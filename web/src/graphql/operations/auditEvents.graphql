@@ -1,0 +1,26 @@
+query AuditEvents($filter: AuditFilter!, $after: String) {
+  auditEvents(filter: $filter, after: $after) {
+    totalCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        id
+        timestampUtc
+        userId
+        userDisplayName
+        action
+        subjectType
+        subjectId
+        subjectSpaceKey
+        outcome
+        channel
+        mcpClientName
+        detailsJson
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+query PersistedNotifications {
+  notifications {
+    id
+    type
+    pageId
+    spaceKey
+    pageTitle
+    actorDisplayName
+    createdAtUtc
+    readAtUtc
+  }
+}
+
+mutation MarkNotificationRead($input: MarkNotificationReadInput!) {
+  markNotificationRead(input: $input) {
+    notification {
+      id
+      readAtUtc
+    }
+  }
+}

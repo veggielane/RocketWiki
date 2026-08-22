@@ -1,0 +1,62 @@
+query PageById($id: ID!) {
+  page(id: $id) {
+    id
+    spaceKey
+    title
+    slug
+    content
+    revisionNumber
+    canEdit
+    canComment
+    canManageAccess
+    labels
+    restrictions {
+      hasViewRestriction
+      hasEditRestriction
+      summary
+    }
+    parent {
+      id
+      title
+    }
+    children {
+      id
+    }
+    comments {
+      id
+      parentCommentId
+      body
+      isDeleted
+      authorUserId
+      authorDisplayName
+      createdAtUtc
+      editedAtUtc
+    }
+    attachments {
+      id
+      fileName
+      contentType
+      sizeBytes
+      uploadedByDisplayName
+    }
+  }
+}
+
+mutation UpdatePage($input: UpdatePageInput!) {
+  updatePage(input: $input) {
+    page {
+      id
+      revisionNumber
+      content
+    }
+    staleRevisionError {
+      message
+      currentRevisionNumber
+      currentContent
+    }
+    readOnlyReplicaError {
+      message
+      originInstanceId
+    }
+  }
+}

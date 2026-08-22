@@ -1,0 +1,16 @@
+{
+  "headings": [
+    {
+      "level": 1,
+      "text": "Intro"
+    },
+    {
+      "level": 2,
+      "text": "Setup"
+    }
+  ],
+  "anchors": [
+    "intro",
+    "intro--setup"
+  ]
+}

@@ -1,0 +1,507 @@
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
+using RocketWiki.Core.Events;
+using RocketWiki.Core.Services;
+using RocketWiki.Core.Sync;
+using RocketWiki.Storage;
+
+namespace RocketWiki.Data.Services;
+
+/// <summary>
+/// EF-backed implementation of IBundleImportService. design.md §12: strictly ordered,
+/// gap-refusing, idempotent, hash-chain-verified. Every check that can fail happens
+/// BEFORE any entity in the bundle is applied, so a rejected bundle never partially lands.
+/// </summary>
+public class BundleImportService : IBundleImportService
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly RocketWikiDbContext _db;
+    private readonly IFileStorage _fileStorage;
+
+    public BundleImportService(RocketWikiDbContext db, IFileStorage fileStorage)
+    {
+        _db = db;
+        _fileStorage = fileStorage;
+    }
+
+    public async Task<PageMutationResult<ImportedBundleSummary>> ImportAsync(
+        string bundleFilePath, string originInstanceId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        using var archive = ZipFile.OpenRead(bundleFilePath);
+
+        var manifestBytes = await ReadEntryAsync(archive, "manifest.json", cancellationToken);
+        var manifest = JsonSerializer.Deserialize<BundleManifest>(manifestBytes, JsonOptions)
+            ?? throw new InvalidOperationException($"'{bundleFilePath}' has an unparseable manifest.json.");
+
+        var eventsBytes = await ReadEntryAsync(archive, "events.ndjson", cancellationToken);
+        var actualPayloadHash = Convert.ToHexString(SHA256.HashData(eventsBytes));
+        if (!string.Equals(actualPayloadHash, manifest.PayloadSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return PageMutationResult<ImportedBundleSummary>.Failure(new BundlePayloadTamperedError(
+                $"events.ndjson hashes to {actualPayloadHash}, but the manifest declares {manifest.PayloadSha256}."));
+        }
+
+        var importState = await _db.SyncImportStates.FirstOrDefaultAsync(s => s.OriginInstanceId == originInstanceId, cancellationToken);
+
+        // design.md §12: "Apply is idempotent, so duplicate delivery is harmless" - a
+        // bundle numbered at or below the last one we applied is a no-op success, not
+        // an error, and it is NOT re-applied (re-applying could resurrect content a
+        // LATER, already-applied bundle deliberately moved past, e.g. a delete).
+        if (importState is not null && manifest.BundleNumber <= importState.LastBundleNumber)
+        {
+            _db.AuditContext = auditContext;
+            _db.RaiseDomainEvent(new SyncImportedEvent(originInstanceId, manifest.BundleNumber, BuildSpaceRanges(manifest), WasDuplicate: true));
+            await _db.SaveChangesAsync(cancellationToken);
+            return PageMutationResult<ImportedBundleSummary>.Success(new ImportedBundleSummary(manifest.BundleNumber, EventsApplied: 0, WasDuplicate: true));
+        }
+
+        var expectedBundleNumber = (importState?.LastBundleNumber ?? 0) + 1;
+        if (manifest.BundleNumber != expectedBundleNumber)
+        {
+            // design.md §12: "if bundle 41 hasn't been applied, 42 waits."
+            return PageMutationResult<ImportedBundleSummary>.Failure(new BundleGapError(expectedBundleNumber, manifest.BundleNumber));
+        }
+
+        if (!string.Equals(manifest.PreviousManifestHash, importState?.LastManifestHash, StringComparison.OrdinalIgnoreCase))
+        {
+            return PageMutationResult<ImportedBundleSummary>.Failure(new BundleChainMismatchError(
+                $"Bundle {manifest.BundleNumber}'s PreviousManifestHash does not match the last applied bundle's manifest hash - " +
+                "a bundle may be missing, reordered, or tampered."));
+        }
+
+        var records = ParseEvents(eventsBytes);
+
+        foreach (var spaceGroup in records.GroupBy(r => r.SpaceId))
+        {
+            // design.md §12: "a space is native or a replica... on high it materializes
+            // as a replica." Spaces aren't themselves a sync event type (only their
+            // pages/comments/etc. are), so importing the first event for a space this
+            // instance has never seen must create the replica Space row itself - every
+            // Page/Comment/etc. FK's into Spaces, and there is nothing else that would
+            // ever create this row on the high side.
+            await EnsureReplicaSpaceExistsAsync(spaceGroup.Key, spaceGroup.First().SpaceKey, originInstanceId, cancellationToken);
+
+            var gapError = await ApplySpaceEventsAsync(spaceGroup.Key, originInstanceId, spaceGroup.OrderBy(r => r.SequenceNumber).ToList(), archive, cancellationToken);
+            if (gapError is not null)
+            {
+                return PageMutationResult<ImportedBundleSummary>.Failure(gapError);
+            }
+        }
+
+        var currentManifestHash = Convert.ToHexString(SHA256.HashData(manifestBytes));
+        if (importState is null)
+        {
+            importState = new SyncImportState { OriginInstanceId = originInstanceId };
+            _db.SyncImportStates.Add(importState);
+        }
+
+        importState.LastBundleNumber = manifest.BundleNumber;
+        importState.LastManifestHash = currentManifestHash;
+        importState.LastImportAtUtc = DateTime.UtcNow;
+
+        _db.AuditContext = auditContext;
+        _db.RaiseDomainEvent(new SyncImportedEvent(originInstanceId, manifest.BundleNumber, BuildSpaceRanges(manifest), WasDuplicate: false));
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return PageMutationResult<ImportedBundleSummary>.Success(new ImportedBundleSummary(manifest.BundleNumber, records.Count, WasDuplicate: false));
+    }
+
+    private async Task EnsureReplicaSpaceExistsAsync(Guid spaceId, string spaceKey, string originInstanceId, CancellationToken cancellationToken)
+    {
+        var existing = FindLocal<Space>(s => s.Id == spaceId)
+            ?? await _db.Spaces.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Id == spaceId, cancellationToken);
+        if (existing is not null)
+        {
+            return;
+        }
+
+        // A minimal replica shell: OriginInstanceId != this instance's own id is what
+        // Space.IsReplicaOf checks, so as long as this differs from whatever the
+        // caller's own InstanceId is configured to, canEdit is unconditionally false
+        // for it (design.md §6.4/§12) the moment any authorization check runs. Name is
+        // a placeholder - space metadata itself isn't a sync event type (§12's table:
+        // only pages/comments/attachments/restrictions/labels travel), so there's
+        // nothing else to name it from yet.
+        _db.Spaces.Add(new Space
+        {
+            Id = spaceId,
+            Key = spaceKey,
+            Name = spaceKey,
+            OriginInstanceId = originInstanceId,
+            IsExported = false,
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = Guid.Empty,
+        });
+    }
+
+    /// <summary>
+    /// data-model.md: SyncSpaceState.AppliedSequence is the finer-grained, per-space
+    /// high-water mark inside the coarser per-bundle check above. Baseline lines
+    /// (SequenceNumber == 0) are always applied and never advance or gap-check this.
+    /// </summary>
+    private async Task<SpaceSequenceGapError?> ApplySpaceEventsAsync(
+        Guid spaceId, string originInstanceId, List<NdjsonEventRecord> records, ZipArchive archive, CancellationToken cancellationToken)
+    {
+        var spaceState = await _db.SyncSpaceStates.FirstOrDefaultAsync(
+            s => s.OriginInstanceId == originInstanceId && s.SpaceId == spaceId, cancellationToken);
+
+        var appliedSequence = spaceState?.AppliedSequence ?? 0;
+
+        foreach (var record in records)
+        {
+            if (record.SequenceNumber > 0)
+            {
+                if (record.SequenceNumber != appliedSequence + 1)
+                {
+                    return new SpaceSequenceGapError(spaceId, appliedSequence + 1, record.SequenceNumber);
+                }
+
+                appliedSequence = record.SequenceNumber;
+            }
+
+            await ApplyEventAsync(record, archive, cancellationToken);
+        }
+
+        if (spaceState is null)
+        {
+            spaceState = new SyncSpaceState { OriginInstanceId = originInstanceId, SpaceId = spaceId, AppliedSequence = appliedSequence };
+            _db.SyncSpaceStates.Add(spaceState);
+        }
+        else
+        {
+            spaceState.AppliedSequence = appliedSequence;
+        }
+
+        return null;
+    }
+
+    private async Task ApplyEventAsync(NdjsonEventRecord record, ZipArchive archive, CancellationToken cancellationToken)
+    {
+        var eventType = Enum.Parse<SyncEventType>(record.EventType);
+        using var payload = JsonDocument.Parse(record.PayloadJson);
+        var root = payload.RootElement;
+
+        switch (eventType)
+        {
+            case SyncEventType.PageUpsert:
+                await ApplyPageUpsertAsync(root, cancellationToken);
+                break;
+            case SyncEventType.PageMove:
+                await ApplyPageMoveAsync(root, cancellationToken);
+                break;
+            case SyncEventType.PageDelete:
+                await ApplyPageDeleteOrRestoreAsync(root, isDeleted: true, cancellationToken);
+                break;
+            case SyncEventType.PageRestore:
+                await ApplyPageDeleteOrRestoreAsync(root, isDeleted: false, cancellationToken);
+                break;
+            case SyncEventType.Comment:
+                await ApplyCommentAsync(root, cancellationToken);
+                break;
+            case SyncEventType.Restrictions:
+                await ApplyRestrictionAsync(root, cancellationToken);
+                break;
+            case SyncEventType.Labels:
+                await ApplyLabelAsync(root, record.SpaceId, cancellationToken);
+                break;
+            case SyncEventType.Attachment:
+                await ApplyAttachmentAsync(root, archive, cancellationToken);
+                break;
+        }
+    }
+
+    private async Task ApplyPageUpsertAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var pageId = payload.GetProperty("pageId").GetGuid();
+        var page = await FindPageAsync(pageId, cancellationToken);
+        var now = DateTime.UtcNow;
+
+        if (page is null)
+        {
+            page = new Page { Id = pageId, CreatedAtUtc = now };
+            _db.Pages.Add(page);
+        }
+
+        page.SpaceId = payload.GetProperty("spaceId").GetGuid();
+        page.ParentPageId = GetNullableGuid(payload, "parentPageId");
+        page.AncestorPath = payload.GetProperty("ancestorPath").GetString()!;
+        page.Slug = payload.GetProperty("slug").GetString()!;
+        page.Title = payload.GetProperty("title").GetString()!;
+        page.SortOrder = payload.GetProperty("sortOrder").GetInt32();
+        page.CurrentContent = payload.GetProperty("content").GetString()!;
+        page.CurrentRevisionNumber = payload.GetProperty("revisionNumber").GetInt32();
+        page.UpdatedAtUtc = now;
+        page.IsDeleted = false; // an upsert always represents live content
+    }
+
+    private async Task ApplyPageMoveAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var pageId = payload.GetProperty("pageId").GetGuid();
+        var page = await FindPageAsync(pageId, cancellationToken);
+        if (page is null)
+        {
+            return; // defensive no-op: the page hasn't arrived via an earlier PageUpsert somehow
+        }
+
+        page.ParentPageId = GetNullableGuid(payload, "newParentPageId");
+        page.AncestorPath = payload.GetProperty("newAncestorPath").GetString()!;
+        page.SortOrder = payload.GetProperty("newSortOrder").GetInt32();
+        page.UpdatedAtUtc = DateTime.UtcNow;
+    }
+
+    private async Task ApplyPageDeleteOrRestoreAsync(JsonElement payload, bool isDeleted, CancellationToken cancellationToken)
+    {
+        var pageIds = payload.GetProperty("pageIds").EnumerateArray().Select(e => e.GetGuid()).ToList();
+        var pages = await FindPagesAsync(pageIds, cancellationToken);
+        var now = DateTime.UtcNow;
+        var batchId = isDeleted ? Guid.NewGuid() : (Guid?)null;
+
+        foreach (var page in pages)
+        {
+            page.IsDeleted = isDeleted;
+            page.DeletedAtUtc = isDeleted ? now : null;
+            page.DeleteBatchId = batchId;
+            // DeletedByUserId stays null: no local user corresponds to the low-side actor.
+        }
+    }
+
+    private async Task ApplyCommentAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var commentId = payload.GetProperty("commentId").GetGuid();
+        var authorUserId = GetNullableGuid(payload, "authorUserId");
+        if (authorUserId is not null)
+        {
+            await EnsureShadowUserAsync(authorUserId.Value, payload, cancellationToken);
+        }
+
+        var comment = FindLocal<Comment>(c => c.Id == commentId)
+            ?? await _db.Comments.FirstOrDefaultAsync(c => c.Id == commentId, cancellationToken);
+        if (comment is null)
+        {
+            comment = new Comment { Id = commentId, CreatedAtUtc = DateTime.UtcNow };
+            _db.Comments.Add(comment);
+        }
+
+        comment.PageId = payload.GetProperty("pageId").GetGuid();
+        comment.ParentCommentId = GetNullableGuid(payload, "parentCommentId");
+        comment.Body = payload.GetProperty("body").GetString() ?? string.Empty;
+        comment.AuthorUserId = authorUserId ?? comment.AuthorUserId;
+        comment.IsDeleted = payload.TryGetProperty("isDeleted", out var deletedEl) && deletedEl.GetBoolean();
+    }
+
+    /// <summary>design.md §12: "Authors arrive as shadow users (name/email from the event, flagged external, never loginable)". Reuses the same User.Id across bundles so repeated authorship by the same low-side user maps to one shadow row, not a fresh one each time.</summary>
+    private async Task EnsureShadowUserAsync(Guid userId, JsonElement payload, CancellationToken cancellationToken)
+    {
+        var displayName = payload.TryGetProperty("authorDisplayName", out var nameEl) ? nameEl.GetString() : null;
+        var email = payload.TryGetProperty("authorEmail", out var emailEl) ? emailEl.GetString() : null;
+
+        var existing = FindLocal<User>(u => u.Id == userId)
+            ?? await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
+        if (existing is null)
+        {
+            _db.Users.Add(new User
+            {
+                Id = userId,
+                Subject = null, // never loginable
+                DisplayName = displayName ?? "Unknown Author",
+                Email = email,
+                IsExternal = true,
+                AttributesJson = "{}",
+                CreatedAtUtc = DateTime.UtcNow,
+                LastSeenAtUtc = DateTime.UtcNow,
+            });
+        }
+        else if (existing.IsExternal && displayName is not null)
+        {
+            existing.DisplayName = displayName;
+            existing.Email = email;
+        }
+    }
+
+    private async Task ApplyRestrictionAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var ruleId = payload.GetProperty("accessRuleId").GetGuid();
+        var afterElement = payload.GetProperty("after");
+        var existing = FindLocal<AccessRule>(r => r.Id == ruleId)
+            ?? await _db.AccessRules.FirstOrDefaultAsync(r => r.Id == ruleId, cancellationToken);
+
+        if (afterElement.ValueKind == JsonValueKind.Null)
+        {
+            if (existing is not null)
+            {
+                _db.AccessRules.Remove(existing);
+            }
+
+            return;
+        }
+
+        if (existing is null)
+        {
+            existing = new AccessRule { Id = ruleId, Kind = AccessRuleKind.PageRestriction, CreatedAtUtc = DateTime.UtcNow };
+            _db.AccessRules.Add(existing);
+        }
+
+        // AccessRuleSnapshot's enum properties serialize as their numeric tinyint
+        // values (System.Text.Json's default for enums; no string converter is
+        // configured anywhere in this pipeline - see AccessRuleAuditJson), so they're
+        // read back the same way here, not as names.
+        existing.PageId = afterElement.GetProperty("pageId").GetGuid();
+        existing.Action = (PageAction)afterElement.GetProperty("action").GetInt32();
+        existing.ExpressionJson = afterElement.GetProperty("expressionJson").GetString()!;
+        existing.UpdatedAtUtc = DateTime.UtcNow;
+    }
+
+    private async Task ApplyLabelAsync(JsonElement payload, Guid spaceId, CancellationToken cancellationToken)
+    {
+        var pageId = payload.GetProperty("pageId").GetGuid();
+        var labelName = payload.GetProperty("labelName").GetString()!;
+        var action = payload.GetProperty("action").GetString();
+
+        // Labels are matched by NAME within the target space, not by Id - Label.Id was
+        // never claimed to survive the crossing (unlike Page/Attachment), so the import
+        // side just finds-or-creates a Label row with this name in this space.
+        var label = FindLocal<Label>(l => l.SpaceId == spaceId && l.Name == labelName)
+            ?? await _db.Labels.FirstOrDefaultAsync(l => l.SpaceId == spaceId && l.Name == labelName, cancellationToken);
+        if (label is null)
+        {
+            label = new Label { SpaceId = spaceId, Name = labelName };
+            _db.Labels.Add(label);
+        }
+
+        var pageLabel = FindLocal<PageLabel>(pl => pl.PageId == pageId && pl.LabelId == label.Id)
+            ?? await _db.PageLabels.FirstOrDefaultAsync(pl => pl.PageId == pageId && pl.LabelId == label.Id, cancellationToken);
+
+        if (action == "attach" && pageLabel is null)
+        {
+            _db.PageLabels.Add(new PageLabel { PageId = pageId, LabelId = label.Id });
+        }
+        else if (action == "detach" && pageLabel is not null)
+        {
+            _db.PageLabels.Remove(pageLabel);
+        }
+    }
+
+    private async Task ApplyAttachmentAsync(JsonElement payload, ZipArchive archive, CancellationToken cancellationToken)
+    {
+        var attachmentId = payload.GetProperty("attachmentId").GetGuid();
+        var contentHashHex = payload.GetProperty("contentHash").GetString()!;
+        var isDeleted = payload.TryGetProperty("isDeleted", out var deletedEl) && deletedEl.GetBoolean();
+
+        // Attachments.UploadedByUserId is a required FK into Users - Guid.Empty would
+        // violate it on the high side, since there's obviously no local user with that
+        // id. The uploader arrives as a shadow user, exactly like a comment author.
+        var uploaderUserId = payload.GetProperty("uploadedByUserId").GetGuid();
+        await EnsureShadowUserAsync(uploaderUserId, payload, cancellationToken);
+
+        var attachment = FindLocal<Attachment>(a => a.Id == attachmentId)
+            ?? await _db.Attachments.IgnoreQueryFilters().FirstOrDefaultAsync(a => a.Id == attachmentId, cancellationToken);
+        var now = DateTime.UtcNow;
+
+        if (attachment is null)
+        {
+            // A fresh StorageKey local to THIS instance's own storage backend - the
+            // low side's key is opaque and meaningless here (deliberately excluded
+            // from the sync payload in the first place - see SyncOutboxWriter).
+            var storageKey = $"attachments/{now:yyyy'/'MM}/{Guid.CreateVersion7()}";
+
+            var blobEntry = archive.GetEntry($"blobs/{contentHashHex}");
+            if (blobEntry is not null)
+            {
+                await using var entryStream = blobEntry.Open();
+                await _fileStorage.SaveAsync(storageKey, entryStream, payload.GetProperty("contentType").GetString()!, cancellationToken);
+            }
+            // A missing blob entry (e.g. a duplicate-content attachment whose blob was
+            // already packed under a different attachment's line) is not an error here -
+            // ExistsAsync at download time is what surfaces a genuinely missing object.
+
+            attachment = new Attachment
+            {
+                Id = attachmentId,
+                StorageKey = storageKey,
+                UploadedByUserId = uploaderUserId, // resolved to a shadow user above
+                CreatedAtUtc = now,
+            };
+            _db.Attachments.Add(attachment);
+        }
+
+        attachment.PageId = payload.GetProperty("pageId").GetGuid();
+        attachment.FileName = payload.GetProperty("fileName").GetString()!;
+        attachment.ContentType = payload.GetProperty("contentType").GetString()!;
+        attachment.SizeBytes = payload.GetProperty("sizeBytes").GetInt64();
+        attachment.ContentHash = Convert.FromHexString(contentHashHex);
+        attachment.IsDeleted = isDeleted;
+        attachment.DeletedAtUtc = isDeleted ? now : null;
+    }
+
+    /// <summary>
+    /// A whole bundle applies inside ONE unsaved unit of work (design.md §12: "a rejected
+    /// bundle never partially lands" - the single SaveChangesAsync at the end of
+    /// ImportAsync is what makes that atomic). That means a page created earlier in this
+    /// SAME bundle - e.g. a page created and then immediately moved/commented/restricted
+    /// before the next incremental export - is only in the change tracker, not yet in the
+    /// database. A plain `_db.Pages.FirstOrDefaultAsync(...)` always round-trips to the
+    /// database and will not see it, silently no-op-ing (or worse, re-Add()-ing a
+    /// duplicate). Every lookup in this file must check the local change tracker first.
+    /// </summary>
+    private T? FindLocal<T>(Func<T, bool> predicate) where T : class =>
+        _db.ChangeTracker.Entries<T>().Select(e => e.Entity).FirstOrDefault(predicate);
+
+    private async Task<Page?> FindPageAsync(Guid pageId, CancellationToken cancellationToken) =>
+        FindLocal<Page>(p => p.Id == pageId)
+        ?? await _db.Pages.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);
+
+    private async Task<List<Page>> FindPagesAsync(List<Guid> pageIds, CancellationToken cancellationToken)
+    {
+        var found = new List<Page>();
+        var remaining = new List<Guid>();
+        foreach (var pageId in pageIds)
+        {
+            var local = FindLocal<Page>(p => p.Id == pageId);
+            if (local is not null)
+            {
+                found.Add(local);
+            }
+            else
+            {
+                remaining.Add(pageId);
+            }
+        }
+
+        if (remaining.Count > 0)
+        {
+            found.AddRange(await _db.Pages.IgnoreQueryFilters().Where(p => remaining.Contains(p.Id)).ToListAsync(cancellationToken));
+        }
+
+        return found;
+    }
+
+    private static IReadOnlyList<SyncImportedSpaceRange> BuildSpaceRanges(BundleManifest manifest) =>
+        manifest.SpaceEventRanges
+            .Select(kv => new SyncImportedSpaceRange(kv.Key, kv.Value.FromSequence, kv.Value.ToSequence, kv.Value.EventCount))
+            .ToList();
+
+    private static Guid? GetNullableGuid(JsonElement payload, string propertyName) =>
+        payload.TryGetProperty(propertyName, out var element) && element.ValueKind != JsonValueKind.Null ? element.GetGuid() : null;
+
+    private static List<NdjsonEventRecord> ParseEvents(byte[] eventsBytes)
+    {
+        var text = Encoding.UTF8.GetString(eventsBytes);
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return lines.Select(line => JsonSerializer.Deserialize<NdjsonEventRecord>(line, JsonOptions)!).ToList();
+    }
+
+    private static async Task<byte[]> ReadEntryAsync(ZipArchive archive, string entryName, CancellationToken cancellationToken)
+    {
+        var entry = archive.GetEntry(entryName) ?? throw new InvalidOperationException($"Bundle is missing '{entryName}'.");
+        await using var stream = entry.Open();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        return memory.ToArray();
+    }
+}

@@ -1,0 +1,15 @@
+mutation MovePage($input: MovePageInput!) {
+  movePage(input: $input) {
+    page {
+      id
+      parent {
+        id
+        title
+      }
+    }
+    readOnlyReplicaError {
+      message
+      originInstanceId
+    }
+  }
+}

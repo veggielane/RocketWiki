@@ -1,0 +1,3 @@
+:::info
+Handy trick.
+:::

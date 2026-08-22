@@ -1,0 +1,212 @@
+{
+  "realm": "rocketwiki",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": false,
+
+  "roles": {
+    "realm": [
+      { "name": "admin", "description": "Instance admin (design.md §6.5) — manages spaces, the attribute registry, and settings. Does NOT bypass page restrictions." },
+      { "name": "user", "description": "Default authenticated-user role." }
+    ]
+  },
+
+  "defaultRole": {
+    "name": "default-roles-rocketwiki",
+    "composite": true,
+    "composites": {
+      "realm": ["user"]
+    }
+  },
+
+  "groups": [
+    { "name": "engineering", "path": "/engineering" },
+    { "name": "export-cleared", "path": "/export-cleared" }
+  ],
+
+  "clientScopes": [
+    {
+      "name": "rocketwiki-claims",
+      "description": "Claims RocketWiki's ABAC rule engine evaluates: group membership and registered attributes (design.md §6).",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups"
+          }
+        },
+        {
+          "name": "nationality",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "nationality",
+            "claim.name": "nationality",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "true",
+            "aggregate.attrs": "false"
+          }
+        },
+        {
+          "name": "roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "roles"
+          }
+        },
+        {
+          "name": "audience-rocketwiki-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "rocketwiki-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+
+  "clients": [
+    {
+      "clientId": "rocketwiki-web",
+      "name": "RocketWiki Web (SPA)",
+      "description": "Vite/React SPA. Authorization Code + PKCE, no client secret (design.md §11).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": ["acr", "basic", "email", "profile", "roles", "web-origins", "rocketwiki-claims"],
+      "optionalClientScopes": ["address", "microprofile-jwt", "offline_access", "phone"]
+    },
+    {
+      "clientId": "rocketwiki-api",
+      "name": "RocketWiki API",
+      "description": "Not used for any OAuth flow directly in v1 — exists so the audience mapper above can target it, and as the future OAuth 2.1 client for MCP (design.md §8). RocketWiki.Api validates tokens against this audience; it never authenticates as this client itself.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    }
+  ],
+
+  "users": [
+    {
+      "username": "alice.engineer",
+      "email": "alice.engineer@example.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Alice",
+      "lastName": "Engineer",
+      "credentials": [{ "type": "password", "value": "RocketWiki!Dev1", "temporary": false }],
+      "groups": ["/engineering"],
+      "realmRoles": ["user"],
+      "attributes": {
+        "nationality": ["NZ"]
+      }
+    },
+    {
+      "username": "bob.engineer",
+      "email": "bob.engineer@example.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Bob",
+      "lastName": "Engineer",
+      "credentials": [{ "type": "password", "value": "RocketWiki!Dev1", "temporary": false }],
+      "groups": ["/engineering"],
+      "realmRoles": ["user"],
+      "attributes": {
+        "nationality": ["US"]
+      }
+    },
+    {
+      "username": "carol.noattr",
+      "email": "carol.noattr@example.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Carol",
+      "lastName": "NoAttribute",
+      "credentials": [{ "type": "password", "value": "RocketWiki!Dev1", "temporary": false }],
+      "groups": ["/engineering"],
+      "realmRoles": ["user"]
+    },
+    {
+      "username": "dave.dual",
+      "email": "dave.dual@example.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Dave",
+      "lastName": "DualNational",
+      "credentials": [{ "type": "password", "value": "RocketWiki!Dev1", "temporary": false }],
+      "groups": ["/engineering"],
+      "realmRoles": ["user"],
+      "attributes": {
+        "nationality": ["NZ", "GB"]
+      }
+    },
+    {
+      "username": "erin.export",
+      "email": "erin.export@example.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Erin",
+      "lastName": "ExportCleared",
+      "credentials": [{ "type": "password", "value": "RocketWiki!Dev1", "temporary": false }],
+      "groups": ["/export-cleared"],
+      "realmRoles": ["user"],
+      "attributes": {
+        "nationality": ["US"]
+      }
+    },
+    {
+      "username": "frank.admin",
+      "email": "frank.admin@example.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Frank",
+      "lastName": "Admin",
+      "credentials": [{ "type": "password", "value": "RocketWiki!Dev1", "temporary": false }],
+      "groups": [],
+      "realmRoles": ["admin", "user"]
+    }
+  ]
+}

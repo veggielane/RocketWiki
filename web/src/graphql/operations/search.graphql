@@ -1,0 +1,30 @@
+query SearchPages($query: String!, $spaceKey: String, $labels: [String!], $after: String) {
+  search(query: $query, spaceKey: $spaceKey, labels: $labels, after: $after) {
+    totalCount
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        snippet
+        headingPath
+        anchorId
+        page {
+          id
+          title
+          spaceKey
+        }
+      }
+    }
+  }
+}
+
+query SearchFacets($spaceKey: String) {
+  spaces {
+    key
+    name
+  }
+  labels(spaceKey: $spaceKey)
+}

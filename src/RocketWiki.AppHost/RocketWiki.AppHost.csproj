@@ -1,0 +1,28 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.5.1">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AspireUseCliBundle>true</AspireUseCliBundle>
+    <UserSecretsId>09b86324-eefb-4fe5-9312-9db2119419cc</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" Version="13.5.1" />
+    <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.5.1" />
+    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.5.1" />
+    <!-- No official Microsoft Aspire hosting integration exists for Keycloak or MinIO.
+         Keycloak.AuthServices.Aspire.Hosting (NikiforovAll) is the leading community
+         package for Keycloak; MinIO is wired via the generic AddContainer API, which
+         is what design.md §15 itself uses. See AppHost.cs for the exact deviations
+         from the design.md snippet (method names / API shape only, not intent). -->
+    <PackageReference Include="Keycloak.AuthServices.Aspire.Hosting" Version="0.3.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RocketWiki.Api\RocketWiki.Api.csproj" />
+  </ItemGroup>
+
+</Project>

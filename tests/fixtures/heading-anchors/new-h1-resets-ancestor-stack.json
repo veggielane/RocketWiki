@@ -1,0 +1,21 @@
+{
+  "headings": [
+    {
+      "level": 1,
+      "text": "Chapter 1"
+    },
+    {
+      "level": 2,
+      "text": "Section A"
+    },
+    {
+      "level": 1,
+      "text": "Chapter 2"
+    }
+  ],
+  "anchors": [
+    "chapter-1",
+    "chapter-1--section-a",
+    "chapter-2"
+  ]
+}

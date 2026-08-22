@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>RocketWiki.Data.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0" />
+    <!-- Direct override: EFCore.Sqlite pulls in SQLitePCLRaw 2.1.11, which NU1903 flags
+         for a known high-severity advisory. Pin to a patched version. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\RocketWiki.Data\RocketWiki.Data.csproj" />
+    <!-- AttachmentService tests use the real FileSystemFileStorage against a temp
+         directory, per design.md §14's own prescribed testing approach, rather than a
+         hand-rolled fake. -->
+    <ProjectReference Include="..\..\src\RocketWiki.Storage\RocketWiki.Storage.csproj" />
+  </ItemGroup>
+
+</Project>

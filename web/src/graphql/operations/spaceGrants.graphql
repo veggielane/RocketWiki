@@ -1,0 +1,28 @@
+query SpaceGrants($key: String!) {
+  space(key: $key) {
+    key
+    name
+    canManageAccess
+    grants {
+      id
+      role
+      expressionJson
+    }
+  }
+}
+
+mutation SetSpaceGrants($input: SetSpaceGrantsInput!) {
+  setSpaceGrants(input: $input) {
+    space {
+      key
+      grants {
+        id
+        role
+        expressionJson
+      }
+    }
+    malformedRuleError {
+      message
+    }
+  }
+}

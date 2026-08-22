@@ -1,0 +1,3 @@
+```csharp
+public class Foo {}
+```

@@ -1,0 +1,50 @@
+mutation CreateSpace($input: CreateSpaceInput!) {
+  createSpace(input: $input) {
+    space {
+      key
+      name
+    }
+    malformedRuleError {
+      message
+    }
+    keyAlreadyInUseError {
+      message
+    }
+  }
+}
+
+mutation RenameSpace($input: RenameSpaceInput!) {
+  renameSpace(input: $input) {
+    space {
+      key
+      name
+    }
+  }
+}
+
+mutation ArchiveSpace($input: ArchiveSpaceInput!) {
+  archiveSpace(input: $input) {
+    space {
+      key
+      isArchived
+      archivedAtUtc
+    }
+  }
+}
+
+mutation RestoreSpace($input: RestoreSpaceInput!) {
+  restoreSpace(input: $input) {
+    space {
+      key
+      isArchived
+    }
+  }
+}
+
+query ArchivedSpaces {
+  archivedSpaces {
+    key
+    name
+    archivedAtUtc
+  }
+}

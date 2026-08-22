@@ -1,0 +1,58 @@
+query PagePermissions($pageId: ID!, $userId: ID!) {
+  page(id: $pageId) {
+    id
+    title
+    canManageAccess
+    restrictions {
+      hasViewRestriction
+      hasEditRestriction
+      summary
+      viewExpressionJson
+      editExpressionJson
+    }
+    effectivePermissionDetail(userId: $userId) {
+      userId
+      userDisplayName
+      spaceRole
+      isReplicaSpace
+      canView
+      canEdit
+      viewDenialReason
+      editDenialReason
+      viewRestrictions {
+        ruleId
+        pageId
+        pageTitle
+        action
+        expressionJson
+        passed
+      }
+      editRestrictions {
+        ruleId
+        pageId
+        pageTitle
+        action
+        expressionJson
+        passed
+      }
+    }
+  }
+}
+
+mutation SetPageRestrictions($input: SetPageRestrictionsInput!) {
+  setPageRestrictions(input: $input) {
+    page {
+      id
+      restrictions {
+        hasViewRestriction
+        hasEditRestriction
+        summary
+        viewExpressionJson
+        editExpressionJson
+      }
+    }
+    malformedRuleError {
+      message
+    }
+  }
+}

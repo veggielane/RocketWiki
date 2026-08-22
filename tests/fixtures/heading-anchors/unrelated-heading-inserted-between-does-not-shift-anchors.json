@@ -1,0 +1,21 @@
+{
+  "headings": [
+    {
+      "level": 1,
+      "text": "Intro"
+    },
+    {
+      "level": 1,
+      "text": "A New Section"
+    },
+    {
+      "level": 1,
+      "text": "Usage"
+    }
+  ],
+  "anchors": [
+    "intro",
+    "a-new-section",
+    "usage"
+  ]
+}

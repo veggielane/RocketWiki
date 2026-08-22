@@ -1,0 +1,26 @@
+{
+  "headings": [
+    {
+      "level": 1,
+      "text": "Project A"
+    },
+    {
+      "level": 2,
+      "text": "Overview"
+    },
+    {
+      "level": 1,
+      "text": "Project B"
+    },
+    {
+      "level": 2,
+      "text": "Overview"
+    }
+  ],
+  "anchors": [
+    "project-a",
+    "project-a--overview",
+    "project-b",
+    "project-b--overview"
+  ]
+}

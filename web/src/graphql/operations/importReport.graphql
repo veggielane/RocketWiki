@@ -1,0 +1,14 @@
+query ImportReports($spaceKey: String!) {
+  importReports(spaceKey: $spaceKey) {
+    id
+    spaceKey
+    importedAtUtc
+    pageCount
+    findings {
+      pageId
+      pageTitle
+      severity
+      message
+    }
+  }
+}

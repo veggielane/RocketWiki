@@ -1,0 +1,370 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type Query {
+  page(id: UUID!): Page @cost(weight: "10")
+  pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
+  me: CurrentUser!
+}
+
+type Mutation {
+  deleteAttachment(input: DeleteAttachmentRequestInput!): DeleteAttachmentPayload!
+    @cost(weight: "10")
+  addComment(input: AddCommentRequestInput!): AddCommentPayload!
+    @cost(weight: "10")
+  editComment(input: EditCommentRequestInput!): EditCommentPayload!
+    @cost(weight: "10")
+  deleteComment(input: DeleteCommentRequestInput!): DeleteCommentPayload!
+    @cost(weight: "10")
+  createPage(input: CreatePageRequestInput!): CreatePagePayload!
+    @cost(weight: "10")
+  updatePageContent(input: UpdatePageContentRequestInput!): UpdatePageContentPayload!
+    @cost(weight: "10")
+  movePage(input: MovePageRequestInput!): MovePagePayload! @cost(weight: "10")
+  deletePage(input: DeletePageRequestInput!): DeletePagePayload!
+    @cost(weight: "10")
+  restorePage(input: RestorePageRequestInput!): RestorePagePayload!
+    @cost(weight: "10")
+  restoreRevision(input: RestoreRevisionRequestInput!): RestoreRevisionPayload!
+    @cost(weight: "10")
+  createLabel(input: CreateLabelRequestInput!): CreateLabelPayload!
+    @cost(weight: "10")
+  attachLabel(input: AttachLabelRequestInput!): AttachLabelPayload!
+    @cost(weight: "10")
+  detachLabel(input: DetachLabelRequestInput!): DetachLabelPayload!
+    @cost(weight: "10")
+}
+
+type AccessRule {
+  id: UUID!
+  kind: AccessRuleKind!
+  spaceId: UUID
+  space: Space
+  pageId: UUID
+  page: Page
+  role: SpaceRole
+  action: PageAction
+  expressionJson: String!
+  createdAtUtc: DateTime!
+  createdByUserId: UUID!
+  updatedAtUtc: DateTime!
+  updatedByUserId: UUID!
+}
+
+type AddCommentPayload {
+  comment: Comment
+  error: PageMutationErrorView
+}
+
+type AttachLabelPayload {
+  pageLabel: PageLabel
+  error: PageMutationErrorView
+}
+
+type Attachment {
+  id: UUID!
+  pageId: UUID!
+  fileName: String!
+  contentType: String!
+  sizeBytes: Long!
+  contentHash: [UnsignedByte!]!
+  isDeleted: Boolean!
+  deletedAtUtc: DateTime
+  deletedByUserId: UUID
+  uploadedByUserId: UUID!
+  createdAtUtc: DateTime!
+}
+
+type Comment {
+  id: UUID!
+  pageId: UUID!
+  parentCommentId: UUID
+  body: String!
+  authorUserId: UUID!
+  createdAtUtc: DateTime!
+  editedAtUtc: DateTime
+  isDeleted: Boolean!
+}
+
+type CreateLabelPayload {
+  label: Label
+  error: PageMutationErrorView
+}
+
+type CreatePagePayload {
+  page: Page
+  error: PageMutationErrorView
+}
+
+type CurrentUser {
+  id: String
+  email: String
+  name: String
+  groups: [String!]!
+  isAuthenticated: Boolean!
+}
+
+type DeleteAttachmentPayload {
+  attachment: Attachment
+  error: PageMutationErrorView
+}
+
+type DeleteCommentPayload {
+  comment: Comment
+  error: PageMutationErrorView
+}
+
+type DeletePagePayload {
+  summary: PageDeleteSummary
+  error: PageMutationErrorView
+}
+
+type DetachLabelPayload {
+  detachedLabelId: UUID
+  error: PageMutationErrorView
+}
+
+type EditCommentPayload {
+  comment: Comment
+  error: PageMutationErrorView
+}
+
+type Label {
+  id: UUID!
+  spaceId: UUID!
+  space: Space
+  name: String!
+  pageLabels: [PageLabel!]!
+}
+
+type MovePagePayload {
+  page: Page
+  error: PageMutationErrorView
+}
+
+type Page {
+  content: String!
+  parent: Page @cost(weight: "10")
+  children: [Page!]! @cost(weight: "10")
+  revisions: [PageRevision!]! @cost(weight: "10")
+  comments: [Comment!]! @cost(weight: "10")
+  attachments: [Attachment!]! @cost(weight: "10")
+  labels: [String!]! @cost(weight: "10")
+  id: UUID!
+  spaceId: UUID!
+  parentPageId: UUID
+  ancestorPath: String!
+  slug: String!
+  title: String!
+  sortOrder: Int!
+  currentRevisionNumber: Int!
+  isDeleted: Boolean!
+  deletedAtUtc: DateTime
+  deletedByUserId: UUID
+  deleteBatchId: UUID
+  createdAtUtc: DateTime!
+  updatedAtUtc: DateTime!
+}
+
+type PageDeleteSummary {
+  rootPageId: UUID!
+  deletedPageCount: Int!
+  deletedAtUtc: DateTime!
+}
+
+type PageLabel {
+  pageId: UUID!
+  page: Page
+  labelId: UUID!
+  label: Label
+}
+
+type PageMutationErrorView {
+  kind: String!
+  message: String
+  expectedRevisionNumber: Int
+  actualRevisionNumber: Int
+  latestTitle: String
+  latestContent: String
+  spaceId: UUID
+  blockedPageCount: Int
+  notFoundId: UUID
+}
+
+type PageRestoreSummary {
+  rootPageId: UUID!
+  restoredPageCount: Int!
+}
+
+type PageRevision {
+  id: UUID!
+  pageId: UUID!
+  revisionNumber: Int!
+  title: String!
+  content: String!
+  editSummary: String
+  authorUserId: UUID!
+  createdAtUtc: DateTime!
+}
+
+type PageTreeNode {
+  id: UUID!
+  title: String!
+  slug: String!
+  sortOrder: Int!
+  children: [PageTreeNode!]!
+}
+
+type RestorePagePayload {
+  summary: PageRestoreSummary
+  error: PageMutationErrorView
+}
+
+type RestoreRevisionPayload {
+  page: Page
+  error: PageMutationErrorView
+}
+
+type Space {
+  isReplicaOf(localInstanceId: String!): Boolean!
+  id: UUID!
+  key: String!
+  name: String!
+  description: String
+  homepageId: UUID
+  homepage: Page
+  originInstanceId: String!
+  isExported: Boolean!
+  lastOutboxSequence: Long!
+  isDeleted: Boolean!
+  deletedAtUtc: DateTime
+  deletedByUserId: UUID
+  createdAtUtc: DateTime!
+  createdByUserId: UUID!
+  pages: [Page!]!
+  accessRules: [AccessRule!]!
+  labels: [Label!]!
+}
+
+type UpdatePageContentPayload {
+  page: Page
+  error: PageMutationErrorView
+}
+
+input AddCommentRequestInput {
+  pageId: UUID!
+  parentCommentId: UUID
+  body: String!
+}
+
+input AttachLabelRequestInput {
+  pageId: UUID!
+  labelId: UUID!
+}
+
+input CreateLabelRequestInput {
+  spaceId: UUID!
+  name: String!
+}
+
+input CreatePageRequestInput {
+  spaceId: UUID!
+  parentPageId: UUID
+  slug: String!
+  title: String!
+  content: String!
+}
+
+input DeleteAttachmentRequestInput {
+  attachmentId: UUID!
+}
+
+input DeleteCommentRequestInput {
+  commentId: UUID!
+}
+
+input DeletePageRequestInput {
+  pageId: UUID!
+}
+
+input DetachLabelRequestInput {
+  pageId: UUID!
+  labelId: UUID!
+}
+
+input EditCommentRequestInput {
+  commentId: UUID!
+  body: String!
+}
+
+input MovePageRequestInput {
+  pageId: UUID!
+  newParentPageId: UUID
+  newSortOrder: Int!
+}
+
+input RestorePageRequestInput {
+  pageId: UUID!
+}
+
+input RestoreRevisionRequestInput {
+  pageId: UUID!
+  revisionNumberToRestore: Int!
+  expectedCurrentRevisionNumber: Int!
+}
+
+input UpdatePageContentRequestInput {
+  pageId: UUID!
+  expectedRevisionNumber: Int!
+  title: String!
+  content: String!
+  editSummary: String
+}
+
+enum AccessRuleKind {
+  SPACE_GRANT
+  PAGE_RESTRICTION
+}
+
+enum PageAction {
+  VIEW
+  EDIT
+}
+
+enum SpaceRole {
+  VIEWER
+  EDITOR
+  SPACE_ADMIN
+}
+
+"The `DateTime` scalar type represents a date and time with time zone offset information."
+scalar DateTime
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/date-time.html")
+
+"The `Long` scalar type represents a signed 64-bit integer."
+scalar Long
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/long.html")
+
+"The `UnsignedByte` scalar type represents an unsigned 8-bit integer."
+scalar UnsignedByte
+  @specifiedBy(
+    url: "https://scalars.graphql.org/chillicream/unsigned-byte.html"
+  )
+
+"The `UUID` scalar type represents a Universally Unique Identifier (UUID) as defined by RFC 9562."
+scalar UUID
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/uuid.html")
+
+"The purpose of the `cost` directive is to define a `weight` for GraphQL types, fields, and arguments. Static analysis can use these weights when calculating the overall cost of a query or response."
+directive @cost(
+  "The `weight` argument defines what value to add to the overall cost for every appearance, or possible appearance, of a type, field, argument, etc."
+  weight: String!
+) on
+  | SCALAR
+  | OBJECT
+  | FIELD_DEFINITION
+  | ARGUMENT_DEFINITION
+  | ENUM
+  | INPUT_FIELD_DEFINITION

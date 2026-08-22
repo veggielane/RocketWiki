@@ -1,0 +1,230 @@
+using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
+using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
+using RocketWiki.Core.Events;
+using RocketWiki.Core.Services;
+
+namespace RocketWiki.Data.Services;
+
+/// <summary>
+/// EF-backed implementation of ILabelService. Lives in RocketWiki.Data for the same
+/// reason every other service here does: it needs RocketWikiDbContext directly.
+/// </summary>
+public class LabelService : ILabelService
+{
+    private readonly RocketWikiDbContext _db;
+    private readonly string _localInstanceId;
+
+    public LabelService(RocketWikiDbContext db, string localInstanceId)
+    {
+        _db = db;
+        _localInstanceId = localInstanceId;
+    }
+
+    public async Task<PageMutationResult<Label>> CreateLabelAsync(
+        CreateLabelRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == request.SpaceId, cancellationToken);
+        if (space is null)
+        {
+            return PageMutationResult<Label>.Failure(new NotFoundError(request.SpaceId));
+        }
+
+        if (space.IsReplicaOf(_localInstanceId))
+        {
+            return PageMutationResult<Label>.Failure(new ReadOnlyReplicaError(space.Id));
+        }
+
+        var spaceGrants = await _db.AccessRules
+            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
+            .ToListAsync(cancellationToken);
+        var role = EffectivePermissionCalculator.ComputeSpaceRole(spaceGrants, principal);
+        if (role is null || role.Value < SpaceRole.Editor)
+        {
+            return PageMutationResult<Label>.Failure(new ForbiddenError("editor role required"));
+        }
+
+        var nameTaken = await _db.Labels.AnyAsync(l => l.SpaceId == space.Id && l.Name == request.Name, cancellationToken);
+        if (nameTaken)
+        {
+            return PageMutationResult<Label>.Failure(new ValidationError($"Label '{request.Name}' already exists in this space."));
+        }
+
+        var label = new Label { SpaceId = space.Id, Name = request.Name };
+        _db.Labels.Add(label);
+
+        _db.AuditContext = auditContext;
+        _db.RaiseDomainEvent(new LabelCreatedEvent(label.Id, space.Id, space.Key, actingUserId, label.Name));
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return PageMutationResult<Label>.Success(label);
+    }
+
+    public async Task<PageMutationResult<PageLabel>> AttachLabelAsync(
+        AttachLabelRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == request.PageId, cancellationToken);
+        if (page is null)
+        {
+            return PageMutationResult<PageLabel>.Failure(new NotFoundError(request.PageId));
+        }
+
+        var label = await _db.Labels.FirstOrDefaultAsync(l => l.Id == request.LabelId, cancellationToken);
+        if (label is null)
+        {
+            return PageMutationResult<PageLabel>.Failure(new NotFoundError(request.LabelId));
+        }
+
+        if (label.SpaceId != page.SpaceId)
+        {
+            return PageMutationResult<PageLabel>.Failure(new ValidationError("Label and page must belong to the same space."));
+        }
+
+        var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
+        if (space is null)
+        {
+            return PageMutationResult<PageLabel>.Failure(new NotFoundError(page.SpaceId));
+        }
+
+        if (space.IsReplicaOf(_localInstanceId))
+        {
+            return PageMutationResult<PageLabel>.Failure(new ReadOnlyReplicaError(space.Id));
+        }
+
+        var canEdit = await ComputeCanEditAsync(space, page, principal, cancellationToken);
+        if (!canEdit)
+        {
+            return PageMutationResult<PageLabel>.Failure(new ForbiddenError("canEdit required"));
+        }
+
+        var alreadyAttached = await _db.PageLabels.AnyAsync(pl => pl.PageId == page.Id && pl.LabelId == label.Id, cancellationToken);
+        if (alreadyAttached)
+        {
+            return PageMutationResult<PageLabel>.Failure(new ValidationError("Label is already attached to this page."));
+        }
+
+        var pageLabel = new PageLabel { PageId = page.Id, LabelId = label.Id };
+        _db.PageLabels.Add(pageLabel);
+
+        _db.AuditContext = auditContext;
+        _db.RaiseDomainEvent(new LabelAttachedEvent(label.Id, page.Id, space.Id, space.Key, actingUserId, label.Name));
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return PageMutationResult<PageLabel>.Success(pageLabel);
+    }
+
+    public async Task<PageMutationResult<Guid>> DetachLabelAsync(
+        DetachLabelRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        var pageLabel = await _db.PageLabels.FirstOrDefaultAsync(
+            pl => pl.PageId == request.PageId && pl.LabelId == request.LabelId, cancellationToken);
+        if (pageLabel is null)
+        {
+            return PageMutationResult<Guid>.Failure(new NotFoundError(request.LabelId));
+        }
+
+        var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == request.PageId, cancellationToken);
+        if (page is null)
+        {
+            return PageMutationResult<Guid>.Failure(new NotFoundError(request.PageId));
+        }
+
+        var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
+        if (space is null)
+        {
+            return PageMutationResult<Guid>.Failure(new NotFoundError(page.SpaceId));
+        }
+
+        if (space.IsReplicaOf(_localInstanceId))
+        {
+            return PageMutationResult<Guid>.Failure(new ReadOnlyReplicaError(space.Id));
+        }
+
+        var canEdit = await ComputeCanEditAsync(space, page, principal, cancellationToken);
+        if (!canEdit)
+        {
+            return PageMutationResult<Guid>.Failure(new ForbiddenError("canEdit required"));
+        }
+
+        var label = await _db.Labels.FirstOrDefaultAsync(l => l.Id == request.LabelId, cancellationToken);
+        var labelName = label?.Name ?? string.Empty;
+
+        _db.PageLabels.Remove(pageLabel);
+
+        _db.AuditContext = auditContext;
+        _db.RaiseDomainEvent(new LabelDetachedEvent(request.LabelId, page.Id, space.Id, space.Key, actingUserId, labelName));
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return PageMutationResult<Guid>.Success(request.LabelId);
+    }
+
+    public async Task<IReadOnlyList<Page>> GetPagesByLabelAsync(
+        Guid spaceId, string labelName, Principal principal, CancellationToken cancellationToken = default)
+    {
+        var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == spaceId, cancellationToken);
+        if (space is null)
+        {
+            return Array.Empty<Page>();
+        }
+
+        var spaceGrants = await _db.AccessRules
+            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
+            .ToListAsync(cancellationToken);
+        if (EffectivePermissionCalculator.ComputeSpaceRole(spaceGrants, principal) is null)
+        {
+            return Array.Empty<Page>(); // no space role at all - nothing is visible (design.md §6.7)
+        }
+
+        var candidatePages = await _db.Pages
+            .Where(p => p.SpaceId == spaceId && p.PageLabels.Any(pl => pl.Label!.Name == labelName))
+            .ToListAsync(cancellationToken);
+
+        if (candidatePages.Count == 0)
+        {
+            return Array.Empty<Page>();
+        }
+
+        var relevantRestrictionPageIds = candidatePages
+            .SelectMany(p => p.GetAncestorIds().Append(p.Id))
+            .Distinct()
+            .ToArray();
+        var restrictions = await _db.AccessRules
+            .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && relevantRestrictionPageIds.Contains(r.PageId.Value))
+            .ToListAsync(cancellationToken);
+
+        // design.md §6.7: a label listing must not reveal a restricted page's existence
+        // by any means, including by omission-implied count - each candidate is
+        // filtered individually against its own ancestor chain, exactly like the page tree.
+        var visiblePages = new List<Page>();
+        foreach (var page in candidatePages)
+        {
+            var applicableIds = new HashSet<Guid>(page.GetAncestorIds()) { page.Id };
+            var applicableRestrictions = restrictions.Where(r => applicableIds.Contains(r.PageId!.Value)).ToList();
+            var permission = EffectivePermissionCalculator.Compute(spaceGrants, applicableRestrictions, isReplicaSpace: false, principal);
+            if (permission.CanView)
+            {
+                visiblePages.Add(page);
+            }
+        }
+
+        return visiblePages;
+    }
+
+    private async Task<bool> ComputeCanEditAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
+    {
+        var spaceGrants = await _db.AccessRules
+            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
+            .ToListAsync(cancellationToken);
+
+        var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
+        var restrictions = restrictionIds.Length == 0
+            ? new List<AccessRule>()
+            : await _db.AccessRules
+                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && restrictionIds.Contains(r.PageId.Value))
+                .ToListAsync(cancellationToken);
+
+        var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, space.IsReplicaOf(_localInstanceId), principal);
+        return permission.CanEdit;
+    }
+}

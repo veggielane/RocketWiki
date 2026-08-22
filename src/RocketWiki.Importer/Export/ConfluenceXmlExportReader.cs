@@ -1,0 +1,301 @@
+using System.Globalization;
+using System.IO.Compression;
+using RocketWiki.Importer.Export.Internal;
+
+namespace RocketWiki.Importer.Export;
+
+/// <summary>
+/// Reads Confluence's "XML" full-space-export archive (Space Tools → Content Tools →
+/// Export → XML): a zip containing <c>entities.xml</c> — a generic Hibernate-style object
+/// graph of <c>Space</c>, <c>Page</c>, <c>BodyContent</c>, <c>Attachment</c>, and user
+/// objects — plus the attachment binaries themselves under <c>attachments/</c>.
+/// </summary>
+/// <remarks>
+/// <b>This has not been run against a real Confluence export.</b> No Confluence instance
+/// or sample export was available while building this importer (see the migration
+/// converter's own report for the same caveat about hand-written fixtures vs. real
+/// content). The object/property/collection shape and the class and property names below
+/// (<c>Page.bodyContents</c>, <c>BodyContent.bodyType</c>, <c>Attachment.fileName</c>,
+/// the <c>attachments/{id}/...</c> archive layout) reflect the documented, long-stable
+/// structure of this export format, but property names have drifted slightly across
+/// Confluence versions before and could again. design.md §16's trial import against a
+/// real space export is exactly the step that proves or corrects the specifics here —
+/// treat this class as the first draft that step is meant to validate, not a verified
+/// implementation. See <c>RUNBOOK.md</c> for the specific assumptions a trial import
+/// needs to confirm, comment/label resolution most of all — those are the least certain
+/// part of this reader, modeled from documented shape with no way to verify which of two
+/// or three plausible property names a real export actually uses.
+/// </remarks>
+public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
+{
+    public ConfluenceSpaceExport Read(Stream exportZip)
+    {
+        var archive = new ZipArchive(exportZip, ZipArchiveMode.Read, leaveOpen: false);
+
+        var entitiesEntry = archive.GetEntry("entities.xml")
+            ?? throw new ConfluenceExportFormatException(
+                "The archive has no entities.xml at its root - this doesn't look like a Confluence XML space export.");
+
+        EntityGraph graph;
+        using (var entitiesStream = entitiesEntry.Open())
+        {
+            graph = EntityGraph.Parse(entitiesStream);
+        }
+
+        var spaceObjects = graph.ObjectsOfClass("Space").ToList();
+        if (spaceObjects.Count == 0)
+        {
+            throw new ConfluenceExportFormatException(
+                "entities.xml contains no Space object. Expected exactly one <object class=\"Space\"> element - " +
+                "this reader targets a single-space XML export (Space Tools -> Content Tools -> Export -> XML), " +
+                "not a full site backup.");
+        }
+
+        if (spaceObjects.Count > 1)
+        {
+            throw new ConfluenceExportFormatException(
+                $"entities.xml contains {spaceObjects.Count} Space objects, but this reader expects exactly one. " +
+                "A multi-space export (or a full site backup) is not supported - export one space at a time.");
+        }
+
+        var spaceObject = spaceObjects[0];
+        var spaceKey = graph.GetScalar(spaceObject, "key")
+            ?? throw new ConfluenceExportFormatException(
+                "The Space object has no 'key' property. This reader was built against the storage shape " +
+                "documented for Confluence Server/Data Center XML exports (property name \"key\") and has not " +
+                "been run against a real export - if a real one lacks this property, please share a redacted " +
+                "sample so the property name can be corrected.");
+        var spaceName = graph.GetScalar(spaceObject, "name") ?? spaceKey;
+        var spaceDescription = graph.GetScalar(spaceObject, "description");
+
+        var commentsByPageId = ResolveAllComments(graph);
+
+        var pages = new List<ConfluenceExportPage>();
+        foreach (var pageObject in graph.ObjectsOfClass("Page"))
+        {
+            // Confluence records superseded versions and unpublished drafts as their own
+            // Page objects too; only "current" content should become a live page here.
+            var status = graph.GetScalar(pageObject, "contentStatus");
+            if (status is not null && !string.Equals(status, "current", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var title = graph.GetScalar(pageObject, "title") ?? $"Untitled page {pageObject.Id}";
+            var parentId = graph.GetReferenceId(pageObject, "parent");
+            var storageBody = ResolveStorageBody(graph, graph.GetCollectionIds(pageObject, "bodyContents"));
+            var author = ResolveAuthor(graph, graph.GetReferenceId(pageObject, "creator"));
+            var createdAt = ParseConfluenceDate(graph.GetScalar(pageObject, "creationDate"));
+
+            var attachments = graph.GetCollectionIds(pageObject, "attachments")
+                .Select(graph.ById)
+                .Where(a => a is not null)
+                .Select(a => BuildAttachment(graph, a!, archive))
+                .Where(a => a is not null)
+                .Select(a => a!)
+                .ToList();
+
+            var comments = commentsByPageId.GetValueOrDefault(pageObject.Id, []);
+            var labels = ResolveLabels(graph, pageObject);
+
+            pages.Add(new ConfluenceExportPage(pageObject.Id, parentId, title, storageBody, author, createdAt, attachments, comments, labels));
+        }
+
+        var space = new ConfluenceExportSpace(spaceKey, spaceName, spaceDescription, pages);
+        return new ConfluenceSpaceExport(archive, space);
+    }
+
+    /// <summary>
+    /// Groups every Comment object by the page it belongs to, computed once for the whole
+    /// export rather than per page (a Comment's owning page and, for a reply, its parent
+    /// comment are the same regardless of which page we're currently looking at).
+    /// </summary>
+    /// <remarks>
+    /// Assumed shape: a Comment carries an <c>owner</c> (falling back to <c>content</c> or
+    /// <c>page</c>) reference to the <c>Page</c> it is attached to, present on every
+    /// comment regardless of thread depth; <c>parent</c> is present only on a threaded
+    /// reply and references another <c>Comment</c>. This is the least certain part of this
+    /// reader (see the class remarks) — a comment whose owning page can't be determined is
+    /// dropped rather than guessed at.
+    /// </remarks>
+    private static Dictionary<string, List<ConfluenceExportComment>> ResolveAllComments(EntityGraph graph)
+    {
+        var byPageId = new Dictionary<string, List<ConfluenceExportComment>>(StringComparer.Ordinal);
+
+        foreach (var commentObject in graph.ObjectsOfClass("Comment"))
+        {
+            var status = graph.GetScalar(commentObject, "contentStatus");
+            if (status is not null && !string.Equals(status, "current", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var ownerRef = graph.GetReferenceId(commentObject, "owner")
+                ?? graph.GetReferenceId(commentObject, "content")
+                ?? graph.GetReferenceId(commentObject, "page");
+            string? owningPageId = ownerRef is not null && graph.ById(ownerRef)?.Class == "Page" ? ownerRef : null;
+
+            string? parentCommentId = null;
+            var parentRef = graph.GetReferenceId(commentObject, "parent");
+            if (parentRef is not null)
+            {
+                var parentObject = graph.ById(parentRef);
+                if (parentObject?.Class == "Comment")
+                {
+                    parentCommentId = parentRef;
+                }
+                else if (parentObject?.Class == "Page")
+                {
+                    owningPageId ??= parentRef;
+                }
+            }
+
+            if (owningPageId is null)
+            {
+                continue; // can't place this comment anywhere - dropped, not guessed at
+            }
+
+            var body = ResolveStorageBody(graph, graph.GetCollectionIds(commentObject, "bodyContents"));
+            var author = ResolveAuthor(graph, graph.GetReferenceId(commentObject, "creator"));
+            var createdAt = ParseConfluenceDate(graph.GetScalar(commentObject, "creationDate"));
+
+            var comment = new ConfluenceExportComment(commentObject.Id, parentCommentId, body, author, createdAt);
+            (byPageId.TryGetValue(owningPageId, out var list) ? list : byPageId[owningPageId] = []).Add(comment);
+        }
+
+        return byPageId;
+    }
+
+    /// <summary>
+    /// Assumed shape: either a Page has a direct <c>labels</c> collection of <c>Label</c>
+    /// objects, or an indirect <c>labellings</c> collection of join objects each carrying
+    /// a <c>label</c> reference — both are checked since Confluence has used both shapes.
+    /// A namespaced label name ("global:my-tag") is reduced to its plain tag text, since
+    /// data-model.md's Label has no namespace concept.
+    /// </summary>
+    private static IReadOnlyList<string> ResolveLabels(EntityGraph graph, EntityObject pageObject)
+    {
+        var names = new List<string>();
+
+        foreach (var labelId in graph.GetCollectionIds(pageObject, "labels"))
+        {
+            var labelName = graph.ById(labelId) is { } labelObject ? graph.GetScalar(labelObject, "name") : null;
+            if (labelName is not null)
+            {
+                names.Add(NormalizeLabelName(labelName));
+            }
+        }
+
+        foreach (var labellingId in graph.GetCollectionIds(pageObject, "labellings"))
+        {
+            if (graph.ById(labellingId) is not { } labelling)
+            {
+                continue;
+            }
+
+            var labelRef = graph.GetReferenceId(labelling, "label");
+            var labelName = labelRef is not null && graph.ById(labelRef) is { } labelObject
+                ? graph.GetScalar(labelObject, "name")
+                : null;
+            if (labelName is not null)
+            {
+                names.Add(NormalizeLabelName(labelName));
+            }
+        }
+
+        return names.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    private static string NormalizeLabelName(string rawName)
+    {
+        var colonIndex = rawName.IndexOf(':');
+        return colonIndex > 0 && colonIndex < rawName.Length - 1 ? rawName[(colonIndex + 1)..] : rawName;
+    }
+
+    private static string ResolveStorageBody(EntityGraph graph, IReadOnlyList<string> bodyContentIds)
+    {
+        // A page can carry more than one BodyContent across format migrations Confluence
+        // has made over the years; bodyType 2 is storage format (what
+        // ConfluenceStorageConverter understands) and is preferred. If none is explicitly
+        // typed, the first BodyContent found is used as a best effort.
+        EntityObject? fallback = null;
+        foreach (var id in bodyContentIds)
+        {
+            var bodyContent = graph.ById(id);
+            if (bodyContent is null || bodyContent.Class != "BodyContent")
+            {
+                continue;
+            }
+
+            fallback ??= bodyContent;
+            if (graph.GetScalar(bodyContent, "bodyType") == "2")
+            {
+                return graph.GetScalar(bodyContent, "body") ?? string.Empty;
+            }
+        }
+
+        return fallback is null ? string.Empty : graph.GetScalar(fallback, "body") ?? string.Empty;
+    }
+
+    private static ConfluenceExportAuthor? ResolveAuthor(EntityGraph graph, string? creatorId)
+    {
+        if (creatorId is null)
+        {
+            return null;
+        }
+
+        var user = graph.ById(creatorId);
+        if (user is null)
+        {
+            return null;
+        }
+
+        var email = graph.GetScalar(user, "email");
+        var name = graph.GetScalar(user, "fullName") ?? graph.GetScalar(user, "name");
+        return email is null && name is null ? null : new ConfluenceExportAuthor(email, name);
+    }
+
+    private static DateTimeOffset? ParseConfluenceDate(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw))
+        {
+            return null;
+        }
+
+        // Confluence's export renders java.util.Date without a time zone offset, in
+        // whatever zone the server ran in - there is no way to recover which, so this is
+        // parsed as-is and should be treated as approximate, not authoritative.
+        return DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static ConfluenceExportAttachment? BuildAttachment(EntityGraph graph, EntityObject attachmentObject, ZipArchive archive)
+    {
+        var fileName = graph.GetScalar(attachmentObject, "fileName");
+        if (fileName is null)
+        {
+            return null;
+        }
+
+        var contentType = graph.GetScalar(attachmentObject, "contentType") ?? "application/octet-stream";
+
+        // The binary layout under attachments/ has varied across Confluence versions
+        // (attachments/{attachmentId}/{version} is the modern layout); match by prefix
+        // rather than an exact path so small variations don't silently drop the file.
+        var entry = archive.Entries.FirstOrDefault(e =>
+            e.FullName.StartsWith($"attachments/{attachmentObject.Id}/", StringComparison.Ordinal));
+        if (entry is null)
+        {
+            return null;
+        }
+
+        var entryFullName = entry.FullName;
+        return new ConfluenceExportAttachment(attachmentObject.Id, fileName, contentType, () =>
+            archive.GetEntry(entryFullName)?.Open()
+            ?? throw new ConfluenceExportFormatException(
+                $"Attachment '{fileName}' (Confluence id {attachmentObject.Id}) was found in entities.xml, and its " +
+                $"binary was located at '{entryFullName}' while reading the archive, but that entry is gone now " +
+                "that content is actually being read. The archive may have been modified between reading and use."));
+    }
+}

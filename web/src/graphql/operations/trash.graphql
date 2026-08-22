@@ -1,0 +1,38 @@
+mutation DeletePage($input: DeletePageInput!) {
+  deletePage(input: $input) {
+    success
+    blockedDescendantCount
+    trashBatchId
+    readOnlyReplicaError {
+      message
+      originInstanceId
+    }
+  }
+}
+
+query SpaceTrash($key: String!) {
+  space(key: $key) {
+    key
+    name
+    trash {
+      id
+      rootPageId
+      rootPageTitle
+      pageCount
+      deletedAtUtc
+      deletedByDisplayName
+      expiresAtUtc
+    }
+  }
+}
+
+mutation RestoreTrashBatch($input: RestoreTrashBatchInput!) {
+  restoreTrashBatch(input: $input) {
+    restoredPageCount
+    restoredRootPageId
+    readOnlyReplicaError {
+      message
+      originInstanceId
+    }
+  }
+}

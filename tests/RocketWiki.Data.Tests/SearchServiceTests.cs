@@ -1,0 +1,252 @@
+using RocketWiki.Core.Access;
+using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
+using RocketWiki.Core.Services;
+using RocketWiki.Data.Services;
+using Xunit;
+
+namespace RocketWiki.Data.Tests;
+
+/// <summary>
+/// design.md §9.1/§9.3: covers the LIKE fallback path, which is what the SQLite tier
+/// actually exercises (SearchService's SQL Server CONTAINSTABLE path is unverified
+/// here - see the TODO comment on SearchService.SearchViaFullTextAsync and the
+/// migration's FTS raw SQL). Facets and the over-fetch-then-filter permission behavior
+/// are provider-agnostic, so they're fully covered.
+/// </summary>
+public class SearchServiceTests : SqliteTestBase
+{
+    private static Principal ViewerPrincipal(params string[] groups) => Principal.Create("viewer-sub", groups);
+
+    private static AccessRule ViewerGrant(Guid spaceId) => new()
+    {
+        Kind = AccessRuleKind.SpaceGrant,
+        SpaceId = spaceId,
+        Role = SpaceRole.Viewer,
+        ExpressionJson = """{ "everyone": true }""",
+        CreatedAtUtc = DateTime.UtcNow,
+        CreatedByUserId = Guid.NewGuid(),
+        UpdatedAtUtc = DateTime.UtcNow,
+        UpdatedByUserId = Guid.NewGuid(),
+    };
+
+    private static AccessRule ViewRestriction(Guid pageId, string expressionJson) => new()
+    {
+        Kind = AccessRuleKind.PageRestriction,
+        PageId = pageId,
+        Action = PageAction.View,
+        ExpressionJson = expressionJson,
+        CreatedAtUtc = DateTime.UtcNow,
+        CreatedByUserId = Guid.NewGuid(),
+        UpdatedAtUtc = DateTime.UtcNow,
+        UpdatedByUserId = Guid.NewGuid(),
+    };
+
+    [Fact]
+    public async Task Search_MatchesTitleOrContent_ReturnsHit()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space, "rocket-engines");
+        page.Title = "Rocket Engine Design";
+        page.CurrentContent = "# Combustion chambers and nozzles";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("combustion", null, null), ViewerPrincipal(), maxResults: 10);
+
+        Assert.Single(result);
+        Assert.Equal(page.Id, result[0].PageId);
+        Assert.Equal(space.Key, result[0].SpaceKey);
+    }
+
+    [Fact]
+    public async Task Search_NoMatch_ReturnsEmpty()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+        page.CurrentContent = "Nothing relevant here.";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("zzz-nonexistent-term", null, null), ViewerPrincipal(), maxResults: 10);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task Search_EmptyQuery_ReturnsEmpty_NoWastedQuery()
+    {
+        using var context = CreateContext();
+        var service = new SearchService(context);
+
+        var result = await service.SearchAsync(new SearchRequest("   ", null, null), ViewerPrincipal(), maxResults: 10);
+
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task Search_SpaceFacet_ExcludesMatchesFromOtherSpaces()
+    {
+        var spaceA = TestData.NewSpace("ENG");
+        var spaceB = TestData.NewSpace("OPS");
+        var pageA = TestData.NewPage(spaceA, "a");
+        var pageB = TestData.NewPage(spaceB, "b");
+        pageA.CurrentContent = "shared-keyword content A";
+        pageB.CurrentContent = "shared-keyword content B";
+
+        using var context = CreateContext();
+        context.Spaces.AddRange(spaceA, spaceB);
+        context.Pages.AddRange(pageA, pageB);
+        context.AccessRules.Add(ViewerGrant(spaceA.Id));
+        context.AccessRules.Add(ViewerGrant(spaceB.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("shared-keyword", "ENG", null), ViewerPrincipal(), maxResults: 10);
+
+        Assert.Single(result);
+        Assert.Equal(pageA.Id, result[0].PageId);
+    }
+
+    [Fact]
+    public async Task Search_LabelFacet_MatchesAnyOfTheGivenLabels()
+    {
+        var space = TestData.NewSpace();
+        var pageWithLabelA = TestData.NewPage(space, "a");
+        var pageWithLabelB = TestData.NewPage(space, "b");
+        var pageWithNoLabel = TestData.NewPage(space, "c");
+        pageWithLabelA.CurrentContent = "keyword content";
+        pageWithLabelB.CurrentContent = "keyword content";
+        pageWithNoLabel.CurrentContent = "keyword content";
+        var labelA = new Label { SpaceId = space.Id, Name = "how-to" };
+        var labelB = new Label { SpaceId = space.Id, Name = "reference" };
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.AddRange(pageWithLabelA, pageWithLabelB, pageWithNoLabel);
+        context.Labels.AddRange(labelA, labelB);
+        context.PageLabels.Add(new PageLabel { PageId = pageWithLabelA.Id, LabelId = labelA.Id });
+        context.PageLabels.Add(new PageLabel { PageId = pageWithLabelB.Id, LabelId = labelB.Id });
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(
+            new SearchRequest("keyword", null, new[] { "how-to", "reference" }), ViewerPrincipal(), maxResults: 10);
+
+        var resultIds = result.Select(h => h.PageId).ToList();
+        Assert.Contains(pageWithLabelA.Id, resultIds);
+        Assert.Contains(pageWithLabelB.Id, resultIds);
+        Assert.DoesNotContain(pageWithNoLabel.Id, resultIds);
+    }
+
+    [Fact]
+    public async Task Search_RestrictedMatch_IsAbsentFromResults_NotJustFilteredWithAGap()
+    {
+        // design.md §6.7/§9.3: absent, not forbidden - same rule as every other read.
+        var space = TestData.NewSpace();
+        var visiblePage = TestData.NewPage(space, "visible");
+        var restrictedPage = TestData.NewPage(space, "restricted");
+        visiblePage.CurrentContent = "keyword content one";
+        restrictedPage.CurrentContent = "keyword content two";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.AddRange(visiblePage, restrictedPage);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(ViewRestriction(restrictedPage.Id, """{ "group": "top-secret" }"""));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("keyword", null, null), ViewerPrincipal(), maxResults: 10);
+
+        Assert.Single(result);
+        Assert.Equal(visiblePage.Id, result[0].PageId);
+    }
+
+    [Fact]
+    public async Task Search_OverFetchesBeforeFiltering_SoARestrictionHeavyResultSetIsNotEmpty()
+    {
+        // design.md §9.3: over-fetch top-K so that when maxResults=1 and the single
+        // best-looking candidate happens to be restricted, a visible result further
+        // down the (recency-ordered, for LIKE) list still comes back - the search
+        // doesn't stop at the first K before permission filtering even applies.
+        var space = TestData.NewSpace();
+        var now = DateTime.UtcNow;
+
+        var restrictedNewest = TestData.NewPage(space, "restricted");
+        restrictedNewest.CurrentContent = "keyword content";
+        restrictedNewest.UpdatedAtUtc = now; // most recent - LIKE fallback orders by UpdatedAtUtc desc
+
+        var visibleOlder = TestData.NewPage(space, "visible");
+        visibleOlder.CurrentContent = "keyword content";
+        visibleOlder.UpdatedAtUtc = now.AddMinutes(-5);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.AddRange(restrictedNewest, visibleOlder);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(ViewRestriction(restrictedNewest.Id, """{ "group": "top-secret" }"""));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        // Ask for just 1 result - without over-fetching, a naive "take 1 then filter"
+        // implementation would filter the single restricted candidate down to nothing.
+        var result = await service.SearchAsync(new SearchRequest("keyword", null, null), ViewerPrincipal(), maxResults: 1);
+
+        Assert.Single(result);
+        Assert.Equal(visibleOlder.Id, result[0].PageId);
+    }
+
+    [Fact]
+    public async Task Search_RespectsMaxResults()
+    {
+        var space = TestData.NewSpace();
+        var pages = Enumerable.Range(0, 5).Select(i =>
+        {
+            var page = TestData.NewPage(space, $"page-{i}");
+            page.CurrentContent = "keyword content";
+            return page;
+        }).ToList();
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.AddRange(pages);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("keyword", null, null), ViewerPrincipal(), maxResults: 2);
+
+        Assert.Equal(2, result.Count);
+    }
+
+    [Fact]
+    public async Task Search_NoSpaceRoleAtAll_ReturnsEmpty()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+        page.CurrentContent = "keyword content";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        // No AccessRule grant at all for this space.
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("keyword", null, null), ViewerPrincipal(), maxResults: 10);
+
+        Assert.Empty(result);
+    }
+}

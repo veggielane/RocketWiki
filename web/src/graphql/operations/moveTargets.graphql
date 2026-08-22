@@ -1,0 +1,48 @@
+# A separate, deeper query than SpaceTree (spaces.graphql) — the move
+# dialog needs each node's own restriction rules so it can compute the
+# accumulated ancestor-restriction set for any candidate target
+# (access/move/visibilityChange.ts). Real recursion isn't possible in
+# GraphQL, so this just goes a few levels deeper than the nav tree query;
+# fine for typical wiki nesting depth in this scaffold.
+query SpaceTreeForMove($key: String!) {
+  space(key: $key) {
+    key
+    labels
+    tree {
+      ...MoveTreeNode
+    }
+  }
+}
+
+fragment MoveTreeNode on PageTreeNode {
+  id
+  title
+  ownViewRestriction {
+    ruleId
+    expressionJson
+  }
+  children {
+    id
+    title
+    ownViewRestriction {
+      ruleId
+      expressionJson
+    }
+    children {
+      id
+      title
+      ownViewRestriction {
+        ruleId
+        expressionJson
+      }
+      children {
+        id
+        title
+        ownViewRestriction {
+          ruleId
+          expressionJson
+        }
+      }
+    }
+  }
+}

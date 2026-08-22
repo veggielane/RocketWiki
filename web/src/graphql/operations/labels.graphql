@@ -1,0 +1,12 @@
+mutation SetLabels($input: SetLabelsInput!) {
+  setLabels(input: $input) {
+    page {
+      id
+      labels
+    }
+    readOnlyReplicaError {
+      message
+      originInstanceId
+    }
+  }
+}

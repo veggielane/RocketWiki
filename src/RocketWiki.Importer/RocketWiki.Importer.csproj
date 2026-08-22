@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>RocketWiki.Importer</RootNamespace>
+    <!-- design.md §14: "RocketWiki.Importer/ Confluence migration console tool" - this
+         project IS the tool, not just a library another host runs. It's still a normal
+         referenceable library too (RocketWiki.Importer.Tests, and the dry-run path in
+         particular, use it as one with zero database dependency). -->
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Conversion/ and the dry-run validation path (Pipeline/ConfluenceImportValidator)
+         depend only on RocketWiki.Core's service *contracts* - never EF Core - so both
+         run with zero database dependency. The real (non-dry-run) CLI path additionally
+         needs concrete service implementations and IFileStorage, hence the two references
+         below: consuming RocketWiki.Data/RocketWiki.Storage's public surface, per the
+         senior-software-engineer.md brief - never their internals, never a hand-rolled
+         EF path of this project's own. -->
+    <ProjectReference Include="..\RocketWiki.Core\RocketWiki.Core.csproj" />
+    <ProjectReference Include="..\RocketWiki.Data\RocketWiki.Data.csproj" />
+    <ProjectReference Include="..\RocketWiki.Storage\RocketWiki.Storage.csproj" />
+  </ItemGroup>
+
+</Project>

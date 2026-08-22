@@ -1,0 +1,11 @@
+/* MUI's CssBaseline handles the rest of the reset; this only covers what
+   it doesn't: making the app fill the viewport for AppShell's flex layout. */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}

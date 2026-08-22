@@ -1,0 +1,58 @@
+// RocketWiki AppHost — the system topology in code (design.md §15).
+//
+// Deviations from the design.md §15 snippet (API shape only; intent unchanged):
+//   - No official Microsoft Aspire hosting integration exists for Keycloak.
+//     `AddKeycloak(...)` in design.md is illustrative; the actual extension method
+//     from the leading community package (Keycloak.AuthServices.Aspire.Hosting by
+//     NikiforovAll) is `AddKeycloakContainer(...)`.
+//   - `WithDataVolume()` is a named-resource convenience (SqlServer, Postgres, Redis,
+//     etc.) that generic `AddContainer` resources don't get. MinIO uses the generic
+//     `.WithVolume(name, target)` API instead, which is functionally identical.
+//   - MinIO has no dedicated Aspire hosting package either (a few third-party ones
+//     exist but are unmaintained/version-mismatched against Aspire 13.5.1), so it's
+//     wired by hand: explicit S3 (9000) and console (9001) endpoints, dev-only root
+//     credentials, and the `server /data --console-address :9001` command.
+var builder = DistributedApplication.CreateBuilder(args);
+
+var sql = builder.AddSqlServer("sql")
+    .WithDataVolume()
+    .AddDatabase("rocketwiki");
+
+var minio = builder.AddContainer("minio", "minio/minio")
+    .WithVolume("minio-data", "/data")
+    .WithHttpEndpoint(targetPort: 9000, name: "http")   // S3 API
+    .WithHttpEndpoint(targetPort: 9001, name: "console") // MinIO console (dev only)
+    .WithEnvironment("MINIO_ROOT_USER", "minioadmin")
+    .WithEnvironment("MINIO_ROOT_PASSWORD", "minioadmin")
+    .WithArgs("server", "/data", "--console-address", ":9001");
+
+// Dev-only Keycloak instance. Production points RocketWiki.Api at an existing
+// realm via configuration instead (design.md §15 "Production"). The `rocketwiki`
+// realm — clients, groups, protocol mappers for `groups`/`nationality`, and dev
+// users covering the rule engine's edge cases — is seeded from ./keycloak on
+// every fresh start (see keycloak/README.md for exactly what's in it, why, and
+// what production needs to reproduce by hand). AddKeycloakContainer always
+// passes --import-realm, so this is a no-op when the folder is empty and a real
+// import once it isn't.
+var keycloak = builder.AddKeycloakContainer("keycloak")
+    .WithDataVolume()
+    .WithImport(Path.Combine(builder.AppHostDirectory, "keycloak"), isReadOnly: true);
+
+// External OpenAI-compatible embeddings endpoint (design.md §9.4) — always a
+// connection string, never a container Aspire runs, in every environment.
+var embeddings = builder.AddConnectionString("embeddings");
+
+var api = builder.AddProject<Projects.RocketWiki_Api>("api")
+    .WithReference(sql)
+    .WithReference(minio.GetEndpoint("http"))
+    .WithReference(keycloak)
+    .WithReference(embeddings);
+
+// TODO(frontend agent / milestone 0): wire the Vite app once web/ has a working
+// dev server script. Uncomment once confirmed:
+//
+//   builder.AddViteApp("web", "../../web").WithReference(api);
+//
+// Requires the Aspire.Hosting.JavaScript package (already referenced above).
+
+builder.Build().Run();

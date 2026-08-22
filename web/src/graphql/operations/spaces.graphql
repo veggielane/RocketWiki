@@ -1,0 +1,41 @@
+query SpaceList {
+  spaces {
+    key
+    name
+    description
+    isReplica
+  }
+}
+
+query SpaceTree($key: String!) {
+  space(key: $key) {
+    key
+    name
+    isReplica
+    originInstanceId
+    canManageAccess
+    labels
+    homepage {
+      id
+      title
+    }
+    tree {
+      id
+      title
+      slug
+      labels
+      children {
+        id
+        title
+        slug
+        labels
+        children {
+          id
+          title
+          slug
+          labels
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "headings": [
+    {
+      "level": 1,
+      "text": "Intro"
+    },
+    {
+      "level": 2,
+      "text": "Setup"
+    },
+    {
+      "level": 3,
+      "text": "Windows"
+    },
+    {
+      "level": 2,
+      "text": "Usage"
+    }
+  ],
+  "anchors": [
+    "intro",
+    "intro--setup",
+    "intro--setup--windows",
+    "intro--usage"
+  ]
+}

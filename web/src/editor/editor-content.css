@@ -1,0 +1,151 @@
+/*
+ * Styling for the ProseMirror-rendered document itself. Deliberately plain
+ * CSS, not MUI/sx — editor internals are TipTap/ProseMirror, not MUI
+ * components, per the frontend engineering brief. Light/dark aware via
+ * `prefers-color-scheme` plus the app's own `data-theme` override (see
+ * theme/ColorModeProvider.tsx), matching the convention used for
+ * published artifacts in this codebase.
+ */
+
+.rw-editor-content {
+  outline: none;
+  min-height: 200px;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.rw-editor-content p {
+  margin: 0 0 0.75em;
+}
+
+.rw-attachment-image {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.rw-attachment-image img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.rw-attachment-image-placeholder {
+  display: inline-block;
+  padding: 0.5em 1em;
+  border-radius: 4px;
+  background: var(--rw-code-bg, #f2f3f5);
+  color: var(--rw-muted, #5b6270);
+  font-size: 0.85em;
+  font-style: italic;
+}
+
+.rw-editor-content h1,
+.rw-editor-content h2,
+.rw-editor-content h3 {
+  line-height: 1.25;
+  margin: 1.2em 0 0.5em;
+}
+
+.rw-editor-content blockquote {
+  margin: 0 0 0.75em;
+  padding-left: 1em;
+  border-left: 3px solid var(--rw-border, #c9ccd1);
+  color: var(--rw-muted, #5b6270);
+}
+
+.rw-code-block {
+  background: var(--rw-code-bg, #f2f3f5);
+  border-radius: 6px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+.rw-editor-content :not(pre) > code {
+  background: var(--rw-code-bg, #f2f3f5);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  font-size: 0.9em;
+}
+
+.rw-callout {
+  border-radius: 8px;
+  padding: 0.75em 1em;
+  margin: 0 0 0.75em;
+  border-left: 4px solid var(--rw-callout-border, #6b9bf7);
+  background: var(--rw-callout-bg, rgba(107, 155, 247, 0.08));
+}
+
+.rw-callout[data-callout-type='warning'] {
+  --rw-callout-border: #d99a1b;
+  --rw-callout-bg: rgba(217, 154, 27, 0.1);
+}
+
+.rw-callout[data-callout-type='note'] {
+  --rw-callout-border: #8a8f98;
+  --rw-callout-bg: rgba(138, 143, 152, 0.1);
+}
+
+.rw-callout > *:last-child {
+  margin-bottom: 0;
+}
+
+.rw-page-link {
+  color: var(--rw-link, #1a56db);
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+}
+
+.rw-mention {
+  background: var(--rw-mention-bg, rgba(107, 155, 247, 0.15));
+  border-radius: 4px;
+  padding: 0 0.3em;
+  font-weight: 500;
+}
+
+.rw-editor-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 0.75em;
+}
+
+.rw-editor-content th,
+.rw-editor-content td {
+  border: 1px solid var(--rw-border, #c9ccd1);
+  padding: 0.4em 0.6em;
+  text-align: left;
+}
+
+.rw-editor-content th {
+  background: var(--rw-code-bg, #f2f3f5);
+}
+
+.rw-editor-content ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0.25em;
+}
+
+.rw-editor-content ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4em;
+}
+
+@media (prefers-color-scheme: dark) {
+  .rw-editor-content {
+    --rw-border: #383c46;
+    --rw-muted: #9aa1ad;
+    --rw-code-bg: #20232b;
+    --rw-link: #6b9bf7;
+    --rw-mention-bg: rgba(107, 155, 247, 0.22);
+  }
+}
+
+:root[data-theme='dark'] .rw-editor-content {
+  --rw-border: #383c46;
+  --rw-muted: #9aa1ad;
+  --rw-code-bg: #20232b;
+  --rw-link: #6b9bf7;
+  --rw-mention-bg: rgba(107, 155, 247, 0.22);
+}
