@@ -660,7 +660,26 @@ so it is subject to the same rules as reading (§6):
 - **Minimal payloads.** Type, page id, space key, actor display name,
   timestamp — and the page title only for recipients who passed `canView`.
   Never content, never diffs.
-- **Mentions** are parsed from `user://{id}` links on save (§4).
+- **Mentions** are parsed from `user://{id}` links on save (§4). Mention
+  notifications are **delta-based on edit**: a page save notifies only users
+  mentioned in the new revision who were not mentioned in the previous one,
+  so re-saving a page never re-pings its standing mentions. Comment mentions
+  notify on add. A user who is both a watcher and newly mentioned receives a
+  single notification of type `mention`.
+- **Watching is canView-gated; unwatching is not.** Creating a watch
+  requires the target's own read gate (canView for a page, any space role
+  for a space) — you can't watch what you can't see. Removing a watch
+  touches only the caller's own row and deliberately requires no
+  permission: a user who lost access must still be able to unwatch, and the
+  subscription is already inert either way because canView is re-evaluated
+  per recipient at send time. Watches on replica spaces are allowed: a
+  Watch row is instance-local user metadata, not a write into the replica's
+  synced content, and watching a replica is exactly how a user hears that a
+  sync bundle changed it.
+- Audit actions: `watch.add` / `watch.remove` (subject = the watched page
+  or space) and `notification.markRead` flow through the domain-event
+  pipeline like every mutation; the persisted list read audits as
+  `notification.list`. Delivery itself remains unaudited, as above.
 - Notifications are also **persisted** (`Notification` table) so users who
   were offline catch up; SignalR delivers the live nudge, the table is the
   record.
