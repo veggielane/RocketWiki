@@ -1,0 +1,24 @@
+apiVersion: v2
+name: rocketwiki
+description: >-
+  RocketWiki on k3s (design.md §15, milestone 9): API + static-web
+  Deployments, Traefik ingress with WebSocket support for /hubs, an EF
+  migration Job as a pre-install/pre-upgrade hook, and an offline/air-gapped
+  image path. SQL Server, Keycloak, and the S3 object store are EXTERNAL to
+  this chart by design — it consumes them, it never runs them.
+  These are the reviewed, owned artifacts §15 calls for — hand-authored, not
+  generated — and none of it has ever been applied to a real cluster
+  (README.md "Current status").
+type: application
+# Chart version: bump on any template/values change.
+version: 0.1.0
+# appVersion tracks the application image tag this chart revision was written
+# against. The repo has no release versioning yet (milestone 9 is the first
+# deployment artifact), so this is a placeholder the release process must own.
+appVersion: "0.1.0"
+kubeVersion: ">=1.28.0-0"
+keywords:
+  - wiki
+  - k3s
+sources:
+  - https://github.com/rocketwiki/rocketwiki # placeholder — repo is not published

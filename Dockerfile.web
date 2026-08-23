@@ -1,0 +1,87 @@
+# RocketWiki web (SPA) image (design.md §15, milestone 9).
+#
+# Repo root for the same reason as Dockerfile.api: the build context is the
+# repo root (it needs web/ AND deploy/docker/nginx/). Build with:
+#
+#     docker build -f Dockerfile.web \
+#       --build-arg VITE_OIDC_AUTHORITY=https://keycloak.internal/realms/rocketwiki \
+#       --build-arg VITE_OIDC_CLIENT_ID=rocketwiki-web \
+#       -t rocketwiki/web:<tag> .
+#
+# STANDING CAVEAT (README.md "Current status"): never built, never run — no
+# container runtime has ever been available here. Correct by inspection only.
+
+# ---------------------------------------------------------------------------
+# Stage 1: Vite build. node:24 to match README's stated toolchain (Node 24).
+# ---------------------------------------------------------------------------
+FROM node:24-alpine AS build
+WORKDIR /web
+
+# npm ci against the lockfile first, so the dependency layer caches.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+
+# --- Build-time configuration, stated honestly -----------------------------
+# Vite *inlines* import.meta.env.VITE_* into the emitted JS at build time.
+# There is no runtime configuration of these values: an image is permanently
+# bound to the Keycloak authority and client id it was built with, and
+# pointing an environment at a different realm means REBUILDING the image,
+# not editing a ConfigMap. That is a real limitation of the SPA-with-Vite
+# shape (web/.env.example documents the same vars for dev); a runtime
+# config.json fetch would lift it, but that is a web/ change not made here.
+#
+# What actually needs baking, per web/src usage today:
+#   - VITE_OIDC_AUTHORITY / VITE_OIDC_CLIENT_ID: the two that matter. Left
+#     unset, oidcConfig.ts falls back to http://localhost:8080/realms/rocketwiki
+#     — fine for a dev image, silently wrong for any real deployment, so CI
+#     should always pass them.
+#   - VITE_OIDC_REDIRECT_URI / VITE_OIDC_POST_LOGOUT_REDIRECT_URI: default to
+#     window.location.origin at runtime — correctly environment-relative, so
+#     baking them is only needed if an environment must override that.
+#   - VITE_GRAPHQL_URL: defaults to same-origin /graphql, which the nginx
+#     proxy below exists to satisfy. Leave unset.
+#   - VITE_SIGNALR_NOTIFICATIONS_URL: documented in web/.env.example; no code
+#     reads it yet (the SignalR transports are wired elsewhere) — accepted
+#     here anyway so the build interface doesn't churn when it lands.
+ARG VITE_OIDC_AUTHORITY
+ARG VITE_OIDC_CLIENT_ID
+ARG VITE_OIDC_REDIRECT_URI
+ARG VITE_OIDC_POST_LOGOUT_REDIRECT_URI
+ARG VITE_GRAPHQL_URL
+ARG VITE_SIGNALR_NOTIFICATIONS_URL
+ENV VITE_OIDC_AUTHORITY=$VITE_OIDC_AUTHORITY \
+    VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID \
+    VITE_OIDC_REDIRECT_URI=$VITE_OIDC_REDIRECT_URI \
+    VITE_OIDC_POST_LOGOUT_REDIRECT_URI=$VITE_OIDC_POST_LOGOUT_REDIRECT_URI \
+    VITE_GRAPHQL_URL=$VITE_GRAPHQL_URL \
+    VITE_SIGNALR_NOTIFICATIONS_URL=$VITE_SIGNALR_NOTIFICATIONS_URL
+
+# tsc -b && vite build (web/package.json). The type-check is kept on purpose:
+# an image build should fail the same way CI does, not ship what tsc rejects.
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 2: nginx-unprivileged — the official nginx image variant that runs as
+# UID 101 and listens on 8080, so the container needs no root and no
+# NET_BIND_SERVICE. Chosen over stock nginx because design.md's whole posture
+# is least-privilege by default, and over static-file exotica because nginx
+# is what §15 names and what reviewers can audit.
+# ---------------------------------------------------------------------------
+FROM nginxinc/nginx-unprivileged:stable-alpine
+
+# The config ships as a template; the image's entrypoint substitutes
+# ${API_UPSTREAM} at start (see the template's own header). The filter
+# restricts envsubst to exactly that variable so nginx's $-runtime-variables
+# can never be mangled by a stray environment collision.
+ENV API_UPSTREAM=api:8080 \
+    NGINX_ENVSUBST_FILTER=^API_UPSTREAM$
+COPY deploy/docker/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+
+COPY --from=build /web/dist /usr/share/nginx/html
+
+# nginx-unprivileged already sets USER 101 and EXPOSE 8080; restated here so
+# the reviewed artifact says what it does without chasing base-image docs.
+USER 101
+EXPOSE 8080

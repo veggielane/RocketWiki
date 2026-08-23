@@ -1,0 +1,261 @@
+# RocketWiki Helm values (design.md §15, milestone 9).
+#
+# Reading order matters less than one rule: everything external stays
+# external. SQL Server, Keycloak, and the S3 store are consumed by connection
+# string / URL, never run by this chart — design.md §17 calls the database
+# outside the cluster the lower-risk default, and §15 says production
+# Keycloak and embeddings are existing services inside the network boundary.
+#
+# NOTHING in this file is a real credential. All secrets arrive by reference
+# to a Secret the operator creates out-of-band (see `api.existingSecret`).
+
+# ---------------------------------------------------------------------------
+# Images & the air-gapped path (design.md §15 "Air-gapped install")
+# ---------------------------------------------------------------------------
+global:
+  # Registry prefix applied to every image below, e.g. "registry.internal:5000".
+  # This is the *registry mirror* half of §15's offline story: push the two
+  # RocketWiki images to the in-network mirror and set this one value. Leave
+  # "" to use image names exactly as written (which is also correct for the
+  # *tarball* half — images preloaded with `k3s ctr images import` are found
+  # by their original name, no registry involved; pair that with
+  # pullPolicy: Never below).
+  imageRegistry: ""
+
+# Names of docker-registry Secrets (operator-created) for pulling from an
+# authenticated mirror. Empty on a mirror with anonymous pull or with
+# preloaded tarballs.
+imagePullSecrets: []
+#  - name: internal-registry-cred
+
+# ---------------------------------------------------------------------------
+# API
+# ---------------------------------------------------------------------------
+api:
+  image:
+    repository: rocketwiki/api # built by Dockerfile.api at the repo root
+    tag: "0.1.0"
+    # IfNotPresent works for both offline paths (a preloaded image is
+    # "present"). Set "Never" on a fully air-gapped node to make any pull
+    # attempt an immediate, visible error instead of a hanging ImagePullBackOff
+    # against a registry that doesn't exist.
+    pullPolicy: IfNotPresent
+
+  # HARD LIMIT — 1 is the only supported value, enforced twice: by
+  # values.schema.json and by a template guard in api-deployment.yaml.
+  # design.md §15: SignalR presence groups and notification fan-out are
+  # per-process, in-memory state (RealtimeConnectionRegistry is a singleton);
+  # at >1 replica they silently fragment unless a Redis backplane is added,
+  # and sticky sessions alone do not fix fan-out. §15 is explicit that
+  # single-replica is a legitimate production shape for a wiki — scaling out
+  # is a deliberate future decision (backplane + this guard removed), not a
+  # knob to turn here.
+  replicaCount: 1
+
+  # The Secret (operator-created, NEVER templated by this chart) injected
+  # wholesale via envFrom. Keys are .NET configuration env-var names, so the
+  # Secret *is* the sensitive half of the app's configuration:
+  #
+  #   ConnectionStrings__rocketwiki   SQL Server connection string (external
+  #                                   server — §17's lower-risk default; this
+  #                                   chart does not run SQL Server, period)
+  #   Keycloak__Authority             e.g. https://keycloak.internal/realms/rocketwiki
+  #   Keycloak__Audience              e.g. rocketwiki-api
+  #   FileStorage__S3__AccessKey      S3/MinIO access key
+  #   FileStorage__S3__SecretKey      S3/MinIO secret key
+  #   ConnectionStrings__embeddings   (later, milestone 7 — §9's external endpoint)
+  #
+  # Authority/audience are identifiers rather than credentials, but they live
+  # here with the credentials so one Secret fully pins "which environment is
+  # this", and a values file can be shared between networks without editing.
+  # deploy/README.md has the exact `kubectl create secret` incantation.
+  existingSecret: rocketwiki-api
+
+  service:
+    # ClusterIP only — nothing reaches the API except the ingress and the web
+    # pod's nginx proxy; there is no reason to expose it wider.
+    port: 8080
+
+  # ASPNETCORE_ENVIRONMENT. Must stay "Production" (or "Staging") in any real
+  # deployment: Development flips RequireHttpsMetadata off for the Keycloak
+  # authority and turns on detailed GraphQL/SignalR error surfaces
+  # (Program.cs). Do NOT set "Development" to get /health endpoints — see
+  # probes.mode below for the honest story there.
+  aspnetcoreEnvironment: Production
+
+  # design.md §12: instance identity for low/high sync (native vs replica
+  # spaces). "" omits the env var and the app default ("standalone") applies.
+  instanceId: ""
+
+  probes:
+    # "tcp" (default) or "http".
+    #
+    # THE HONEST STORY: ServiceDefaults maps /health and /alive only when
+    # ASPNETCORE_ENVIRONMENT == Development
+    # (src/RocketWiki.ServiceDefaults/Extensions.cs, MapDefaultEndpoints — the
+    # stock Aspire template guard, kept because exposing health detail
+    # publicly has security implications). In Production those paths are 404,
+    # and running Development in production is not an option (see
+    # aspnetcoreEnvironment above). So:
+    #
+    #   tcp  — what works TODAY: liveness/readiness open a TCP connection to
+    #          8080. Proves Kestrel is up; says nothing about the DB. Weak but
+    #          truthful.
+    #   http — what the design intends (§15 "wire them to liveness/readiness"):
+    #          /alive for liveness, /health for readiness. REQUIRES a src/
+    #          change that is deliberately NOT made by this deployment work:
+    #          MapDefaultEndpoints must map the endpoints outside Development
+    #          (config-gated, and they should stay unreachable through the
+    #          ingress — probes come from the kubelet, not the ingress, so
+    #          simply not routing /health at Traefik/nginx covers that).
+    #          Tracked as a required follow-up in deploy/README.md. Flip this
+    #          to "http" the day that lands.
+    mode: tcp
+
+  resources:
+    # Deliberately modest; nothing has ever measured this app under load
+    # (README "Current status"), so these are starting points to revise with
+    # real telemetry, not tested capacity statements.
+    requests:
+      cpu: 250m
+      memory: 384Mi
+    limits:
+      # No CPU limit on purpose: CPU is compressible, and hard CPU limits
+      # mostly buy throttling artifacts on a single-node k3s. Memory IS
+      # limited so a leak evicts one pod instead of the node.
+      memory: 1Gi
+
+  fileStorage:
+    # "S3" (default) or "FileSystem" (design.md §10).
+    provider: S3
+    s3:
+      # S3-compatible endpoint (MinIO/Ceph/...). Outside the cluster, or a
+      # separately-managed in-cluster MinIO — this chart runs neither (§15:
+      # stateful services need real storage decisions, not a default PVC).
+      serviceUrl: "http://minio.internal:9000"
+      bucket: rocketwiki
+      # Required for MinIO/Ceph path-style addressing; harmless for AWS.
+      forcePathStyle: true
+      # Only meaningful where SigV4 region signing is validated. "" omits it.
+      region: ""
+      # AccessKey/SecretKey come from existingSecret, never from values.
+    fileSystem:
+      # Only used when provider=FileSystem. The chart mounts an EXISTING
+      # PersistentVolumeClaim; it will not create one — §15: storage for
+      # state is a deliberate operator decision (storage class, node
+      # affinity, backup) that a chart default would quietly get wrong.
+      # Template rendering fails if provider=FileSystem and this is empty.
+      existingClaim: ""
+      mountPath: /var/rocketwiki/attachments
+
+  # design.md §15 "Telemetry is not audit": OFF by default, fail-closed —
+  # when disabled the OTEL_EXPORTER_OTLP_ENDPOINT env var is simply absent,
+  # and ServiceDefaults registers NO exporter at all (Extensions.cs gates the
+  # exporter on that exact variable), so telemetry cannot leave the pod. Turn
+  # on only against a collector INSIDE the network boundary; traces/logs
+  # carry no page content or query text by design, but where they go is still
+  # a boundary question.
+  otel:
+    enabled: false
+    # e.g. "http://otel-collector.observability.svc:4317" (gRPC).
+    endpoint: ""
+    # "grpc" (4317) or "http/protobuf" (4318).
+    protocol: grpc
+
+  # Escape hatch for plain (non-secret) env vars, e.g. Keycloak__Realm if the
+  # realm name ever diverges from the authority URL's path. Standard k8s
+  # EnvVar objects, passed through verbatim.
+  extraEnv: []
+  #  - name: Keycloak__Realm
+  #    value: rocketwiki
+
+# ---------------------------------------------------------------------------
+# Web (static SPA behind nginx-unprivileged, Dockerfile.web)
+# ---------------------------------------------------------------------------
+web:
+  image:
+    repository: rocketwiki/web
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+  # nginx serving static files is stateless — >1 is safe here (unlike api.*)
+  # but pointless on a single-node k3s, so the default matches the api.
+  replicaCount: 1
+
+  service:
+    port: 8080 # nginx-unprivileged listens on 8080 (non-root can't bind 80)
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+# ---------------------------------------------------------------------------
+# Ingress (k3s-bundled Traefik)
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  # k3s installs Traefik with IngressClass "traefik". A standard
+  # networking.k8s.io/v1 Ingress is used rather than Traefik's IngressRoute
+  # CRD — decision reasoning in templates/ingress.yaml.
+  className: traefik
+  # "" matches any host — the sane default for an internal, single-instance
+  # deployment reached by IP or an internal DNS name. Set to pin a hostname.
+  host: ""
+  # Traefik-specific tuning goes here (e.g. pinning to the websecure
+  # entrypoint: traefik.ingress.kubernetes.io/router.entrypoints: websecure).
+  annotations: {}
+  # Standard Ingress TLS blocks. TLS termination is Traefik's job; certs are
+  # an operator concern (k3s default cert, a corporate CA secret, or
+  # cert-manager) — this chart only references a secret name.
+  tls: []
+  #  - secretName: rocketwiki-tls
+  #    hosts: [wiki.internal]
+
+# ---------------------------------------------------------------------------
+# EF Core migration Job (design.md §15 "Migrations must leave startup")
+# ---------------------------------------------------------------------------
+migrate:
+  # Runs the efbundle baked into the api image (see Dockerfile.api) as a Helm
+  # pre-install/pre-upgrade hook, so the schema is migrated to completion
+  # BEFORE the api Deployment rolls. The api container itself always runs
+  # with Database__MigrateOnStartup=false (hardcoded in the template AND
+  # defaulted in the image) — in this chart, migration is only ever the
+  # Job's job.
+  enabled: true
+  # Give up rather than hammer a broken migration: 2 retries covers a
+  # transient SQL connection blip; a real migration failure needs a human
+  # (and leaves the failed Job behind for kubectl logs — see the template's
+  # hook-delete-policy).
+  backoffLimit: 2
+  # Hard stop so a hung migration fails the release visibly instead of
+  # blocking `helm upgrade` forever.
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Pod-level security defaults (applied to api, web, and migrate pods)
+# ---------------------------------------------------------------------------
+# Non-root everywhere: the api image runs as the aspnet image's `app` user
+# (UID 1654), web as nginx-unprivileged's UID 101; runAsNonRoot makes the
+# kubelet enforce what the Dockerfiles declare. readOnlyRootFilesystem is
+# NOT set, honestly: .NET wants a writable /tmp and nginx's entrypoint
+# writes its envsubst output under /etc/nginx — both solvable with emptyDir
+# mounts, but that hardening is unverified guesswork until something can
+# actually run these images, so it's left as a documented follow-up rather
+# than shipped broken.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]

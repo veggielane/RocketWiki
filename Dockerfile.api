@@ -1,0 +1,108 @@
+# RocketWiki API image (design.md §15, milestone 9).
+#
+# Lives at the repo root because the build context *is* the repo root — the
+# publish needs src/RocketWiki.Api plus its four project references, so any
+# other location would just mean ../.. gymnastics in COPY paths. Build with:
+#
+#     docker build -f Dockerfile.api -t rocketwiki/api:<tag> .
+#
+# STANDING CAVEAT (README.md "Current status"): no container runtime has ever
+# been available in the environment this was written in. This Dockerfile has
+# never been built, the image has never run, and the EF bundle step below has
+# never executed. Treat every line as "correct by inspection" until the
+# container-runtime task resumes.
+
+# ---------------------------------------------------------------------------
+# Stage 1: build + publish.
+# Floating minor tag (10.0) rather than a digest pin: this repo targets net10.0
+# and README pins the SDK line (10.0.4xx), so patch drift is intended. For a
+# compliance-reviewed air-gapped build, pin the digest at import time instead
+# (the registry mirror / tarball you actually reviewed IS the pin).
+# ---------------------------------------------------------------------------
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /source
+
+# Restore first, against csproj files only, so the (slow, network-bound) NuGet
+# layer caches across source-only changes. Restoring the Api project pulls its
+# four ProjectReferences transitively — deliberately NOT the .sln, which would
+# drag in the Aspire AppHost and test projects this image has no use for.
+COPY src/RocketWiki.Api/RocketWiki.Api.csproj                     src/RocketWiki.Api/
+COPY src/RocketWiki.ServiceDefaults/RocketWiki.ServiceDefaults.csproj src/RocketWiki.ServiceDefaults/
+COPY src/RocketWiki.Core/RocketWiki.Core.csproj                   src/RocketWiki.Core/
+COPY src/RocketWiki.Data/RocketWiki.Data.csproj                   src/RocketWiki.Data/
+COPY src/RocketWiki.Storage/RocketWiki.Storage.csproj             src/RocketWiki.Storage/
+RUN dotnet restore src/RocketWiki.Api/RocketWiki.Api.csproj
+
+# Only the five projects this image publishes — deliberately NOT src/ or the
+# whole repo, so changes in RocketWiki.AppHost/RocketWiki.Importer (other
+# agents' active projects) neither invalidate this layer nor enter this
+# image's provenance at all.
+COPY src/RocketWiki.Api/             src/RocketWiki.Api/
+COPY src/RocketWiki.ServiceDefaults/ src/RocketWiki.ServiceDefaults/
+COPY src/RocketWiki.Core/            src/RocketWiki.Core/
+COPY src/RocketWiki.Data/            src/RocketWiki.Data/
+COPY src/RocketWiki.Storage/         src/RocketWiki.Storage/
+
+# NOTE: `dotnet run schema export` (the schema.graphql drift workflow, README)
+# is a *development* command and deliberately never runs here — the image
+# carries the published app, not the SDK, and schema export belongs to the
+# repo/CI loop, not the deployment artifact.
+RUN dotnet publish src/RocketWiki.Api/RocketWiki.Api.csproj \
+      -c Release -o /app/publish --no-restore /p:UseAppHost=false
+
+# --- EF Core migrations bundle -------------------------------------------
+# Why a bundle (design.md §15 "Migrations must leave startup"): the k3s chart
+# runs migrations as a Helm pre-install/pre-upgrade Job, and a Job needs a
+# process that applies migrations and *exits*. The API binary can't do that —
+# Database:MigrateOnStartup=true migrates and then keeps serving. The
+# alternatives were worse: shipping the SDK + source in a second image just to
+# run `dotnet ef database update` (~1 GB of attack surface per network), or a
+# sidecar/init-container racing the app. `dotnet ef migrations bundle`
+# produces a single executable, built from the same commit as the API it
+# fronts, that needs only the .NET runtime already present in the final image
+# — one artifact to review and ship air-gapped, not two.
+#
+# The bundle is framework-dependent (default): it runs on Microsoft.NETCore.App,
+# which the aspnet base image below includes. RocketWiki.Data carries both the
+# EFCore.Design package and an IDesignTimeDbContextFactory
+# (RocketWikiDbContextFactory.cs) precisely so this works without the Api as a
+# startup project; the factory's placeholder connection string is overridden at
+# execution time with `--connection` (see the chart's migrate Job).
+# Tool version floats within the EF Core 10 line to match the 10.0.x runtime
+# packages RocketWiki.Data references.
+RUN dotnet tool install dotnet-ef --tool-path /tools --version "10.0.*" \
+ && /tools/dotnet-ef migrations bundle \
+      --project src/RocketWiki.Data/RocketWiki.Data.csproj \
+      --configuration Release \
+      --output /app/efbundle
+
+# ---------------------------------------------------------------------------
+# Stage 2: runtime. aspnet (not sdk): no compilers, no NuGet, smallest
+# reviewed surface. The image's built-in defaults already suit us:
+# ASPNETCORE_HTTP_PORTS=8080 and a non-root `app` user (UID via $APP_UID).
+# ---------------------------------------------------------------------------
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+
+COPY --from=build /app/publish .
+COPY --from=build /app/efbundle /app/efbundle
+
+# Baked-in default, overridable by env: anywhere this image runs, applying
+# migrations is an explicit, separate step (the chart's Job; `docker run
+# --entrypoint /app/efbundle` for Compose), never a startup side effect.
+# appsettings.json defaults this to true because local dev is always
+# single-instance; an orchestrated image must not — two replicas racing
+# MigrateAsync() is the §15 corruption risk. Env beats appsettings in the
+# .NET config order, so this wins without touching src/.
+ENV Database__MigrateOnStartup=false
+
+# Non-root (design.md's compliance posture; also what k8s runAsNonRoot expects).
+# $APP_UID (=1654 in the official images) rather than the name `app`, so
+# Kubernetes can verify runAsNonRoot without a numeric-UID guess.
+USER $APP_UID
+
+# Informational — the chart's Service/probes target 8080 explicitly. No
+# HEALTHCHECK instruction: Kubernetes ignores it and drives its own probes.
+EXPOSE 8080
+
+ENTRYPOINT ["dotnet", "RocketWiki.Api.dll"]

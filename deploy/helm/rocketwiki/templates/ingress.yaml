@@ -1,0 +1,74 @@
+{{- if .Values.ingress.enabled -}}
+# Why a standard networking.k8s.io/v1 Ingress and not Traefik's IngressRoute
+# CRD, given design.md §15 names Traefik explicitly:
+#
+#   1. Stability of the reviewed artifact. The IngressRoute apiVersion has
+#      churned across the Traefik versions k3s bundles
+#      (traefik.containo.us/v1alpha1 in v2, traefik.io/v1alpha1 in v3), so a
+#      checked-in CRD manifest quietly stops applying on a k3s upgrade.
+#      networking.k8s.io/v1 has been stable since k8s 1.19 and Traefik
+#      honors it fully. For a compliance-reviewed, own-the-manifests posture
+#      (§15 "Generate once, then own them"), stable beats bespoke.
+#   2. WebSockets need nothing special from Traefik. Unlike ingress-nginx
+#      (which needs upgrade-header annotations), Traefik passes the
+#      HTTP/1.1 Upgrade handshake through transparently for /hubs — this is
+#      its documented default behavior, not an omission here. The §15
+#      requirement "WebSocket upgrade configured explicitly" is satisfied
+#      explicitly at the OTHER hop: the web pod's nginx sets
+#      Upgrade/Connection headers for /hubs (deploy/docker/nginx/), and the
+#      /hubs route below goes straight to the API precisely so Traefik's
+#      native passthrough is the only middleman.
+#   3. Anything Traefik-specific (entrypoint pinning, middlewares) still has
+#      a home: ingress.annotations.
+#
+# Routing shape (§15): API paths route DIRECTLY to the api Service — one
+# less proxy hop and no nginx in the WebSocket path — while everything else
+# is the static SPA. The web pod's nginx *also* proxies the same API paths,
+# deliberately redundant: it keeps the SPA's same-origin defaults working
+# without any ingress at all (port-forward, NodePort, Compose).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "rocketwiki.fullname" . }}
+  labels:
+    {{- include "rocketwiki.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - {{- with .Values.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          # Traefik routes the longest matching prefix first, so these
+          # specific paths win over the catch-all below regardless of order.
+          {{- $apiSvc := printf "%s-api" (include "rocketwiki.fullname" .) }}
+          {{- $apiPort := .Values.api.service.port }}
+          {{- range $path := list "/graphql" "/hubs" "/attachments" "/mcp" }}
+          # {{ $path }} → API{{ if eq $path "/mcp" }} (milestone 8 — a 404 today, routed now so launching /mcp needs no ingress change){{ end }}
+          - path: {{ $path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $apiSvc }}
+                port:
+                  number: {{ $apiPort }}
+          {{- end }}
+          # Everything else: the static SPA (whose nginx falls back to
+          # index.html for client-routed paths).
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "rocketwiki.fullname" . }}-web
+                port:
+                  number: {{ .Values.web.service.port }}
+{{- end }}

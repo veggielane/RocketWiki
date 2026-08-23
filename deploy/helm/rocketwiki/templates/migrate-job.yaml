@@ -1,0 +1,75 @@
+{{- if .Values.migrate.enabled -}}
+# EF Core migrations as a Helm hook Job (design.md §15 "Migrations must leave
+# startup": migrate-on-startup is safe only at one replica, and even at one
+# replica a Job gives ordering — schema first, THEN the Deployment rolls).
+#
+# Mechanism: the api image carries an EF *migrations bundle* (/app/efbundle,
+# built by Dockerfile.api from the same commit as the API it fronts). A
+# bundle is a self-terminating executable that applies pending migrations
+# and exits — exactly Job semantics — with no .NET SDK, no source, and no
+# second image to ship through the air gap. The alternatives lost on those
+# counts: `dotnet ef database update` needs the SDK + source at runtime
+# (~1 GB extra reviewed surface per network), and running the API itself
+# with MigrateOnStartup=true never exits. Reruns are safe: the bundle
+# consults __EFMigrationsHistory and applies only what's pending.
+#
+# NEVER RUN CAVEAT (README.md "Current status"): no bundle has ever been
+# built or executed — the mechanism is correct by EF Core documentation, not
+# by observation. First real run happens when the container-runtime task
+# resumes; expect to debug it then.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Stable name is safe because before-hook-creation (below) deletes the
+  # previous hook Job before each run — no immutable-spec collision.
+  name: {{ include "rocketwiki.fullname" . }}-migrate
+  labels:
+    {{- include "rocketwiki.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    # before-hook-creation: replace any prior Job on the next run.
+    # hook-succeeded: clean up on success. A FAILED Job is deliberately kept
+    # so `kubectl logs job/...-migrate` shows what the migration said —
+    # deleting the evidence of a failed schema change would be the worst
+    # possible default for this system.
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "rocketwiki.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      {{- include "rocketwiki.imagePullSecrets" . | nindent 6 }}
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "rocketwiki.image" (dict "global" .Values.global "image" .Values.api.image) | quote }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          # An explicit env entry (not envFrom) because $(VAR) expansion in
+          # args is only guaranteed for variables declared in `env`. The
+          # value comes from the same operator-created Secret the API uses —
+          # referenced, never templated (values.yaml api.existingSecret).
+          # If the Secret is missing the pod fails config validation and the
+          # release install/upgrade fails before anything rolls: fail closed.
+          env:
+            - name: ROCKETWIKI_CONNECTIONSTRING
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.api.existingSecret | quote }}
+                  key: ConnectionStrings__rocketwiki
+          command: ["/app/efbundle"]
+          # --connection overrides the placeholder baked in by the
+          # design-time factory (RocketWikiDbContextFactory.cs).
+          args: ["--connection", "$(ROCKETWIKI_CONNECTIONSTRING)"]
+          resources:
+            {{- toYaml .Values.migrate.resources | nindent 12 }}
+{{- end }}

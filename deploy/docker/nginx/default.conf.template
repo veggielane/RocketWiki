@@ -1,0 +1,117 @@
+# RocketWiki web server config (design.md §15: "The web app is built to static
+# files and served by nginx, proxying /graphql, /attachments, /mcp, and /hubs
+# (WebSocket upgrade) to the API").
+#
+# This is an *envsubst template*, not a finished config: the official nginx
+# images (including nginx-unprivileged) run /etc/nginx/templates/*.template
+# through envsubst at container start and write the result to conf.d. The one
+# substituted variable is ${API_UPSTREAM} (host:port of the API service) —
+# Dockerfile.web sets NGINX_ENVSUBST_FILTER=^API_UPSTREAM$ so nginx's own
+# runtime variables ($uri, $http_upgrade, ...) are never touched even if a
+# same-named env var existed. The Helm chart sets API_UPSTREAM to the api
+# Service's DNS name; the Dockerfile default (api:8080) suits Docker Compose,
+# where "api" is the conventional service name.
+#
+# Why the SPA's own server proxies the API at all, when the Traefik Ingress
+# also routes these paths (see the chart): the frontend's defaults are
+# same-origin (web/.env.example — VITE_GRAPHQL_URL=/graphql), and this keeps
+# that true through *any* door: Ingress, `kubectl port-forward`, NodePort, or
+# plain Compose. The Ingress path routes are an optimization (one less hop,
+# and Traefik speaks WebSocket natively); this proxy is the guarantee.
+
+# WebSocket upgrade handling for /hubs (SignalR): the standard nginx idiom.
+# When the client asks to upgrade, forward "Connection: upgrade"; otherwise
+# send an empty Connection header so ordinary requests are unaffected.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    # nginx-unprivileged listens on 8080 — an unprivileged user cannot bind 80.
+    listen       8080;
+    server_name  _;
+
+    root  /usr/share/nginx/html;
+    index index.html;
+
+    # Compress the text assets; the hashed JS/CSS bundles are where it pays.
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # --- API proxy locations -------------------------------------------------
+    # One shared set of proxy headers. X-Forwarded-* matter to the API for
+    # correct scheme/host reconstruction behind TLS-terminating Traefik.
+
+    location /graphql {
+        proxy_pass         http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+    }
+
+    location /hubs {
+        proxy_pass         http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        # The WebSocket upgrade — without these two headers SignalR silently
+        # falls back to long polling (or fails), which is exactly the class of
+        # bug design.md §15 calls out for the ingress layer too.
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        $connection_upgrade;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+        # An idle WebSocket must outlive the 60s default. SignalR pings every
+        # 15s, so 100s only trips if the connection is genuinely dead.
+        proxy_read_timeout 100s;
+        proxy_send_timeout 100s;
+    }
+
+    location /attachments {
+        proxy_pass         http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+        # Upload size cap. nginx's default (1m) would reject any real
+        # attachment; 100m is a guess pending a product decision — the API
+        # does not enforce its own limit yet, so today this line IS the limit.
+        client_max_body_size 100m;
+        # Stream uploads through instead of buffering them to nginx's disk
+        # first — the API is the thing that should own backpressure here.
+        proxy_request_buffering off;
+    }
+
+    # Milestone 8's MCP endpoint (design.md §8/§15). The API returns 404 here
+    # today; routing it now means the /mcp launch needs no coordinated change
+    # to an already-reviewed deployment artifact.
+    location /mcp {
+        proxy_pass         http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+    }
+
+    # --- Static SPA ----------------------------------------------------------
+    # Vite emits content-hashed filenames under /assets — safe to cache
+    # forever; a new deploy means new names.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        try_files $uri =404;
+    }
+
+    # SPA fallback: every non-file route (e.g. /spaces/ENG/pages/123) serves
+    # index.html and lets the client router take over. index.html itself must
+    # never be cached, or users keep running a stale bundle after an upgrade.
+    location / {
+        add_header Cache-Control "no-cache";
+        try_files $uri $uri/ /index.html;
+    }
+}

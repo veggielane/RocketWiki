@@ -1,0 +1,19 @@
+# Shared by Dockerfile.api and Dockerfile.web — both build with the repo root
+# as context. Everything excluded here is either rebuilt inside the image
+# (bin/obj, node_modules, dist), never belongs in one (git history, agent
+# worktrees), or is simply dead weight for a publish (tests).
+.git
+.github
+.claude
+**/bin
+**/obj
+web/node_modules
+web/dist
+web/coverage
+tests
+# Local secrets / env files must never enter a build context, even ignored
+# ones — web/.env.example is the documented exception (it holds no values).
+**/.env
+**/.env.*
+!web/.env.example
+**/appsettings.*.Local.json

@@ -1,0 +1,8 @@
+# Keep packaged charts clean of OS/editor noise.
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*~
+.git/
+.gitignore

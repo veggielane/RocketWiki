@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RocketWiki chart values",
+  "description": "Deliberately narrow: this schema exists to hard-fail the values that would corrupt or silently break the system (design.md §15), not to re-type every knob. Draft-07 so both Helm 3 and Helm 4 enforce it.",
+  "type": "object",
+  "properties": {
+    "api": {
+      "type": "object",
+      "properties": {
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1,
+          "description": "Locked to exactly 1. design.md §15: SignalR presence/notification fan-out is per-process in-memory state; >1 replica needs a Redis backplane (a deliberate future decision, not a values knob) and would also demand this guard's removal. The api-deployment.yaml template repeats this check for anyone who edits the schema away."
+        },
+        "existingSecret": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of the operator-created Secret carrying connection strings and S3 credentials. Required: this chart never templates secret material."
+        },
+        "probes": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": ["tcp", "http"],
+              "description": "\"http\" requires the ServiceDefaults follow-up (health endpoints are Development-only today) - see values.yaml."
+            }
+          }
+        },
+        "fileStorage": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "enum": ["S3", "FileSystem"],
+              "description": "Matches RocketWiki.Storage's AddFileStorage, which fails closed on anything else."
+            }
+          }
+        },
+        "otel": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "protocol": { "enum": ["grpc", "http/protobuf"] }
+          }
+        }
+      },
+      "required": ["replicaCount", "existingSecret"]
+    },
+    "web": {
+      "type": "object",
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "required": ["api"]
+}
