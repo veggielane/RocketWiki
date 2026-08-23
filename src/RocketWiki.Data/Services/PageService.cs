@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Telemetry;
 
 namespace RocketWiki.Data.Services;
 
@@ -163,8 +165,22 @@ public class PageService : IPageService
         return PageMutationResult<Page>.Success(page);
     }
 
+    // design.md §15: the four operations below each span several queries before a single
+    // SaveChanges, so SQL Client's per-query spans alone can't show how long the whole
+    // unit of work took or how many pages it touched. Simple single-query mutations
+    // (create, update content) are left to SQL Client's own instrumentation rather than
+    // wrapped here for symmetry's sake.
     public async Task<PageMutationResult<Page>> MovePageAsync(
         MovePageRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        using var activity = DataTelemetry.StartSpan(DataTelemetry.MovePageSpan);
+        activity?.SetTag(DataTelemetry.PageIdTag, request.PageId);
+        return DataTelemetry.Finish(activity,
+            await MovePageCoreAsync(request, principal, actingUserId, auditContext, cancellationToken));
+    }
+
+    private async Task<PageMutationResult<Page>> MovePageCoreAsync(
+        MovePageRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken)
     {
         var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == request.PageId, cancellationToken);
         if (page is null)
@@ -262,6 +278,21 @@ public class PageService : IPageService
     public async Task<PageMutationResult<PageDeleteSummary>> DeletePageAsync(
         DeletePageRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {
+        using var activity = DataTelemetry.StartSpan(DataTelemetry.SubtreeDeleteSpan);
+        activity?.SetTag(DataTelemetry.PageIdTag, request.PageId);
+        var result = DataTelemetry.Finish(activity,
+            await DeletePageCoreAsync(request, principal, actingUserId, auditContext, cancellationToken));
+        if (result.IsSuccess)
+        {
+            activity?.SetTag(DataTelemetry.PageCountTag, result.Value.DeletedPageCount);
+        }
+
+        return result;
+    }
+
+    private async Task<PageMutationResult<PageDeleteSummary>> DeletePageCoreAsync(
+        DeletePageRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken)
+    {
         var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == request.PageId, cancellationToken);
         if (page is null)
         {
@@ -318,6 +349,21 @@ public class PageService : IPageService
 
     public async Task<PageMutationResult<PageRestoreSummary>> RestorePageAsync(
         RestorePageRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        using var activity = DataTelemetry.StartSpan(DataTelemetry.SubtreeRestoreSpan);
+        activity?.SetTag(DataTelemetry.PageIdTag, request.PageId);
+        var result = DataTelemetry.Finish(activity,
+            await RestorePageCoreAsync(request, principal, actingUserId, auditContext, cancellationToken));
+        if (result.IsSuccess)
+        {
+            activity?.SetTag(DataTelemetry.PageCountTag, result.Value.RestoredPageCount);
+        }
+
+        return result;
+    }
+
+    private async Task<PageMutationResult<PageRestoreSummary>> RestorePageCoreAsync(
+        RestorePageRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken)
     {
         var page = await _db.Pages.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == request.PageId, cancellationToken);
         if (page is null || !page.IsDeleted || page.DeleteBatchId is null)
@@ -416,6 +462,16 @@ public class PageService : IPageService
 
     public async Task<PageMutationResult<Page>> RestoreRevisionAsync(
         RestoreRevisionRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        using var activity = DataTelemetry.StartSpan(DataTelemetry.RestoreRevisionSpan);
+        activity?.SetTag(DataTelemetry.PageIdTag, request.PageId);
+        activity?.SetTag(DataTelemetry.RevisionNumberTag, request.RevisionNumberToRestore);
+        return DataTelemetry.Finish(activity,
+            await RestoreRevisionCoreAsync(request, principal, actingUserId, auditContext, cancellationToken));
+    }
+
+    private async Task<PageMutationResult<Page>> RestoreRevisionCoreAsync(
+        RestoreRevisionRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken)
     {
         var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == request.PageId, cancellationToken);
         if (page is null)

@@ -27,51 +27,98 @@ public sealed class FileSystemFileStorage : IFileStorage
 
     public async Task SaveAsync(string key, Stream content, string contentType, CancellationToken ct)
     {
-        var path = ResolvePath(key);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var operation = StorageTelemetry.StartOperation(StorageTelemetry.FileSystemProvider, StorageTelemetry.SaveOperation);
+        try
+        {
+            var path = ResolvePath(key);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
-        // FileMode.Create: upload order is "bytes to storage, then the Attachment
-        // row + audit event in one DB transaction" (design.md §10) — a re-upload
-        // under the same key is expected to overwrite, not append or fail.
-        await using var fileStream = new FileStream(
-            path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 81920, useAsync: true);
-        await content.CopyToAsync(fileStream, ct);
+            // FileMode.Create: upload order is "bytes to storage, then the Attachment
+            // row + audit event in one DB transaction" (design.md §10) — a re-upload
+            // under the same key is expected to overwrite, not append or fail.
+            await using var fileStream = new FileStream(
+                path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 81920, useAsync: true);
+            await content.CopyToAsync(fileStream, ct);
 
-        // contentType is deliberately unused here: this provider has no companion
-        // metadata store, and Attachment.ContentType (data-model.md) is the
-        // source of truth the API serves back to clients. Kept as a parameter to
-        // satisfy IFileStorage and to keep provider parity with S3FileStorage,
-        // which does need it (S3 objects carry their own Content-Type).
+            // Measured from what was actually written, rather than the source stream's
+            // Length, which a non-seekable upload stream doesn't have.
+            operation.Bytes = fileStream.Length;
+
+            // contentType is deliberately unused here: this provider has no companion
+            // metadata store, and Attachment.ContentType (data-model.md) is the
+            // source of truth the API serves back to clients. Kept as a parameter to
+            // satisfy IFileStorage and to keep provider parity with S3FileStorage,
+            // which does need it (S3 objects carry their own Content-Type).
+        }
+        catch (Exception ex)
+        {
+            operation.Fail(ex);
+            throw;
+        }
     }
 
     public Task<Stream> OpenReadAsync(string key, CancellationToken ct)
     {
-        var path = ResolvePath(key);
-        if (!File.Exists(path))
+        using var operation = StorageTelemetry.StartOperation(StorageTelemetry.FileSystemProvider, StorageTelemetry.OpenReadOperation);
+        try
         {
-            throw new FileNotFoundException($"No object exists for key '{key}'.", path);
-        }
+            var path = ResolvePath(key);
+            if (!File.Exists(path))
+            {
+                throw new FileNotFoundException($"No object exists for key '{key}'.", path);
+            }
 
-        Stream stream = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
-        return Task.FromResult(stream);
+            var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+            operation.Bytes = stream.Length;
+            return Task.FromResult<Stream>(stream);
+        }
+        catch (Exception ex)
+        {
+            operation.Fail(ex);
+            throw;
+        }
     }
 
     public Task DeleteAsync(string key, CancellationToken ct)
     {
-        var path = ResolvePath(key);
-        if (File.Exists(path))
+        using var operation = StorageTelemetry.StartOperation(StorageTelemetry.FileSystemProvider, StorageTelemetry.DeleteOperation);
+        try
         {
-            File.Delete(path);
-        }
+            var path = ResolvePath(key);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+            else
+            {
+                operation.SetOutcome("not_found");
+            }
 
-        return Task.CompletedTask;
+            return Task.CompletedTask;
+        }
+        catch (Exception ex)
+        {
+            operation.Fail(ex);
+            throw;
+        }
     }
 
     public Task<bool> ExistsAsync(string key, CancellationToken ct)
     {
-        var path = ResolvePath(key);
-        return Task.FromResult(File.Exists(path));
+        using var operation = StorageTelemetry.StartOperation(StorageTelemetry.FileSystemProvider, StorageTelemetry.ExistsOperation);
+        try
+        {
+            var path = ResolvePath(key);
+            var exists = File.Exists(path);
+            operation.SetOutcome(exists ? "found" : "not_found");
+            return Task.FromResult(exists);
+        }
+        catch (Exception ex)
+        {
+            operation.Fail(ex);
+            throw;
+        }
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Telemetry;
 using RocketWiki.Data;
 
 namespace RocketWiki.Api.Audit;
@@ -67,5 +68,14 @@ public sealed class DbAuditSink(
         });
 
         await db.SaveChangesAsync(ct);
+
+        // After the save, never before: design.md §7 requires a failed audit insert to
+        // fail the request, so a counter incremented on the way in would report rows
+        // that were never written. record.Action is a declared [AuditAction] name and
+        // the other two are enums - a bounded vocabulary, never the subject's content
+        // (§15). record.DetailsJson is deliberately not tagged: it is the audit row's
+        // payload, and the audit table is where it belongs.
+        CoreTelemetry.RecordAuditEventWritten(
+            record.Action, record.Outcome, auditContext.Channel, CoreTelemetry.AuditWriterSink);
     }
 }

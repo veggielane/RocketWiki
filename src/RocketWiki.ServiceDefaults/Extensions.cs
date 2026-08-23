@@ -18,6 +18,70 @@ public static class Extensions
     private const string HealthEndpointPath = "/health";
     private const string AlivenessEndpointPath = "/alive";
 
+    /// <summary>
+    /// design.md §15: every RocketWiki project declares its <c>ActivitySource</c> and
+    /// <c>Meter</c> under its own assembly name (<c>RocketWiki.Core</c>,
+    /// <c>RocketWiki.Data</c>, ...), so one wildcard subscribes to all of them and to
+    /// any project added later. It has to be a wildcard rather than an explicit list
+    /// because this project cannot reference the projects whose names it would list —
+    /// every service references ServiceDefaults, so a reference back would be circular.
+    /// A guard test (<c>TelemetrySourceNamingTests</c>) asserts every telemetry class
+    /// actually uses a name this pattern matches, so the indirection can't silently rot.
+    /// </summary>
+    public const string RocketWikiMeterAndSourceWildcard = "RocketWiki.*";
+
+    /// <summary>
+    /// Instrumentation that ships inside .NET or a library and only needs subscribing
+    /// to, verified against the current docs rather than assumed:
+    /// <list type="bullet">
+    /// <item><c>Microsoft.AspNetCore.SignalR.Server</c> — one activity per hub method
+    /// invocation, built into ASP.NET Core since .NET 9. Hub activities are deliberately
+    /// parentless (they aren't nested under the long-lived connection), so without this
+    /// source a <c>JoinPage</c> call is invisible.</item>
+    /// <item><c>HotChocolate.Diagnostics</c> — the GraphQL execution pipeline. The
+    /// package is referenced by RocketWiki.Api, which configures what may appear on
+    /// those spans (see Program.cs); this end only subscribes. Named by string rather
+    /// than via the package's own <c>AddHotChocolateInstrumentation()</c> helper so
+    /// ServiceDefaults keeps no GraphQL dependency of its own.</item>
+    /// </list>
+    /// SQL is absent on purpose: Aspire's <c>AddSqlServerDbContext</c> already calls
+    /// <c>AddSqlClientInstrumentation()</c> itself (confirmed by decompiling
+    /// Aspire.Microsoft.EntityFrameworkCore.SqlServer 13.5.1), and registering it twice
+    /// would double every database span.
+    /// </summary>
+    private static readonly string[] ThirdPartySources =
+    [
+        "Microsoft.AspNetCore.SignalR.Server",
+        "HotChocolate.Diagnostics",
+    ];
+
+    /// <summary>
+    /// Built-in meters that are not part of <c>AddAspNetCoreInstrumentation</c>:
+    /// <list type="bullet">
+    /// <item><c>Microsoft.AspNetCore.Http.Connections</c> — SignalR connection metrics
+    /// (<c>signalr.server.active_connections</c>, connection duration). This is the
+    /// only view of whether presence connections are accumulating or churning.</item>
+    /// <item><c>Microsoft.EntityFrameworkCore</c> — EF Core's own metrics
+    /// (<c>microsoft.entityframeworkcore.active_dbcontexts</c>, queries, savechanges,
+    /// compiled-query cache hits/misses), available since EF Core 9. Aspire's client
+    /// integration registers SQL Client <i>tracing</i> only and no metrics at all, so
+    /// this is a genuine gap it leaves rather than a duplicate. Active-DbContext count
+    /// is the leak signal for a pooled context, which this app uses.</item>
+    /// <item><c>Microsoft.AspNetCore.Authorization</c> / <c>.Authentication</c> —
+    /// .NET 10 security metrics. Directly relevant to a fail-closed system: an
+    /// authorization failure rate that moves is a thing to notice. Their attributes are
+    /// bounded (<c>user.is_authenticated</c> as a boolean, policy name, success/failure,
+    /// scheme name) and carry no claim values, so they satisfy §15 as shipped.</item>
+    /// </list>
+    /// </summary>
+    private static readonly string[] ThirdPartyMeters =
+    [
+        "Microsoft.AspNetCore.Http.Connections",
+        "Microsoft.EntityFrameworkCore",
+        "Microsoft.AspNetCore.Authorization",
+        "Microsoft.AspNetCore.Authentication",
+    ];
+
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.ConfigureOpenTelemetry();
@@ -57,11 +121,20 @@ public static class Extensions
             {
                 metrics.AddAspNetCoreInstrumentation()
                     .AddHttpClientInstrumentation()
-                    .AddRuntimeInstrumentation();
+                    .AddRuntimeInstrumentation()
+                    // Every RocketWiki project's own Meter (design.md §15). Named
+                    // after the assembly, so one wildcard covers Core, Data, Api,
+                    // Storage and Importer, and any project added later.
+                    .AddMeter(RocketWikiMeterAndSourceWildcard)
+                    .AddMeter(ThirdPartyMeters);
             })
             .WithTracing(tracing =>
             {
                 tracing.AddSource(builder.Environment.ApplicationName)
+                    // Every RocketWiki project's own ActivitySource; same wildcard
+                    // convention as the meters above.
+                    .AddSource(RocketWikiMeterAndSourceWildcard)
+                    .AddSource(ThirdPartySources)
                     .AddAspNetCoreInstrumentation(tracing =>
                         // Exclude health check requests from tracing
                         tracing.Filter = context =>

@@ -31,47 +31,89 @@ public sealed class S3FileStorage : IFileStorage
 
     public async Task SaveAsync(string key, Stream content, string contentType, CancellationToken ct)
     {
-        var request = new PutObjectRequest
+        using var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.SaveOperation);
+        try
         {
-            BucketName = _bucket,
-            Key = key,
-            InputStream = content,
-            ContentType = contentType,
-            AutoCloseStream = false,
-            DisablePayloadSigning = true,
-        };
+            var request = new PutObjectRequest
+            {
+                BucketName = _bucket,
+                Key = key,
+                InputStream = content,
+                ContentType = contentType,
+                AutoCloseStream = false,
+                DisablePayloadSigning = true,
+            };
 
-        await _client.PutObjectAsync(request, ct);
+            // Only a seekable stream can report its size without consuming it; a
+            // non-seekable upload simply records no byte count rather than buffering
+            // the whole attachment in memory to measure it.
+            if (content.CanSeek)
+            {
+                operation.Bytes = content.Length;
+            }
+
+            await _client.PutObjectAsync(request, ct);
+        }
+        catch (Exception ex)
+        {
+            operation.Fail(ex);
+            throw;
+        }
     }
 
     public async Task<Stream> OpenReadAsync(string key, CancellationToken ct)
     {
+        using var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.OpenReadOperation);
         try
         {
             var response = await _client.GetObjectAsync(_bucket, key, ct);
+            operation.Bytes = response.ContentLength;
             return response.ResponseStream;
         }
         catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
+            operation.SetOutcome("not_found");
             throw new FileNotFoundException($"No object exists for key '{key}'.", ex);
+        }
+        catch (Exception ex)
+        {
+            operation.Fail(ex);
+            throw;
         }
     }
 
     public async Task DeleteAsync(string key, CancellationToken ct)
     {
-        await _client.DeleteObjectAsync(_bucket, key, ct);
+        using var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.DeleteOperation);
+        try
+        {
+            await _client.DeleteObjectAsync(_bucket, key, ct);
+        }
+        catch (Exception ex)
+        {
+            operation.Fail(ex);
+            throw;
+        }
     }
 
     public async Task<bool> ExistsAsync(string key, CancellationToken ct)
     {
+        using var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.ExistsOperation);
         try
         {
             await _client.GetObjectMetadataAsync(_bucket, key, cancellationToken: ct);
+            operation.SetOutcome("found");
             return true;
         }
         catch (AmazonS3Exception ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
+            operation.SetOutcome("not_found");
             return false;
+        }
+        catch (Exception ex)
+        {
+            operation.Fail(ex);
+            throw;
         }
     }
 }

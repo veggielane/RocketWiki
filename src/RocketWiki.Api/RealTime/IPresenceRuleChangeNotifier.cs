@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Services;
 
 namespace RocketWiki.Api.RealTime;
@@ -37,6 +39,16 @@ public sealed class PresenceRuleChangeNotifier(
             return;
         }
 
+        // design.md §15: the sweep re-checks every open presence connection, so its cost
+        // scales with concurrent viewers - worth a span with the size of the working set
+        // it swept and how many it evicted. No connection ids, no user ids, no page ids
+        // per eviction: this method's whole job is deciding who may no longer see what,
+        // and recording that per-subject in a trace is precisely the second, unregulated
+        // access record §15 exists to prevent.
+        using var activity = ApiTelemetry.ActivitySource.StartActivity(
+            ApiTelemetry.PresenceReauthorizeSpan, ActivityKind.Internal);
+        activity?.SetTag("rocketwiki.presence.connection_count", connections.Count);
+
         // A fresh scope, not the caller's own DbContext: this runs after a GraphQL
         // mutation resolver has already finished its own unit of work, and
         // IPageReadService needs its own scoped RocketWikiDbContext to see the rule
@@ -45,6 +57,7 @@ public sealed class PresenceRuleChangeNotifier(
         var pageReadService = scope.ServiceProvider.GetRequiredService<IPageReadService>();
 
         var affectedPages = new HashSet<Guid>();
+        var evicted = 0;
         foreach (var (pageId, connectionId, principal) in connections)
         {
             var page = await pageReadService.GetPageAsync(pageId, principal, cancellationToken);
@@ -61,7 +74,11 @@ public sealed class PresenceRuleChangeNotifier(
             registry.LeavePage(pageId, connectionId);
             await hubContext.Groups.RemoveFromGroupAsync(connectionId, NotificationsHub.GroupName(pageId), cancellationToken);
             affectedPages.Add(pageId);
+            evicted++;
         }
+
+        ApiTelemetry.PresenceEvictions.Add(evicted);
+        activity?.SetTag("rocketwiki.presence.evicted_count", evicted);
 
         foreach (var pageId in affectedPages)
         {

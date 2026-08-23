@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Telemetry;
 
 namespace RocketWiki.Core.Access;
 
@@ -31,6 +33,7 @@ public static class EffectivePermissionCalculator
             }
 
             var result = AccessRuleExpression.Evaluate(rule.ExpressionJson, principal);
+            CoreTelemetry.RecordRuleEvaluation(AccessRuleKind.SpaceGrant, result);
             if (result.IsMatch && (best is null || rule.Role.Value > best.Value))
             {
                 best = rule.Role.Value;
@@ -59,6 +62,7 @@ public static class EffectivePermissionCalculator
             }
 
             var result = AccessRuleExpression.Evaluate(rule.ExpressionJson, principal);
+            CoreTelemetry.RecordRuleEvaluation(AccessRuleKind.PageRestriction, result);
             if (!result.IsMatch)
             {
                 return PermissionCheckResult.Deny($"restriction:{rule.PageId}:{rule.Id}");
@@ -80,6 +84,22 @@ public static class EffectivePermissionCalculator
     /// </param>
     /// <param name="isReplicaSpace">See <see cref="Space.IsReplicaOf"/>.</param>
     public static EffectivePermission Compute(
+        IEnumerable<AccessRule> spaceGrants,
+        IEnumerable<AccessRule> pageAndAncestorRestrictions,
+        bool isReplicaSpace,
+        Principal principal)
+    {
+        // design.md §15: timed and counted, never traced with a span — canView runs on
+        // every resolved Page (§6.7), so a span per check would be one per field, and
+        // the interesting question is a distribution ("are permission checks slow, are
+        // denials spiking"), which a histogram answers without a per-decision record.
+        var startTimestamp = Stopwatch.GetTimestamp();
+        var permission = ComputeCore(spaceGrants, pageAndAncestorRestrictions, isReplicaSpace, principal);
+        CoreTelemetry.RecordPermissionCheck(permission, Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds);
+        return permission;
+    }
+
+    private static EffectivePermission ComputeCore(
         IEnumerable<AccessRule> spaceGrants,
         IEnumerable<AccessRule> pageAndAncestorRestrictions,
         bool isReplicaSpace,

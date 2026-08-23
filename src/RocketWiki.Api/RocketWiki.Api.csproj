@@ -12,6 +12,7 @@
     <!-- Enables "dotnet run schema export" to keep schema.graphql in sync with
          code (design.md §8); CI drift check is a later hardening step. -->
     <PackageReference Include="HotChocolate.AspNetCore.CommandLine" Version="16.6.1" />
+    <PackageReference Include="HotChocolate.Diagnostics" Version="16.6.1" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
     <!-- design.md §8: SignalR's MessagePack protocol for /hubs/notifications - keeps
          high-frequency presence frames (pointer moves) small, and is the protocol the

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Identity;
+using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Services;
 using RocketWiki.Data;
 
@@ -65,6 +66,7 @@ public sealed class NotificationsHub(
         var affectedPageIds = registry.UnregisterConnection(Context.ConnectionId);
         foreach (var pageId in affectedPageIds)
         {
+            ApiTelemetry.RecordPresenceLeave(ApiTelemetry.PresenceLeaveDisconnected);
             await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
         }
 
@@ -83,12 +85,18 @@ public sealed class NotificationsHub(
         var principal = PrincipalBuilder.Build(Context.User);
         if (principal is null)
         {
+            ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceNoPrincipal);
             return;
         }
 
         var page = await pageReadService.GetPageAsync(pageId, principal, Context.ConnectionAborted);
         if (page is null)
         {
+            // Counted, not distinguished to the caller: the three silent-return branches
+            // in this method are indistinguishable over the wire on purpose (§6.7), and
+            // an aggregate count with no page id and no user id keeps it that way while
+            // still telling an operator which branch is firing.
+            ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceNotViewable);
             return;
         }
 
@@ -96,11 +104,13 @@ public sealed class NotificationsHub(
             .FirstOrDefaultAsync(u => u.Subject == principal.UserId, Context.ConnectionAborted);
         if (user is null)
         {
+            ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceNoLocalUser);
             return;
         }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(pageId));
         registry.JoinPage(pageId, new PresenceViewer(Context.ConnectionId, user.Id, user.DisplayName, ColourFor(user.Id)));
+        ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceJoined);
 
         await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
     }
@@ -114,6 +124,7 @@ public sealed class NotificationsHub(
     public async Task LeavePage(Guid pageId)
     {
         registry.LeavePage(pageId, Context.ConnectionId);
+        ApiTelemetry.RecordPresenceLeave(ApiTelemetry.PresenceLeaveExplicit);
         await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
     }
 

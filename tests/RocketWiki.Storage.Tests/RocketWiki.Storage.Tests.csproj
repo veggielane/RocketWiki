@@ -10,16 +10,24 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- MetricCollector<T>, for asserting that StorageTelemetry's instruments actually
+         emit (design.md §15/§16: instrumentation counts as done when a test proves it
+         fires, not when the call is written). -->
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.Testing" Version="10.8.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+    <!-- Bumped from 10.0.0 to 10.0.11 because Microsoft.Extensions.Diagnostics.Testing
+         above pulls these in transitively at >= 10.0.10, and NU1605 (warning-as-error
+         here) refuses the resulting downgrade. 10.0.11 matches the Microsoft.* pins the
+         rest of the solution already uses. -->
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup>

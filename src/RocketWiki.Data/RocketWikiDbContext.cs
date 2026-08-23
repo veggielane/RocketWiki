@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
+using RocketWiki.Core.Telemetry;
+using RocketWiki.Data.Telemetry;
 
 namespace RocketWiki.Data;
 
@@ -71,14 +74,18 @@ public class RocketWikiDbContext : DbContext
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
-        ProcessPendingDomainEvents();
-        return base.SaveChanges(acceptAllChangesOnSuccess);
+        var telemetry = ProcessPendingDomainEvents();
+        var result = base.SaveChanges(acceptAllChangesOnSuccess);
+        telemetry.RecordCommitted();
+        return result;
     }
 
-    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
-        ProcessPendingDomainEvents();
-        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        var telemetry = ProcessPendingDomainEvents();
+        var result = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        telemetry.RecordCommitted();
+        return result;
     }
 
     /// <summary>
@@ -90,11 +97,11 @@ public class RocketWikiDbContext : DbContext
     /// finding an untracked entity it needs) means nothing is sent to the database at
     /// all - not the audit row, not the outbox row, not the mutation raised alongside them.
     /// </summary>
-    private void ProcessPendingDomainEvents()
+    private PendingTelemetry ProcessPendingDomainEvents()
     {
         if (_pendingDomainEvents.Count == 0)
         {
-            return;
+            return default;
         }
 
         if (AuditContext is null)
@@ -102,14 +109,61 @@ public class RocketWikiDbContext : DbContext
             throw new MissingAuditContextException();
         }
 
+        var telemetry = new PendingTelemetry(_pendingDomainEvents.Count);
+
         var timestampUtc = DateTime.UtcNow;
         foreach (var domainEvent in _pendingDomainEvents)
         {
-            AuditEvents.Add(DomainEventAuditMapper.ToAuditEvent(domainEvent, AuditContext, timestampUtc));
+            var auditEvent = DomainEventAuditMapper.ToAuditEvent(domainEvent, AuditContext, timestampUtc);
+            AuditEvents.Add(auditEvent);
+            telemetry.DomainEventTypes.Add(domainEvent.GetType().Name);
+            telemetry.AuditEvents.Add((auditEvent.Action, auditEvent.Outcome, auditEvent.Channel));
         }
 
-        SyncOutboxWriter.AppendPendingEvents(this, _pendingDomainEvents);
+        SyncOutboxWriter.AppendPendingEvents(this, _pendingDomainEvents, telemetry.OutboxEventTypes);
 
         _pendingDomainEvents.Clear();
+        return telemetry;
+    }
+
+    /// <summary>
+    /// design.md §15: counters are incremented only once <c>base.SaveChanges</c> has
+    /// returned, never at the point the rows are added to the change set. Everything the
+    /// pipeline produces — the mutation, its audit row, its outbox entry — commits or
+    /// rolls back together, so counting at add-time would report writes that a failed
+    /// transaction never made. A rolled-back save leaves these counters untouched, which
+    /// is the honest reading.
+    /// </summary>
+    private readonly struct PendingTelemetry(int capacity)
+    {
+        public List<string> DomainEventTypes { get; } = new(capacity);
+
+        public List<(string Action, AuditOutcome Outcome, AuditChannel Channel)> AuditEvents { get; } = new(capacity);
+
+        public List<SyncEventType> OutboxEventTypes { get; } = new(capacity);
+
+        public void RecordCommitted()
+        {
+            if (DomainEventTypes is null)
+            {
+                return; // default(PendingTelemetry) — nothing was pending
+            }
+
+            foreach (var eventType in DomainEventTypes)
+            {
+                CoreTelemetry.DomainEventsRaised.Add(1,
+                    new KeyValuePair<string, object?>(CoreTelemetry.DomainEventTypeTag, eventType));
+            }
+
+            foreach (var (action, outcome, channel) in AuditEvents)
+            {
+                CoreTelemetry.RecordAuditEventWritten(action, outcome, channel, CoreTelemetry.AuditWriterDomainEvent);
+            }
+
+            foreach (var eventType in OutboxEventTypes)
+            {
+                DataTelemetry.RecordOutboxEntryAppended(eventType);
+            }
+        }
     }
 }

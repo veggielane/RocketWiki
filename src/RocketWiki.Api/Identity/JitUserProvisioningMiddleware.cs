@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Entities;
 using RocketWiki.Data;
 
@@ -50,6 +51,7 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
 
         var now = DateTime.UtcNow;
         var user = await db.Users.FirstOrDefaultAsync(u => u.Subject == subject, ct);
+        var created = user is null;
 
         if (user is null)
         {
@@ -78,6 +80,11 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
         // is safe here regardless of whether AuditContext has been set yet: no domain event
         // is pending, so RocketWikiDbContext's override is a no-op beyond the normal save.
         await db.SaveChangesAsync(ct);
+
+        // design.md §15: created-vs-refreshed only. The subject, email, display name and
+        // above all the nationality claim this method just serialized are exactly the
+        // attribute values §15 forbids in telemetry.
+        ApiTelemetry.RecordJitProvisioning(created);
 
         return user.Id;
     }

@@ -37,7 +37,15 @@ internal static class SyncOutboxWriter
 {
     private static readonly JsonSerializerOptions PayloadOptions = new(JsonSerializerDefaults.Web);
 
-    public static void AppendPendingEvents(RocketWikiDbContext db, IReadOnlyList<IDomainEvent> pendingDomainEvents)
+    /// <summary>
+    /// <paramref name="appendedEventTypes"/> collects the type of every entry actually
+    /// appended, for the caller to turn into telemetry once the transaction commits
+    /// (design.md §15 — see RocketWikiDbContext.PendingTelemetry for why counting here
+    /// would be wrong). Only entries that survive the skip conditions below are recorded,
+    /// so the counter reflects the journal, not the events offered to it.
+    /// </summary>
+    public static void AppendPendingEvents(
+        RocketWikiDbContext db, IReadOnlyList<IDomainEvent> pendingDomainEvents, ICollection<SyncEventType> appendedEventTypes)
     {
         foreach (var domainEvent in pendingDomainEvents)
         {
@@ -84,6 +92,7 @@ internal static class SyncOutboxWriter
                 PayloadJson = payloadJson,
                 CreatedAtUtc = DateTime.UtcNow,
             });
+            appendedEventTypes.Add(eventType.Value);
         }
     }
 

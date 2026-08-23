@@ -2,6 +2,7 @@ using RocketWiki.Core.Services;
 using RocketWiki.Importer.Conversion;
 using RocketWiki.Importer.Export;
 using RocketWiki.Importer.Pipeline.Internal;
+using RocketWiki.Importer.Telemetry;
 
 namespace RocketWiki.Importer.Pipeline;
 
@@ -60,6 +61,13 @@ public sealed class ConfluenceSpaceImporter
 
     public async Task<ImportResult> ImportAsync(ConfluenceExportSpace export, ImportOptions options, CancellationToken cancellationToken = default)
     {
+        // design.md §15: one span per pipeline stage, carrying counts and the space key
+        // only. Titles, bodies, converted Markdown and author names all flow through the
+        // code below and none of them belong in a trace.
+        using var importActivity = ImporterTelemetry.StartSpan(ImporterTelemetry.ImportSpaceSpan);
+        importActivity?.SetTag(ImporterTelemetry.SpaceKeyTag, export.Key);
+        importActivity?.SetTag(ImporterTelemetry.PageCountTag, export.Pages.Count);
+
         var report = new ImportReport();
 
         var spaceResult = await _spaceService.CreateAsync(
@@ -81,6 +89,12 @@ public sealed class ConfluenceSpaceImporter
         // --- Pass 1: create every page as a stub, parent before child (ImportTreePlanner
         // guarantees this order), so every Confluence page id maps to a real RocketWiki
         // page id before pass 3 tries to resolve a link to any of them.
+        // Each pass span is started and disposed explicitly rather than with a `using`
+        // block, to avoid re-indenting these loops purely for a scope. An exception out
+        // of a pass leaves its span unstopped, which is acceptable here: it aborts the
+        // whole import, so there is no later work for a stale Activity.Current to
+        // misparent.
+        var pass1 = ImporterTelemetry.StartSpan(ImporterTelemetry.CreatePagesSpan);
         foreach (var planned in plan.OrderedPages)
         {
             var page = planned.Page;
@@ -113,8 +127,14 @@ public sealed class ConfluenceSpaceImporter
             resolver.RegisterPage(export.Key, page.ConfluencePageId, page.Title, realId.ToString());
         }
 
+        pass1?.SetTag(ImporterTelemetry.CreatedCountTag, realPageIds.Count);
+        pass1?.SetTag(ImporterTelemetry.SkippedCountTag, skippedConfluenceIds.Count);
+        pass1?.Dispose();
+
         // --- Pass 2: upload every attachment for every page that was actually created,
         // so pass 3 can resolve attachment:// references to real ids too.
+        var pass2 = ImporterTelemetry.StartSpan(ImporterTelemetry.UploadAttachmentsSpan);
+        var uploadedAttachmentCount = 0;
         var attachmentFailuresByPage = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var planned in plan.OrderedPages)
         {
@@ -141,14 +161,20 @@ public sealed class ConfluenceSpaceImporter
                 }
 
                 resolver.RegisterAttachment(export.Key, page.ConfluencePageId, page.Title, attachment.FileName, uploadResult.Value.Id.ToString());
+                uploadedAttachmentCount++;
             }
         }
+
+        pass2?.SetTag(ImporterTelemetry.AttachmentCountTag, uploadedAttachmentCount);
+        pass2?.Dispose();
 
         // --- Pass 3: every page/attachment id is now known, so convert real bodies,
         // replace each page's placeholder content, then import its comments and labels
         // (both need the page's real id, but neither needs to happen before anything
         // else - unlike attachments, nothing in step 3's own body conversion depends on
         // comments or labels existing yet).
+        var pass3 = ImporterTelemetry.StartSpan(ImporterTelemetry.ConvertContentSpan);
+        var convertedPageCount = 0;
         var converter = new ConfluenceStorageConverter(resolver);
         var labelIdCache = new Dictionary<string, Guid>(StringComparer.Ordinal);
         foreach (var planned in plan.OrderedPages)
@@ -178,7 +204,11 @@ public sealed class ConfluenceSpaceImporter
                 page.ConfluencePageId, page.Title, realPageId, conversion.Report, attachmentFailures, ImportAuthorFormatting.Format(page.Author),
                 skippedReason, ProducedEmptyContent: updateResult.IsSuccess && string.IsNullOrWhiteSpace(conversion.Markdown),
                 ConvertedMarkdown: conversion.Markdown, Comments: commentOutcomes, LabelsApplied: labelsApplied, LabelFailures: labelFailures));
+            convertedPageCount++;
         }
+
+        pass3?.SetTag(ImporterTelemetry.PageCountTag, convertedPageCount);
+        pass3?.Dispose();
 
         foreach (var orphan in plan.OrphanedPages)
         {

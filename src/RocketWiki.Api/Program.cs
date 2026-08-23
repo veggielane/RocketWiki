@@ -1,3 +1,4 @@
+using HotChocolate.Diagnostics;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -143,7 +144,54 @@ builder.Services
     // Hot Chocolate hides resolver exception details by default regardless of the
     // ASP.NET Core hosting environment - a separate setting, deliberately opt-in only
     // for Development so a production error response never carries a stack trace.
-    .ModifyRequestOptions(o => o.IncludeExceptionDetails = builder.Environment.IsDevelopment());
+    .ModifyRequestOptions(o => o.IncludeExceptionDetails = builder.Environment.IsDevelopment())
+    // --- GraphQL tracing (design.md §15) ---
+    // HotChocolate.Diagnostics emits on the "HotChocolate.Diagnostics" ActivitySource,
+    // which ServiceDefaults subscribes to. Every option below is set explicitly, even
+    // where it matches the package default, because each one is a §15 decision and a
+    // future version changing a default must not quietly change what leaves this
+    // process. What each one prevents:
+    //
+    // * RequestDetails: the package default is Id | Hash | OperationName | Extensions.
+    //   Document and Variables are excluded (they would carry the raw query text and
+    //   raw variable JSON - a search query, a page body on a mutation, both squarely
+    //   "page content" and "search query text" under §15). Extensions is ALSO excluded,
+    //   which the default does not do: it is written verbatim as
+    //   request.Extensions.RootElement.ToString(), and it is a client-controlled bag
+    //   this server does not define the contents of. Id/Hash/OperationName remain -
+    //   a document hash and the frontend's own operation name are how you find a slow
+    //   query without seeing what it asked for.
+    // * IncludeDocument: false. The parsed document is the query text by another route,
+    //   and a query can embed a literal inline rather than as a variable.
+    // * IncludeDataLoaderKeys: false. Keys are page ids - identifiers §15 permits - but
+    //   the batch SIZE is what diagnoses an N+1, and the keys add nothing to that.
+    // * MaxErrorEvents: 0. GraphQL error events carry graphql.error.message verbatim,
+    //   and this schema's own errors include StaleRevisionError, which carries the
+    //   page's latest title and content. graphql.error.count and error.type survive at
+    //   0, which is exactly the "error rates" §15 asks telemetry to provide; the audit
+    //   log (§7) remains the record of what actually happened, and operator-facing
+    //   detail goes to logs.
+    // * IncludeOperationNameInSpanName: false (the default) - span names must stay
+    //   low-cardinality.
+    //
+    // Scopes: everything except ResolveFieldValue. Per-field spans would be one span per
+    // resolved field - a page tree query alone would emit hundreds - and object-level
+    // authorization means every Page field is resolved through the same service anyway,
+    // so the per-field breakdown restates what the operation-level spans already show.
+    // DataLoaderBatch IS kept: PageByIdDataLoader is documented as deduping and
+    // parallelizing rather than truly batching (README), and batch-size spans are the
+    // only direct measurement of that. EnableResolveFieldValue = false additionally
+    // skips the resolver hook entirely rather than starting and discarding activities.
+    .AddInstrumentation(o =>
+    {
+        o.Scopes = ActivityScopes.All & ~ActivityScopes.ResolveFieldValue;
+        o.EnableResolveFieldValue = false;
+        o.RequestDetails = RequestDetails.Id | RequestDetails.Hash | RequestDetails.OperationName;
+        o.IncludeDocument = false;
+        o.IncludeDataLoaderKeys = false;
+        o.IncludeOperationNameInSpanName = false;
+        o.MaxErrorEvents = 0;
+    });
 
 var app = builder.Build();
 

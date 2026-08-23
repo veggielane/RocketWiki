@@ -8,6 +8,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
 using RocketWiki.Core.Sync;
+using RocketWiki.Data.Telemetry;
 using RocketWiki.Storage;
 
 namespace RocketWiki.Data.Services;
@@ -37,8 +38,26 @@ public class BundleExportService : IBundleExportService
         _fileStorage = fileStorage;
     }
 
+    // design.md §15: bundle export is the one long, batch-shaped operation in this
+    // service layer - a span here answers "how long did the drain take and how much went
+    // in it", which no per-query span can. The output directory is deliberately not
+    // tagged: it's a filesystem path from operator config, not something a dashboard
+    // needs, and paths have a habit of carrying environment detail.
     public async Task<ExportedBundleInfo> ExportBaselineAsync(
         Guid spaceId, string outputDirectory, string localInstanceId, CancellationToken cancellationToken = default)
+    {
+        using var activity = DataTelemetry.StartSpan(DataTelemetry.BundleExportBaselineSpan);
+        activity?.SetTag(DataTelemetry.SpaceIdTag, spaceId);
+
+        var info = await ExportBaselineCoreAsync(spaceId, outputDirectory, localInstanceId, cancellationToken);
+
+        activity?.SetTag(DataTelemetry.BundleNumberTag, info.BundleNumber);
+        activity?.SetTag(DataTelemetry.BundleEntryCountTag, info.EventCount);
+        return info;
+    }
+
+    private async Task<ExportedBundleInfo> ExportBaselineCoreAsync(
+        Guid spaceId, string outputDirectory, string localInstanceId, CancellationToken cancellationToken)
     {
         var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == spaceId, cancellationToken)
             ?? throw new InvalidOperationException($"Space {spaceId} not found.");
@@ -53,6 +72,24 @@ public class BundleExportService : IBundleExportService
 
     public async Task<ExportedBundleInfo?> ExportIncrementalAsync(
         string outputDirectory, string localInstanceId, CancellationToken cancellationToken = default)
+    {
+        using var activity = DataTelemetry.StartSpan(DataTelemetry.BundleExportIncrementalSpan);
+
+        var info = await ExportIncrementalCoreAsync(outputDirectory, localInstanceId, cancellationToken);
+
+        // Nothing pending is a normal outcome, not an error - record it as an empty
+        // drain so a dashboard can tell "ran, had nothing" from "never ran".
+        activity?.SetTag(DataTelemetry.BundleEntryCountTag, info?.EventCount ?? 0);
+        if (info is not null)
+        {
+            activity?.SetTag(DataTelemetry.BundleNumberTag, info.BundleNumber);
+        }
+
+        return info;
+    }
+
+    private async Task<ExportedBundleInfo?> ExportIncrementalCoreAsync(
+        string outputDirectory, string localInstanceId, CancellationToken cancellationToken)
     {
         var pendingEvents = await _db.SyncOutboxEvents
             .Where(e => e.ExportedInBundle == null)

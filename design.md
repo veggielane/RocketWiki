@@ -1233,6 +1233,93 @@ space identifiers only where needed to diagnose. In production the
 dashboard and any collector stay inside the network boundary, same rule as
 everything else.
 
+That rule is enforced by a test, not by intent. `TelemetryHygieneTests`
+(RocketWiki.Api.Tests, §14's SQLite tier) drives real requests through the
+real pipeline with sentinel strings planted as a nationality value, a page
+title, page content, a search-shaped inline literal, and attachment bytes;
+listens to **every** ActivitySource in the process and every RocketWiki
+meter; and fails if any sentinel reaches a span name, tag, event, baggage
+entry, or metric tag. The listener is deliberately unfiltered, so a package
+upgrade that turns on a new span carrying the GraphQL document fails the
+build rather than shipping. Logs are the one gap: .NET logging isn't
+interceptable the same way, so "no content in log messages" stays a review
+rule.
+
+The browser is inside that boundary too. The SPA carries the same
+OpenTelemetry story — document load, fetch and XHR, and a span per GraphQL
+operation carrying the operation *name* — exported over OTLP/HTTP to a
+collector that stays in-network, with W3C trace context propagated **only**
+to the API's own origin so a browser span joins its server span and nothing
+else learns a correlatable id. Two things make this harder in a browser than
+on the server, and both are handled at the exporter rather than trusted to
+each instrumentation's configuration: the SPA puts search text in `?q=` and
+heading text in `#anchor`, so **every URL leaving the browser has its query
+string and fragment stripped**, leaving the path — and therefore the page
+and space identifiers this section permits — intact. Browser telemetry is
+**off unless an OTLP endpoint is configured**. There is deliberately no
+default endpoint and no same-origin fallback: "someone forgot to configure
+it" must fail closed rather than guess at a destination that might sit
+outside the boundary.
+
+#### What is instrumented
+
+| Layer | Source / meter | What it adds |
+|---|---|---|
+| HTTP, HttpClient, runtime | *(Aspire ServiceDefaults baseline)* | request duration, dependency calls, GC/thread pool |
+| GraphQL | `HotChocolate.Diagnostics` | operation-level spans: parse, validate, compile, execute, plus DataLoader batch spans with batch size |
+| SQL | `OpenTelemetry.Instrumentation.SqlClient` | one client span per query, registered by Aspire's `AddSqlServerDbContext` (not by us — registering it again would double every span) |
+| EF Core | `Microsoft.EntityFrameworkCore` meter | active DbContexts, queries, SaveChanges, compiled-query cache. Aspire's client integration registers SQL *tracing* only and no metrics at all; this is the gap it leaves |
+| SignalR | `Microsoft.AspNetCore.SignalR.Server`, `Microsoft.AspNetCore.Http.Connections` meter | one span per hub method invocation (hub spans are parentless, so without this a `JoinPage` leaves no trace), plus connection counts and duration |
+| Auth | `Microsoft.AspNetCore.Authorization` / `.Authentication` meters | authorization attempts by result, authentication duration by scheme. Directly relevant to a fail-closed system |
+| Rule engine (§6) | `RocketWiki.Core` | rule evaluations by kind and decision; effective-permission checks by canView/canEdit and denial *category*; duration histogram |
+| Domain events + audit (§7, §12) | `RocketWiki.Core` | events raised by type; audit rows written by action, outcome, channel, and which writer produced them |
+| Persistence (§6.4.1, §12) | `RocketWiki.Data` | spans for units of work spanning several queries — subtree delete/restore, move, revision restore, bundle export/import — plus outbox entries appended by event type |
+| Blob storage (§10) | `RocketWiki.Storage` | span, duration, count and byte count per operation, tagged by provider. Nothing else instruments this path |
+| Identity + real-time (§8, §11.3) | `RocketWiki.Api` | JIT provisioning created-vs-refreshed; presence joins/leaves/evictions; notification fan-out by disposition, including how many recipients were skipped for being offline |
+| Migration (§13) | `RocketWiki.Importer` | a span per pipeline pass with page and attachment counts. No exporter is wired into the CLI |
+| Browser (`web/`) | `rocketwiki-web` over OTLP/HTTP | document load, fetch/XHR (covers urql's GraphQL POSTs and SignalR's negotiate/long-poll), GraphQL operation-name spans; every URL's query string and fragment stripped at the export choke point (see above) |
+
+#### Naming
+
+Every project declares its `ActivitySource` and `Meter` under its own
+assembly name, so ServiceDefaults subscribes with a single `RocketWiki.*`
+wildcard — it has to, since every project references ServiceDefaults and a
+reference back would be circular. That makes the convention load-bearing: a
+source named outside it would compile, emit, and be silently dropped, so a
+test asserts every telemetry class matches the pattern. Instruments are
+`rocketwiki.<area>.<thing>` and tags `rocketwiki.<area>.<tag>`, following
+OpenTelemetry's lowercase dotted convention.
+
+#### Rules for adding instrumentation
+
+- **Tag vocabularies are bounded.** Enum names, decision outcomes, and fixed
+  reason categories — never free text. A failed restriction's audit reason is
+  `restriction:{pageId}:{ruleId}`; as a metric dimension that becomes one
+  series per rule, so it collapses to `restriction`. The audit log keeps the
+  specific reason, which is where it belongs.
+- **Errors are recorded by type, never by message.** `StaleRevisionError`
+  carries the page's latest title and content; a message tag would leak both.
+  GraphQL error *events* are suppressed entirely (`MaxErrorEvents = 0`) for
+  the same reason — `graphql.error.message` echoes the client's own query
+  text back. `graphql.error.count` and `error.type` survive, which is the
+  "error rates" this section asks telemetry to provide.
+- **Identifiers go on spans, not on metric dimensions.** A Guid tag on a
+  counter is both a cardinality problem and wider exposure than a dashboard
+  needs.
+- **Counters increment on commit.** The domain-event pipeline builds the
+  mutation, its audit row and its outbox entry in one change set; counting
+  before `SaveChanges` returns would report writes a rolled-back transaction
+  never made.
+- **GraphQL request details are opt-in, never inherited.** Document text and
+  variables are excluded, and so are `extensions` — which the library's own
+  default *does* include, written verbatim as a client-controlled blob.
+  Document id, hash and operation name remain: enough to find a slow query
+  without seeing what it asked for.
+- **Resolver-level spans stay off.** `canView` runs on every resolved Page
+  (§6.7), so per-field spans would be hundreds per page-tree query and would
+  only restate the operation-level view. DataLoader batch spans are kept —
+  they are the only direct measurement of whether batching actually batches.
+
 ---
 
 ## 16. Milestones

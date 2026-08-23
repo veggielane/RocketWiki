@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
@@ -41,6 +43,15 @@ public sealed class NotificationDispatcher(
 {
     public async Task NotifyPageChangedAsync(Guid pageId, Guid actorUserId, NotificationType type, CancellationToken cancellationToken)
     {
+        // design.md §15: a span here because fan-out is several queries plus a canView
+        // evaluation and a push per candidate - a unit of work SQL Client's per-query
+        // spans can't show as one thing. Tagged with the page id (an identifier, allowed
+        // by §15) and counts; never TitleSnapshot, which is page content, and never a
+        // recipient id, which would make this trace a record of who can see what.
+        using var activity = ApiTelemetry.ActivitySource.StartActivity(
+            ApiTelemetry.NotificationFanOutSpan, ActivityKind.Internal);
+        activity?.SetTag("rocketwiki.page.id", pageId);
+
         var page = await db.Pages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);
         if (page is null)
         {
@@ -72,17 +83,21 @@ public sealed class NotificationDispatcher(
 
         var now = DateTime.UtcNow;
         var delivered = 0;
+        var skippedOffline = 0;
+        var skippedNotViewable = 0;
         foreach (var recipientId in candidateIds)
         {
             var principal = registry.GetConnectedPrincipal(recipientId);
             if (principal is null)
             {
+                skippedOffline++;
                 continue; // offline recipient - see this interface's own doc for the gap
             }
 
             var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplica, principal);
             if (!permission.CanView)
             {
+                skippedNotViewable++;
                 continue;
             }
 
@@ -113,5 +128,16 @@ public sealed class NotificationDispatcher(
         {
             await db.SaveChangesAsync(cancellationToken);
         }
+
+        // Recorded after the save, so `delivered` counts rows that actually committed
+        // (design.md §15 - see RocketWikiDbContext.PendingTelemetry for the same rule).
+        // The two skip counters are the operational measure of this dispatcher's two
+        // documented behaviours: the offline-recipient gap, and canView at send time.
+        ApiTelemetry.RecordNotificationFanOut(type, ApiTelemetry.NotificationDelivered, delivered);
+        ApiTelemetry.RecordNotificationFanOut(type, ApiTelemetry.NotificationSkippedOffline, skippedOffline);
+        ApiTelemetry.RecordNotificationFanOut(type, ApiTelemetry.NotificationSkippedNotViewable, skippedNotViewable);
+
+        activity?.SetTag("rocketwiki.notification.candidate_count", candidateIds.Count);
+        activity?.SetTag("rocketwiki.notification.delivered_count", delivered);
     }
 }

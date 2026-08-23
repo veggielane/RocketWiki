@@ -54,6 +54,14 @@ exercises the real ASP.NET Core + Hot Chocolate pipeline — GraphQL mutations
 authentication handler standing in for Keycloak — design.md §14's
 container-free tier).
 
+Every project also carries telemetry tests (design.md §15): `MetricCollector`
+and `ActivityListener` coverage that the custom instruments emit with the tags
+claimed, plus `TelemetryHygieneTests` in `RocketWiki.Api.Tests`, which sweeps
+every ActivitySource in the process for page content, search text, and
+principal attribute values. Those classes sit in a non-parallelizable xUnit
+collection — an `ActivitySource` and a `Meter` are process-wide, so a listener
+in one class otherwise captures whatever a class running in parallel emits.
+
 To regenerate the checked-in GraphQL SDL after changing the schema:
 
 ```
@@ -244,6 +252,57 @@ Being explicit about what has and hasn't been checked, rather than letting
   each confirmed to actually fail when the condition they guard against is
   deliberately introduced, not just written and left untested against
   themselves.
+- **OpenTelemetry now covers the whole backend, and design.md §15's "telemetry
+  is not audit" rule is enforced by a test rather than by intent.** Beyond
+  Aspire's stock ASP.NET Core/HttpClient/runtime baseline, the GraphQL
+  pipeline, SignalR hub invocations and connections, EF Core's own metrics,
+  and the .NET 10 authorization/authentication metrics are all subscribed;
+  the rule engine, domain-event and audit pipelines, sync outbox and bundle
+  export/import, both `IFileStorage` providers, JIT provisioning, presence
+  and notification fan-out, and the importer's pipeline passes each declare
+  their own `ActivitySource`/`Meter` (see design.md §15 for the full table
+  and naming scheme). What's verified by tests: that the key instruments
+  actually emit with the tags claimed (`MetricCollector`/`ActivityListener`
+  unit tests across Core, Data, Storage and Importer); that a hub invocation
+  and a GraphQL request really do emit on the exact third-party source names
+  ServiceDefaults hard-codes; that counters increment only after a commit,
+  proven by forcing a failed `SaveChanges` and asserting nothing was
+  counted; and — the §15 one — that no sentinel nationality value, page
+  title, page content, search-shaped literal, or attachment byte reaches any
+  span name, tag, event, baggage entry, or metric tag across *every*
+  ActivitySource in the process. That last test was confirmed to fail when
+  the rule is deliberately broken, three separate ways: enabling
+  `RequestDetails.All` (the query document lands on a span), restoring
+  `MaxErrorEvents` (Hot Chocolate's `graphql.error.message` quotes the
+  client's own query text straight back), and tagging a metric with a rule
+  expression (the nationality values being matched). All three were caught
+  with a readable failure naming the exact tag, then reverted — so the two
+  §15-driven deviations from the library's defaults are demonstrably
+  load-bearing, not cargo-culted.
+  Load-bearing finding along the way: `Aspire.Microsoft.EntityFrameworkCore.SqlServer`
+  13.5.1's `AddSqlServerDbContext` registers **only** `AddSqlClientInstrumentation()`
+  plus a DbContext health check — no EF Core instrumentation and **no metrics
+  at all** (confirmed by decompiling the package, same practice as the
+  Keycloak realm work). So SQL query tracing was already covered and must not
+  be registered a second time, while EF Core's meter was a genuine gap.
+  Second finding, about the tests rather than the code: an `ActivitySource`
+  and a `Meter` are process-wide, so a listener in one test class captures
+  what a class running in parallel emits. The telemetry test classes are in a
+  non-parallelizable xUnit collection for that reason; without it the
+  assertions would have had to be weakened to "contains something of roughly
+  this shape", which would pass even if the instrumentation emitted nothing.
+- **Browser telemetry is wired and unit-tested** (a frontend agent's work,
+  reported rather than independently reverified here): `web/src/telemetry`
+  adds OpenTelemetry to the SPA behind a configuration gate — with no
+  `VITE_OTEL_EXPORTER_OTLP_ENDPOINT` set, the tracing SDK is never even
+  downloaded; Vite splits it into its own 75 kB chunk that an unconfigured
+  build never requests. 73 tests cover the gate (off when unset, and off for
+  a malformed endpoint), the query/fragment redaction that keeps search text
+  and heading-anchor slugs out of spans (design.md §15), the `traceparent`
+  allowlist checked against the SDK's own matcher rather than our
+  assumptions about it, and the GraphQL operation-name enrichment —
+  including an assertion that no variable value, document text, or response
+  body reaches a span.
 - `RocketWiki.Core.Tests` and `RocketWiki.Data.Tests` (owned by another
   agent) have passed as part of a solution-wide run in the past — not
   independently reverified by this file's author this round (see the
@@ -286,8 +345,34 @@ Being explicit about what has and hasn't been checked, rather than letting
   Closing this would need either a richer `IPageReadService` return type or
   the service auditing its own denials internally, where the reason is
   already computed — a Core-side change, not mine to make unilaterally.
-- **The frontend**, beyond the fact that it exists and is a separate agent's
-  work in progress — this file makes no claim about `web/`'s state.
+- **That any of the OpenTelemetry above has ever left the process.** No OTLP
+  endpoint and no Aspire dashboard has ever received a single span or metric
+  from RocketWiki — the exporter only activates when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, which requires `aspire run`, which
+  requires the container runtime this environment doesn't have. The tests
+  prove the instruments emit and that §15 holds at the `ActivitySource` /
+  `Meter` boundary; they say nothing about serialization, the OTLP exporter,
+  sampling under load, or what a dashboard actually renders. Two specific
+  things to check on the first real run: that ServiceDefaults' `RocketWiki.*`
+  wildcard actually picks the custom sources up (`AddSource`/`AddMeter`
+  wildcard subscription is documented by OpenTelemetry .NET, and a guard test
+  asserts every source and meter is named to match the pattern, but the two
+  halves have never been exercised together against a live SDK), and that
+  span volume is sane — GraphQL scopes are set to everything except per-field
+  resolvers, which is a judgement call made without ever having seen the
+  trace count.
+- **That any browser span has ever been exported to a real OTLP endpoint.**
+  The exporter's transport is mocked in the web tests; the only evidence the
+  export leg does anything at all is an early draft that let it run for real
+  and produced `ECONNREFUSED` against a dashboard that wasn't running. The
+  Aspire AppHost still doesn't run the Vite dev server (a commented-out TODO
+  in `AppHost.cs`), so nothing injects the endpoint automatically yet —
+  `web/.env.example` documents the variables for standalone `vite dev`,
+  including the easily-missed detail that the dashboard's OTLP/HTTP port is
+  18890, not the gRPC 18889.
+- **The frontend**, beyond the browser-telemetry claim above and the fact
+  that it exists and is a separate agent's work in progress — this file
+  makes no other claim about `web/`'s state.
 - Real login, real page CRUD, real search, real anything involving SQL
   Server or Keycloak issuing a token — none of it exists yet at more than a
   placeholder level (see design.md §16's milestone list for what's next).

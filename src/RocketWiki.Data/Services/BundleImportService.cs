@@ -8,6 +8,7 @@ using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Core.Sync;
+using RocketWiki.Data.Telemetry;
 using RocketWiki.Storage;
 
 namespace RocketWiki.Data.Services;
@@ -30,8 +31,29 @@ public class BundleImportService : IBundleImportService
         _fileStorage = fileStorage;
     }
 
+    // design.md §15: the bundle path is not tagged (an operator filesystem path), and
+    // neither is originInstanceId beyond what the audit row already records. What a span
+    // adds over SQL Client's per-query view is the whole apply as one timed unit, plus
+    // how many events it applied and whether it was a duplicate no-op.
     public async Task<PageMutationResult<ImportedBundleSummary>> ImportAsync(
         string bundleFilePath, string originInstanceId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        using var activity = DataTelemetry.StartSpan(DataTelemetry.BundleImportSpan);
+
+        var result = DataTelemetry.Finish(activity,
+            await ImportCoreAsync(bundleFilePath, originInstanceId, auditContext, cancellationToken));
+        if (result.IsSuccess)
+        {
+            activity?.SetTag(DataTelemetry.BundleNumberTag, result.Value.BundleNumber);
+            activity?.SetTag(DataTelemetry.BundleEntryCountTag, result.Value.EventsApplied);
+            activity?.SetTag(DataTelemetry.BundleDuplicateTag, result.Value.WasDuplicate);
+        }
+
+        return result;
+    }
+
+    private async Task<PageMutationResult<ImportedBundleSummary>> ImportCoreAsync(
+        string bundleFilePath, string originInstanceId, AuditContext auditContext, CancellationToken cancellationToken)
     {
         using var archive = ZipFile.OpenRead(bundleFilePath);
 
