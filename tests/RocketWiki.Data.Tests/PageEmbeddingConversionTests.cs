@@ -5,10 +5,12 @@ using Xunit;
 namespace RocketWiki.Data.Tests;
 
 /// <summary>
-/// PageEmbeddingConfiguration stores Embedding as a hand-rolled float[]-to-bytes
-/// conversion (interim varbinary(max) mapping ahead of a native vector(1536) column -
-/// see the TODO there). That conversion has no test elsewhere, so prove it round-trips
-/// exactly through a real provider rather than trusting the Buffer.BlockCopy math by eye.
+/// On SQLite, Embedding is stored via the hand-rolled float[]-to-bytes conversion
+/// (RocketWikiDbContext's provider-conditional mapping; data-model.md: "On SQLite
+/// (tests) this table maps Embedding to a blob"). SQL Server graduated to the native
+/// vector(1536) column — its round-trip twin lives in the SqlServer tier's
+/// VectorSearchTests. This proves the blob conversion round-trips exactly through a
+/// real provider rather than trusting the Buffer.BlockCopy math by eye.
 /// </summary>
 public class PageEmbeddingConversionTests : SqliteTestBase
 {

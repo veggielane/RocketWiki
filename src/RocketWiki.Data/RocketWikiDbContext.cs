@@ -83,6 +83,35 @@ public class RocketWikiDbContext : DbContext
             modelBuilder.Entity<AuditEvent>()
                 .Property(e => e.Id)
                 .HasValueGenerator<SqliteAuditEventIdGenerator>();
+
+            // data-model.md: "On SQLite (tests) this table maps Embedding to a blob and
+            // the in-memory cosine fallback handles search." The flat little-endian
+            // float32 blob that used to be the uniform mapping is now SQLite-only —
+            // SQL Server graduated to the native vector column below.
+            modelBuilder.Entity<PageEmbedding>()
+                .Property(e => e.Embedding)
+                .HasConversion(
+                    v => Configurations.PageEmbeddingConfiguration.FloatArrayToBytes(v),
+                    v => Configurations.PageEmbeddingConfiguration.BytesToFloatArray(v));
+        }
+        else
+        {
+            // SQL Server (including design-time migration scaffolding, which runs on the
+            // SQL Server provider via RocketWikiDbContextFactory): design.md §9.3 /
+            // data-model.md — Embedding is the native SQL Server 2025 vector(1536)
+            // column (AlterPageEmbeddingToNativeVector migration), written and read as
+            // Microsoft.Data.SqlClient's SqlVector<float> over TDS. The entity keeps a
+            // plain float[] so RocketWiki.Core stays provider-agnostic and the indexer /
+            // exact-scan math is identical on every provider; the conversion below is
+            // the entire provider-specific surface. The dimension count comes from
+            // PageEmbeddingConfiguration.EmbeddingDimensions — fixed per column, so a
+            // model/dimension change is a migration + full re-embed (data-model.md).
+            modelBuilder.Entity<PageEmbedding>()
+                .Property(e => e.Embedding)
+                .HasColumnType($"vector({Configurations.PageEmbeddingConfiguration.EmbeddingDimensions})")
+                .HasConversion(
+                    v => new Microsoft.Data.SqlTypes.SqlVector<float>(v),
+                    v => v.Memory.ToArray());
         }
 
         base.OnModelCreating(modelBuilder);

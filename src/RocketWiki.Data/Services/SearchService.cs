@@ -157,13 +157,15 @@ public class SearchService : ISearchService
     /// FTS-only), and when the index holds another model's vectors (§9.3: an index only
     /// ever contains one model's vectors, enforced here at query time via the Model stamp).
     ///
-    /// TODO(sql-server, container-gated): this is the exact-scan fallback design.md
-    /// §9.3/§14 prescribe for the SQLite tier - candidate vectors are pulled into memory
-    /// and scored in-process, fine at test scale but a full scan at real scale. The real
-    /// path (native vector(1536) column, VECTOR_DISTANCE, DiskANN index) needs the SQL
-    /// Server Testcontainers tier to exist first; until then this fallback runs on BOTH
-    /// providers so the behavior every test proves is the behavior production has. See
-    /// PageEmbeddingConfiguration's TODO for the storage half of the same flag.
+    /// Two provider branches, one contract (both are EXACT cosine ranking, so every
+    /// behavioral test transfers): SQL Server scores in-engine with
+    /// VECTOR_DISTANCE('cosine', …) over the native vector(1536) column - the §9.3 path,
+    /// proven by tests/RocketWiki.SqlServer.Tests/VectorSearchTests - and SQLite runs
+    /// the §14-prescribed in-memory scan over the blob column. A DiskANN-assisted
+    /// approximate search would additionally need the preview VECTOR_SEARCH TVF
+    /// (VECTOR_DISTANCE never uses a vector index, per its docs); see
+    /// AlterPageEmbeddingToNativeVector for why that index is deliberately not created
+    /// on boxed SQL Server 2025 yet.
     /// </summary>
     private async Task<List<VectorHit>> SearchViaVectorsAsync(
         string query, string? spaceKey, int overFetchCount, CancellationToken cancellationToken)
@@ -195,6 +197,15 @@ public class SearchService : ISearchService
             return [];
         }
 
+        // Only the embedding-endpoint call above is caught: a failure INSIDE the store
+        // (e.g. a query vector whose dimensions don't match the vector(1536) column)
+        // is a configuration error, not endpoint weather - it propagates and fails the
+        // request loudly rather than silently degrading.
+        if (_db.Database.ProviderName == SqlServerProviderName)
+        {
+            return await SearchViaVectorDistanceAsync(queryVector, spaceKey, overFetchCount, cancellationToken);
+        }
+
         // The Page navigation is referenced explicitly so the soft-delete query filters
         // join in and trashed pages/spaces drop out of the scan itself - the fused
         // candidates are re-fetched through filtered DbSets later anyway, but the store
@@ -222,6 +233,54 @@ public class SearchService : ISearchService
             .ThenBy(h => h.PageId)
             .Take(overFetchCount)
             .ToList();
+    }
+
+    /// <summary>
+    /// design.md §9.3: the SQL Server branch — VECTOR_DISTANCE('cosine', …) over the
+    /// native vector(1536) column, entirely in-engine, so candidate vectors never cross
+    /// the wire. Raw SQL for the same reason as SearchViaFullTextAsync (CONTAINSTABLE):
+    /// the construct has no provider-agnostic LINQ form, and this class already branches
+    /// per provider. Same contract as the in-memory scan: exact cosine, best chunk per
+    /// page (ROW_NUMBER), top-N pages, deterministic tie-breaks (distance, then PageId;
+    /// chunk ties by ChunkIndex), soft-deleted pages/spaces excluded in the scan itself.
+    /// Cosine DISTANCE (0..2) converts to the similarity the fused pipeline records as
+    /// similarity = 1 - distance. One deliberate edge divergence: a stored zero vector
+    /// has no defined cosine distance — the engine yields NULL and the row is skipped
+    /// here, where the in-memory scan ranks it unwinnably last; both mean "never
+    /// surfaces", and real embeddings are never zero.
+    ///
+    /// The query vector travels as a Microsoft.Data.SqlClient SqlVector&lt;float&gt;
+    /// parameter — the same type mapping the write path (RocketWikiDbContext's SQL
+    /// Server Embedding conversion) uses. If its dimensions don't match the column's,
+    /// the engine rejects the query and the error propagates: fail loud, never
+    /// fail-open into keyword-only (see caller).
+    /// </summary>
+    private async Task<List<VectorHit>> SearchViaVectorDistanceAsync(
+        float[] queryVector, string? spaceKey, int overFetchCount, CancellationToken cancellationToken)
+    {
+        var queryParameter = new Microsoft.Data.SqlTypes.SqlVector<float>(queryVector);
+
+        var rows = await _db.Database.SqlQuery<VectorDistanceRow>($"""
+            SELECT TOP ({overFetchCount}) ranked.PageId, ranked.ChunkIndex, ranked.Distance
+            FROM (
+                SELECT e.PageId AS PageId, e.ChunkIndex AS ChunkIndex,
+                       VECTOR_DISTANCE('cosine', e.Embedding, {queryParameter}) AS Distance,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY e.PageId
+                           ORDER BY VECTOR_DISTANCE('cosine', e.Embedding, {queryParameter}) ASC, e.ChunkIndex ASC) AS ChunkRank
+                FROM PageEmbeddings e
+                INNER JOIN Pages p ON p.Id = e.PageId
+                INNER JOIN Spaces s ON s.Id = p.SpaceId
+                WHERE e.Model = {_embeddingOptions!.Model}
+                  AND p.IsDeleted = 0
+                  AND s.IsDeleted = 0
+                  AND ({spaceKey} IS NULL OR s.[Key] = {spaceKey})
+            ) ranked
+            WHERE ranked.ChunkRank = 1 AND ranked.Distance IS NOT NULL
+            ORDER BY ranked.Distance ASC, ranked.PageId ASC
+            """).ToListAsync(cancellationToken);
+
+        return rows.Select(r => new VectorHit(r.PageId, r.ChunkIndex, 1.0 - r.Distance)).ToList();
     }
 
     /// <summary>
@@ -435,6 +494,13 @@ public class SearchService : ISearchService
     private sealed record SearchCandidate(Guid PageId, string Title, Guid SpaceId, string SpaceKey, string CurrentContent, string AncestorPath);
 
     private sealed record VectorHit(Guid PageId, int ChunkIndex, double Similarity);
+
+    private sealed class VectorDistanceRow
+    {
+        public Guid PageId { get; init; }
+        public int ChunkIndex { get; init; }
+        public double Distance { get; init; }
+    }
 
     private sealed class PageSearchRow
     {

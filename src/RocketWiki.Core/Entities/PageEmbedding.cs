@@ -18,10 +18,14 @@ public class PageEmbedding
     public byte[] ChunkHash { get; set; } = Array.Empty<byte>();
 
     /// <summary>
-    /// SQL Server 2025 native vector(1536) with a DiskANN cosine index in production
-    /// (design.md §9.3). Modeled as a CLR float[] so Core stays provider-agnostic; see
-    /// RocketWiki.Data's PageEmbeddingConfiguration for the relational mapping and the
-    /// TODO covering the native vector column/index.
+    /// SQL Server 2025 native vector(1536) column in production (design.md §9.3),
+    /// queried in-engine via VECTOR_DISTANCE; a flat float blob on SQLite. Modeled as
+    /// a CLR float[] so Core stays provider-agnostic — the storage split lives in
+    /// RocketWiki.Data (RocketWikiDbContext's provider-conditional mapping; dimensions
+    /// fixed by PageEmbeddingConfiguration.EmbeddingDimensions, so a model/dimension
+    /// change is a migration + full re-embed). The DiskANN index §9.3 names remains
+    /// deliberately out of the migration chain — see AlterPageEmbeddingToNativeVector
+    /// for the engine-verified reasons.
     /// </summary>
     public float[] Embedding { get; set; } = Array.Empty<float>();
 

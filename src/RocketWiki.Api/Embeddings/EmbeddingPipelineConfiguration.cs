@@ -64,6 +64,11 @@ public static class EmbeddingPipelineConfiguration
                 .AsIEmbeddingGenerator(options.Dimensions));
 
         builder.Services.AddScoped<EmbeddingIndexer>();
+        // Registered BEFORE the background service (hosted services start in
+        // registration order): a Dimensions setting that contradicts the SQL Server
+        // vector(1536) column fails startup before the job can attempt a single
+        // doomed write. See EmbeddingDimensionsStartupCheck.
+        builder.Services.AddHostedService<EmbeddingDimensionsStartupCheck>();
         builder.Services.AddHostedService<EmbeddingBackgroundService>();
     }
 

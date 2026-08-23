@@ -34,6 +34,7 @@
        vocabulary). Linked, not copied, so a helper change propagates everywhere. -->
   <ItemGroup>
     <Compile Include="..\RocketWiki.Data.Tests\TestData.cs" Link="Shared\TestData.cs" />
+    <Compile Include="..\RocketWiki.Data.Tests\FakeEmbeddingGenerator.cs" Link="Shared\FakeEmbeddingGenerator.cs" />
     <Compile Include="..\RocketWiki.Api.Tests\Integration\TestAuthHandler.cs" Link="Shared\TestAuthHandler.cs" />
     <Compile Include="..\RocketWiki.Api.Tests\Integration\TestUserHttpClientExtensions.cs" Link="Shared\TestUserHttpClientExtensions.cs" />
     <Compile Include="..\RocketWiki.Api.Tests\Integration\GraphQLHttpClientExtensions.cs" Link="Shared\GraphQLHttpClientExtensions.cs" />

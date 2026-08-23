@@ -74,16 +74,21 @@ public sealed class MigrateOnStartupApiTests
     }
 }
 
-/// <summary>See <see cref="MigrateOnStartupApiTests"/> for what is (and is not) overridden.</summary>
+/// <summary>See <see cref="MigrateOnStartupApiTests"/> for what is (and is not) overridden.
+/// <paramref name="extraSettings"/> flows through UseSetting for the same
+/// read-imperatively-at-Program-time reason as the connection string — used by
+/// EmbeddingStartupGuardTests to inject an embeddings connection string.</summary>
 internal sealed class SqlServerApiFactory : WebApplicationFactory<Program>
 {
     private readonly string _connectionString;
+    private readonly IReadOnlyDictionary<string, string?>? _extraSettings;
     private readonly string _attachmentsRoot =
         Path.Combine(Path.GetTempPath(), "rocketwiki-sqlserver-api-tests-" + Guid.NewGuid());
 
-    public SqlServerApiFactory(string connectionString)
+    public SqlServerApiFactory(string connectionString, IReadOnlyDictionary<string, string?>? extraSettings = null)
     {
         _connectionString = connectionString;
+        _extraSettings = extraSettings;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -103,6 +108,14 @@ internal sealed class SqlServerApiFactory : WebApplicationFactory<Program>
         // Program runs. (The SQLite tier never hit this because it replaces the
         // DbContext registration wholesale.)
         builder.UseSetting("ConnectionStrings:rocketwiki", _connectionString);
+
+        if (_extraSettings is not null)
+        {
+            foreach (var (key, value) in _extraSettings)
+            {
+                builder.UseSetting(key, value);
+            }
+        }
 
         builder.ConfigureAppConfiguration((_, config) =>
         {

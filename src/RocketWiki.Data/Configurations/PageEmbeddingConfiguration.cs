@@ -4,8 +4,30 @@ using RocketWiki.Core.Entities;
 
 namespace RocketWiki.Data.Configurations;
 
+/// <summary>
+/// Provider-neutral half of the PageEmbedding mapping. The one provider-specific
+/// piece — how the Embedding float[] is physically stored — lives in
+/// RocketWikiDbContext.OnModelCreating (the SqliteAuditEventIdGenerator precedent):
+/// SQL Server maps it to the native vector(1536) column the
+/// AlterPageEmbeddingToNativeVector migration created, SQLite keeps the flat
+/// little-endian float blob (data-model.md: "On SQLite (tests) this table maps
+/// Embedding to a blob and the in-memory cosine fallback handles search").
+/// </summary>
 public class PageEmbeddingConfiguration : IEntityTypeConfiguration<PageEmbedding>
 {
+    /// <summary>
+    /// data-model.md / design.md §9.3: the vector(1536) column hard-fixes the
+    /// embedding dimensions at the schema level — unlike the varbinary blob it
+    /// replaced, which would store any length. This constant is the code-side twin of
+    /// that DDL: the SQL Server column type in RocketWikiDbContext is built from it,
+    /// the API's startup guard (EmbeddingDimensionsStartupCheck) refuses to boot a
+    /// SQL Server instance whose configured Ai:Dimensions disagrees with it, and the
+    /// SqlServer-tier migration test ties it to sys.columns. Changing the embedding
+    /// model to a different dimension count is therefore a migration + full re-embed,
+    /// exactly as data-model.md promises — never a config edit.
+    /// </summary>
+    public const int EmbeddingDimensions = 1536;
+
     public void Configure(EntityTypeBuilder<PageEmbedding> builder)
     {
         builder.ToTable("PageEmbeddings");
@@ -16,29 +38,10 @@ public class PageEmbeddingConfiguration : IEntityTypeConfiguration<PageEmbedding
         builder.Property(e => e.Model).HasMaxLength(128).IsRequired();
         builder.Property(e => e.UpdatedAtUtc).HasColumnType("datetime2(3)");
 
-        // TODO(sql-server, container-gated): design.md §9.3 wants a native vector(1536)
-        // column with a DiskANN cosine index. EF Core's SQL Server vector-type support
-        // is new enough that pinning the exact mapping here would need this instance's
-        // precise package versions confirmed against a real SQL Server — which needs
-        // the §14 Testcontainers tier that doesn't exist yet. Until that follow-up
-        // migration lands, Embedding is stored as a flat little-endian float blob on
-        // every provider — this is exactly the "maps Embedding to a blob" behavior
-        // data-model.md already specifies for SQLite, just applied uniformly so the
-        // column round-trips real data now instead of being dropped. Milestone 7's
-        // cosine search runs the exact-scan in-memory fallback on both providers
-        // (SearchService.SearchViaVectorsAsync); see the AddPageEmbeddingState
-        // migration's TODO for the intended native DDL and why it is not emitted early.
-        //
-        // No explicit HasColumnType("varbinary(max)"): that's SQL-Server-only syntax
-        // and fails schema creation on SQLite (confirmed by running RocketWiki.Data.Tests
-        // - its type-name grammar accepts numeric length args but not the keyword MAX).
-        // An unbounded byte[] with no HasMaxLength already defaults to varbinary(max) on
-        // SQL Server and to a BLOB on SQLite.
-        builder.Property(e => e.Embedding)
-            .HasConversion(
-                v => FloatArrayToBytes(v),
-                v => BytesToFloatArray(v))
-            .IsRequired();
+        // Storage conversion (blob on SQLite, SqlVector<float> on SQL Server) is
+        // provider-conditional and applied in RocketWikiDbContext.OnModelCreating —
+        // see the class doc. Only the provider-independent facet lives here.
+        builder.Property(e => e.Embedding).IsRequired();
 
         builder.HasIndex(e => new { e.PageId, e.ChunkIndex }).IsUnique();
 
@@ -48,14 +51,16 @@ public class PageEmbeddingConfiguration : IEntityTypeConfiguration<PageEmbedding
             .OnDelete(DeleteBehavior.NoAction);
     }
 
-    private static byte[] FloatArrayToBytes(float[] values)
+    /// <summary>SQLite storage shape: flat little-endian float32 blob. Public statics so the
+    /// context's provider-conditional mapping (and tests) share one definition.</summary>
+    public static byte[] FloatArrayToBytes(float[] values)
     {
         var bytes = new byte[values.Length * sizeof(float)];
         Buffer.BlockCopy(values, 0, bytes, 0, bytes.Length);
         return bytes;
     }
 
-    private static float[] BytesToFloatArray(byte[] bytes)
+    public static float[] BytesToFloatArray(byte[] bytes)
     {
         var values = new float[bytes.Length / sizeof(float)];
         Buffer.BlockCopy(bytes, 0, values, 0, bytes.Length);

@@ -10,25 +10,15 @@ namespace RocketWiki.Data.Migrations
     /// background job — see PageEmbeddingState. Derived, instance-local data; never
     /// synced (§9.4).
     ///
-    /// TODO(sql-server, container-gated): design.md §9.3 / data-model.md specify
-    /// PageEmbeddings.Embedding as SQL Server 2025's native vector(1536) with a DiskANN
-    /// cosine index. That DDL is deliberately NOT emitted here — not even as raw
-    /// provider-only SQL like InitialCreate's FULLTEXT block — because unlike the FTS
-    /// index it would not be additive: converting the column changes what EF's write
-    /// path must produce (the model maps a varbinary float blob via a value converter,
-    /// and varbinary does not implicitly convert to vector), so shipping
-    /// `ALTER TABLE PageEmbeddings ALTER COLUMN Embedding vector(1536)` today would
-    /// break the indexer on the one environment (real SQL Server) nothing yet tests.
-    /// The follow-up, once the §14 Testcontainers tier exists to prove it, is one
-    /// migration + model change together:
-    ///   - remap Embedding to Microsoft.Data.SqlClient's SqlVector&lt;float&gt; /
-    ///     EF's native vector type mapping (SQL Server provider),
-    ///   - ALTER COLUMN to vector(1536) (values re-populate via re-embed — embeddings
-    ///     are derived data, rebuildable per §9.4, so a lossy conversion is acceptable),
-    ///   - CREATE VECTOR INDEX … WITH (METRIC = 'cosine', TYPE = 'diskann').
-    /// Until then, vector search runs the exact-scan fallback on every provider
-    /// (SearchService.SearchViaVectorsAsync), which is also what keeps SQLite-tier
-    /// tests exercising the real pipeline end to end.
+    /// The native-vector DDL deliberately not emitted here (it would not have been
+    /// additive: the varbinary blob the model then wrote does not convert to vector,
+    /// and no tier existed to prove any of it) landed once the §14 Testcontainers tier
+    /// could verify it — see AlterPageEmbeddingToNativeVector for the column
+    /// conversion, the SqlVector&lt;float&gt; remap, the VECTOR_DISTANCE query path,
+    /// and why the DiskANN index specifically remains out of the migration chain
+    /// (preview-gated, ≥100-row creation minimum, and read-only-table semantics on
+    /// boxed SQL Server 2025). The SQLite tier still stores the blob and runs the
+    /// exact-scan fallback, keeping its tests exercising the real pipeline end to end.
     /// </summary>
     public partial class AddPageEmbeddingState : Migration
     {

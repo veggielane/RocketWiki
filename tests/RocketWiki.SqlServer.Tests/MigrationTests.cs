@@ -38,8 +38,43 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260823133434_AddUserAvatars", applied);
         Assert.Contains("20260823134425_AddCustomEmojis", applied);
         Assert.Contains("20260823173233_AddPageRevisionContributors", applied);
-        Assert.Equal(6, applied.Count);
+        Assert.Contains("20260823180135_AlterPageEmbeddingToNativeVector", applied);
+        Assert.Equal(7, applied.Count);
         Assert.Empty(pending);
+    }
+
+    [SqlServerFact]
+    public async Task PageEmbeddings_EmbeddingColumn_IsNativeVector1536_NotNull()
+    {
+        // AlterPageEmbeddingToNativeVector (design.md §9.3 / data-model.md): the column
+        // must land as the native vector type, NOT NULL, with the dimension count the
+        // code fixes in PageEmbeddingConfiguration.EmbeddingDimensions. sys.columns is
+        // the ground truth (sp_describe_first_result_set famously misreports vector as
+        // varchar); a vector(n) column's max_length is its storage size, 8 + 4n bytes
+        // (vector data-type docs: 4-byte single-precision elements + 8-byte header) —
+        // asserting through the constant ties schema and code together, so drifting
+        // either one alone fails here.
+        var typeName = await ExecuteScalarAsync<string>("""
+            SELECT t.name
+            FROM sys.columns c
+            INNER JOIN sys.types t ON t.user_type_id = c.user_type_id
+            WHERE c.object_id = OBJECT_ID('dbo.PageEmbeddings') AND c.name = 'Embedding'
+            """);
+        Assert.Equal("vector", typeName);
+
+        var maxLength = await ExecuteScalarAsync<short>("""
+            SELECT c.max_length
+            FROM sys.columns c
+            WHERE c.object_id = OBJECT_ID('dbo.PageEmbeddings') AND c.name = 'Embedding'
+            """);
+        Assert.Equal(8 + 4 * RocketWiki.Data.Configurations.PageEmbeddingConfiguration.EmbeddingDimensions, maxLength);
+
+        var isNullable = await ExecuteScalarAsync<bool>("""
+            SELECT c.is_nullable
+            FROM sys.columns c
+            WHERE c.object_id = OBJECT_ID('dbo.PageEmbeddings') AND c.name = 'Embedding'
+            """);
+        Assert.False(isNullable);
     }
 
     [SqlServerFact]
