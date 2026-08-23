@@ -395,6 +395,12 @@ Being explicit about what has and hasn't been checked, rather than letting
   `web/.env.example` documents the variables for standalone `vite dev`,
   including the easily-missed detail that the dashboard's OTLP/HTTP port is
   18890, not the gRPC 18889.
+- **The SPA is fully wired to the reconciled schema**: server-computed
+  permissions shape every affordance (edit/move/delete/comment/permissions),
+  page restrictions and the effectivePermission inspector are live, replica
+  spaces are marked proactively, and watches/labels/archived-spaces/audit
+  totals read server truth. No `NOTE (schema reconciliation)` markers
+  remain in `web/src`.
 - **Permissions shape the UI** (design.md §6.6): `Page` exposes
   `canEdit`/`canComment`/`canManageAccess` for the current caller (batched,
   replica-aware), a manage-gated `restrictions` listing, tree lock markers,

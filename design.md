@@ -1109,6 +1109,7 @@ Defense in depth: the one-way guarantee is the whole point of the design.
 | Attachments (bytes + metadata) | Audit log — each side keeps its own |
 | Comments made on low | Users and logins — each side has its own Keycloak |
 | Page **restrictions** (fail closed: a group/attribute unknown on high matches nobody) | Search index + embeddings — recomputed locally on import (§9.4) |
+| | Space **lifecycle and identity** — name, description, archived state. Spaces aren't a sync event type: import creates the replica row from the space key alone, so renaming or archiving a replica is legitimate local curation (like grants), not a blocked content write |
 
 - IDs are GUIDs and survive the crossing, so `page://` and `attachment://`
   links keep working on high.
