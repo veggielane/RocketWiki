@@ -594,18 +594,22 @@ type Mutation {
   later hardening step once the UI's query set stabilizes.
 
 **Known deltas between the sketch above and the exported schema** (surfaced
-reconciling the SPA to `schema.graphql`; tracked as backend follow-ups): the
-exported schema carries no viewer-permission fields — `Page` has neither
-`canEdit`/`canComment` nor `restrictions`, and no `effectivePermission`
-inspector, so §6.6's tooling has no read path — no `groups`/
-`attributeRegistry` queries for the rule builder, no label-id read path
-(`labels` returns names while attach/detach take ids), no archived-space
-listing to feed `restoreSpace`, no watch-state read, and no display-name
-resolution for comment/attachment authors. `Space.isReplicaOf(localInstanceId!)`
-also surfaces as an argument-taking field the browser cannot call — the §12
-replica banner needs a server-resolved boolean. Until these land, the SPA
-degrades explicitly (marked `NOTE (schema reconciliation)` in code) rather
-than inventing the data.
+reconciling the SPA to `schema.graphql`): the read-path half is closed —
+`Space.isReplica` (and the uncallable `isReplicaOf(localInstanceId!)`
+removed), `groups`/`attributeRegistry` for the rule builder (gated to rule
+managers, enumerated honestly from local data — stored rules, registered
+`AttributeDefinition` rows, the caller's own token, and, for instance
+admins only, the User mirror; suggestion-vocabulary, never authority),
+`labelDetails` (Query + Page) giving labels ids, `archivedSpaces` (scoped
+exactly to who `restoreSpace` accepts), `UserRef` display-name resolution
+for comment/attachment/trash authors, viewer watch state, tree-node labels,
+and audit `totalCount`. New §7 action: `permission.vocabulary` (success +
+audited denial); watch-state and tree-label nested fields deliberately emit
+no audit rows of their own. Still open (in flight): viewer-permission
+fields (`canEdit`/`canComment`/`canManageAccess`), the restrictions read
+path, the `effectivePermission` inspector, `PageTreeNode.hasRestrictions`,
+and `CurrentUser.isInstanceAdmin`/`localUserId` — until those land the SPA
+degrades explicitly (marked `NOTE (schema reconciliation)` in code).
 
 ### Non-GraphQL routes: attachment binary
 
