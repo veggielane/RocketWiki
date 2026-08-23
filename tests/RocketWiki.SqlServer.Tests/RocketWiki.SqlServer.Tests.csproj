@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>RocketWiki.SqlServer.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <!-- design.md §14 tier 3: real SQL Server via Testcontainers. 4.14.0 is the
+         current stable on nuget.org (verified 2026-08-23). -->
+    <PackageReference Include="Testcontainers.MsSql" Version="4.14.0" />
+    <!-- MigrateOnStartup happy path: the real API host against the container
+         (version matches RocketWiki.Api.Tests). -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\RocketWiki.Data\RocketWiki.Data.csproj" />
+    <ProjectReference Include="..\..\src\RocketWiki.Api\RocketWiki.Api.csproj" />
+  </ItemGroup>
+
+  <!-- Thin reuse of the sibling tiers' helpers (design.md §14: this tier re-runs
+       high-value scenarios on the real provider, it does not fork the test
+       vocabulary). Linked, not copied, so a helper change propagates everywhere. -->
+  <ItemGroup>
+    <Compile Include="..\RocketWiki.Data.Tests\TestData.cs" Link="Shared\TestData.cs" />
+    <Compile Include="..\RocketWiki.Api.Tests\Integration\TestAuthHandler.cs" Link="Shared\TestAuthHandler.cs" />
+    <Compile Include="..\RocketWiki.Api.Tests\Integration\TestUserHttpClientExtensions.cs" Link="Shared\TestUserHttpClientExtensions.cs" />
+    <Compile Include="..\RocketWiki.Api.Tests\Integration\GraphQLHttpClientExtensions.cs" Link="Shared\GraphQLHttpClientExtensions.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- SqlServerContainerFixture builds this at runtime when no pre-built image is
+         supplied; CI pre-builds the same file (see .github/workflows/ci.yml). -->
+    <None Update="mssql-fts\Dockerfile" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

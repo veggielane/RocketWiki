@@ -35,6 +35,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RocketWiki.Sync", "src\Rock
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RocketWiki.Sync.Tests", "tests\RocketWiki.Sync.Tests\RocketWiki.Sync.Tests.csproj", "{81565D0D-302B-41D3-9142-7A84BB1CC859}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RocketWiki.SqlServer.Tests", "tests\RocketWiki.SqlServer.Tests\RocketWiki.SqlServer.Tests.csproj", "{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -213,6 +215,18 @@ Global
 		{81565D0D-302B-41D3-9142-7A84BB1CC859}.Release|x64.Build.0 = Release|Any CPU
 		{81565D0D-302B-41D3-9142-7A84BB1CC859}.Release|x86.ActiveCfg = Release|Any CPU
 		{81565D0D-302B-41D3-9142-7A84BB1CC859}.Release|x86.Build.0 = Release|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Debug|x64.Build.0 = Debug|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Debug|x86.Build.0 = Debug|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Release|x64.ActiveCfg = Release|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Release|x64.Build.0 = Release|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Release|x86.ActiveCfg = Release|Any CPU
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -232,5 +246,6 @@ Global
 		{7EA8E451-5D42-4A75-9082-48FB949C62A6} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 		{0465803E-71A2-403E-9862-DA9835BD9953} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{81565D0D-302B-41D3-9142-7A84BB1CC859} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{8C4F2E5A-1D7B-4A6E-9C3D-5B8E2F0A6D41} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

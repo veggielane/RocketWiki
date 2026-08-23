@@ -90,20 +90,30 @@ public class SearchService : ISearchService
     }
 
     /// <summary>
-    /// TODO(sql-server, unexercised): runs CONTAINSTABLE against the FTS index created
-    /// in the migration (Page(Title, CurrentContent)). There is no SQL Server
-    /// Testcontainers suite yet (design.md §14's third tier), so this path is written
-    /// carefully but has never actually run against a real SQL Server instance -
-    /// verify it there before trusting it in production.
+    /// Runs CONTAINSTABLE against the FTS index created in the InitialCreate migration
+    /// (Pages(Title, CurrentContent)), ordered by FTS RANK. The raw user query is first
+    /// compiled into a real search condition by <see cref="FullTextQueryBuilder"/> -
+    /// passing user text straight into CONTAINSTABLE is a syntax error for any
+    /// multi-word query, and a plain term would miss the stemming ("running" finding
+    /// "run") that is the whole point of FTS over LIKE. Covered by
+    /// tests/RocketWiki.SqlServer.Tests (design.md §14's third tier), which runs only
+    /// where Docker is available - in practice CI's sqlserver job; this branch has
+    /// never run on a developer machine without a container runtime.
     /// </summary>
     private async Task<List<SearchCandidate>> SearchViaFullTextAsync(
         string query, string? spaceKey, int overFetchCount, CancellationToken cancellationToken)
     {
+        var containsCondition = FullTextQueryBuilder.BuildContainsCondition(query);
+        if (containsCondition is null)
+        {
+            return []; // nothing indexable in the query - no keyword candidates
+        }
+
         var rows = await _db.Database.SqlQuery<PageSearchRow>($"""
             SELECT TOP ({overFetchCount}) p.Id AS Id, p.Title AS Title, p.SpaceId AS SpaceId,
                    s.[Key] AS SpaceKey, p.CurrentContent AS CurrentContent, p.AncestorPath AS AncestorPath
             FROM Pages p
-            INNER JOIN CONTAINSTABLE(Pages, (Title, CurrentContent), {query}) AS ft ON p.Id = ft.[KEY]
+            INNER JOIN CONTAINSTABLE(Pages, (Title, CurrentContent), {containsCondition}) AS ft ON p.Id = ft.[KEY]
             INNER JOIN Spaces s ON s.Id = p.SpaceId
             WHERE p.IsDeleted = 0
               AND s.IsDeleted = 0

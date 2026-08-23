@@ -694,23 +694,40 @@ namespace RocketWiki.Data.Migrations
             // this migration is actually applied to a real SQL Server database - the
             // SQLite test tier builds its schema from the live model via
             // EnsureCreated() and never replays migrations, so ISearchService's LIKE
-            // fallback (RocketWiki.Data.Services.SearchService) is what the test suite
-            // actually exercises. This FTS path is unverified until SQL Server runs it.
+            // fallback (RocketWiki.Data.Services.SearchService) is what that tier
+            // actually exercises. tests/RocketWiki.SqlServer.Tests (design.md §14's
+            // third tier) replays this migration against a real, FTS-enabled SQL
+            // Server container and asserts the index exists via sys.fulltext_indexes.
+            //
+            // suppressTransaction: EF Core runs each migration inside a transaction by
+            // default, and SQL Server rejects CREATE FULLTEXT CATALOG / CREATE FULLTEXT
+            // INDEX inside a user transaction (error 574: "... statement cannot be used
+            // inside a user transaction"). These two statements therefore run after the
+            // migration's transactional batch has committed. That is safe here: they are
+            // the final operations of the migration, purely additive, and no database
+            // had ever had this migration applied when the flag was added (README /
+            // design.md §16's standing caveat - the fix itself is only provable by the
+            // container tier that motivated it). Split into two calls so a failure
+            // reports which statement died.
+            migrationBuilder.Sql(
+                "CREATE FULLTEXT CATALOG PageSearchCatalog AS DEFAULT;",
+                suppressTransaction: true);
             migrationBuilder.Sql("""
-                CREATE FULLTEXT CATALOG PageSearchCatalog AS DEFAULT;
                 CREATE FULLTEXT INDEX ON Pages(Title, CurrentContent)
                     KEY INDEX PK_Pages ON PageSearchCatalog
                     WITH STOPLIST = SYSTEM, CHANGE_TRACKING AUTO;
-                """);
+                """,
+                suppressTransaction: true);
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.Sql("""
-                DROP FULLTEXT INDEX ON Pages;
-                DROP FULLTEXT CATALOG PageSearchCatalog;
-                """);
+            // Same transaction restriction as Up: FULLTEXT DDL cannot run inside the
+            // migration's transaction. Index before catalog - a catalog with an index
+            // still attached cannot be dropped.
+            migrationBuilder.Sql("DROP FULLTEXT INDEX ON Pages;", suppressTransaction: true);
+            migrationBuilder.Sql("DROP FULLTEXT CATALOG PageSearchCatalog;", suppressTransaction: true);
 
             migrationBuilder.DropForeignKey(
                 name: "FK_Spaces_Pages_HomepageId",
