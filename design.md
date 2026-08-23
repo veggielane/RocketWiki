@@ -116,6 +116,7 @@ deliberately constrained to GitHub-Flavored Markdown plus a few extensions:
 | Callouts (info/warning/note) | Directive syntax: `:::info … :::` |
 | Page links | `[title](page://{id})` — stable across renames |
 | Mentions | `@[display](user://{id})` |
+| Diagrams | ` ```mermaid ` fenced block (source rendered client-side); ` ```drawio ` fenced block whose body is base64 of the diagrams.net editable-SVG export — one payload renders as an inert data-URI image and reloads into the embed editor. Both are plain fenced text to the serializer, sync bundles (§12), and the importer (§13); `drawio` is a reserved fence language. Per-diagram payload cap: 512 KB of base64 |
 
 **Rule:** no editor feature ships unless it round-trips (Markdown → editor →
 Markdown produces identical output). A round-trip test suite enforces this,
@@ -1396,6 +1397,15 @@ default endpoint and no same-origin fallback: "someone forgot to configure
 it" must fail closed rather than guess at a destination that might sit
 outside the boundary.
 
+The diagram editor URL (`VITE_DRAWIO_URL`) follows the same fail-closed
+rule as the OTLP endpoint: no default exists, because opening the editor
+posts diagram content into whatever page that URL serves. Unset means no
+external editor loads (viewing is unaffected — diagrams are inline page
+content); production points at a self-hosted in-network diagrams.net
+instance (the AppHost defines a dev `drawio` container,
+`jgraph/drawio:31.3.2`); the public service is a dev-only opt-in the UI
+visibly flags.
+
 #### What is instrumented
 
 | Layer | Source / meter | What it adds |
@@ -1502,8 +1512,12 @@ the highest-value unblocking action available.
 - [ ] Do we need page templates (Confluence-style) in v1 or later?
 - [ ] Archived spaces (§6.5.1): read-only-but-visible to their existing
       viewers, or hidden from everyone except admins?
-- [ ] Diagramming: Confluence had draw.io/Gliffy — is a Mermaid code block
-      enough for v1?
+- [x] Diagramming — resolved: both. Mermaid fences render client-side
+      (mermaid bundled locally, lazy-loaded, `securityLevel: strict`), and
+      draw.io diagrams embed inline as base64 editable SVG in a ` ```drawio `
+      fence, edited via the diagrams.net iframe embed protocol against a
+      self-hosted instance. No schema/API changes; diagrams are ordinary
+      page Markdown to everything but the SPA.
 - [ ] Which attributes beyond nationality? (clearance level, employer/contractor
       status?) Each needs a Keycloak attribute + protocol mapper.
 - [ ] Audit retention: how long must events be kept, and where do archived

@@ -395,6 +395,12 @@ Being explicit about what has and hasn't been checked, rather than letting
   `web/.env.example` documents the variables for standalone `vite dev`,
   including the easily-missed detail that the dashboard's OTLP/HTTP port is
   18890, not the gRPC 18889.
+- **Diagrams**: ` ```mermaid ` blocks render inline (live preview while
+  editing), and draw.io diagrams embed as base64 editable SVG with in-place
+  editing via a configured diagrams.net instance (`VITE_DRAWIO_URL`,
+  fail-closed). Both are plain fenced Markdown — round-trip, sync, and
+  import untouched. The diagrams.net postMessage handshake has never run
+  against a live instance (standing container caveat).
 - **The frontend** now generates its typed client from the exported
   `schema.graphql` and defaults to the real SignalR transports against
   `/hubs/notifications` (fakes only behind `VITE_FAKE_REALTIME`) — but no
