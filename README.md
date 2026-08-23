@@ -445,9 +445,15 @@ Being explicit about what has and hasn't been checked, rather than letting
   open-source/small-org use, commercial otherwise; 4.x additionally needs a
   build-time license key, so upgrading is a version bump plus that key):
   decode-limited, squared to 32–256 px, re-encoded with metadata stripped;
-  animated GIF supported (64-frame cap). The SPA rendering for both
-  features (cropper, avatar display, `:`-autocomplete picker) is the
-  in-flight phase 2.
+  animated GIF supported (64-frame cap).
+- **Profile pictures & custom emojis (SPA)** — upload an avatar in Settings
+  (server-normalized to a square 512 PNG, metadata stripped); faces appear
+  beside comments, presence, and bylines, with initials as the fallback.
+  Instance admins curate a `:name:` emoji registry under Admin → Custom
+  emojis; type `:` in the editor to autocomplete, and unknown names simply
+  stay text — including in content synced from another instance. Emoji
+  rendering is a read-mode decoration over literal text, so the Markdown
+  round-trip is untouched by construction (corpus vectors prove it).
 - **GitLab integration (backend, design.md §18)**: `gitlabIssue`/
   `gitlabIssues`/`gitlabFile` queries proxying GitLab REST v4 under the
   *calling user's own* encrypted PAT (no service account, ever — the
