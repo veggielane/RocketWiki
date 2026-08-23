@@ -5,6 +5,20 @@ export-control requirements: WYSIWYG editing over a Markdown storage format, a
 .NET/GraphQL backend, and attribute-based access control designed for
 "engineering AND nationality NZ or US" style rules.
 
+![Page view — rendered Markdown with custom emojis, labels, watch toggle, and a mirrored-space nav](docs/screenshots/page-view.png)
+
+<details>
+<summary>More screenshots: search with section-attributed results, and the Settings page (avatar upload + GitLab token)</summary>
+
+![Search results with heading-path attribution and permission-filtered totals](docs/screenshots/search.png)
+
+![Settings — profile picture upload and the GitLab personal-access-token flow](docs/screenshots/settings.png)
+
+</details>
+
+*Screenshots are real components with staged sample data, captured headlessly
+— not a live deployment; see [docs/screenshots/README.md](docs/screenshots/README.md).*
+
 **This is under active, parallel construction.** Every design.md §16
 milestone except the Confluence migration trial is implemented and
 test-verified (the SQL Server slice on every CI run), but nothing has been
