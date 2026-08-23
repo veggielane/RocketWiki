@@ -445,6 +445,15 @@ Being explicit about what has and hasn't been checked, rather than letting
   (`tests/RocketWiki.SqlServer.Tests`); on machines without Docker the tier
   skips visibly and these claims are only as fresh as the last green CI
   run.
+- **Real-time co-editing (backend, design.md §8)** — Yjs relay sessions
+  over the SignalR hub: canEdit-gated and session-audited (join denials
+  recorded with their failing restriction), seeder/reseed protocol with log
+  caps, rule-change eviction closing the relay, and multi-author revision
+  attribution (`PageRevisionContributor`, resolved only from server-side
+  session state — client-supplied contributor lists don't exist in the
+  API). The collaborative editor UI (TipTap + Yjs, live carets) is the
+  in-flight phase 2; the SignalR transport's default 32 KB receive limit
+  was raised to fit real Yjs seeds — found by test, not in production.
 - **Profile pictures + Gravatar endpoint (backend, design.md §19)** —
   user-uploaded avatars (PNG/JPEG/WebP in, server-normalized canonical
   512×512 PNG stored — originals and their EXIF never persisted), self-only

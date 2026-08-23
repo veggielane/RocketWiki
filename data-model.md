@@ -344,6 +344,19 @@ in-memory cosine fallback handles search.
 Never synced, never exported (no `SyncEventType`; the outbox classifier has
 no case for its events). `ON DELETE NO ACTION` like every FK.
 
+### PageRevisionContributor — immutable
+
+Composite PK `(PageRevisionId FK → PageRevision, UserId FK → User)`; index
+`(UserId)` for per-user attribution queries; NO ACTION, never updated or
+deleted. One row per user whose live co-editing updates fed the revision
+(design.md §8); rows exist only for session saves and are written in the
+revision's own transaction. The FK targets PageRevision's PK rather than
+its `(PageId, RevisionNumber)` unique index — every FK here targets a PK.
+Related notes: `AuditEvent.Channel` gains `6 = realtime` (the hub surface),
+and like presence, edit-session state (membership, update log, contributor
+marks) is ephemeral hub memory — but unlike presence it IS audited, as
+`page.edit_session.joined`/`.left`.
+
 ### UserAvatar — per-user profile picture, instance-local
 
 | Column | Type | Notes |

@@ -488,6 +488,16 @@ so no row *can* exist. Note also: the audit *channel* `attachment` now
 denotes the binary-HTTP surface (`/attachments`, `/avatars`, `/emojis`),
 not the Attachment subject.
 
+`page.edit_session.joined` / `page.edit_session.left` (§8 co-editing) —
+subject = page, on the `realtime` channel (a hub invocation reaches no HTTP
+path; filing it under `graphql` would lie about the transport). Join
+denials are recorded Denied with the failing reason while the caller still
+sees the not-found-identical null; `.left` details carry
+left/disconnected/evicted. Presence joins deliberately remain unaudited —
+joining an *edit* session consumes a canEdit authorization and opens a
+content-bearing channel, which is what makes it §7-worthy. The save's
+`page.edit` details now include `contributors` for session saves.
+
 `gitlab.fetch` (§18) — every GitLab read, one row per distinct resource per
 request (same resource twice in one document is one row, like `page.view`).
 Details carry the *reference* (project, iid/path/ref or the filter) and the
@@ -839,34 +849,34 @@ CRDT layer, not a separate one. See the decision note below.
   what, live" is itself acceptable in a controlled environment is a question
   for compliance, not an engineering default — flagged in open questions.
 
-#### CRDT co-editing (v2, not v1)
+#### CRDT co-editing
 
-The hub makes real-time co-editing reachable: TipTap already sits on
-ProseMirror, so `y-prosemirror` + a Yjs provider written over the SignalR
-client would give shared editing on the transport we already authenticate.
-Two honest complications before committing:
-
-1. **Server-side document state.** The simple path is a *relay* — the hub
-   broadcasts opaque Yjs updates and persists the encoded state without
-   interpreting it. But then the server cannot serialize the document to
-   Markdown, so a designated client has to author the save. The alternative
-   is materializing the doc server-side (Ycs, a C# Yjs port) so the server
-   writes revisions authoritatively — more capable, less mature.
-2. **Co-editing changes what "an edit" is.** Revisions are currently
-   single-author (`PageRevision.AuthorUserId`); a co-editing session
-   produces one debounced revision with *several* authors, and audit needs
-   session semantics rather than per-keystroke events. Both the data model
-   and §7 would need revisiting.
-
-Replica spaces stay read-only — no co-editing there, ever (§12). Presence
-and pointers still work on a replica; there's just nothing to merge.
-
-**Decision needed:** live text carets are wanted (see presence above), and
-they cannot ship without this layer. Either CRDT co-editing is promoted from
-v2 spike to a committed milestone — which means answering the multi-author
-revision and session-audit questions — or carets are deferred and v1 ships
-viewer presence plus mouse pointers, which stand on their own. Recorded in
-open questions.
+**Resolved: promoted to a committed milestone, relay-only.** The hub relays
+opaque Yjs binary updates between edit-session members and retains a
+session-scoped in-memory update log for late joiners; the server never
+interprets CRDT state (Ycs, the C# port, is unmaintained — last activity
+Aug 2023, Yjs 13.4.14-era). Consequence, accepted: the server cannot
+validate live update content. Authorization is therefore membership-gated —
+joining a session requires canEdit, evaluated at join with the same silent
+fail-closed shape as presence joins and re-checked by the rule-change
+eviction sweep — and the authoritative write remains the existing save
+path: a client serializes to Markdown and calls updatePageContent, so
+nothing enters storage, sync, search, or embeddings except through the
+guarded pipeline. The server designates the first joiner as seeder (it
+seeds the Y.Doc from CurrentContent at a stated base revision and pushes
+the encoded seed as the log's first entry); seeder loss re-designates; an
+empty session's log is dropped after a grace period; a log byte cap forces
+a save-and-reseed (the designated member saves, then hands back one
+full-state snapshot that replaces the log). Sessions are memory-only: an
+API restart drops them and clients re-seed from saved content — the durable
+record is the save path, not the relay. Multi-author revisions: the session
+tracks distinct contributors since the last save; the save records them as
+PageRevisionContributor rows in the same transaction (AuthorUserId stays
+"who pressed save"), resolved exclusively from the server's session
+registry — no client-supplied contributor list exists anywhere in the API.
+Replicas refuse co-editing at the join gate (§12); presence and pointers
+still work on a replica — there's just nothing to merge. Live updates are
+content: telemetry sees byte counts only (§15).
 
 ---
 
@@ -1598,6 +1608,7 @@ caveat below the table.
 | 7 | Semantic search | **done** (fake endpoint; exact-scan vectors) | Heading-boundary chunker over the shared anchor primitives; `PageEmbeddingState`-driven polling background job (covers sync-CLI writes; per-chunk hash re-embed; failure backoff; trash purge); `IEmbeddingGenerator` via Microsoft.Extensions.AI.OpenAI from the Aspire `embeddings` connection string — unconfigured means keyword-only, structurally; hybrid RRF inside the same `search` field (no schema change), canView after fusion, semantic hits deep-link via chunk attribution recomputed post-canView; `rocketwiki.embeddings.*` telemetry with a sentinel hygiene test. Native `vector` + DiskANN remain TODO-flagged (the conversion is deliberately not shipped ahead of the container tier — see the AddPageEmbeddingState migration); the exact-scan cosine fallback runs on both providers until then |
 | 8 | MCP server | **done** (no live Keycloak/OAuth dance yet) | `/mcp` (streamable HTTP, stateless, in-process) via the official C# SDK; RFC 9728 resource-metadata discovery pointing at Keycloak; four read-only tools over the shared service layer; per-call `mcp`-channel audit incl. client name and denied-read reasons; audit-declaration guard extended to tools; `rocketwiki.mcp.*` telemetry |
 | 9 | k3s deployment | **authored, unexercised** | Dockerfiles + Helm chart in-repo (`deploy/`), migration Job via EF bundle, Traefik ingress with WebSocket upgrade, secrets by reference, probes (TCP until health endpoints get a non-Dev config gate), offline image path. `helm lint`/`template` pass; nothing applied to a cluster; restore drill unrun |
+| 10 | Co-editing | **backend done** (SPA is phase 2) | Relay-only Yjs edit sessions over the existing hub: canEdit-gated join with denied-join auditing, seeder designation + reseed protocol, log cap + empty-session GC, rule-change eviction extended to edit groups, PageRevisionContributor attribution wired through updatePageContent (forgery-proof: server-side session data only), session-scoped audit on the new realtime channel, `rocketwiki.coedit.*` telemetry with sentinel hygiene test |
 
 ### The standing caveat
 
@@ -1671,10 +1682,11 @@ the highest-value unblocking action available.
       what review process? v1 is deliberately read-only.
 - [ ] Email/digest notifications as well as in-app, or in-app only? (Email
       leaves the app's control — page titles would travel to a mail server.)
-- [ ] **Live text carets require CRDT** (§8). Promote co-editing to a
-      committed milestone — deciding relay-only vs server-side Ycs, plus
-      multi-author revisions and session-scoped audit — or ship v1 with
-      viewer presence and mouse pointers only?
+- [x] **Live text carets require CRDT** (§8) — resolved: promoted to a
+      committed milestone, relay-only (see §8's co-editing decision note);
+      multi-author revisions land as PageRevisionContributor rows and
+      sessions audit as `page.edit_session.joined`/`.left` on the
+      `realtime` channel.
 - [ ] Is live presence ("X is reading this page right now") acceptable in a
       controlled environment, or does it need an opt-out / invisible mode?
 
