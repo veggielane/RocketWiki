@@ -41,6 +41,11 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      # The typed GraphQL client is generated, not committed (web/.gitignore):
+      # codegen reads ../schema.graphql, which the backend's schema-drift test
+      # keeps in lockstep with the code-first schema — so this step is
+      # deterministic, and skipping it is why a fresh checkout can't compile.
+      - run: npm run codegen
       - run: npm run lint
       - run: npm run build
       - run: npx vitest run

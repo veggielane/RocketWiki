@@ -395,9 +395,14 @@ Being explicit about what has and hasn't been checked, rather than letting
   `web/.env.example` documents the variables for standalone `vite dev`,
   including the easily-missed detail that the dashboard's OTLP/HTTP port is
   18890, not the gRPC 18889.
-- **The frontend**, beyond the browser-telemetry claim above and the fact
-  that it exists and is a separate agent's work in progress — this file
-  makes no other claim about `web/`'s state.
+- **The frontend** now generates its typed client from the exported
+  `schema.graphql` and defaults to the real SignalR transports against
+  `/hubs/notifications` (fakes only behind `VITE_FAKE_REALTIME`) — but no
+  browser has ever connected to the hub or executed a query against a live
+  API; everything is verified by vitest against a mocked exchange and a
+  mocked hub connection builder. The generated client is deliberately
+  untracked; CI runs `npm run codegen` from the committed `schema.graphql`
+  before building.
 - Real login, real page CRUD, real search, real anything involving SQL
   Server or Keycloak issuing a token — none of it exists yet at more than a
   placeholder level (see design.md §16's milestone list for what's next).

@@ -592,6 +592,20 @@ type Mutation {
   limits. Persisted operations (server accepts only known queries) are a
   later hardening step once the UI's query set stabilizes.
 
+**Known deltas between the sketch above and the exported schema** (surfaced
+reconciling the SPA to `schema.graphql`; tracked as backend follow-ups): the
+exported schema carries no viewer-permission fields — `Page` has neither
+`canEdit`/`canComment` nor `restrictions`, and no `effectivePermission`
+inspector, so §6.6's tooling has no read path — no `groups`/
+`attributeRegistry` queries for the rule builder, no label-id read path
+(`labels` returns names while attach/detach take ids), no archived-space
+listing to feed `restoreSpace`, no watch-state read, and no display-name
+resolution for comment/attachment authors. `Space.isReplicaOf(localInstanceId!)`
+also surfaces as an argument-taking field the browser cannot call — the §12
+replica banner needs a server-resolved boolean. Until these land, the SPA
+degrades explicitly (marked `NOTE (schema reconciliation)` in code) rather
+than inventing the data.
+
 ### Non-GraphQL routes: attachment binary
 
 ```
@@ -1457,7 +1471,7 @@ caveat below the table.
 | 2 | Core wiki | **done** | Rule engine, EF model proven on SQLite, domain-event pipeline (audit in the same transaction), page CRUD + subtree delete, permission-filtered reads (incl. §6.7's not-found-vs-denied result with denied-read auditing), GraphQL resolvers + object-level authorization (adversarially tested), access-rule management with replay-provable history, space CRUD |
 | 3 | Content features | **done** | Attachments (S3 + filesystem providers; S3 unverified against a live endpoint), comments, labels — all wired end to end and audited |
 | 4 | Search & polish | **done** (bar real-FTS verification) | `search`/`labels` API matching the shipped UI operations, permission-filtered with section attribution; SQL Server FTS path TODO-flagged until the container tier exists (SQLite LIKE fallback is what tests exercise); trash/restore, space management UI, rule builder + permission inspector, audit log viewer, import report UI |
-| 4b | Notifications & presence | **backend done; web transport swap pending** | SignalR hub, watches, delta-based mentions, per-recipient `canView` fan-out (re-checked at read time too), persisted notification list; viewer presence + live pointers with rule-change eviction. Remaining: the SPA still runs its fake transports/placeholder schema — swapping to the real ones is frontend work now unblocked; `comment_reply`/`sync_bundle_landed` have no producer yet |
+| 4b | Notifications & presence | **done** (live hub unexercised) | SignalR hub, watches, delta-based mentions and reply notifications, per-recipient `canView` fan-out (re-checked at read time too), persisted notification list incl. `sync_bundle_landed` rows from the offline import. The SPA now generates its client from the exported `schema.graphql` (placeholder deleted), runs the real SignalR transports by default (fakes only behind `VITE_FAKE_REALTIME`, for tests and backend-less dev), and wires the bell (persisted list + live push, de-duplicated by row id), watch/unwatch on pages and spaces, and the §12 admin sync status page. Per the standing caveat no browser has ever actually connected to the hub |
 | 5 | Migration | not started | Importer against a real Confluence space export; trial runs and fidelity review |
 | 6 | Low/high sync | **done** (baselines are current-state-only) | Outbox journal, `RocketWiki.Sync` export/import CLI with hash chain, baseline snapshots (documented simplification: no revision history), replica read-only enforcement with `originInstanceId` in the error, admin `syncStatus` query |
 | 7 | Semantic search | **done** (fake endpoint; exact-scan vectors) | Heading-boundary chunker over the shared anchor primitives; `PageEmbeddingState`-driven polling background job (covers sync-CLI writes; per-chunk hash re-embed; failure backoff; trash purge); `IEmbeddingGenerator` via Microsoft.Extensions.AI.OpenAI from the Aspire `embeddings` connection string — unconfigured means keyword-only, structurally; hybrid RRF inside the same `search` field (no schema change), canView after fusion, semantic hits deep-link via chunk attribution recomputed post-canView; `rocketwiki.embeddings.*` telemetry with a sentinel hygiene test. Native `vector` + DiskANN remain TODO-flagged (the conversion is deliberately not shipped ahead of the container tier — see the AddPageEmbeddingState migration); the exact-scan cosine fallback runs on both providers until then |

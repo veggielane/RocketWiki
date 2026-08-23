@@ -1,0 +1,10 @@
+# The corpus fixtures are byte-exact contracts: the importer regenerates
+# converted-markdown and the anchor tests regenerate heading-anchors, and CI
+# fails if the committed bytes differ from what the code produces. CRLF
+# smudging via core.autocrlf breaks that equality (and made the round-trip
+# tests fail in a fresh autocrlf=true clone), so pin them to LF everywhere.
+tests/fixtures/** text eol=lf
+
+# Same byte-exactness argument: the schema-drift test compares this file to
+# the exporter's output.
+schema.graphql text eol=lf
