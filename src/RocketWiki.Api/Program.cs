@@ -120,6 +120,11 @@ builder.Services.AddScoped<IInstanceRoleAccessor, InstanceRoleAccessor>();
 // with it.
 builder.Services.AddSingleton(new InstanceIdentity(localInstanceId));
 builder.Services.AddScoped<IPageReadService, PageReadService>();
+// Viewer-relative permission facts, the §6.6 inspector, and the manage-gated
+// restriction listing. Needs the local InstanceId (unlike IPageReadService) because
+// canEdit/canComment honor the replica invariant (design.md §12).
+builder.Services.AddScoped<IPagePermissionReadService>(sp =>
+    new PagePermissionReadService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<IPageService>(sp => new PageService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<ICommentService>(sp => new CommentService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<ILabelService>(sp => new LabelService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));

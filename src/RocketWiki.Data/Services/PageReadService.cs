@@ -91,14 +91,18 @@ public class PageReadService : IPageReadService
         }
 
         // Two queries total regardless of tree depth or size: every live page in the
-        // space, and every view-restriction attached to any of them. The walk below is
+        // space, and every restriction attached to any of them. The walk below is
         // then pure in-memory recursion - exactly what AncestorPath exists to make cheap.
+        // Both actions are loaded (not just View, which pruning alone would need):
+        // the same rows also feed each node's HasRestrictions marker and
+        // OwnViewRestrictions list (see PageTreeNode's doc for the leak posture),
+        // still without a per-node query.
         var pages = await _db.Pages.Where(p => p.SpaceId == spaceId).ToListAsync(cancellationToken);
         var pageIds = pages.Select(p => p.Id).ToArray();
         var restrictions = pageIds.Length == 0
             ? new List<AccessRule>()
             : await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.Action == PageAction.View && r.PageId != null && pageIds.Contains(r.PageId.Value))
+                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && pageIds.Contains(r.PageId.Value))
                 .ToListAsync(cancellationToken);
 
         var restrictionsByPageId = restrictions
@@ -136,14 +140,29 @@ public class PageReadService : IPageReadService
         IReadOnlyDictionary<Guid, List<AccessRule>> restrictionsByPageId,
         Principal principal)
     {
+        var ownViewRestrictions = new List<PageTreeRestriction>();
+        var hasRestrictions = false;
         if (restrictionsByPageId.TryGetValue(page.Id, out var ownRestrictions))
         {
+            hasRestrictions = ownRestrictions.Count > 0;
             foreach (var rule in ownRestrictions)
             {
+                if (rule.Action != PageAction.View)
+                {
+                    // Edit restrictions mark the node as restricted but never gate
+                    // visibility and never expose their contents here (PageTreeNode doc).
+                    continue;
+                }
+
                 if (!AccessRuleExpression.Evaluate(rule.ExpressionJson, principal).IsMatch)
                 {
                     return null;
                 }
+
+                // Only reached for rules the caller passed - an unpassed view rule
+                // pruned the node above, so OwnViewRestrictions can never carry an
+                // expression the caller doesn't already satisfy.
+                ownViewRestrictions.Add(new PageTreeRestriction(rule.Id, rule.ExpressionJson));
             }
         }
 
@@ -160,7 +179,7 @@ public class PageReadService : IPageReadService
             }
         }
 
-        return new PageTreeNode(page.Id, page.Title, page.Slug, page.SortOrder, children);
+        return new PageTreeNode(page.Id, page.Title, page.Slug, page.SortOrder, hasRestrictions, ownViewRestrictions, children);
     }
 
     private async Task<EffectivePermission> ComputePermissionAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
