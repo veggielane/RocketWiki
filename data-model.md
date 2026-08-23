@@ -329,6 +329,17 @@ Unique `(PageId, ChunkIndex)`; DiskANN vector index on `Embedding`
 (cosine). On SQLite (tests) this table maps `Embedding` to a blob and the
 in-memory cosine fallback handles search.
 
+### PageEmbeddingState — job bookkeeping, instance-local
+
+One row per page: `PageId` (PK = FK), `EmbeddedRevisionNumber int`,
+`FailedAttempts int`, `LastAttemptAtUtc`, `UpdatedAtUtc`. The embedding
+job's trigger is a scan — a page is due when this row is missing or its
+`EmbeddedRevisionNumber` differs from `Page.CurrentRevisionNumber` — chosen
+over event wiring because it also catches the sync CLI's out-of-process
+imports (design.md §9.4) and survives restarts. Purged with the chunk rows
+when a page is trashed; the absence re-embeds on restore. Like
+`PageEmbedding`: derived, never synced, no audit rows (system action).
+
 ---
 
 ## Temporal tables — considered and rejected
