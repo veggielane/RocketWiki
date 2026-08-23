@@ -5,6 +5,7 @@ using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Reads;
 using RocketWiki.Core.Access;
+using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
 using RocketWiki.Data;
@@ -96,6 +97,7 @@ public sealed class WikiMcpTools
         [Description("The page id (a GUID, as returned by search, get_page_tree, or list_spaces).")] string pageId,
         IPageReadService readService,
         ICurrentPrincipalAccessor principalAccessor,
+        IAuditSink auditSink,
         McpAuditState auditState,
         CancellationToken cancellationToken)
     {
@@ -109,15 +111,18 @@ public sealed class WikiMcpTools
             throw new McpException(PageNotFoundMessage);
         }
 
-        var page = await readService.GetPageAsync(id, principal, cancellationToken);
-        if (page is null)
+        var result = await readService.GetPageAsync(id, principal, cancellationToken);
+        if (result is ReadResult<Page>.Denied denied)
         {
-            // IPageReadService's null already conflates "doesn't exist" and "not
-            // viewable" by contract (design.md §6.7) — this constant preserves that
-            // indistinguishability on the wire. Known repo-wide gap, stated plainly:
-            // the denial (with its failing restriction) is not audited here, because
-            // nothing at this layer can tell a denial from a miss; that closes when
-            // the §6.7 internal not-found-vs-denied result lands in Core.
+            // §6.7's internal result distinguishes a denial exactly long enough to
+            // audit it with its failing restriction (§7), same as Query.Page; the
+            // constant error below then restores wire-level indistinguishability.
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "page.view", AuditSubjectType.Page, id, denied.Reason, cancellationToken);
+        }
+
+        if (result.ValueOrNull() is not { } page)
+        {
             throw new McpException(PageNotFoundMessage);
         }
 
@@ -152,6 +157,7 @@ public sealed class WikiMcpTools
         RocketWikiDbContext db,
         IPageReadService readService,
         ICurrentPrincipalAccessor principalAccessor,
+        IAuditSink auditSink,
         McpAuditState auditState,
         CancellationToken cancellationToken)
     {
@@ -165,7 +171,17 @@ public sealed class WikiMcpTools
 
         // The tree arrives pre-pruned (design.md §6.7): a node failing canView is
         // dropped with its whole subtree inside IPageReadService, never filtered here.
-        var tree = await readService.GetPageTreeAsync(space.Id, principal, cancellationToken);
+        // A Denied here is a refused browse (no-space-role), audited like
+        // Query.PageTree; pruning inside a permitted browse is deliberately not a
+        // denial. Both collapse to the same empty tree the caller can't tell apart.
+        var treeResult = await readService.GetPageTreeAsync(space.Id, principal, cancellationToken);
+        if (treeResult is ReadResult<IReadOnlyList<PageTreeNode>>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "space.browse", AuditSubjectType.Space, space.Id, denied.Reason, cancellationToken);
+        }
+
+        var tree = treeResult.ValueOrNull() ?? [];
 
         auditState.SetSubject(AuditSubjectType.Space, space.Id, space.Key);
         return new McpPageTree(space.Key, space.Name, tree.Select(ToNode).ToList());

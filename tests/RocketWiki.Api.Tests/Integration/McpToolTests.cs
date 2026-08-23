@@ -235,7 +235,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
     }
 
     [Fact]
-    public async Task GetPage_Restricted_IsByteIdenticalToNonexistent_AndNeitherLeaksIntoAudit()
+    public async Task GetPage_Restricted_IsByteIdenticalToNonexistent_AndOnlyTheDenialIsAudited()
     {
         var f = await SeedAsync();
         var sub = $"mcp-nz-{Guid.NewGuid()}";
@@ -257,12 +257,17 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         Assert.Equal(serialize(nonexistent), serialize(malformed));
         Assert.Contains(WikiMcpTools.PageNotFoundMessage, SingleText(restricted));
 
-        // No page.view row for either id: nothing was read. (The known, documented gap:
-        // the *denial* isn't audited with its failing restriction yet either, because
-        // IPageReadService's null can't distinguish denied from missing — design.md
-        // §6.7's internal result type is the Core-side fix in flight.)
+        // The wire is identical, the audit log is not (§6.7/§7): the restricted read —
+        // and only it — writes a Denied page.view row carrying its failing restriction
+        // (same ReadDenialAudit path as Query.Page). The nonexistent and malformed ids
+        // audit nothing: no access decision was made, and a Denied row for a 404 would
+        // pollute the probing signal with noise.
         var rows = await McpAuditRowsForUserAsync(sub);
-        Assert.DoesNotContain(rows, r => r.Action == "page.view");
+        var denial = Assert.Single(rows, r => r.Action == "page.view");
+        Assert.Equal(AuditOutcome.Denied, denial.Outcome);
+        Assert.Equal(AuditSubjectType.Page, denial.SubjectType);
+        Assert.Equal(f.PageBId, denial.SubjectId);
+        Assert.Contains($"restriction:{f.PageBId}", denial.DetailsJson);
     }
 
     // ---------- anonymous ----------

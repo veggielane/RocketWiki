@@ -309,6 +309,24 @@ Being explicit about what has and hasn't been checked, rather than letting
   assumptions about it, and the GraphQL operation-name enrichment —
   including an assertion that no variable value, document text, or response
   body reaches a span.
+- **The MCP server is real and adversarially tested** (design.md §8,
+  milestone 8): `/mcp` runs in the API process over the official C# SDK
+  (stateless streamable HTTP), so every tool call is an individually
+  authenticated request through the same JIT-provisioning and audit pipeline
+  as GraphQL. The four read-only v1 tools call the identical services the
+  resolvers call — never raw EF — and a restricted page or space is
+  *byte-identical* on the wire to a nonexistent one (proven by
+  serialized-result equality), while the restricted case — and only it —
+  writes a Denied `mcp`-channel audit row with its failing restriction
+  through the same `ReadDenialAudit` path GraphQL uses. Anonymous calls die
+  at the pipeline with the MCP spec's resource-metadata discovery challenge;
+  every successful call writes an `mcp`-channel audit row carrying the
+  client's self-reported name; the audit-declaration guard now covers tools
+  (build-time sweep plus a runtime refusal for undeclared tools, both proven
+  to fire). Unverified, same as everything Keycloak: no real OAuth flow has
+  run — discovery shape and token-validation wiring are tested, a live
+  client obtaining a Keycloak token is not; and RFC 8707 resource-audience
+  alignment is an open realm-config question.
 - **The k3s deployment package (milestone 9) is authored but entirely
   unexercised.** `Dockerfile.api`, `Dockerfile.web`, and the Helm chart in
   `deploy/helm/rocketwiki/` exist, `helm lint` passes and `helm template`

@@ -1356,6 +1356,7 @@ outside the boundary.
 | Blob storage (§10) | `RocketWiki.Storage` | span, duration, count and byte count per operation, tagged by provider. Nothing else instruments this path |
 | Identity + real-time (§8, §11.3) | `RocketWiki.Api` | JIT provisioning created-vs-refreshed; presence joins/leaves/evictions; notification fan-out by disposition, including how many recipients were skipped for being offline |
 | Migration (§13) | `RocketWiki.Importer` | a span per pipeline pass with page and attachment counts. No exporter is wired into the CLI |
+| MCP (§8) | `RocketWiki.Api` | a span, counter and duration histogram per tool call, tagged by tool name and outcome only (bounded; unknown client-supplied names collapse to a constant). The SDK's own `Experimental.ModelContextProtocol` source is deliberately not subscribed: it records error *messages* into span status, which §15's "errors by type, never by message" rule excludes — a hygiene test sweeps it anyway, including status descriptions |
 | Browser (`web/`) | `rocketwiki-web` over OTLP/HTTP | document load, fetch/XHR (covers urql's GraphQL POSTs and SignalR's negotiate/long-poll), GraphQL operation-name spans; every URL's query string and fragment stripped at the export choke point (see above) |
 
 #### Naming
@@ -1411,15 +1412,15 @@ caveat below the table.
 |---|---|---|---|
 | 0 | Walking skeleton | **done** (bar `aspire run`) | Aspire AppHost + ServiceDefaults, Vite app scaffolded, Keycloak dev realm with the §11 protocol mappers, schema-drift + audit-coverage guards |
 | 1 | Editor spike ⚠️ | **done** | TipTap + Markdown round-trip for the full v1 feature set, proven against a real editor instance. Was the highest-risk item; it held. |
-| 2 | Core wiki | **mostly done** | Rule engine, EF model proven on SQLite, domain-event pipeline (audit in the same transaction), page CRUD + subtree delete, permission-filtered reads, access-rule management with replay-provable history, space CRUD. Remaining: GraphQL resolvers + object-level authorization |
-| 3 | Content features | not started | Attachments/images (S3 + filesystem providers), comments, labels |
-| 4 | Search & polish | UI landed, API pending | FTS, trash/restore, space management UI, rule builder + permission inspector, audit log viewer, import report UI |
-| 4b | Notifications & presence | not started | SignalR hub, watches, mentions, per-recipient `canView` fan-out, persisted notification list + UI; viewer presence and live mouse pointers (authorized group join, eviction on rule change) |
+| 2 | Core wiki | **done** | Rule engine, EF model proven on SQLite, domain-event pipeline (audit in the same transaction), page CRUD + subtree delete, permission-filtered reads (incl. §6.7's not-found-vs-denied result with denied-read auditing), GraphQL resolvers + object-level authorization (adversarially tested), access-rule management with replay-provable history, space CRUD |
+| 3 | Content features | **done** | Attachments (S3 + filesystem providers; S3 unverified against a live endpoint), comments, labels — all wired end to end and audited |
+| 4 | Search & polish | **done** (bar real-FTS verification) | `search`/`labels` API matching the shipped UI operations, permission-filtered with section attribution; SQL Server FTS path TODO-flagged until the container tier exists (SQLite LIKE fallback is what tests exercise); trash/restore, space management UI, rule builder + permission inspector, audit log viewer, import report UI |
+| 4b | Notifications & presence | **backend done; web transport swap pending** | SignalR hub, watches, delta-based mentions, per-recipient `canView` fan-out (re-checked at read time too), persisted notification list; viewer presence + live pointers with rule-change eviction. Remaining: the SPA still runs its fake transports/placeholder schema — swapping to the real ones is frontend work now unblocked; `comment_reply`/`sync_bundle_landed` have no producer yet |
 | 5 | Migration | not started | Importer against a real Confluence space export; trial runs and fidelity review |
-| 6 | Low/high sync | outbox in progress | Outbox journal, bundle export/import CLI with hash chain, baseline snapshots, replica read-only enforcement, sync status page |
+| 6 | Low/high sync | **done** (baselines are current-state-only) | Outbox journal, `RocketWiki.Sync` export/import CLI with hash chain, baseline snapshots (documented simplification: no revision history), replica read-only enforcement with `originInstanceId` in the error, admin `syncStatus` query |
 | 7 | Semantic search | not started | Embedding background jobs, vector storage + ANN index, hybrid retrieval (RRF), section deep-links in results |
-| 8 | MCP server | not started | `/mcp` endpoint (OAuth via Keycloak), read-only tools over the shared service layer, channel-tagged audit |
-| 9 | k3s deployment | not started | Reviewed manifests/Helm in-repo, migration Job, Traefik ingress with WebSocket upgrade, secrets, probes, offline image path, restore drill |
+| 8 | MCP server | **done** (no live Keycloak/OAuth dance yet) | `/mcp` (streamable HTTP, stateless, in-process) via the official C# SDK; RFC 9728 resource-metadata discovery pointing at Keycloak; four read-only tools over the shared service layer; per-call `mcp`-channel audit incl. client name and denied-read reasons; audit-declaration guard extended to tools; `rocketwiki.mcp.*` telemetry |
+| 9 | k3s deployment | **authored, unexercised** | Dockerfiles + Helm chart in-repo (`deploy/`), migration Job via EF bundle, Traefik ingress with WebSocket upgrade, secrets by reference, probes (TCP until health endpoints get a non-Dev config gate), offline image path. `helm lint`/`template` pass; nothing applied to a cluster; restore drill unrun |
 
 ### The standing caveat
 
