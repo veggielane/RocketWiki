@@ -7,9 +7,8 @@ using RocketWiki.Core.Services;
 namespace RocketWiki.Api.GraphQL;
 
 /// <summary>
-/// TODO(milestone 2+): search — Page and Space read paths, plus auditEvents, are
-/// covered (design.md §8); see Query.Spaces.cs and Query.AuditEvents.cs for the rest
-/// of this partial class.
+/// Root query fields (design.md §8); see Query.Spaces.cs, Query.AuditEvents.cs,
+/// Query.Search.cs, and Query.Labels.cs for the rest of this partial class.
 /// </summary>
 public partial class Query
 {

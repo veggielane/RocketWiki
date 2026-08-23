@@ -24,6 +24,7 @@ public static class GraphQLConfiguration
             .AddType<AttachmentType>()
             .AddType<SpaceType>()
             .AddType<AccessRuleType>()
-            .AddType<AuditEventType>();
+            .AddType<AuditEventType>()
+            .AddType<SearchHitType>();
     }
 }

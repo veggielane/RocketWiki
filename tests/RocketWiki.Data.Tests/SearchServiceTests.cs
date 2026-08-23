@@ -232,6 +232,106 @@ public class SearchServiceTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task Search_HitInsideASection_CarriesHeadingPathAndAnchorId()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space, "engines");
+        page.CurrentContent = "# Engines\n\nintro text\n\n## Turbopumps\n\nThe impeller-cavitation margin is thin.\n\n## Nozzles\n\nunrelated";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("impeller-cavitation", null, null), ViewerPrincipal(), maxResults: 10);
+
+        var hit = Assert.Single(result);
+        Assert.Equal(new[] { "Engines", "Turbopumps" }, hit.HeadingPath);
+        Assert.Equal("engines--turbopumps", hit.AnchorId);
+        Assert.Contains("impeller-cavitation", hit.Snippet);
+    }
+
+    [Fact]
+    public async Task Search_TitleOnlyMatch_EmptyHeadingPath_LeadingSnippet()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space, "unique");
+        page.Title = "Cryogenic-Loading Procedures";
+        page.CurrentContent = "# Overview\n\nNothing containing the search word.";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("Cryogenic-Loading", null, null), ViewerPrincipal(), maxResults: 10);
+
+        var hit = Assert.Single(result);
+        Assert.Empty(hit.HeadingPath);
+        Assert.Equal(string.Empty, hit.AnchorId);
+        Assert.StartsWith("# Overview", hit.Snippet);
+    }
+
+    [Fact]
+    public async Task Search_MatchDeepInLongPage_SnippetIsCenteredOnTheMatch_NotAPrefix()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space, "long");
+        page.CurrentContent = "# Long\n\n" + string.Join(' ', Enumerable.Repeat("filler", 300))
+            + " hydrazine-loading " + string.Join(' ', Enumerable.Repeat("filler", 300));
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("hydrazine-loading", null, null), ViewerPrincipal(), maxResults: 10);
+
+        var hit = Assert.Single(result);
+        Assert.Contains("hydrazine-loading", hit.Snippet);
+        Assert.StartsWith("…", hit.Snippet); // a naive prefix excerpt would never contain a match this deep
+    }
+
+    [Fact]
+    public async Task Search_RestrictedPagesContent_NeverSurfacesInAnyReturnedField()
+    {
+        // The adversarial version of "absent, not forbidden" (design.md §6.7): not
+        // only is the restricted page's hit missing, no OTHER hit's snippet, title,
+        // path, or anchor carries its text either - the restricted content must
+        // never have entered the excerpting code at all.
+        const string secretPhrase = "the-classified-payload-manifest";
+        var space = TestData.NewSpace();
+        var visible = TestData.NewPage(space, "visible");
+        visible.CurrentContent = "shared-term in public content";
+        var restricted = TestData.NewPage(space, "restricted");
+        restricted.Title = $"Secret {secretPhrase}";
+        restricted.CurrentContent = $"shared-term next to {secretPhrase}";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.AddRange(visible, restricted);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(ViewRestriction(restricted.Id, """{ "group": "top-secret" }"""));
+        context.SaveChanges();
+
+        var service = new SearchService(context);
+        var result = await service.SearchAsync(new SearchRequest("shared-term", null, null), ViewerPrincipal(), maxResults: 10);
+
+        var hit = Assert.Single(result);
+        Assert.Equal(visible.Id, hit.PageId);
+
+        var everyReturnedString = string.Join('\n',
+            result.SelectMany(h => new[] { h.Title, h.Snippet, h.AnchorId }.Concat(h.HeadingPath)));
+        Assert.DoesNotContain(secretPhrase, everyReturnedString, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Search_NoSpaceRoleAtAll_ReturnsEmpty()
     {
         var space = TestData.NewSpace();

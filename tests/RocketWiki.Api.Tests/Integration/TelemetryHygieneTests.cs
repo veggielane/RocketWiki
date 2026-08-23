@@ -225,10 +225,28 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         Assert.False(create.RootElement.GetProperty("data").GetProperty("createPage")
             .GetProperty("page").ValueKind == JsonValueKind.Null);
 
-        // 3. A search-shaped inline literal. There is no search field in the schema yet
-        //    (milestone 4), so this stands in for one: an argument value embedded
-        //    directly in the query text, which is exactly the shape a search query has
-        //    and exactly what RequestDetails.Document would have leaked.
+        // 3. The real search field (milestone 4), twice - both halves of §15's
+        //    "search query text" rule through the genuine path:
+        //    3a. The sentinel as the inline query argument. The query text lands in
+        //        the search.query audit row's DetailsJson (design.md §7, deliberate -
+        //        SearchQueryTests asserts that side) and must never land in a span -
+        //        RequestDetails.Document would have leaked exactly this.
+        using var search = await client.PostGraphQLAsync($$"""
+            query SearchSentinel { search(query: "{{SentinelSearchText}}") { totalCount edges { node { snippet headingPath anchorId } } } }
+            """);
+        Assert.Equal(0, search.RootElement.GetProperty("data").GetProperty("search")
+            .GetProperty("totalCount").GetInt32());
+
+        //    3b. A search that HITS the sentinel page, so sentinel title and content
+        //        flow through the full result path - LIKE query, canView, snippet
+        //        builder, DataLoader-resolved page { title spaceKey } - while every
+        //        span in that pipeline stays clean.
+        using var searchHit = await client.PostGraphQLAsync($$"""
+            query SearchSentinelContent { search(query: "{{SentinelContent}}") { totalCount edges { node { snippet page { id title spaceKey } } } } }
+            """);
+        Assert.True(searchHit.RootElement.GetProperty("data").GetProperty("search")
+            .GetProperty("totalCount").GetInt32() >= 1);
+
         using var searchish = await client.PostGraphQLAsync($$"""
             query FindByTitle { pageTree(spaceId: "{{fixture.SpaceId}}") { id title } }
             """);

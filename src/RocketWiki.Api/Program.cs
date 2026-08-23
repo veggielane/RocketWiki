@@ -112,6 +112,12 @@ builder.Services.AddScoped<IAttachmentService>(sp =>
 builder.Services.AddScoped<ISpaceService>(sp => new SpaceService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<IAccessRuleService, AccessRuleService>();
 
+// --- Search (design.md §9.1, milestone 4) ---
+// One implementation, self-detecting provider: SQL Server FTS in production, the
+// LIKE fallback everywhere else (which is what the SQLite test tier exercises —
+// the FTS path stays TODO-flagged/unverified until the Testcontainers tier exists).
+builder.Services.AddScoped<ISearchService, SearchService>();
+
 // --- Real-time: SignalR (design.md §8) ---
 // design.md §15: a Redis backplane is needed once replicas > 1; at one replica (today)
 // the default in-memory backplane is correct and this is a real decision to revisit at
@@ -133,8 +139,8 @@ builder.Services.AddScoped<INotificationDispatcher>(sp =>
         localInstanceId));
 
 // --- GraphQL (Hot Chocolate, design.md §8) ---
-// TODO(milestone 2+): search — Page, Space, Comment/Label/Attachment reads and
-// auditEvents are wired; search is still ahead.
+// Page, Space, Comment/Label/Attachment reads, auditEvents, and search (milestone 4)
+// are wired.
 // TODO(milestone 8/MCP): the object-level canView enforcement here (PageFieldResolvers,
 // routing every Page-returning field through IPageReadService) is the same enforcement
 // MCP tools must reuse once they exist (design.md §6.7/§8) — same service, same rules.

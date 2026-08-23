@@ -26,6 +26,9 @@ type Query {
   page(id: UUID!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
   me: CurrentUser!
+  labels(spaceKey: String): [String!]! @cost(weight: "10")
+  search(query: String!, spaceKey: String, labels: [String!], after: String): SearchConnection!
+    @cost(weight: "10")
   spaces: [Space!]! @cost(weight: "10")
   space(key: String!): Space @cost(weight: "10")
 }
@@ -242,6 +245,7 @@ type Page {
   comments: [Comment!]! @cost(weight: "10")
   attachments: [Attachment!]! @cost(weight: "10")
   labels: [String!]! @cost(weight: "10")
+  spaceKey: String! @cost(weight: "10")
   id: UUID!
   spaceId: UUID!
   parentPageId: UUID
@@ -337,6 +341,29 @@ type RestoreRevisionPayload {
 type RestoreSpacePayload {
   space: Space
   error: PageMutationErrorView
+}
+
+type SearchConnection {
+  totalCount: Int!
+  edges: [SearchEdge!]!
+  pageInfo: SearchPageInfo!
+}
+
+type SearchEdge {
+  cursor: String!
+  node: SearchHit!
+}
+
+type SearchHit {
+  page: Page! @cost(weight: "10")
+  snippet: String!
+  headingPath: [String!]!
+  anchorId: String!
+}
+
+type SearchPageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
 }
 
 type Space {

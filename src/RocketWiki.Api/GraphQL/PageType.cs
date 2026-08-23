@@ -65,5 +65,12 @@ public sealed class PageType : ObjectType<Page>
         descriptor.Field("labels")
             .Type<NonNullType<ListType<NonNullType<StringType>>>>()
             .ResolveWith<PageFieldResolvers>(r => r.GetLabelsAsync(default!, default!, default));
+
+        // The SPA's contract (schema.placeholder.graphql / operations/search.graphql)
+        // addresses pages by space KEY, not space id — search results link as
+        // /spaces/{spaceKey}/... — so Page carries its space's key directly.
+        descriptor.Field("spaceKey")
+            .Type<NonNullType<StringType>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetSpaceKeyAsync(default!, default!, default));
     }
 }
