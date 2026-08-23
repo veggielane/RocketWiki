@@ -694,7 +694,19 @@ so it is subject to the same rules as reading (§6):
   `canView` **per recipient at send time**, and delivers only to
   `user:{id}` groups that pass. Subscribe-time checks are not enough:
   restrictions change, and a page-scoped group would keep delivering to
-  someone who lost access.
+  someone who lost access. That send-time evaluation requires a live
+  token-built Principal, which only currently-connected recipients have. A
+  candidate recipient with no open connection gets a **deferred row**
+  instead: persisted with no title snapshot — no principal existed, so
+  nothing is disclosed at send time — and gated exactly like a
+  `sync_bundle_landed` row, at the notifications fetch, where the
+  recipient's live token-built Principal must pass `canView` for the row to
+  be returned at all. Its existence, not just its title, is gated, fail
+  closed; a surviving row carries the page's live title, which the
+  recipient could open the page to read anyway. There is no live push for
+  these; the next fetch is the delivery. `markNotificationRead` runs the
+  same gate, so probing row ids returns the same not-found as a row that
+  never existed.
 - **Minimal payloads.** Type, page id, space key, actor display name,
   timestamp — and the page title only for recipients who passed `canView`.
   Never content, never diffs.
@@ -1459,7 +1471,7 @@ visibly flags.
 | Domain events + audit (§7, §12) | `RocketWiki.Core` | events raised by type; audit rows written by action, outcome, channel, and which writer produced them |
 | Persistence (§6.4.1, §12) | `RocketWiki.Data` | spans for units of work spanning several queries — subtree delete/restore, move, revision restore, bundle export/import — plus outbox entries appended by event type |
 | Blob storage (§10) | `RocketWiki.Storage` | span, duration, count and byte count per operation, tagged by provider. Nothing else instruments this path |
-| Identity + real-time (§8, §11.3) | `RocketWiki.Api` | JIT provisioning created-vs-refreshed; presence joins/leaves/evictions; notification fan-out by disposition, including how many recipients were skipped for being offline |
+| Identity + real-time (§8, §11.3) | `RocketWiki.Api` | JIT provisioning created-vs-refreshed; presence joins/leaves/evictions; notification fan-out by disposition: delivered live, deferred for offline recipients, skipped not-viewable |
 | Migration (§13) | `RocketWiki.Importer` | a span per pipeline pass with page and attachment counts. No exporter is wired into the CLI |
 | MCP (§8) | `RocketWiki.Api` | a span, counter and duration histogram per tool call, tagged by tool name and outcome only (bounded; unknown client-supplied names collapse to a constant). The SDK's own `Experimental.ModelContextProtocol` source is deliberately not subscribed: it records error *messages* into span status, which §15's "errors by type, never by message" rule excludes — a hygiene test sweeps it anyway, including status descriptions |
 | Browser (`web/`) | `rocketwiki-web` over OTLP/HTTP | document load, fetch/XHR (covers urql's GraphQL POSTs and SignalR's negotiate/long-poll), GraphQL operation-name spans; every URL's query string and fragment stripped at the export choke point (see above) |

@@ -241,11 +241,15 @@ and (later) their caret are ephemeral hub state, held in memory and gone
 when the connection drops. Nothing about live presence is persisted or
 audited (design.md §8).
 
-**Rows exist only for recipients who passed `canView` at send time** — the
-row is created *after* the permission check, not filtered on read. That
-keeps the leak-prevention in one place (design.md §8). Re-check `canView`
-when rendering the list anyway: a row written last week may name a page the
-user can no longer see, and stale titles must not resurface.
+**Rows exist only for recipients who passed `canView` at send time** — or,
+for recipients with no live token at write time (sync imports, offline
+fan-out recipients), a row with `TitleSnapshot NULL` whose existence is
+gated at read. Snapshot rows are created *after* the permission check, not
+filtered on read. That keeps the leak-prevention in one place (design.md
+§8). Re-check `canView` when rendering the list anyway: a snapshot row
+written last week may name a page the user can no longer see, and stale
+titles must not resurface; a null-snapshot row that fails the read-time
+check is withheld entirely.
 
 ---
 
