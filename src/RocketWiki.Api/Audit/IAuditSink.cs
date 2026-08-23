@@ -30,6 +30,15 @@ public interface IAuditSink
 /// One audit event's domain-specific content (design.md §7's event model,
 /// minus the request/channel metadata and UserId that <see cref="DbAuditSink"/>
 /// fills in from ambient context, not from the caller).
+///
+/// <see cref="DedupKey"/> extends the per-request dedup identity for actions whose
+/// subject is not a wiki entity: the sink's dedup key is (Action, SubjectId, Outcome),
+/// which is exactly right when SubjectId identifies the subject — and exactly wrong
+/// when it is null for several *different* subjects in one request (two different
+/// GitLab resources both audit as `gitlab.fetch` with no SubjectId; without a
+/// discriminator the second row would be swallowed as a duplicate of the first).
+/// Callers with a Guid subject leave this null and nothing changes; callers with an
+/// external subject supply its identity here. Dedup only — never persisted.
 /// </summary>
 public sealed record AuditRecord(
     string Action,
@@ -37,4 +46,5 @@ public sealed record AuditRecord(
     AuditSubjectType? SubjectType = null,
     Guid? SubjectId = null,
     string? SpaceKey = null,
-    string? DetailsJson = null);
+    string? DetailsJson = null,
+    string? DedupKey = null);

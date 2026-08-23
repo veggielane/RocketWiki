@@ -75,6 +75,65 @@ public static class ApiTelemetry
         Meter.CreateHistogram<double>("rocketwiki.mcp.tool_call.duration", "s",
             "Duration of MCP tool invocations, by tool name and outcome.");
 
+    /// <summary>
+    /// design.md §15 (GitLab amendment): one measurement per GitLab fetch, by
+    /// operation, outcome, and upstream HTTP status class — all three bounded
+    /// vocabularies. Never a project path, file path, issue title, or filter text:
+    /// those belong to the audit row (`gitlab.fetch`, §7), and the built-in
+    /// HttpClient span is deliberately not emitted for this client at all
+    /// (GitLabConfiguration) because its url.full would carry exactly them.
+    /// </summary>
+    public static readonly Counter<long> GitLabFetches =
+        Meter.CreateCounter<long>("rocketwiki.gitlab.fetches", "{fetch}",
+            "GitLab fetches, by operation, outcome, and upstream status class.");
+
+    public static readonly Histogram<double> GitLabFetchDuration =
+        Meter.CreateHistogram<double>("rocketwiki.gitlab.fetch.duration", "s",
+            "Duration of GitLab fetches, by operation, outcome, and upstream status class.");
+
+    /// <summary>Constant span name (low-cardinality, §15); operation/outcome ride as tags.</summary>
+    public const string GitLabFetchSpan = "rocketwiki.gitlab.fetch";
+
+    public const string GitLabOperationTag = "rocketwiki.gitlab.operation";
+    public const string GitLabOutcomeTag = "rocketwiki.gitlab.outcome";
+    public const string GitLabStatusClassTag = "rocketwiki.gitlab.status_class";
+
+    public const string GitLabOperationIssue = "issue";
+    public const string GitLabOperationIssues = "issues";
+    public const string GitLabOperationFile = "file";
+
+    public const string GitLabOutcomeOk = "ok";
+    public const string GitLabOutcomeNotConfigured = "not_configured";
+    public const string GitLabOutcomeNoCredential = "no_credential";
+    public const string GitLabOutcomeInvalidCredential = "invalid_credential";
+    public const string GitLabOutcomeNotFound = "not_found";
+    public const string GitLabOutcomeUnreachable = "unreachable";
+
+    public static void RecordGitLabFetch(string operation, string outcome, int? upstreamStatus, TimeSpan duration)
+    {
+        var tags = new KeyValuePair<string, object?>[]
+        {
+            new(GitLabOperationTag, operation),
+            new(GitLabOutcomeTag, outcome),
+            new(GitLabStatusClassTag, StatusClass(upstreamStatus)),
+        };
+        GitLabFetches.Add(1, tags);
+        GitLabFetchDuration.Record(duration.TotalSeconds, tags);
+    }
+
+    /// <summary>Collapses an HTTP status to its class — the §15 bounded-vocabulary rule
+    /// applied to a value that is already an enum-ish int, but whose raw form would
+    /// still mint a series per distinct upstream status.</summary>
+    public static string StatusClass(int? status) => status switch
+    {
+        null => "none",
+        >= 200 and < 300 => "2xx",
+        >= 300 and < 400 => "3xx",
+        >= 400 and < 500 => "4xx",
+        >= 500 => "5xx",
+        _ => "none",
+    };
+
     public const string JitResultTag = "rocketwiki.identity.result";
     public const string PresenceOutcomeTag = "rocketwiki.presence.outcome";
     public const string PresenceReasonTag = "rocketwiki.presence.reason";

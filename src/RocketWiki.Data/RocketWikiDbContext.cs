@@ -62,6 +62,7 @@ public class RocketWikiDbContext : DbContext
     public DbSet<SyncSpaceState> SyncSpaceStates => Set<SyncSpaceState>();
     public DbSet<PageEmbedding> PageEmbeddings => Set<PageEmbedding>();
     public DbSet<PageEmbeddingState> PageEmbeddingStates => Set<PageEmbeddingState>();
+    public DbSet<GitLabCredential> GitLabCredentials => Set<GitLabCredential>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -29,6 +29,13 @@ type Query {
   me: CurrentUser!
   effectivePermission(pageId: UUID!, subject: InspectedPrincipalInput): EffectivePermissionDetail
     @cost(weight: "10")
+  gitlabIssue(projectId: String!, iid: Int!): GitLabIssuePayload!
+    @cost(weight: "10")
+  gitlabIssues(projectId: String!, filter: GitLabIssueFilterInput, first: Int): GitLabIssuesPayload!
+    @cost(weight: "10")
+  gitlabFile(projectId: String!, path: String!, ref: String): GitLabFilePayload!
+    @cost(weight: "10")
+  gitlabStatus: GitLabStatus! @cost(weight: "10")
   labels(spaceKey: String): [String!]! @cost(weight: "10")
   labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
@@ -67,6 +74,9 @@ type Mutation {
     @cost(weight: "10")
   restoreRevision(input: RestoreRevisionRequestInput!): RestoreRevisionPayload!
     @cost(weight: "10")
+  setGitLabToken(input: SetGitLabTokenRequestInput!): SetGitLabTokenPayload!
+    @cost(weight: "10")
+  clearGitLabToken: ClearGitLabTokenPayload! @cost(weight: "10")
   createLabel(input: CreateLabelRequestInput!): CreateLabelPayload!
     @cost(weight: "10")
   attachLabel(input: AttachLabelRequestInput!): AttachLabelPayload!
@@ -189,6 +199,11 @@ type AuditEventsEdge {
   node: AuditEvent!
 }
 
+type ClearGitLabTokenPayload {
+  tokenState: GitLabTokenState
+  error: PageMutationErrorView
+}
+
 type Comment {
   author: UserRef! @cost(weight: "10")
   id: UUID!
@@ -280,6 +295,65 @@ type ExportedSpaceSyncStatusView {
   lastOutboxSequence: Long!
   pendingEventCount: Int!
   lastExportedBundle: Int
+}
+
+type GitLabFile {
+  project: String!
+  filePath: String!
+  ref: String
+  fileName: String
+  sizeBytes: Long!
+  contentSha256: String
+  lastCommitId: String
+  content: String
+  contentIssue: GitLabContentIssue
+}
+
+type GitLabFilePayload {
+  file: GitLabFile
+  unavailable: GitLabUnavailableView
+}
+
+type GitLabIssue {
+  project: String!
+  iid: Int!
+  title: String!
+  state: String!
+  labels: [String!]!
+  authorName: String
+  authorUsername: String
+  assigneeNames: [String!]!
+  webUrl: String!
+  createdAtUtc: DateTime
+  updatedAtUtc: DateTime
+  dueDate: String
+  milestone: String
+  confidential: Boolean!
+}
+
+type GitLabIssuePayload {
+  issue: GitLabIssue
+  unavailable: GitLabUnavailableView
+}
+
+type GitLabIssuesPayload {
+  issues: [GitLabIssue!]
+  unavailable: GitLabUnavailableView
+}
+
+type GitLabStatus {
+  configured: Boolean!
+  baseUrl: String
+  viewerHasToken: Boolean!
+}
+
+type GitLabTokenState {
+  hasToken: Boolean!
+}
+
+type GitLabUnavailableView {
+  reason: GitLabUnavailableReason!
+  upstreamStatus: Int
 }
 
 type Label {
@@ -483,6 +557,11 @@ type SearchPageInfo {
   endCursor: String
 }
 
+type SetGitLabTokenPayload {
+  tokenState: GitLabTokenState
+  error: PageMutationErrorView
+}
+
 type Space {
   isReplica: Boolean!
   viewerIsWatching: Boolean! @cost(weight: "10")
@@ -644,6 +723,15 @@ input EditCommentRequestInput {
   body: String!
 }
 
+input GitLabIssueFilterInput {
+  state: String
+  labels: [String!]
+  search: String
+  milestone: String
+  orderBy: String
+  sort: String
+}
+
 input InitialSpaceGrantInput {
   role: SpaceRole!
   expressionJson: String!
@@ -688,6 +776,10 @@ input RestoreRevisionRequestInput {
 
 input RestoreSpaceRequestInput {
   spaceId: UUID!
+}
+
+input SetGitLabTokenRequestInput {
+  token: String!
 }
 
 input UnwatchPageRequestInput {
@@ -745,6 +837,19 @@ enum AuditSubjectType {
   ATTACHMENT
   COMMENT
   RULE
+}
+
+enum GitLabContentIssue {
+  TOO_LARGE
+  NOT_TEXT
+}
+
+enum GitLabUnavailableReason {
+  NOT_CONFIGURED
+  NO_CREDENTIAL
+  INVALID_CREDENTIAL
+  NOT_FOUND
+  UNREACHABLE
 }
 
 enum PageAction {

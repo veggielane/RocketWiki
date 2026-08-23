@@ -108,6 +108,16 @@ public static class DomainEventAuditMapper
         NotificationMarkedReadEvent e => ("notification.markRead", null, null, null,
             JsonSerializer.Serialize(new { notificationId = e.NotificationId })),
 
+        // GitLab integration: the credential row is the subject conceptually, but no
+        // AuditSubjectType fits a per-user setting (the subject list is wiki content
+        // shapes) and the row PK is the acting UserId the event already carries in its
+        // UserId column — so subject stays null, same pattern as notification.markRead.
+        // Deliberately no DetailsJson: there is nothing to say about a token that
+        // wouldn't risk saying too much, and the event type carries no material anyway.
+        GitLabTokenSetEvent => ("settings.gitlab_token.set", null, null, null, null),
+
+        GitLabTokenClearedEvent => ("settings.gitlab_token.cleared", null, null, null, null),
+
         SpaceCreatedEvent e => ("space.create", AuditSubjectType.Space, e.SpaceId, e.Key, null),
 
         SpaceRenamedEvent e => ("space.rename", AuditSubjectType.Space, e.SpaceId, e.Key,

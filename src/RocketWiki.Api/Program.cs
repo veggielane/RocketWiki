@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Attachments;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Embeddings;
+using RocketWiki.Api.GitLab;
 using RocketWiki.Api.GraphQL;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Mcp;
@@ -166,6 +167,13 @@ builder.Services.AddScoped<INotificationReadModelService>(sp =>
 // service layer, and per-call audit on AuditChannel.Mcp. See McpServerConfiguration
 // for why in-process (and stateless) is load-bearing, not a convenience.
 builder.AddRocketWikiMcp();
+
+// --- GitLab integration (design.md GitLab section) ---
+// Per-user encrypted PAT storage + typed REST v4 client. GitLab:BaseUrl is
+// fail-closed like the OTLP endpoint (§15): unset means the feature is absent and
+// every GitLab field answers NOT_CONFIGURED — no default, no fallback. Every fetch
+// runs under the calling user's own stored token; no service account exists.
+builder.AddRocketWikiGitLab();
 
 // --- Real-time: SignalR (design.md §8) ---
 // design.md §15: a Redis backplane is needed once replicas > 1; at one replica (today)
