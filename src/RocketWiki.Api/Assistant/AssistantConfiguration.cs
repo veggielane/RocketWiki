@@ -1,0 +1,124 @@
+using System.ClientModel;
+using System.ClientModel.Primitives;
+using System.Data.Common;
+using Microsoft.Extensions.AI;
+using OpenAI;
+
+namespace RocketWiki.Api.Assistant;
+
+/// <summary>
+/// Wires the "ask the wiki" assistant (design.md §9, resolving §17's assistant
+/// bullet): the OpenAI-compatible <see cref="IChatClient"/> and its options,
+/// mirroring <see cref="Embeddings.EmbeddingPipelineConfiguration"/> deliberately —
+/// the chat endpoint is the same class of in-network, §9.4-boundary dependency as
+/// the embedding endpoint, configured the same two ways:
+///
+/// 1. The Aspire-injected <c>assistant</c> connection string
+///    (<c>Endpoint=…;Key=…;Model=…</c>, bare URL accepted as Endpoint-only) — the
+///    AppHost's <c>AddConnectionString("assistant")</c>, §15 "config by reference".
+/// 2. The <c>Ai</c> section for anything the connection string doesn't carry:
+///    <c>Ai:ChatModel</c> names the model, and the endpoint/key fall back to §9.2's
+///    shared <c>Ai:BaseUrl</c>/<c>Ai:ApiKey</c> — one gateway serving both the
+///    embedding and chat models is the expected deployment, so the second model
+///    should be one config key, not a duplicated section.
+///
+/// <b>Configured is opt-in; absent is a supported state (§15 fail-closed).</b> When
+/// no endpoint/model resolves, no client and no options register: AskWikiService
+/// (always registered — the schema must not change shape with configuration, the
+/// GitLab precedent) sees nulls and answers NOT_CONFIGURED without touching
+/// retrieval or the network. There is no default endpoint: the question and
+/// viewable page content travel to this URL, so guessing one would be a
+/// content-exfiltration bug, not a convenience.
+///
+/// Resilience: one attempt, bounded timeout, no retries — the GitLab reasoning
+/// (a user-facing request retrying against a down endpoint at exactly the wrong
+/// moment), enforced here via the OpenAI client's own pipeline options rather than
+/// an IHttpClientFactory handler chain, because System.ClientModel clients own
+/// their transport and never pass through the factory's resilience defaults.
+///
+/// Telemetry (§15, decided rather than cargo-culted from the GitLab handler
+/// surgery): this client's built-in HTTP span is NOT suppressed. GitLab's was
+/// because its URL path carries repository file paths — content by another name.
+/// Here <c>url.full</c> is config-static (<c>{BaseUrl}/chat/completions</c>): it
+/// names the operator's own configured endpoint and nothing about any question or
+/// page. The sensitive part of an ask is the request BODY, which no built-in
+/// HttpClient/ClientModel instrumentation records anywhere. The factory's
+/// full-URI request logging doesn't apply either — this client never goes through
+/// IHttpClientFactory. Both facts are what AssistantTelemetryHygieneTests sweeps
+/// for. This exactly matches the embeddings client's posture, established for the
+/// same endpoint class.
+/// </summary>
+public static class AssistantConfiguration
+{
+    public static void AddRocketWikiAssistant(this WebApplicationBuilder builder)
+    {
+        // Always registered, configured or not — the resolver answers NOT_CONFIGURED
+        // through this service's null options/client (optional ctor parameters, the
+        // same DI pattern SearchService uses for the optional embedding generator).
+        builder.Services.AddScoped<AskWikiService>();
+
+        var (endpoint, key, model) = ResolveConfiguration(builder.Configuration);
+        if (endpoint is null || model is null)
+        {
+            return; // Not configured: feature absent, fail closed. See class doc.
+        }
+
+        var options = new AssistantOptions(
+            ChatModel: model,
+            Timeout: TimeSpan.FromSeconds(builder.Configuration.GetValue("Ai:ChatTimeoutSeconds", 30)),
+            MaxContextChars: builder.Configuration.GetValue("Ai:MaxContextChars", 24_000),
+            MaxRetrievedPages: builder.Configuration.GetValue("Ai:MaxRetrievedPages", 8));
+
+        builder.Services.AddSingleton(options);
+
+        // Same construction as the embedding generator (§9.2): official OpenAI 2.x
+        // client at the configured in-boundary endpoint, surfaced through
+        // Microsoft.Extensions.AI so the provider stays pure config. Keyless
+        // gateways get the same "unused" placeholder.
+        builder.Services.AddSingleton<IChatClient>(_ =>
+            new OpenAIClient(
+                    new ApiKeyCredential(string.IsNullOrEmpty(key) ? "unused" : key),
+                    new OpenAIClientOptions
+                    {
+                        Endpoint = new Uri(endpoint),
+                        NetworkTimeout = options.Timeout,
+                        // No retries — see class doc. maxRetries: 0 keeps the policy's
+                        // bookkeeping but never re-sends.
+                        RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
+                    })
+                .GetChatClient(options.ChatModel)
+                .AsIChatClient());
+    }
+
+    /// <summary>Connection string first, Ai section as per-value fallback — the exact
+    /// precedence EmbeddingPipelineConfiguration.ResolveConfiguration established.</summary>
+    private static (string? Endpoint, string? Key, string? Model) ResolveConfiguration(IConfiguration configuration)
+    {
+        string? endpoint = null, key = null, model = null;
+
+        var connectionString = configuration.GetConnectionString("assistant");
+        if (!string.IsNullOrWhiteSpace(connectionString))
+        {
+            if (connectionString.Contains('=', StringComparison.Ordinal))
+            {
+                var csb = new DbConnectionStringBuilder { ConnectionString = connectionString };
+                endpoint = ValueOrNull(csb, "Endpoint");
+                key = ValueOrNull(csb, "Key");
+                model = ValueOrNull(csb, "Model");
+            }
+            else
+            {
+                endpoint = connectionString.Trim(); // bare URL
+            }
+        }
+
+        endpoint ??= configuration["Ai:BaseUrl"];
+        key ??= configuration["Ai:ApiKey"];
+        model ??= configuration["Ai:ChatModel"];
+
+        return (endpoint, key, model);
+    }
+
+    private static string? ValueOrNull(DbConnectionStringBuilder builder, string keyword) =>
+        builder.TryGetValue(keyword, out var value) && value is string s && s.Length > 0 ? s : null;
+}

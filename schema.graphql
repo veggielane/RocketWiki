@@ -5,6 +5,7 @@ schema {
 
 type Query {
   archivedSpaces: [ArchivedSpace!]! @cost(weight: "10")
+  askWiki(question: String!): AskWikiPayload! @cost(weight: "10")
   auditEvents(
     filter: AuditFilterInput!
     "Returns the first _n_ elements from the list."
@@ -135,6 +136,19 @@ type ArchivedSpace {
 type ArchiveSpacePayload {
   space: Space
   error: PageMutationErrorView
+}
+
+type AskWikiCitation {
+  pageId: UUID!
+  title: String!
+  headingPath: [String!]!
+  anchorId: String!
+}
+
+type AskWikiPayload {
+  answer: String
+  citations: [AskWikiCitation!]!
+  unavailable: AskWikiUnavailableReason
 }
 
 type AttachLabelPayload {
@@ -825,6 +839,12 @@ input WatchSpaceRequestInput {
 enum AccessRuleKind {
   SPACE_GRANT
   PAGE_RESTRICTION
+}
+
+enum AskWikiUnavailableReason {
+  NOT_CONFIGURED
+  UNREACHABLE
+  NO_RESULTS
 }
 
 enum AuditChannel {

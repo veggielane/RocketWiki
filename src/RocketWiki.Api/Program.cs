@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using RocketWiki.Api.Assistant;
 using RocketWiki.Api.Attachments;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Avatars;
@@ -187,6 +188,16 @@ builder.AddRocketWikiMcp();
 // every GitLab field answers NOT_CONFIGURED — no default, no fallback. Every fetch
 // runs under the calling user's own stored token; no service account exists.
 builder.AddRocketWikiGitLab();
+
+// --- "Ask the wiki" assistant (design.md §9, resolving §17's assistant bullet) ---
+// RAG over the permission-filtered hybrid index: retrieval under the caller's own
+// principal (ISearchService + IPageReadService — answers only from pages the asker
+// can view, by construction), generation at the OpenAI-compatible chat endpoint from
+// the Aspire "assistant" connection string / Ai:ChatModel. Fail-closed like GitLab
+// and the embeddings endpoint: unconfigured means askWiki answers NOT_CONFIGURED and
+// no client exists. See AssistantConfiguration for config precedence and the
+// telemetry decision; AskWikiService for the enforcement story.
+builder.AddRocketWikiAssistant();
 
 // --- Real-time: SignalR (design.md §8) ---
 // design.md §15: a Redis backplane is needed once replicas > 1; at one replica (today)
