@@ -1060,6 +1060,22 @@ bundle-000041.zip
   detected error, never a silent absorb. Every import is audited
   (`sync.import` with bundle id and event range).
 
+**Bundle format versioning.** The manifest declares `formatVersion`; its
+absence marks format 1 (the original, current-state-only baselines). Format
+2 delivers the "full snapshot including revision history" above — a
+baseline PageUpsert carries every revision of its page, an incremental
+PageUpsert the one revision it corresponds to, each author
+shadow-user-resolvable — and stores events under `events.v2.ndjson`. That
+rename is deliberate: a format-1 importer would otherwise absorb a format-2
+bundle while silently discarding its history; instead its
+missing-`events.ndjson` guard refuses loudly (exit 2,
+`sync.import.refused`). A format-2 importer accepts format-1 bundles as the
+current-state snapshots they always were, and refuses any newer
+`formatVersion` with a typed error before parsing a single event. Revision
+data is attached at export time from the immutable PageRevisions table, so
+outbox rows journaled before format 2 existed still export with full
+history.
+
 **Exported-ness is a low-side property.** Only a native space can be
 exported; a replica must never emit sync events for content it doesn't own.
 The outbox writer enforces this rather than assuming it: an outbox entry is

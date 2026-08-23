@@ -287,7 +287,7 @@ this table — append-only is enforced by the database, not convention.
 | SpaceId | uniqueidentifier FK → Space | exported spaces only |
 | SequenceNumber | bigint | **gap-free per space** — see below |
 | EventType | tinyint | page upsert / move / delete / restore, comment, attachment, labels, restrictions |
-| PayloadJson | nvarchar(max) | full Markdown, not diffs; attachments by ContentHash |
+| PayloadJson | nvarchar(max) | full Markdown, not diffs; attachments by ContentHash. PageUpsert payloads carry no revision data in the journal; the export job attaches the page's revision history (bundle format 2) by joining `(pageId, revisionNumber)` back to PageRevisions at drain time |
 | CreatedAtUtc | | |
 | ExportedInBundle | int null | stamped by the export job |
 
