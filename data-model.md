@@ -344,6 +344,46 @@ in-memory cosine fallback handles search.
 Never synced, never exported (no `SyncEventType`; the outbox classifier has
 no case for its events). `ON DELETE NO ACTION` like every FK.
 
+### UserAvatar — per-user profile picture, instance-local
+
+| Column | Type | Notes |
+|---|---|---|
+| UserId | uniqueidentifier PK, FK → User | PK = FK (the PageEmbeddingState pattern): one avatar per user |
+| StorageKey | nvarchar(200) | opaque key into `IFileStorage` (`avatars/{yyyy}/{MM}/{guid}`); replaced on re-upload, old object left for the §10 janitor |
+| SizeBytes | bigint | of the canonical stored PNG |
+| ContentHash | binary(32) | SHA-256 of the stored bytes; the ETag on both GET routes |
+| EmailHashMd5 | varchar(32) null | lowercase hex MD5 of the trim+lowercase mirrored email; null when no email |
+| EmailHashSha256 | varchar(64) null | lowercase hex SHA-256, same normalization; both stored because Gravatar consumers disagree (historic MD5, current-spec SHA-256, Libravatar both) |
+| CreatedAtUtc / UpdatedAtUtc | datetime2(3) | UpdatedAtUtc tracks the image, not hash refreshes |
+
+Indexes: `(EmailHashMd5)` and `(EmailHashSha256)`, filtered `IS NOT NULL`,
+deliberately **non-unique** — `User.Email` is not unique (shadow users can
+mirror a real address), so the anonymous hash lookup resolves ties
+deterministically instead of the schema forbidding them. Content is always
+the server-re-encoded 512×512 PNG (no ContentType column to disagree with
+that construction). Never synced, never exported; the hashes are re-derived
+by JIT provisioning whenever the mirrored email changes. `ON DELETE NO
+ACTION` like every FK.
+
+### CustomEmoji — admin-curated `:name:` registry, instance-local
+
+| Column | Type | Notes |
+|---|---|---|
+| Id | uniqueidentifier PK (v7) | |
+| Name | nvarchar(64) unique | grammar `[a-z0-9_-]{1,64}`; lowercase-only makes uniqueness case-insensitive by construction, no collation dependence |
+| ContentType | nvarchar(127) | `image/png` or `image/gif` (animated) |
+| SizeBytes | bigint | of the re-encoded stored image |
+| ContentHash | binary(32) | source of the serve-route ETag |
+| StorageKey | nvarchar(200) | `emojis/{guid}` in IFileStorage |
+| PixelSize | int | stored images are always square, 32–256 |
+| CreatedByUserId | FK → User | NO ACTION |
+| CreatedAtUtc | datetime2(3) | |
+
+Hard delete, no query filter (registry vocabulary, not user content).
+Never synced. The audit channel `attachment` denotes the binary-HTTP
+surface (`/attachments`, `/avatars`, `/emojis`), not the Attachment
+subject.
+
 ### PageEmbeddingState — job bookkeeping, instance-local
 
 One row per page: `PageId` (PK = FK), `EmbeddedRevisionNumber int`,

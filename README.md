@@ -422,6 +422,29 @@ Being explicit about what has and hasn't been checked, rather than letting
   (`tests/RocketWiki.SqlServer.Tests`); on machines without Docker the tier
   skips visibly and these claims are only as fresh as the last green CI
   run.
+- **Profile pictures + Gravatar endpoint (backend, design.md §19)** —
+  user-uploaded avatars (PNG/JPEG/WebP in, server-normalized canonical
+  512×512 PNG stored — originals and their EXIF never persisted), self-only
+  set/clear, audited; `UserRef.hasAvatar`/`me.hasAvatar` for rendering.
+  Optionally the wiki serves the Gravatar/Libravatar protocol at
+  `GET /avatar/{hash}` for other in-network tools — **honest caveat: this
+  endpoint is unauthenticated by design** (that's the protocol), so it is
+  off by default (`Avatars:GravatarEndpointEnabled`) and enabling it means
+  anyone on the network can fetch avatars and probe which email hashes have
+  one; the network boundary is the only wall. Example consumer: point
+  GitLab at the wiki with `gravatar_enabled: true` and
+  `gravatar_url: "https://wiki.example.com/avatar/%{hash}?s=%{size}&d=404"`.
+- **Custom emojis (backend, design.md §19)** — instance admins manage a
+  `:name:` registry (`POST/DELETE /emojis/{name}`, audited); any
+  authenticated user gets `GET /emojis/{name}` (ETag/304) and the
+  `customEmojis` GraphQL list. Uploads are normalized via
+  SixLabors.ImageSharp 3.1.12 (**Split License** — Apache-2.0 for
+  open-source/small-org use, commercial otherwise; 4.x additionally needs a
+  build-time license key, so upgrading is a version bump plus that key):
+  decode-limited, squared to 32–256 px, re-encoded with metadata stripped;
+  animated GIF supported (64-frame cap). The SPA rendering for both
+  features (cropper, avatar display, `:`-autocomplete picker) is the
+  in-flight phase 2.
 - **GitLab integration (backend, design.md §18)**: `gitlabIssue`/
   `gitlabIssues`/`gitlabFile` queries proxying GitLab REST v4 under the
   *calling user's own* encrypted PAT (no service account, ever — the

@@ -118,6 +118,7 @@ deliberately constrained to GitHub-Flavored Markdown plus a few extensions:
 | Mentions | `@[display](user://{id})` |
 | Diagrams | ` ```mermaid ` fenced block (source rendered client-side); ` ```drawio ` fenced block whose body is base64 of the diagrams.net editable-SVG export — one payload renders as an inert data-URI image and reloads into the embed editor. Both are plain fenced text to the serializer, sync bundles (§12), and the importer (§13); `drawio` is a reserved fence language. Per-diagram payload cap: 512 KB of base64 |
 | GitLab references (§18) | `[text](gitlab-issue://{project}/{iid})` link mark; ` ```gitlab-file ` and ` ```gitlab-issues ` fences (reserved languages, `key=value` bodies) — host-free scheme forms, inert text to every pipeline but the SPA |
+| Custom emojis (§19) | `:name:` where the name matches `[a-z0-9_-]{1,64}` **and exists in this instance's emoji registry**; anything else is literal text. Plain TEXT to the serializer, round-trip suite, sync bundles (§12), and importer (§13) — no mark, no node, zero pipeline changes. Deleting a definition leaves content rendering the literal text — harmless by construction |
 
 **Rule:** no editor feature ships unless it round-trips (Markdown → editor →
 Markdown produces identical output). A round-trip test suite enforces this,
@@ -471,6 +472,21 @@ Append-only `AuditEvent` table:
 The `search.query` row's Details JSON carries the raw query text, facets,
 and result count — the audit table, not telemetry (§15), is where
 who-searched-what lives.
+
+`settings.avatar.set` / `settings.avatar.cleared` (§19) — the avatar
+mutations, via the domain-event pipeline in the same transaction as the
+row, on the `attachment` channel (the shared binary-HTTP surface; the
+action names carry the distinction). No subject and no details: a per-user
+setting fits no content SubjectType, the row's UserId already names whose
+avatar, and nothing about the image belongs in an audit row.
+`emoji.created` / `emoji.deleted` (§19) — the instance-admin registry
+mutations; subject null, emoji name in details; route-gate denials audited
+under the same actions. Reading avatars or emoji images is deliberately
+unaudited on every path — display assets, same reasoning as display-name
+resolution — and the anonymous `/avatar/{hash}` endpoint has no principal,
+so no row *can* exist. Note also: the audit *channel* `attachment` now
+denotes the binary-HTTP surface (`/attachments`, `/avatars`, `/emojis`),
+not the Attachment subject.
 
 `gitlab.fetch` (§18) — every GitLab read, one row per distinct resource per
 request (same resource twice in one document is one row, like `page.view`).
@@ -1123,6 +1139,7 @@ Defense in depth: the one-way guarantee is the whole point of the design.
 | Comments made on low | Users and logins — each side has its own Keycloak |
 | Page **restrictions** (fail closed: a group/attribute unknown on high matches nobody) | Search index + embeddings — recomputed locally on import (§9.4) |
 | | Space **lifecycle and identity** — name, description, archived state. Spaces aren't a sync event type: import creates the replica row from the space key alone, so renaming or archiving a replica is legitimate local curation (like grants), not a blocked content write |
+| | Custom emoji **definitions** (§19) — content carrying `:name:` syncs as plain text and degrades to literal text on an instance whose registry lacks the name. Syncing the registry is a flagged future decision (collision question: same name, different image, different instances). User avatars likewise never travel |
 
 - IDs are GUIDs and survive the crossing, so `page://` and `attachment://`
   links keep working on high.
@@ -1786,3 +1803,90 @@ container is heavyweight (gigabytes, minutes to boot) and nothing in the
 test tiers needs it; the SQLite tier fakes the wire under the real client.
 A `gitlab/gitlab-ce` container behind `GitLab:BaseUrl` is a documented
 local option for anyone who wants end-to-end dev, not part of the topology.
+
+---
+
+## 19. Profile pictures and the Gravatar endpoint
+
+Users can upload a profile picture, shown beside comments, presence, and
+bylines. Uploads (PNG, JPEG, or WebP) are normalized server-side — decoded
+under hard limits (format allow-list, dimension gate before allocation,
+capped decode memory), center-cropped, resized to a canonical 512×512, and
+re-encoded to PNG. The user's original bytes are never stored: re-encoding
+strips EXIF/XMP/ICC wholesale, so camera metadata such as GPS position
+never reaches storage — worth stating because avatars are the most widely
+served bytes in the system — and a polyglot file crafted to be both an
+image and something else does not survive the decode/re-encode round trip.
+SVG is never accepted (scripting risk), and nothing is ever content-sniffed:
+avatars are served as `image/png` with `X-Content-Type-Options: nosniff`,
+an ETag on the content hash, and short-lived cache headers. Bytes live in
+object storage under an `avatars/` prefix with §10's exact discipline: no
+presigned URLs, write-bytes-then-commit-row, orphans for the janitor.
+Setting and clearing are self-only by construction (the routes take no
+target user) and audited via the domain-event pipeline
+(`settings.avatar.set`/`.cleared`); rendering another user's avatar
+(`GET /users/{id}/avatar`, authenticated) is display data like `UserRef`
+display-name resolution and deliberately emits no audit rows. Avatars are
+**instance-local**: never synced, never exported; shadow users render
+initials. Image processing uses SixLabors.ImageSharp — note for operators:
+it is Six Labors Split License (Apache-2.0 terms for open-source/small-org
+use, commercial license otherwise); we pin 3.1.12 because 4.x additionally
+enforces a license key at build time — upgrading is a version bump plus a
+provisioned `SixLaborsLicenseKey` once that question is settled.
+
+The wiki can also act as a **Gravatar-protocol server**
+(`GET /avatar/{hash}`, Libravatar-compatible) so other in-network tools —
+GitLab above all — show the same faces. This cuts against every instinct in
+this document and the tension is resolved by stating it, not hiding it: the
+Gravatar protocol is **unauthenticated by design** — consumers fetch with
+no credentials — so the endpoint is a deliberate exception to "all access
+requires sign-in". It is therefore an explicit operator opt-in
+(`Avatars:GravatarEndpointEnabled`, default false — the same fail-closed
+posture as the OTLP endpoint, `VITE_DRAWIO_URL`, and `GitLab:BaseUrl`), and
+§15's network boundary is the outer wall: "anonymous" means anonymous
+*inside* the boundary, never the open internet. The inherent protocol
+disclosures, plainly: with the flag on, any in-network actor without a wiki
+account can fetch any user's avatar and can probe which email hashes have
+one — that is what the protocol *is*, and enabling it is an operator's
+decision that those disclosures are acceptable on that network. The design
+confines the exception rather than pretending it away: lookups match the
+MD5 *and* SHA-256 of the normalized (trim+lowercase) mirrored email
+(historical Gravatar is MD5, the current spec SHA-256, Libravatar accepts
+both), and JIT provisioning re-derives the stored hashes whenever it
+refreshes the mirrored email, because a stale hash would serve the old
+address-holder's face to whoever holds that address next. `d=404`
+semantics are the default and only behavior — unknown hash, avatar-less
+user, or feature disabled are one indistinguishable 404, so the flag state
+is not probeable; other `d=` values are ignored (no server-side identicons
+— the consumer's fallback owns misses). `s=` is honored, clamped to 16–512
+and resized on demand from the stored canonical image (no pre-generated
+variants: derived objects would need their own janitor and invalidation
+story for a resize that costs milliseconds, and HTTP caching absorbs the
+repeats). No JIT row, no principal, and no audit row exist on this path —
+there is no acting user to attribute one to, and §7's vocabulary has no
+anonymous case; the only telemetry is a bounded hit/miss/disabled counter,
+and the route is excluded from HTTP tracing wholesale because a server
+span's `url.path` would carry the email hash. Beyond the flag there is no
+rate limiting in v1 — stated as a fact, not an oversight. In-wiki
+rendering does **not** depend on the flag: the authenticated
+`GET /users/{id}/avatar` route serves the SPA regardless. Contrast with
+§18: GitLab embeds carry per-user credentials because that content is
+*someone's* controlled data; avatars are the opposite — deliberately
+public-ish display data whose only gate is the network boundary and the
+operator's opt-in.
+
+**Custom emojis** share the binary-upload machinery: instance admins curate
+a `:name:` registry (`POST`/`DELETE /emojis/{name}`, audited as
+`emoji.created`/`emoji.deleted`; grammar `[a-z0-9_-]{1,64}`, lowercase-only
+so uniqueness is case-insensitive by construction), any authenticated user
+reads the list and the images (ETag/304). Uploads (PNG/JPEG/WebP/GIF) are
+decode-limited, squared to 32–256 px, re-encoded with metadata stripped;
+animated GIF is supported frame-preserving (64-frame cap); animated
+PNG/WebP flatten to their first frame. Emoji definitions are
+instance-local (§12): content carrying `:name:` syncs as plain text and
+degrades to literal text where the registry lacks the name; syncing the
+registry is a flagged future decision with an unresolved collision
+question (same name, different image, different instances). Deleting a
+definition leaves content rendering the literal text — harmless by
+construction, and why deletes are hard deletes (a tombstone would only
+block re-creating the name).

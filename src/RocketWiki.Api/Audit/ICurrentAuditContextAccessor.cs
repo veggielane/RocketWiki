@@ -103,6 +103,10 @@ public sealed class CurrentAuditContextAccessor(IHttpContextAccessor httpContext
         // (the in-wiki read, which deliberately emits no audit rows — see
         // AvatarEndpoints for the reasoning).
         if (path.StartsWithSegments("/avatars", StringComparison.OrdinalIgnoreCase))
+        {
+            return AuditChannel.Attachment;
+        }
+
         // The custom-emoji routes are binary HTTP routes through the same pipeline as
         // /attachments, and Attachment is the channel for exactly that surface -
         // "which HTTP surface carried this action", not "the subject was an

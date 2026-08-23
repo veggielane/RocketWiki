@@ -26,7 +26,7 @@ type Query {
     @cost(weight: "10")
   page(id: UUID!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
-  me: CurrentUser!
+  me: CurrentUser! @cost(weight: "10")
   customEmojis: [CustomEmojiRef!]! @cost(weight: "10")
   effectivePermission(pageId: UUID!, subject: InspectedPrincipalInput): EffectivePermissionDetail
     @cost(weight: "10")
@@ -245,6 +245,7 @@ type CurrentUser {
   isAuthenticated: Boolean!
   isInstanceAdmin: Boolean!
   localUserId: UUID
+  hasAvatar: Boolean!
 }
 
 type CustomEmojiRef {
@@ -631,6 +632,7 @@ type UpdatePageContentPayload {
 type UserRef {
   id: UUID!
   displayName: String!
+  hasAvatar: Boolean!
 }
 
 type WatchPagePayload {
