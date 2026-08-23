@@ -13,7 +13,8 @@ namespace RocketWiki.Data.Services;
 /// (data-model.md: "re-check canView when rendering the list anyway... stale titles
 /// must not resurface") — batched the same way PageService's subtree checks are: one
 /// grants query, one restrictions query over every involved page's ancestors+self,
-/// then pure in-memory evaluation per row.
+/// then pure in-memory evaluation per row. For SyncImported rows the read-time check
+/// is not a re-check but THE check — see <see cref="SurvivesReadTimeCheck"/>.
 /// </summary>
 public class NotificationReadModelService : INotificationReadModelService
 {
@@ -62,7 +63,11 @@ public class NotificationReadModelService : INotificationReadModelService
             .Where(u => actorIds.Contains(u.Id))
             .ToDictionaryAsync(u => u.Id, cancellationToken);
 
-        var involvedSpaceIds = pages.Values.Select(p => p.SpaceId).Distinct().ToArray();
+        // Space-scoped SyncImported rows need their space's grants too (for the
+        // any-space-role check below), not only the spaces of page-scoped rows.
+        var involvedSpaceIds = pages.Values.Select(p => p.SpaceId)
+            .Concat(rows.Where(n => n.Type == NotificationType.SyncImported && n.SpaceId != null).Select(n => n.SpaceId!.Value))
+            .Distinct().ToArray();
         var grantsBySpace = (await _db.AccessRules.AsNoTracking()
                 .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId != null && involvedSpaceIds.Contains(r.SpaceId.Value))
                 .ToListAsync(cancellationToken))
@@ -97,7 +102,42 @@ public class NotificationReadModelService : INotificationReadModelService
             }
         }
 
-        return rows.Select(n => ToListItem(n, viewablePageIds, spaces, actors)).ToList();
+        return rows
+            .Where(n => SurvivesReadTimeCheck(n, viewablePageIds, grantsBySpace, principal))
+            .Select(n => ToListItem(n, viewablePageIds, spaces, actors, pages))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Read-time gate on a row's EXISTENCE, not just its title. Rows the dispatcher
+    /// wrote (watch/mention/reply) passed canView at send time, so they always survive
+    /// - the recipient legitimately learned of the event then, and only the stale
+    /// title is withheld (ToListItem). SyncImported rows are the exception: they are
+    /// written by the offline sync CLI, where no recipient has a live token to
+    /// evaluate canView against (see BundleImportService), so the check those rows
+    /// never got happens HERE, against the caller's live token-built Principal - page
+    /// rows need canView on the page now, space rows the same any-space-role gate that
+    /// watching the space required (WatchService). Fail closed: an unresolvable
+    /// subject (deleted page, missing grants, malformed row) suppresses the row
+    /// entirely - a sync notification must never be the way someone without access
+    /// learns a replica page still exists and is active.
+    /// </summary>
+    private static bool SurvivesReadTimeCheck(
+        Notification row, HashSet<Guid> viewablePageIds, Dictionary<Guid, List<AccessRule>> grantsBySpace, Principal principal)
+    {
+        if (row.Type != NotificationType.SyncImported)
+        {
+            return true;
+        }
+
+        if (row.PageId is { } pageId)
+        {
+            return viewablePageIds.Contains(pageId);
+        }
+
+        return row.SpaceId is { } spaceId
+            && grantsBySpace.TryGetValue(spaceId, out var grants)
+            && EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is not null;
     }
 
     public async Task<PageMutationResult<NotificationListItem>> MarkNotificationReadAsync(
@@ -125,7 +165,14 @@ public class NotificationReadModelService : INotificationReadModelService
         // The mark-read response reuses the same title discipline as the list: no
         // fresh canView evaluation is spent here, so the title is simply omitted -
         // the shipped MarkNotificationRead operation selects only { id readAtUtc }.
-        var spaceKey = notification.SpaceId is { } spaceId
+        // A SyncImported row's page id and space key are withheld too: unlike
+        // dispatcher-written rows no canView ever held at send time, this method has
+        // no Principal to run the deferred check the list performs
+        // (SurvivesReadTimeCheck), and marking sequential ids read must not become a
+        // side channel for subjects the list is currently suppressing. Fail closed;
+        // the caller still gets their receipt (id + readAtUtc).
+        var withholdSubject = notification.Type == NotificationType.SyncImported;
+        var spaceKey = !withholdSubject && notification.SpaceId is { } spaceId
             ? await _db.Spaces.AsNoTracking().IgnoreQueryFilters()
                 .Where(s => s.Id == spaceId).Select(s => s.Key).FirstOrDefaultAsync(cancellationToken)
             : null;
@@ -136,7 +183,7 @@ public class NotificationReadModelService : INotificationReadModelService
         return PageMutationResult<NotificationListItem>.Success(new NotificationListItem(
             notification.Id,
             notification.Type,
-            notification.PageId,
+            withholdSubject ? null : notification.PageId,
             spaceKey,
             PageTitle: null,
             actorDisplayName ?? "System",
@@ -148,17 +195,28 @@ public class NotificationReadModelService : INotificationReadModelService
         Notification row,
         HashSet<Guid> viewablePageIds,
         Dictionary<Guid, Space> spaces,
-        Dictionary<Guid, User> actors)
+        Dictionary<Guid, User> actors,
+        Dictionary<Guid, Page> pages)
     {
         var canViewPage = row.PageId is { } pageId && viewablePageIds.Contains(pageId);
+
+        // TitleSnapshot was already "as permitted at send time" (data-model.md);
+        // surfacing it still requires canView to hold NOW. A SyncImported row has no
+        // snapshot at all (the offline CLI could attest nothing - BundleImportService),
+        // so its title is the page's LIVE title instead: this row only survived
+        // SurvivesReadTimeCheck because the caller's live Principal passes canView on
+        // that page right now, and a title the caller can open the page to read is not
+        // a disclosure.
+        var title = row.Type == NotificationType.SyncImported
+            ? (canViewPage && pages.TryGetValue(row.PageId!.Value, out var page) ? page.Title : null)
+            : (canViewPage ? row.TitleSnapshot : null);
+
         return new NotificationListItem(
             row.Id,
             row.Type,
             row.PageId,
             row.SpaceId is { } spaceId && spaces.TryGetValue(spaceId, out var space) ? space.Key : null,
-            // TitleSnapshot was already "as permitted at send time" (data-model.md);
-            // surfacing it still requires canView to hold NOW.
-            canViewPage ? row.TitleSnapshot : null,
+            title,
             row.ActorUserId is { } actorId && actors.TryGetValue(actorId, out var actor) ? actor.DisplayName : "System",
             row.CreatedAtUtc,
             row.ReadAtUtc);

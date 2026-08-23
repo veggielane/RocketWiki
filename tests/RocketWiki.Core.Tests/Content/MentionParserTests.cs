@@ -94,4 +94,41 @@ public class MentionParserTests
         var ids = MentionParser.ExtractMentionedUserIds($"@[A](user://{UserA} )");
         Assert.Empty(ids);
     }
+
+    // --- ExtractNewlyMentionedUserIds: design.md §8's delta rule, shared by page edits
+    // --- and comment edits - "re-saving content never re-pings its standing mentions".
+
+    [Fact]
+    public void NewMentions_AgainstNullPrevious_AreAllNew()
+    {
+        var ids = MentionParser.ExtractNewlyMentionedUserIds($"@[A](user://{UserA}) @[B](user://{UserB})", null);
+        Assert.Equal([UserA, UserB], ids.Order());
+    }
+
+    [Fact]
+    public void NewMentions_StandingMentionIsNotReRaised()
+    {
+        var ids = MentionParser.ExtractNewlyMentionedUserIds(
+            $"@[A](user://{UserA}) and now also @[B](user://{UserB})",
+            $"@[A](user://{UserA})");
+        Assert.Equal([UserB], ids);
+    }
+
+    [Fact]
+    public void NewMentions_IdenticalContent_YieldsNothing()
+    {
+        var content = $"@[A](user://{UserA})";
+        Assert.Empty(MentionParser.ExtractNewlyMentionedUserIds(content, content));
+    }
+
+    [Fact]
+    public void NewMentions_RemovedThenUnchanged_DoesNotResurrect()
+    {
+        // A previously mentioned user who is REMOVED by the edit is not "new" either -
+        // the delta is strictly additions.
+        var ids = MentionParser.ExtractNewlyMentionedUserIds(
+            $"@[B](user://{UserB})",
+            $"@[A](user://{UserA}) @[B](user://{UserB})");
+        Assert.Empty(ids);
+    }
 }

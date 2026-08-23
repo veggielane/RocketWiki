@@ -52,7 +52,7 @@ public static class SyncCli
         return options.Verb switch
         {
             SyncVerb.Export => await RunExportAsync(db, fileStorage, options, output, cancellationToken),
-            SyncVerb.Import => await RunImportAsync(db, fileStorage, options, output, cancellationToken),
+            SyncVerb.Import => await RunImportAsync(db, fileStorage, options, dbContextFactory, output, cancellationToken),
             _ => 1,
         };
     }
@@ -114,7 +114,8 @@ public static class SyncCli
     }
 
     private static async Task<int> RunImportAsync(
-        RocketWikiDbContext db, IFileStorage fileStorage, SyncCliOptions options, TextWriter output, CancellationToken cancellationToken)
+        RocketWikiDbContext db, IFileStorage fileStorage, SyncCliOptions options,
+        Func<string, RocketWikiDbContext> dbContextFactory, TextWriter output, CancellationToken cancellationToken)
     {
         List<string> bundleFiles;
         if (Directory.Exists(options.BundlePath))
@@ -160,13 +161,20 @@ public static class SyncCli
             {
                 // An unopenable zip or a structurally broken manifest is the same class
                 // of loud, refuse-don't-absorb failure as a chain break (design.md §12).
-                output.WriteLine($"REFUSED {Path.GetFileName(bundleFile)}: {ex.Message}");
+                var detail = $"REFUSED {Path.GetFileName(bundleFile)}: {ex.Message}";
+                output.WriteLine(detail);
+                await RecordRefusalAsync(
+                    dbContextFactory, options, auditContext, bundleFile, "unreadable", detail, declaredBundleNumber: null, cancellationToken);
                 return 2;
             }
 
             if (!result.IsSuccess)
             {
-                output.WriteLine($"REFUSED {Path.GetFileName(bundleFile)}: {DescribeRefusal(result.Error)}");
+                var detail = $"REFUSED {Path.GetFileName(bundleFile)}: {DescribeRefusal(result.Error)}";
+                output.WriteLine(detail);
+                await RecordRefusalAsync(
+                    dbContextFactory, options, auditContext, bundleFile, ClassifyRefusal(result.Error), detail,
+                    declaredBundleNumber: result.Error is BundleGapError gap ? gap.ActualBundleNumber : null, cancellationToken);
                 return 2;
             }
 
@@ -177,6 +185,39 @@ public static class SyncCli
 
         return 0;
     }
+
+    /// <summary>
+    /// design.md §12/§7: an integrity refusal must leave a durable record, not only an
+    /// exit code - it is exactly the "detected error, never a silent absorb" the hash
+    /// chain exists to produce, and a paging job's evidence trail. Written through the
+    /// same domain-event → audit seam every Data-layer action uses (sync.import.refused,
+    /// AuditChannel.Sync - see DomainEventAuditMapper for why this is NOT sync.import +
+    /// Denied), but on a FRESH DbContext from the factory: the import context that just
+    /// refused still tracks whatever the bundle partially applied before its integrity
+    /// check failed, and calling SaveChanges on IT would flush exactly the content the
+    /// refusal exists to keep out. A failure writing this row propagates - a refusal
+    /// that cannot be recorded fails loudly (nonzero exit), never silently (§7:
+    /// fail-closed applies to observability too).
+    /// </summary>
+    private static async Task RecordRefusalAsync(
+        Func<string, RocketWikiDbContext> dbContextFactory, SyncCliOptions options, AuditContext auditContext,
+        string bundleFile, string reason, string detail, int? declaredBundleNumber, CancellationToken cancellationToken)
+    {
+        await using var auditDb = dbContextFactory(options.ConnectionString);
+        auditDb.AuditContext = auditContext;
+        auditDb.RaiseDomainEvent(new SyncImportRefusedEvent(
+            options.OriginInstanceId!, Path.GetFileName(bundleFile), declaredBundleNumber, reason, detail));
+        await auditDb.SaveChangesAsync(cancellationToken);
+    }
+
+    private static string ClassifyRefusal(PageMutationError error) => error switch
+    {
+        BundleGapError => "bundle_gap",
+        BundleChainMismatchError => "chain_mismatch",
+        BundlePayloadTamperedError => "payload_hash_mismatch",
+        SpaceSequenceGapError => "space_sequence_gap",
+        _ => error.GetType().Name,
+    };
 
     private static string DescribeRefusal(PageMutationError error) => error switch
     {

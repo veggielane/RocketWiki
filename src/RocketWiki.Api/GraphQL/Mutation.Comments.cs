@@ -52,6 +52,7 @@ public partial class Mutation
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         [Service] IAuditSink auditSink,
+        [Service] INotificationDispatcher notificationDispatcher,
         CancellationToken cancellationToken)
     {
         var (principal, actingUserId, auditContext, unauthenticated) =
@@ -68,7 +69,12 @@ public partial class Mutation
             return new EditCommentPayload(null, PageMutationErrorView.From(result.Error));
         }
 
-        return new EditCommentPayload(result.Value, null);
+        // design.md §8: delta-based mention re-scan - only users the edit NEWLY
+        // mentions (vs the pre-edit body the service captured) are notified.
+        await notificationDispatcher.NotifyCommentEditedAsync(
+            result.Value.Comment.Id, actingUserId.Value, result.Value.PreviousBody, cancellationToken);
+
+        return new EditCommentPayload(result.Value.Comment, null);
     }
 
     [AuditAction("comment.delete")]

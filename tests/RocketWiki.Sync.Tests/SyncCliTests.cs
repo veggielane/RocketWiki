@@ -361,6 +361,44 @@ public sealed class SyncCliTests : IDisposable
         using var high = CreateContext("high");
         Assert.Empty(high.Pages.IgnoreQueryFilters().Where(p => p.Id == tamperedPageId)); // nothing from bundle 2
         Assert.Equal(1, high.SyncImportStates.Single().LastBundleNumber); // position did not advance
+
+        // The refusal itself left a durable record (design.md §12/§7) - written on a
+        // FRESH context, so recording it flushed nothing bundle 2 partially applied
+        // (the two assertions above prove that). NOT sync.import + Denied: §7's Denied
+        // is an access-control outcome (a principal, a failing restriction); an
+        // integrity refusal has neither, so it is its own action, recorded as the
+        // Success it operationally is - see DomainEventAuditMapper.
+        var refusal = Assert.Single(high.AuditEvents.Where(e => e.Action == "sync.import.refused").ToList());
+        Assert.Equal(AuditOutcome.Success, refusal.Outcome);
+        Assert.Equal(AuditChannel.Sync, refusal.Channel);
+        Assert.Null(refusal.UserId); // system action, like sync.import itself
+        Assert.Contains("chain_mismatch", refusal.DetailsJson);
+        Assert.Contains("bundle-000002.zip", refusal.DetailsJson);
+        Assert.Contains(LowInstanceId, refusal.DetailsJson);
+
+        // And the applied bundle's own audit row is unchanged by any of this.
+        Assert.Single(high.AuditEvents.Where(e => e.Action == "sync.import").ToList());
+    }
+
+    [Fact]
+    public async Task Import_UnreadableBundleFile_RefusedLoudly_Exit2_WithAuditRow()
+    {
+        // Not a zip at all - the same refuse-don't-absorb class as a chain break.
+        var garbagePath = Path.Combine(BundleDir, "bundle-000001.zip");
+        await File.WriteAllTextAsync(garbagePath, "this is not a zip archive");
+
+        var (exitCode, output) = await RunImportAsync(garbagePath);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("REFUSED bundle-000001.zip", output);
+
+        using var high = CreateContext("high");
+        var refusal = Assert.Single(high.AuditEvents.Where(e => e.Action == "sync.import.refused").ToList());
+        Assert.Equal(AuditOutcome.Success, refusal.Outcome);
+        Assert.Equal(AuditChannel.Sync, refusal.Channel);
+        Assert.Contains("unreadable", refusal.DetailsJson);
+        Assert.Contains("bundle-000001.zip", refusal.DetailsJson);
+        Assert.Empty(high.SyncImportStates.ToList()); // nothing advanced, nothing landed
     }
 
     // --- Helpers -------------------------------------------------------------------------

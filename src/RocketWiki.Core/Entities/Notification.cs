@@ -3,9 +3,13 @@ using RocketWiki.Core.Enums;
 namespace RocketWiki.Core.Entities;
 
 /// <summary>
-/// data-model.md: Notification — instance-local, never synced. Rows exist only for
-/// recipients who passed canView at send time (design.md §8) — the row is created
-/// after the permission check, not filtered on read.
+/// data-model.md: Notification — instance-local, never synced. Dispatcher-written rows
+/// (watch/mention/reply) exist only for recipients who passed canView at send time
+/// (design.md §8) — the row is created after the permission check, not filtered on
+/// read. The one exception is <see cref="NotificationType.SyncImported"/>: written by
+/// the offline sync CLI where no recipient has a live token to check against, so the
+/// check is deferred — NotificationReadModelService suppresses the whole row unless
+/// the recipient's live Principal passes at fetch time (fail closed either way).
 /// </summary>
 public class Notification
 {

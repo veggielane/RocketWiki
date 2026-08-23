@@ -41,4 +41,24 @@ public static partial class MentionParser
 
         return result;
     }
+
+    /// <summary>
+    /// design.md §8: mention notifications are <b>delta-based on edit</b> — the users
+    /// mentioned in <paramref name="currentMarkdown"/> who were NOT already mentioned in
+    /// <paramref name="previousMarkdown"/>, so re-saving content never re-pings its
+    /// standing mentions. The one delta rule for every mention-bearing surface: page
+    /// saves diff against the previous revision's content, comment edits against the
+    /// comment's pre-edit body. A null/empty <paramref name="previousMarkdown"/> (first
+    /// revision, empty original) means every current mention is new.
+    /// </summary>
+    public static HashSet<Guid> ExtractNewlyMentionedUserIds(string? currentMarkdown, string? previousMarkdown)
+    {
+        var newlyMentioned = ExtractMentionedUserIds(currentMarkdown).ToHashSet();
+        if (newlyMentioned.Count > 0)
+        {
+            newlyMentioned.ExceptWith(ExtractMentionedUserIds(previousMarkdown));
+        }
+
+        return newlyMentioned;
+    }
 }

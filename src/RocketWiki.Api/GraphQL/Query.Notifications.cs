@@ -13,10 +13,13 @@ public partial class Query
     /// plain capped list rather than a connection: the shipped frontend operation
     /// (web/src/graphql/operations/notifications.graphql) selects a flat list, and 100
     /// most-recent rows is the whole product surface (a bell dropdown), not a browsable
-    /// history. Rows only ever exist for recipients who passed canView at send time;
-    /// canView is STILL re-checked per row here, nulling <c>pageTitle</c> for pages
-    /// since lost (data-model.md: "stale titles must not resurface") — which the
-    /// frontend renders as "a page you can no longer view".
+    /// history. Dispatcher-written rows only ever exist for recipients who passed
+    /// canView at send time; canView is STILL re-checked per row here, nulling
+    /// <c>pageTitle</c> for pages since lost (data-model.md: "stale titles must not
+    /// resurface") — which the frontend renders as "a page you can no longer view".
+    /// SyncImported rows, written offline by the sync CLI with no send-time check
+    /// possible, get their ONLY canView evaluation here and are suppressed entirely
+    /// when it fails (NotificationReadModelService.SurvivesReadTimeCheck).
     /// </summary>
     [AuditAction("notification.list")]
     [UseAuditDispatch]

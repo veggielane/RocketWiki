@@ -99,6 +99,11 @@ public class BundleImportService : IBundleImportService
 
         var records = ParseEvents(eventsBytes);
 
+        // pageId -> spaceId for every page an applied event touched, plus every space
+        // touched at all - the fan-out set for the watcher notification rows below.
+        var affectedPages = new Dictionary<Guid, Guid>();
+        var affectedSpaceIds = new HashSet<Guid>();
+
         foreach (var spaceGroup in records.GroupBy(r => r.SpaceId))
         {
             // design.md §12: "a space is native or a replica... on high it materializes
@@ -108,13 +113,20 @@ public class BundleImportService : IBundleImportService
             // Page/Comment/etc. FK's into Spaces, and there is nothing else that would
             // ever create this row on the high side.
             await EnsureReplicaSpaceExistsAsync(spaceGroup.Key, spaceGroup.First().SpaceKey, originInstanceId, cancellationToken);
+            affectedSpaceIds.Add(spaceGroup.Key);
 
-            var gapError = await ApplySpaceEventsAsync(spaceGroup.Key, originInstanceId, spaceGroup.OrderBy(r => r.SequenceNumber).ToList(), archive, cancellationToken);
+            var gapError = await ApplySpaceEventsAsync(spaceGroup.Key, originInstanceId, spaceGroup.OrderBy(r => r.SequenceNumber).ToList(), archive, affectedPages, cancellationToken);
             if (gapError is not null)
             {
                 return PageMutationResult<ImportedBundleSummary>.Failure(gapError);
             }
         }
+
+        // design.md §8: "watching a replica is exactly how a user hears that a sync
+        // bundle changed it" - added to this same change set, so the rows exist exactly
+        // when the bundle's content does (one transaction, nothing on a refusal).
+        AppendWatcherNotificationRows(
+            await LoadWatcherTriggersAsync(affectedPages, affectedSpaceIds, cancellationToken), affectedPages);
 
         var currentManifestHash = Convert.ToHexString(SHA256.HashData(manifestBytes));
         if (importState is null)
@@ -168,7 +180,8 @@ public class BundleImportService : IBundleImportService
     /// (SequenceNumber == 0) are always applied and never advance or gap-check this.
     /// </summary>
     private async Task<SpaceSequenceGapError?> ApplySpaceEventsAsync(
-        Guid spaceId, string originInstanceId, List<NdjsonEventRecord> records, ZipArchive archive, CancellationToken cancellationToken)
+        Guid spaceId, string originInstanceId, List<NdjsonEventRecord> records, ZipArchive archive,
+        Dictionary<Guid, Guid> affectedPages, CancellationToken cancellationToken)
     {
         var spaceState = await _db.SyncSpaceStates.FirstOrDefaultAsync(
             s => s.OriginInstanceId == originInstanceId && s.SpaceId == spaceId, cancellationToken);
@@ -188,6 +201,7 @@ public class BundleImportService : IBundleImportService
             }
 
             await ApplyEventAsync(record, archive, cancellationToken);
+            CollectAffectedPageIds(record, spaceId, affectedPages);
         }
 
         if (spaceState is null)
@@ -459,6 +473,125 @@ public class BundleImportService : IBundleImportService
         attachment.ContentHash = Convert.FromHexString(contentHashHex);
         attachment.IsDeleted = isDeleted;
         attachment.DeletedAtUtc = isDeleted ? now : null;
+    }
+
+    /// <summary>Which pages a just-applied event touched, for the watcher fan-out. A
+    /// restriction REMOVAL (null <c>after</c>) is deliberately not collected as a page:
+    /// its payload carries no page id, and a permission widening isn't "content you
+    /// watch changed" - the space-level trigger still covers the bundle.</summary>
+    private static void CollectAffectedPageIds(NdjsonEventRecord record, Guid spaceId, Dictionary<Guid, Guid> affectedPages)
+    {
+        using var payload = JsonDocument.Parse(record.PayloadJson);
+        var root = payload.RootElement;
+
+        switch (Enum.Parse<SyncEventType>(record.EventType))
+        {
+            case SyncEventType.PageUpsert:
+            case SyncEventType.PageMove:
+            case SyncEventType.Comment:
+            case SyncEventType.Labels:
+            case SyncEventType.Attachment:
+                affectedPages[root.GetProperty("pageId").GetGuid()] = spaceId;
+                break;
+            case SyncEventType.PageDelete:
+            case SyncEventType.PageRestore:
+                foreach (var pageIdElement in root.GetProperty("pageIds").EnumerateArray())
+                {
+                    affectedPages[pageIdElement.GetGuid()] = spaceId;
+                }
+
+                break;
+            case SyncEventType.Restrictions:
+                if (root.GetProperty("after").ValueKind != JsonValueKind.Null)
+                {
+                    affectedPages[root.GetProperty("after").GetProperty("pageId").GetGuid()] = spaceId;
+                }
+
+                break;
+        }
+    }
+
+    private sealed record WatcherTrigger(Guid UserId, Guid? PageId, Guid? SpaceId);
+
+    private async Task<List<WatcherTrigger>> LoadWatcherTriggersAsync(
+        Dictionary<Guid, Guid> affectedPages, HashSet<Guid> affectedSpaceIds, CancellationToken cancellationToken)
+    {
+        if (affectedPages.Count == 0 && affectedSpaceIds.Count == 0)
+        {
+            return [];
+        }
+
+        var affectedPageIds = affectedPages.Keys.ToArray();
+        var spaceIds = affectedSpaceIds.ToArray();
+        return (await _db.Watches.AsNoTracking()
+                .Where(w => (w.PageId != null && affectedPageIds.Contains(w.PageId.Value)) ||
+                    (w.SpaceId != null && spaceIds.Contains(w.SpaceId.Value)))
+                .Select(w => new { w.UserId, w.PageId, w.SpaceId })
+                .ToListAsync(cancellationToken))
+            .Select(w => new WatcherTrigger(w.UserId, w.PageId, w.SpaceId))
+            .ToList();
+    }
+
+    /// <summary>
+    /// design.md §8: a Watch on a replica page/space is "exactly how a user hears that a
+    /// sync bundle changed it". One Notification row per watcher per BUNDLE - never per
+    /// event - so a 500-event bundle is one nudge, not 500. Rows only: this runs in the
+    /// RocketWiki.Sync CLI, where there is no hub connection and no live token for any
+    /// recipient, so nothing is (or could be) pushed - the rows surface on the
+    /// recipient's next `notifications` fetch.
+    ///
+    /// The canView discipline differs from NotificationDispatcher's by necessity, not
+    /// preference: canView requires a Principal built from a validated token (design.md
+    /// §6.1), and in this offline CLI process no recipient has one - and the local User
+    /// mirror is never a substitute (§6.1). So instead of checking at send time, the
+    /// check is DEFERRED to read time: TitleSnapshot stays null (nothing attested here
+    /// may disclose a title), and NotificationReadModelService suppresses the ENTIRE row
+    /// - not just the title - unless the recipient's live, token-built Principal passes
+    /// canView (page rows) / holds a space role (space rows) at fetch. Fail closed
+    /// either way: a recipient who lost access since watching sees nothing at all.
+    ///
+    /// Row shape: page-scoped (PageId + SpaceId) when exactly one watched page was
+    /// affected and no space watch fired, else space-scoped (PageId null). A bundle
+    /// spanning several watched spaces still yields ONE row, naming one space
+    /// deterministically (smallest id) - the notification is a nudge to go look, not a
+    /// ledger of everything the bundle did. ActorUserId is null: a sync import is the
+    /// system's action (rendered as "System", same as the sync.import audit row).
+    /// </summary>
+    private void AppendWatcherNotificationRows(List<WatcherTrigger> triggers, Dictionary<Guid, Guid> affectedPages)
+    {
+        var now = DateTime.UtcNow;
+        foreach (var userTriggers in triggers.GroupBy(t => t.UserId))
+        {
+            var watchedPageIds = userTriggers.Where(t => t.PageId is not null).Select(t => t.PageId!.Value).Distinct().ToList();
+            var watchedSpaceIds = userTriggers.Where(t => t.SpaceId is not null).Select(t => t.SpaceId!.Value).Distinct().ToList();
+
+            Guid? pageId = null;
+            Guid spaceId;
+            if (watchedSpaceIds.Count == 0 && watchedPageIds.Count == 1)
+            {
+                pageId = watchedPageIds[0];
+                spaceId = affectedPages[watchedPageIds[0]];
+            }
+            else
+            {
+                spaceId = watchedSpaceIds
+                    .Concat(watchedPageIds.Select(p => affectedPages[p]))
+                    .Distinct()
+                    .Order()
+                    .First();
+            }
+
+            _db.Notifications.Add(new Notification
+            {
+                RecipientUserId = userTriggers.Key,
+                Type = NotificationType.SyncImported,
+                PageId = pageId,
+                SpaceId = spaceId,
+                ActorUserId = null,
+                TitleSnapshot = null, // no canView was (or could be) evaluated here - see doc above
+                CreatedAtUtc = now,
+            });
+        }
     }
 
     /// <summary>

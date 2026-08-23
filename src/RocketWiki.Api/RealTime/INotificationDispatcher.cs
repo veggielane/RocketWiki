@@ -39,8 +39,28 @@ public interface INotificationDispatcher
     /// <summary>Page saved (create, edit, revision restore): notifies watchers with <paramref name="type"/> and newly-mentioned users with <see cref="NotificationType.Mention"/>.</summary>
     Task NotifyPageChangedAsync(Guid pageId, Guid actorUserId, NotificationType type, CancellationToken cancellationToken);
 
-    /// <summary>Comment added: notifies users mentioned in the comment body (design.md §8/§4). Reply notifications (CommentReply) are a documented follow-up, not built this round.</summary>
+    /// <summary>
+    /// Comment added: notifies users mentioned in the comment body with
+    /// <see cref="NotificationType.Mention"/> and — when the comment is a reply — the
+    /// parent comment's author with <see cref="NotificationType.CommentReply"/>
+    /// (design.md §8: "someone replied to your comment"). Never the actor themselves,
+    /// and a parent author who is also newly mentioned gets ONE notification, the more
+    /// specific Mention — the same most-specific-type-wins rule as mention-beats-watch
+    /// on page saves. Page/space watchers are deliberately NOT notified here:
+    /// page_watched_changed means the page's content changed (§8's "a page you watch
+    /// changed"), and comment activity has never fanned out to watchers on this
+    /// dispatcher — preserved, not an oversight.
+    /// </summary>
     Task NotifyCommentPostedAsync(Guid commentId, Guid actorUserId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Comment edited: delta-based mentions only, the same rule as page edits
+    /// (design.md §8) diffing the saved body against <paramref name="previousBody"/> —
+    /// only users NOT already mentioned before the edit are notified, so touching up a
+    /// comment never re-pings its standing mentions. No CommentReply here: the reply
+    /// notification belongs to the reply's creation, not to each later touch-up.
+    /// </summary>
+    Task NotifyCommentEditedAsync(Guid commentId, Guid actorUserId, string previousBody, CancellationToken cancellationToken);
 }
 
 public sealed class NotificationDispatcher(
@@ -66,6 +86,8 @@ public sealed class NotificationDispatcher(
 
         // New mentions only: everything in the saved content minus whatever the
         // previous revision already mentioned (all of them, for a first revision).
+        // Same delta rule as comment edits - MentionParser.ExtractNewlyMentionedUserIds
+        // is the one implementation of it.
         var mentionedIds = MentionParser.ExtractMentionedUserIds(page.CurrentContent).ToHashSet();
         if (mentionedIds.Count > 0 && page.CurrentRevisionNumber > 1)
         {
@@ -73,7 +95,7 @@ public sealed class NotificationDispatcher(
                 .Where(r => r.PageId == pageId && r.RevisionNumber == page.CurrentRevisionNumber - 1)
                 .Select(r => r.Content)
                 .FirstOrDefaultAsync(cancellationToken);
-            mentionedIds.ExceptWith(MentionParser.ExtractMentionedUserIds(previousContent));
+            mentionedIds = MentionParser.ExtractNewlyMentionedUserIds(page.CurrentContent, previousContent);
         }
 
         mentionedIds.Remove(actorUserId);
@@ -103,10 +125,59 @@ public sealed class NotificationDispatcher(
             return;
         }
 
+        var recipients = new Dictionary<Guid, NotificationType>();
+
+        // A reply notifies the parent comment's author (design.md §8: "someone replied
+        // to your comment") - never the actor replying to themselves. A tombstoned
+        // parent still has its author and still gets the nudge: replies to deleted
+        // comments are legal (the thread shape survives deletion, data-model.md), and
+        // canView at fan-out below is the only gate that matters for what it reveals.
+        if (comment.ParentCommentId is { } parentCommentId)
+        {
+            var parentAuthorId = await db.Comments.AsNoTracking()
+                .Where(c => c.Id == parentCommentId)
+                .Select(c => (Guid?)c.AuthorUserId)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (parentAuthorId is { } authorId && authorId != actorUserId)
+            {
+                recipients[authorId] = NotificationType.CommentReply;
+            }
+        }
+
         var mentionedIds = MentionParser.ExtractMentionedUserIds(comment.Body).ToHashSet();
         mentionedIds.Remove(actorUserId);
 
-        var recipients = mentionedIds.ToDictionary(id => id, _ => NotificationType.Mention);
+        // Mention beats reply for a parent author who is also mentioned - one event,
+        // one notification, the most specific type, mirroring mention-beats-watch above.
+        foreach (var mentionedId in mentionedIds)
+        {
+            recipients[mentionedId] = NotificationType.Mention;
+        }
+
+        await FanOutAsync(page, recipients, actorUserId, cancellationToken);
+    }
+
+    public async Task NotifyCommentEditedAsync(Guid commentId, Guid actorUserId, string previousBody, CancellationToken cancellationToken)
+    {
+        var comment = await db.Comments.AsNoTracking().FirstOrDefaultAsync(c => c.Id == commentId, cancellationToken);
+        if (comment is null)
+        {
+            return;
+        }
+
+        var page = await db.Pages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == comment.PageId, cancellationToken);
+        if (page is null)
+        {
+            return;
+        }
+
+        // Delta only (design.md §8, same rule as page edits): the saved body against
+        // the pre-edit body the service captured - re-saving a comment never re-pings
+        // users it already mentioned.
+        var newlyMentionedIds = MentionParser.ExtractNewlyMentionedUserIds(comment.Body, previousBody);
+        newlyMentionedIds.Remove(actorUserId);
+
+        var recipients = newlyMentionedIds.ToDictionary(id => id, _ => NotificationType.Mention);
         await FanOutAsync(page, recipients, actorUserId, cancellationToken);
     }
 

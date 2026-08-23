@@ -189,8 +189,9 @@ public class CommentServiceTests : SqliteTestBase
         var result = await service.EditCommentAsync(new EditCommentRequest(comment.Id, "Updated"), ViewerPrincipal(), author.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("Updated", result.Value.Body);
-        Assert.NotNull(result.Value.EditedAtUtc);
+        Assert.Equal("Updated", result.Value.Comment.Body);
+        Assert.Equal("Original", result.Value.PreviousBody); // the pre-edit body travels for §8's mention delta
+        Assert.NotNull(result.Value.Comment.EditedAtUtc);
     }
 
     [Fact]

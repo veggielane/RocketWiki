@@ -43,7 +43,7 @@ public sealed class FakeCommentService : ICommentService
         return Task.FromResult(PageMutationResult<Comment>.Success(comment));
     }
 
-    public Task<PageMutationResult<Comment>> EditCommentAsync(EditCommentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default) =>
+    public Task<PageMutationResult<EditedComment>> EditCommentAsync(EditCommentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("ConfluenceSpaceImporter is not expected to call EditCommentAsync.");
 
     public Task<PageMutationResult<Comment>> DeleteCommentAsync(DeleteCommentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default) =>

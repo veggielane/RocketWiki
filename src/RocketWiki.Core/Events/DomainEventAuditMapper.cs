@@ -129,6 +129,25 @@ public static class DomainEventAuditMapper
             spaceRanges = e.SpaceRanges,
         })),
 
+        // Deliberately NOT `sync.import` + Denied. §7's outcome vocabulary is
+        // success/denied, and Denied specifically means an access decision refused a
+        // principal - it is "recorded along with which restriction failed" and feeds
+        // the permission inspector. An integrity refusal has no principal and no
+        // failing restriction; labeling it Denied would file bundle tampering among
+        // access denials and make the permission inspector lie. The action being
+        // audited here is the refusal itself - §12's "detected error, never a silent
+        // absorb" - and that action completed exactly as designed, so it gets its own
+        // action name with Outcome.Success (this pipeline's invariant anyway), keeping
+        // "sync.import + success" unambiguously meaning content landed.
+        SyncImportRefusedEvent e => ("sync.import.refused", null, null, null, JsonSerializer.Serialize(new
+        {
+            originInstanceId = e.OriginInstanceId,
+            bundleFileName = e.BundleFileName,
+            declaredBundleNumber = e.DeclaredBundleNumber,
+            reason = e.Reason,
+            detail = e.Detail,
+        })),
+
         _ => throw new NotSupportedException(
             $"No audit mapping registered for domain event type '{domainEvent.GetType().Name}'. " +
             "Every mutation must be auditable (design.md §7) - add a case here before raising a new event type."),

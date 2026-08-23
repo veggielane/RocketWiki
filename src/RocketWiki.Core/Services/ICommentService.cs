@@ -23,7 +23,8 @@ public interface ICommentService
     Task<PageMutationResult<Comment>> AddCommentAsync(
         AddCommentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 
-    Task<PageMutationResult<Comment>> EditCommentAsync(
+    /// <summary>Result carries the pre-edit body alongside the comment — see <see cref="EditedComment"/>.</summary>
+    Task<PageMutationResult<EditedComment>> EditCommentAsync(
         EditCommentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 
     Task<PageMutationResult<Comment>> DeleteCommentAsync(

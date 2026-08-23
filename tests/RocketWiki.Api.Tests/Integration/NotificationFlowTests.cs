@@ -434,6 +434,264 @@ public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClass
         Assert.DoesNotContain(actions, a => a.StartsWith("page."));
     }
 
+    private async Task<string> AddCommentAsync(HttpClient client, Guid pageId, string body, string? parentCommentId = null)
+    {
+        var parentField = parentCommentId is null ? "" : $"parentCommentId: \"{parentCommentId}\", ";
+        using var result = await client.PostGraphQLAsync($$"""
+            mutation { addComment(input: { pageId: "{{pageId}}", {{parentField}}body: {{JsonSerializer.Serialize(body)}} }) { comment { id } error { kind } } }
+            """);
+        var data = result.RootElement.GetProperty("data").GetProperty("addComment");
+        Assert.Equal(JsonValueKind.Null, data.GetProperty("error").ValueKind);
+        return data.GetProperty("comment").GetProperty("id").GetString()!;
+    }
+
+    private async Task EditCommentAsync(HttpClient client, string commentId, string body)
+    {
+        using var result = await client.PostGraphQLAsync($$"""
+            mutation { editComment(input: { commentId: "{{commentId}}", body: {{JsonSerializer.Serialize(body)}} }) { comment { id } error { kind } } }
+            """);
+        Assert.Equal(JsonValueKind.Null,
+            result.RootElement.GetProperty("data").GetProperty("editComment").GetProperty("error").ValueKind);
+    }
+
+    // --- comment_reply (design.md §8: "someone replied to your comment") --------------
+
+    [Fact]
+    public async Task ReplyToComment_NotifiesParentAuthor_WithCommentReply()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var parentAuthorSub = $"parent-author-{Guid.NewGuid()}";
+        var parentAuthorId = await ProvisionUserAsync(parentAuthorSub);
+        var parentAuthorClient = AuthedClient(parentAuthorSub);
+        var parentCommentId = await AddCommentAsync(parentAuthorClient, pageId, "First!");
+
+        await using var connection = await ConnectAsync(parentAuthorSub);
+        var pushed = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("Notification", payload => pushed.TrySetResult(payload));
+
+        var replierSub = $"replier-{Guid.NewGuid()}";
+        await ProvisionUserAsync(replierSub);
+        await AddCommentAsync(AuthedClient(replierSub), pageId, "Good point.", parentCommentId);
+
+        var row = Assert.Single(await RowsForAsync(parentAuthorId));
+        Assert.Equal(NotificationType.CommentReply, row.Type);
+        Assert.Equal(pageId, row.PageId);
+
+        var payload = await pushed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("comment_reply", payload.GetProperty("type").GetString());
+        Assert.Equal(replierSub, payload.GetProperty("actorDisplayName").GetString());
+    }
+
+    [Fact]
+    public async Task ReplyToOwnComment_ProducesNothing()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var authorSub = $"self-replier-{Guid.NewGuid()}";
+        var authorId = await ProvisionUserAsync(authorSub);
+        await using var connection = await ConnectAsync(authorSub);
+
+        var client = AuthedClient(authorSub);
+        var parentCommentId = await AddCommentAsync(client, pageId, "Talking...");
+        await AddCommentAsync(client, pageId, "...to myself.", parentCommentId);
+
+        Assert.Empty(await RowsForAsync(authorId));
+    }
+
+    [Fact]
+    public async Task ReplyThatAlsoMentionsParentAuthor_YieldsOneMention_NotReplyPlusMention()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var parentAuthorSub = $"both-{Guid.NewGuid()}";
+        var parentAuthorId = await ProvisionUserAsync(parentAuthorSub);
+        var parentCommentId = await AddCommentAsync(AuthedClient(parentAuthorSub), pageId, "Original comment.");
+        await using var connection = await ConnectAsync(parentAuthorSub);
+
+        var replierSub = $"replier2-{Guid.NewGuid()}";
+        await ProvisionUserAsync(replierSub);
+        await AddCommentAsync(AuthedClient(replierSub), pageId,
+            $"Agreed, @[{parentAuthorSub}](user://{parentAuthorId}).", parentCommentId);
+
+        // One event, one notification, the most specific type wins - the same
+        // precedence rule as mention-beats-watch on page saves.
+        var row = Assert.Single(await RowsForAsync(parentAuthorId));
+        Assert.Equal(NotificationType.Mention, row.Type);
+    }
+
+    [Fact]
+    public async Task ReplyWhenParentAuthorLostCanView_ProducesNothing()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var parentAuthorSub = $"nz-parent-{Guid.NewGuid()}";
+        var parentAuthorId = await ProvisionUserAsync(parentAuthorSub, nationality: ["NZ"]);
+        var parentCommentId = await AddCommentAsync(AuthedClient(parentAuthorSub, nationality: ["NZ"]), pageId, "Commented while viewable.");
+
+        await using var connection = await ConnectAsync(parentAuthorSub, nationality: ["NZ"]);
+        var pushed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("Notification", _ => pushed.TrySetResult(true));
+
+        // The page becomes US-only AFTER the parent comment exists - canView at
+        // send time (design.md §8) must now silence the reply notification entirely.
+        await RestrictPageViewToUsAsync(pageId);
+
+        var replierSub = $"us-replier-{Guid.NewGuid()}";
+        await ProvisionUserAsync(replierSub, nationality: ["US"]);
+        await AddCommentAsync(AuthedClient(replierSub, nationality: ["US"]), pageId, "US-only reply.", parentCommentId);
+
+        Assert.Empty(await RowsForAsync(parentAuthorId));
+        var completed = await Task.WhenAny(pushed.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+        Assert.NotSame(pushed.Task, completed);
+    }
+
+    [Fact]
+    public async Task CommentActivity_DoesNotNotifyPageWatchers()
+    {
+        // Deliberate, preserved behavior: page_watched_changed means the page's CONTENT
+        // changed. Comment activity has never fanned out to watchers, and adding the
+        // reply producer must not change that.
+        var (_, pageId) = await SeedEditablePageAsync();
+        var watcherSub = $"comment-watcher-{Guid.NewGuid()}";
+        var watcherId = await ProvisionUserAsync(watcherSub);
+        var watcherClient = AuthedClient(watcherSub);
+        using var watchResult = await watcherClient.PostGraphQLAsync($$"""
+            mutation { watchPage(input: { pageId: "{{pageId}}" }) { watch { id } error { kind } } }
+            """);
+        await using var connection = await ConnectAsync(watcherSub);
+
+        var commenterSub = $"commenter2-{Guid.NewGuid()}";
+        await ProvisionUserAsync(commenterSub);
+        var parentId = await AddCommentAsync(AuthedClient(commenterSub), pageId, "No watcher ping for this.");
+
+        var replierSub = $"replier3-{Guid.NewGuid()}";
+        await ProvisionUserAsync(replierSub);
+        await AddCommentAsync(AuthedClient(replierSub), pageId, "Nor this reply.", parentId);
+
+        Assert.Empty(await RowsForAsync(watcherId));
+    }
+
+    // --- editComment: delta-based mention re-scan (design.md §8) ----------------------
+
+    [Fact]
+    public async Task EditComment_NotifiesOnlyNewlyMentionedUsers()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var standingSub = $"standing-{Guid.NewGuid()}";
+        var standingId = await ProvisionUserAsync(standingSub);
+        var newSub = $"newly-{Guid.NewGuid()}";
+        var newId = await ProvisionUserAsync(newSub);
+        await using var standingConnection = await ConnectAsync(standingSub);
+        await using var newConnection = await ConnectAsync(newSub);
+
+        var authorSub = $"editing-author-{Guid.NewGuid()}";
+        await ProvisionUserAsync(authorSub);
+        var authorClient = AuthedClient(authorSub);
+        var commentId = await AddCommentAsync(authorClient, pageId, $"cc @[{standingSub}](user://{standingId})");
+        Assert.Single(await RowsForAsync(standingId)); // mentioned on add
+
+        // The edit ADDS a mention of newSub while keeping standingSub's - only the
+        // NEW mention notifies (delta against the pre-edit body, same rule as pages).
+        await EditCommentAsync(authorClient, commentId,
+            $"cc @[{standingSub}](user://{standingId}) and now @[{newSub}](user://{newId})");
+
+        Assert.Single(await RowsForAsync(standingId)); // NOT re-pinged
+        var newRow = Assert.Single(await RowsForAsync(newId));
+        Assert.Equal(NotificationType.Mention, newRow.Type);
+        Assert.Equal(pageId, newRow.PageId);
+
+        // An edit that changes no mentions notifies nobody at all.
+        await EditCommentAsync(authorClient, commentId,
+            $"cc @[{standingSub}](user://{standingId}) and now @[{newSub}](user://{newId}) (typo fix)");
+        Assert.Single(await RowsForAsync(standingId));
+        Assert.Single(await RowsForAsync(newId));
+    }
+
+    // --- sync_bundle_landed rows surfacing through the notifications query ------------
+    // The PRODUCER runs in the offline Sync CLI (BundleImportService, covered by
+    // RocketWiki.Data.Tests.SyncBundleNotificationTests); what this proves end-to-end
+    // is the read side those rows depend on: the deferred canView check against the
+    // caller's live token, and the shipped wire vocabulary.
+
+    private async Task<(Guid SpaceId, Guid PageId)> SeedReplicaPageWithSyncRowsAsync(Guid recipientUserId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
+        db.Users.Add(seeder);
+        await db.SaveChangesAsync();
+
+        // OriginInstanceId != "standalone" (the API's default Instance:Id) -> replica.
+        var space = new Space { Key = $"RS{Guid.NewGuid():N}"[..8], Name = "Replica", OriginInstanceId = "low-side", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        db.Spaces.Add(space);
+        db.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Viewer,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
+            CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
+        });
+        var page = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "landed", Title = "Landed Replica Page", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
+        db.Pages.Add(page);
+
+        // Exactly what BundleImportService writes: no snapshot, no actor.
+        db.Notifications.Add(new Notification
+        {
+            RecipientUserId = recipientUserId, Type = NotificationType.SyncImported,
+            PageId = page.Id, SpaceId = space.Id, TitleSnapshot = null, CreatedAtUtc = DateTime.UtcNow,
+        });
+        db.Notifications.Add(new Notification
+        {
+            RecipientUserId = recipientUserId, Type = NotificationType.SyncImported,
+            PageId = null, SpaceId = space.Id, TitleSnapshot = null, CreatedAtUtc = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+        return (space.Id, page.Id);
+    }
+
+    [Fact]
+    public async Task SyncBundleLandedRows_SurfaceWithLiveTitle_ForRecipientWhoCanViewNow()
+    {
+        var recipientSub = $"sync-recipient-{Guid.NewGuid()}";
+        var recipientId = await ProvisionUserAsync(recipientSub);
+        var (_, pageId) = await SeedReplicaPageWithSyncRowsAsync(recipientId);
+
+        using var list = await AuthedClient(recipientSub).PostGraphQLAsync(
+            "query { notifications { id type pageId spaceKey pageTitle actorDisplayName } }");
+        var items = list.RootElement.GetProperty("data").GetProperty("notifications").EnumerateArray().ToList();
+
+        Assert.Equal(2, items.Count);
+        Assert.All(items, i => Assert.Equal("sync_bundle_landed", i.GetProperty("type").GetString()));
+        Assert.All(items, i => Assert.Equal("System", i.GetProperty("actorDisplayName").GetString()));
+
+        var pageScoped = Assert.Single(items, i => i.GetProperty("pageId").ValueKind != JsonValueKind.Null);
+        Assert.Equal(pageId.ToString(), pageScoped.GetProperty("pageId").GetString());
+        // The row carries no snapshot; canView passes NOW, so the live title serves.
+        Assert.Equal("Landed Replica Page", pageScoped.GetProperty("pageTitle").GetString());
+
+        var spaceScoped = Assert.Single(items, i => i.GetProperty("pageId").ValueKind == JsonValueKind.Null);
+        Assert.Equal(JsonValueKind.Null, spaceScoped.GetProperty("pageTitle").ValueKind);
+        Assert.False(string.IsNullOrEmpty(spaceScoped.GetProperty("spaceKey").GetString()));
+    }
+
+    [Fact]
+    public async Task SyncBundleLandedRow_IsFullySuppressed_WhenPageCanViewFailsNow()
+    {
+        var recipientSub = $"nz-sync-{Guid.NewGuid()}";
+        var recipientId = await ProvisionUserAsync(recipientSub, nationality: ["NZ"]);
+        var (_, pageId) = await SeedReplicaPageWithSyncRowsAsync(recipientId);
+        await RestrictPageViewToUsAsync(pageId);
+
+        using var list = await AuthedClient(recipientSub, nationality: ["NZ"]).PostGraphQLAsync(
+            "query { notifications { id type pageId pageTitle } }");
+        var items = list.RootElement.GetProperty("data").GetProperty("notifications").EnumerateArray().ToList();
+
+        // These rows never passed canView at send time (written offline by the sync
+        // CLI), so a failed read-time check suppresses the ROW, not just the title -
+        // the page-scoped one must vanish entirely. The space-scoped row survives on
+        // its own gate: the recipient still holds a space role (the everyone grant),
+        // and it names no page.
+        var survivor = Assert.Single(items);
+        Assert.Equal("sync_bundle_landed", survivor.GetProperty("type").GetString());
+        Assert.Equal(JsonValueKind.Null, survivor.GetProperty("pageId").ValueKind);
+    }
+
     [Fact]
     public async Task SpaceWatch_CoversEveryPageInTheSpace()
     {

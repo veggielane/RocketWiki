@@ -126,4 +126,27 @@ public class DomainEventAuditMapperTests
 
         Assert.Equal(Timestamp, auditEvent.TimestampUtc);
     }
+
+    [Fact]
+    public void SyncImportRefusedEvent_MapsToItsOwnAction_NeverSyncImportPlusDenied()
+    {
+        // §7: Denied means a principal was refused by a failing restriction; an
+        // integrity refusal has neither, so it is a DISTINCT action whose recorded
+        // outcome is Success - the refusal itself completed as designed (§12:
+        // "a detected error, never a silent absorb").
+        var domainEvent = new SyncImportRefusedEvent(
+            "low-instance", "bundle-000042.zip", DeclaredBundleNumber: 42,
+            Reason: "chain_mismatch", Detail: "manifest hash chain break");
+
+        var auditEvent = DomainEventAuditMapper.ToAuditEvent(domainEvent, Context, Timestamp);
+
+        Assert.Equal("sync.import.refused", auditEvent.Action);
+        Assert.Equal(AuditOutcome.Success, auditEvent.Outcome);
+        Assert.Null(auditEvent.UserId); // system action, like sync.import
+        Assert.Null(auditEvent.SubjectType);
+        Assert.Contains("\"reason\":\"chain_mismatch\"", auditEvent.DetailsJson);
+        Assert.Contains("bundle-000042.zip", auditEvent.DetailsJson);
+        Assert.Contains("\"declaredBundleNumber\":42", auditEvent.DetailsJson);
+        Assert.Contains("low-instance", auditEvent.DetailsJson);
+    }
 }

@@ -75,39 +75,43 @@ public class CommentService : ICommentService
         return PageMutationResult<Comment>.Success(comment);
     }
 
-    public async Task<PageMutationResult<Comment>> EditCommentAsync(
+    public async Task<PageMutationResult<EditedComment>> EditCommentAsync(
         EditCommentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {
         var comment = await _db.Comments.FirstOrDefaultAsync(c => c.Id == request.CommentId, cancellationToken);
         if (comment is null || comment.IsDeleted)
         {
-            return PageMutationResult<Comment>.Failure(new NotFoundError(request.CommentId));
+            return PageMutationResult<EditedComment>.Failure(new NotFoundError(request.CommentId));
         }
 
         var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == comment.PageId, cancellationToken);
         if (page is null)
         {
-            return PageMutationResult<Comment>.Failure(new NotFoundError(comment.PageId));
+            return PageMutationResult<EditedComment>.Failure(new NotFoundError(comment.PageId));
         }
 
         var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         if (space is null)
         {
-            return PageMutationResult<Comment>.Failure(new NotFoundError(page.SpaceId));
+            return PageMutationResult<EditedComment>.Failure(new NotFoundError(page.SpaceId));
         }
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Comment>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
+            return PageMutationResult<EditedComment>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         // Judgement call: only the original author may edit their own comment - no
         // moderation role is specified anywhere for edits (unlike delete, below).
         if (comment.AuthorUserId != actingUserId)
         {
-            return PageMutationResult<Comment>.Failure(new ForbiddenError("only the comment's author may edit it"));
+            return PageMutationResult<EditedComment>.Failure(new ForbiddenError("only the comment's author may edit it"));
         }
 
+        // Captured before the overwrite: comments have no revision history, so this is
+        // the only place the pre-edit body still exists - design.md §8's delta rule
+        // (notify only NEWLY mentioned users) diffs the saved body against it.
+        var previousBody = comment.Body;
         comment.Body = request.Body;
         comment.EditedAtUtc = DateTime.UtcNow;
 
@@ -115,7 +119,7 @@ public class CommentService : ICommentService
         _db.RaiseDomainEvent(new CommentEditedEvent(comment.Id, page.Id, space.Id, space.Key, actingUserId));
 
         await _db.SaveChangesAsync(cancellationToken);
-        return PageMutationResult<Comment>.Success(comment);
+        return PageMutationResult<EditedComment>.Success(new EditedComment(comment, previousBody));
     }
 
     public async Task<PageMutationResult<Comment>> DeleteCommentAsync(
