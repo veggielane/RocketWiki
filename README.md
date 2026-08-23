@@ -401,6 +401,9 @@ Being explicit about what has and hasn't been checked, rather than letting
   and an `effectivePermission` inspector with per-rule pass/fail — all
   fail-closed, all audited (`permission.inspect`). The SPA's already-built
   permission components wire up in the un-stub round.
+- **Edit conflicts show a Markdown diff** of the other author's revision
+  against your draft right in the conflict dialog, so you can keep yours,
+  take theirs (your text goes to the clipboard), or keep editing.
 - **Diagrams**: ` ```mermaid ` blocks render inline (live preview while
   editing), and draw.io diagrams embed as base64 editable SVG with in-place
   editing via a configured diagrams.net instance (`VITE_DRAWIO_URL`,
