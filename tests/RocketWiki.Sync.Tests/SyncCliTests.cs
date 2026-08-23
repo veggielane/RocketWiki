@@ -387,6 +387,49 @@ public sealed class SyncCliTests : IDisposable
     }
 
     [Fact]
+    public async Task Import_FutureFormatBundle_RefusedLoudly_Exit2_WithAuditRow()
+    {
+        // A bundle from a NEWER era (BundleFormat): well-formed zip, parseable manifest,
+        // but a formatVersion this instance doesn't understand. Same exit-2 +
+        // sync.import.refused contract as a chain break - the scheduled job pages, the
+        // operator upgrades, nothing is partially understood in the meantime. (The
+        // mirror case - THIS importer being the old one refusing a format it predates -
+        // is what the per-format events entry name exists for: it lands in the
+        // unreadable-refusal path tested above, by construction rather than by code.)
+        var bundlePath = Path.Combine(BundleDir, "bundle-000001.zip");
+        var manifestJson = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            instanceId = LowInstanceId,
+            bundleNumber = 1,
+            previousManifestHash = (string?)null,
+            payloadSha256 = new string('0', 64),
+            spaceEventRanges = new Dictionary<string, object>(),
+            formatVersion = 99,
+        }, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        using (var fileStream = new FileStream(bundlePath, FileMode.CreateNew))
+        using (var archive = new ZipArchive(fileStream, ZipArchiveMode.Create))
+        using (var writer = new StreamWriter(archive.CreateEntry("manifest.json").Open()))
+        {
+            writer.Write(manifestJson);
+        }
+
+        var (exitCode, output) = await RunImportAsync(bundlePath);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("REFUSED bundle-000001.zip", output);
+        Assert.Contains("format version 99", output);
+        Assert.Contains("Upgrade this", output);
+
+        using var high = CreateContext("high");
+        var refusal = Assert.Single(high.AuditEvents.Where(e => e.Action == "sync.import.refused").ToList());
+        Assert.Equal(AuditOutcome.Success, refusal.Outcome);
+        Assert.Equal(AuditChannel.Sync, refusal.Channel);
+        Assert.Contains("unsupported_format", refusal.DetailsJson);
+        Assert.Contains("bundle-000001.zip", refusal.DetailsJson);
+        Assert.Empty(high.SyncImportStates.ToList()); // nothing advanced, nothing landed
+    }
+
+    [Fact]
     public async Task Import_UnreadableBundleFile_RefusedLoudly_Exit2_WithAuditRow()
     {
         // Not a zip at all - the same refuse-don't-absorb class as a chain break.

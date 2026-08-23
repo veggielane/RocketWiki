@@ -61,12 +61,24 @@ public class BundleImportService : IBundleImportService
         var manifest = JsonSerializer.Deserialize<BundleManifest>(manifestBytes, JsonOptions)
             ?? throw new InvalidOperationException($"'{bundleFilePath}' has an unparseable manifest.json.");
 
-        var eventsBytes = await ReadEntryAsync(archive, "events.ndjson", cancellationToken);
+        // BundleFormat: a NEWER format than this instance understands is refused before
+        // a single event byte is parsed - never partially understood. Anything at or
+        // below CurrentVersion (including format-1 bundles, whose manifests predate the
+        // FormatVersion field) is accepted; a format-1 bundle simply carries no revision
+        // history to materialize.
+        if (manifest.FormatVersion > BundleFormat.CurrentVersion)
+        {
+            return PageMutationResult<ImportedBundleSummary>.Failure(
+                new BundleFormatUnsupportedError(manifest.FormatVersion, BundleFormat.CurrentVersion));
+        }
+
+        var eventsEntryName = BundleFormat.EventsEntryName(manifest.FormatVersion);
+        var eventsBytes = await ReadEntryAsync(archive, eventsEntryName, cancellationToken);
         var actualPayloadHash = Convert.ToHexString(SHA256.HashData(eventsBytes));
         if (!string.Equals(actualPayloadHash, manifest.PayloadSha256, StringComparison.OrdinalIgnoreCase))
         {
             return PageMutationResult<ImportedBundleSummary>.Failure(new BundlePayloadTamperedError(
-                $"events.ndjson hashes to {actualPayloadHash}, but the manifest declares {manifest.PayloadSha256}."));
+                $"{eventsEntryName} hashes to {actualPayloadHash}, but the manifest declares {manifest.PayloadSha256}."));
         }
 
         var importState = await _db.SyncImportStates.FirstOrDefaultAsync(s => s.OriginInstanceId == originInstanceId, cancellationToken);
@@ -274,6 +286,64 @@ public class BundleImportService : IBundleImportService
         page.CurrentRevisionNumber = payload.GetProperty("revisionNumber").GetInt32();
         page.UpdatedAtUtc = now;
         page.IsDeleted = false; // an upsert always represents live content
+
+        await ApplyPageRevisionsAsync(pageId, payload, cancellationToken);
+    }
+
+    /// <summary>
+    /// design.md §12: "Pages + full revision history ... travel with content". A format-2
+    /// PageUpsert carries a <c>revisions</c> array - the page's whole history on a
+    /// baseline line, the one new revision on an incremental line - and each entry is
+    /// materialized as a local PageRevision row so history and bylines render on the
+    /// replica. Authors arrive as shadow users, exactly like comment authors and
+    /// attachment uploaders (each entry carries the same generic authorDisplayName/
+    /// authorEmail keys, so EnsureShadowUserAsync is reused unchanged). An ABSENT
+    /// <c>revisions</c> key is a format-1 payload (a legacy bundle already on disk, or
+    /// an enrichment miss): accepted as current-state-only, exactly what format 1 always
+    /// meant - never an error.
+    ///
+    /// Revisions are immutable (data-model.md), so an entry whose (pageId,
+    /// revisionNumber) already exists locally is skipped, never rewritten - which is
+    /// also what makes the baseline/incremental overlap harmless: a revision journaled
+    /// to the outbox before the baseline was cut appears in both bundles and lands once.
+    /// The low-side CreatedAtUtc is preserved so the history timeline stays honest.
+    /// </summary>
+    private async Task ApplyPageRevisionsAsync(Guid pageId, JsonElement payload, CancellationToken cancellationToken)
+    {
+        if (!payload.TryGetProperty("revisions", out var revisionsElement) || revisionsElement.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (var revisionElement in revisionsElement.EnumerateArray())
+        {
+            var revisionNumber = revisionElement.GetProperty("revisionNumber").GetInt32();
+            var existing = FindLocal<PageRevision>(r => r.PageId == pageId && r.RevisionNumber == revisionNumber)
+                ?? await _db.PageRevisions.FirstOrDefaultAsync(
+                    r => r.PageId == pageId && r.RevisionNumber == revisionNumber, cancellationToken);
+            if (existing is not null)
+            {
+                continue; // immutable - history is never rewritten, and duplicates land once
+            }
+
+            // PageRevision.AuthorUserId is a required FK into Users, same situation as
+            // Attachment.UploadedByUserId - the author must exist as a shadow user first.
+            var authorUserId = revisionElement.GetProperty("authorUserId").GetGuid();
+            await EnsureShadowUserAsync(authorUserId, revisionElement, cancellationToken);
+
+            _db.PageRevisions.Add(new PageRevision
+            {
+                PageId = pageId,
+                RevisionNumber = revisionNumber,
+                Title = revisionElement.GetProperty("title").GetString()!,
+                Content = revisionElement.GetProperty("content").GetString()!,
+                EditSummary = revisionElement.TryGetProperty("editSummary", out var summaryElement) && summaryElement.ValueKind == JsonValueKind.String
+                    ? summaryElement.GetString()
+                    : null,
+                AuthorUserId = authorUserId,
+                CreatedAtUtc = revisionElement.GetProperty("createdAtUtc").GetDateTime(),
+            });
+        }
     }
 
     private async Task ApplyPageMoveAsync(JsonElement payload, CancellationToken cancellationToken)

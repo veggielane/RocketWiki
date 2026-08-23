@@ -132,7 +132,8 @@ public class RocketWikiDbContext : DbContext
             telemetry.AuditEvents.Add((auditEvent.Action, auditEvent.Outcome, auditEvent.Channel));
         }
 
-        SyncOutboxWriter.AppendPendingEvents(this, _pendingDomainEvents, telemetry.OutboxEventTypes);
+        SyncOutboxWriter.AppendPendingEvents(
+            this, _pendingDomainEvents, telemetry.OutboxEventTypes, telemetry.OutboxOwnershipMismatchEventTypes);
 
         _pendingDomainEvents.Clear();
         return telemetry;
@@ -153,6 +154,12 @@ public class RocketWikiDbContext : DbContext
         public List<(string Action, AuditOutcome Outcome, AuditChannel Channel)> AuditEvents { get; } = new(capacity);
 
         public List<SyncEventType> OutboxEventTypes { get; } = new(capacity);
+
+        /// <summary>Sync-relevant events the outbox writer refused to journal because the
+        /// exported space belongs to another instance (corrupt replica-flagged-exported
+        /// state, design.md §12). Commit-gated like everything else here: if the local
+        /// mutation rolls back, no skip "happened" and nothing is counted.</summary>
+        public List<SyncEventType> OutboxOwnershipMismatchEventTypes { get; } = new(capacity);
 
         public void RecordCommitted()
         {
@@ -175,6 +182,11 @@ public class RocketWikiDbContext : DbContext
             foreach (var eventType in OutboxEventTypes)
             {
                 DataTelemetry.RecordOutboxEntryAppended(eventType);
+            }
+
+            foreach (var eventType in OutboxOwnershipMismatchEventTypes)
+            {
+                DataTelemetry.RecordOutboxOwnershipMismatch(eventType);
             }
         }
     }

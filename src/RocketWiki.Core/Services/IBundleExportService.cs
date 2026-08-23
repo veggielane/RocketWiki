@@ -15,10 +15,11 @@ public sealed record ExportedBundleInfo(int BundleNumber, string BundleFilePath,
 public interface IBundleExportService
 {
     /// <summary>
-    /// Full current-state snapshot for one space, as its own numbered bundle.
-    /// Simplification, flagged: this snapshots each live page's CURRENT content only,
-    /// not "including revision history" as design.md §12 literally specifies - full
-    /// history replay was out of reach in this pass; see the accompanying report.
+    /// Full snapshot for one space, as its own numbered bundle: every live page's
+    /// current state PLUS its complete PageRevision history, each revision's author
+    /// resolved to shadow-user-creatable identity (design.md §12: "full snapshot
+    /// including revision history"). Written as bundle format 2 - see
+    /// RocketWiki.Core.Sync.BundleFormat for the versioning contract.
     /// </summary>
     Task<ExportedBundleInfo> ExportBaselineAsync(
         Guid spaceId, string outputDirectory, string localInstanceId, CancellationToken cancellationToken = default);
