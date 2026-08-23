@@ -68,6 +68,10 @@ public sealed class SqlServerContainerFixture : IAsyncLifetime
         // Linux needs generous limits and the fix is to declare them rather than
         // inherit the daemon's mood. PidsLimit -1 = unlimited within the cgroup.
         _container = new MsSqlBuilder(imageName)
+            // A fixed memory ceiling calms SQLPAL's boot-time thread/memory-node
+            // appetite — part of the same errno-11 boot-crash mitigation as the
+            // explicit limits below; 4 GiB is plenty for this tier's workload.
+            .WithEnvironment("MSSQL_MEMORY_LIMIT_MB", "4096")
             .WithCreateParameterModifier(p =>
             {
                 p.HostConfig.PidsLimit = -1;

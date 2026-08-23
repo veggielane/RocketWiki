@@ -39,7 +39,14 @@ jobs:
   # skipped" step below turns any silent skip (= Docker broke on the runner) into a
   # red build, because a skipped tier that stays green is a tier that doesn't exist.
   sqlserver:
-    runs-on: ubuntu-latest
+    # ubuntu-22.04, deliberately not -latest: on 2026-08-23 the byte-identical
+    # FTS image (digest-pinned) ran green seven times on the 24.04 pool, then
+    # crashed at engine boot four times in a row from ~18:00 UTC (SQLPAL fatal in
+    # lsass init, errno 11 EAGAIN) with no change in image, runner-image release,
+    # or code - the signature of a host-pool rollout SQLPAL dislikes. The 22.04
+    # pool is the isolation experiment; revisit when the mssql-docker 2025 boot
+    # issues settle (see microsoft/mssql-docker#936/#940 for the genre).
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
