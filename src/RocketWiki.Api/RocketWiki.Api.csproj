@@ -24,6 +24,13 @@
          high-frequency presence frames (pointer moves) small, and is the protocol the
          eventual Yjs binary co-editing updates will want anyway. -->
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.11" />
+    <!-- design.md §9.2/§16 milestone 7: the OpenAI-compatible embedding client behind
+         Microsoft.Extensions.AI's IEmbeddingGenerator abstraction — self-hosted or
+         gateway endpoint, pure config (the Aspire "embeddings" connection string +
+         the Ai section). 10.9.0 is the current stable on nuget.org (verified
+         2026-08-23); brings Microsoft.Extensions.AI.Abstractions (which
+         RocketWiki.Data consumes) and the official OpenAI 2.x client transitively. -->
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
     <!-- Official Aspire client integration: AddSqlServerDbContext wires
          RocketWikiDbContext to the "rocketwiki" connection string injected by
          the AppHost via service discovery, plus health checks, retry, and

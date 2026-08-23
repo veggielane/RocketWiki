@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Attachments;
 using RocketWiki.Api.Audit;
+using RocketWiki.Api.Embeddings;
 using RocketWiki.Api.GraphQL;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Mcp;
@@ -116,11 +117,21 @@ builder.Services.AddScoped<IAttachmentService>(sp =>
 builder.Services.AddScoped<ISpaceService>(sp => new SpaceService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<IAccessRuleService, AccessRuleService>();
 
-// --- Search (design.md §9.1, milestone 4) ---
+// --- Search (design.md §9.1/§9.3, milestones 4 + 7) ---
 // One implementation, self-detecting provider: SQL Server FTS in production, the
 // LIKE fallback everywhere else (which is what the SQLite test tier exercises —
 // the FTS path stays TODO-flagged/unverified until the Testcontainers tier exists).
+// Hybrid keyword+vector RRF when the embedding pipeline below is configured; the
+// generator/options parameters default to null otherwise and search is keyword-only.
 builder.Services.AddScoped<ISearchService, SearchService>();
+
+// --- Embedding pipeline (design.md §9.2/§9.3, milestone 7) ---
+// IEmbeddingGenerator over the OpenAI-compatible endpoint from the Aspire "embeddings"
+// connection string / Ai section, the EmbeddingIndexer, and the polling background job
+// that (re-)embeds changed pages. Registers NOTHING when no endpoint is configured —
+// search then degrades to keyword-only and saves are never affected (§9.2). See
+// EmbeddingPipelineConfiguration for config precedence and §9.4's boundary requirement.
+builder.AddRocketWikiEmbeddings();
 
 // --- Watches and the persisted notification list (design.md §8, milestone 4b) ---
 builder.Services.AddScoped<IWatchService>(sp => new WatchService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
