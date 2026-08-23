@@ -1,0 +1,19 @@
+# ClusterIP only: the API is reached through the ingress and the web pod's
+# nginx proxy, never exposed directly (design.md §15).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rocketwiki.fullname" . }}-api
+  labels:
+    {{- include "rocketwiki.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "rocketwiki.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api

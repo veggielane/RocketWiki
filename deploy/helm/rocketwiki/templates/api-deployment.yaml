@@ -1,0 +1,169 @@
+{{- /*
+Template-level guard, duplicating values.schema.json on purpose (belt and
+braces — the schema can be sidestepped by editing the chart; this line makes
+the intent survive that). design.md §15: SignalR presence groups and
+per-user notification fan-out live in a per-process singleton
+(RealtimeConnectionRegistry); at replicas > 1 they fragment silently — some
+users just stop receiving notifications, which is worse than an outage.
+Scaling out requires a Redis backplane in src/ first, and only then removing
+this guard in the same change.
+*/ -}}
+{{- if gt (int .Values.api.replicaCount) 1 }}
+{{- fail "api.replicaCount > 1 is unsupported: SignalR presence/notifications are per-process state (design.md §15). Add a Redis backplane in src/ before removing this guard." }}
+{{- end }}
+{{- if and (eq .Values.api.fileStorage.provider "FileSystem") (not .Values.api.fileStorage.fileSystem.existingClaim) }}
+{{- fail "api.fileStorage.provider=FileSystem requires api.fileStorage.fileSystem.existingClaim: this chart does not create storage for state (design.md §15) — create a PVC deliberately and reference it." }}
+{{- end }}
+{{- if and .Values.api.otel.enabled (not .Values.api.otel.endpoint) }}
+{{- fail "api.otel.enabled=true requires api.otel.endpoint (an in-network collector, design.md §15 'Telemetry is not audit')." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rocketwiki.fullname" . }}-api
+  labels:
+    {{- include "rocketwiki.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  # Recreate, not RollingUpdate: at one replica a rolling update briefly runs
+  # two pods, which is exactly the two-processes-of-per-process-state shape
+  # the replica guard above exists to prevent (and would deadlock on a RWO
+  # attachment PVC in FileSystem mode). A few seconds of downtime per deploy
+  # is the honest cost of the single-replica shape §15 endorses.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "rocketwiki.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "rocketwiki.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      {{- include "rocketwiki.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "rocketwiki.image" (dict "global" .Values.global "image" .Values.api.image) | quote }}
+          imagePullPolicy: {{ .Values.api.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          # The whole operator-created Secret becomes environment: its keys
+          # ARE .NET config env names (ConnectionStrings__rocketwiki, ...) —
+          # see values.yaml api.existingSecret for the contract. If the
+          # Secret doesn't exist the pod fails with CreateContainerConfigError
+          # rather than starting half-configured: fail closed.
+          envFrom:
+            - secretRef:
+                name: {{ .Values.api.existingSecret | quote }}
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: {{ .Values.api.aspnetcoreEnvironment | quote }}
+            # Explicit rather than inherited from the base image, so the
+            # reviewed manifest states the port it probes and serves.
+            - name: ASPNETCORE_HTTP_PORTS
+              value: "8080"
+            # Hardcoded, not a value, on purpose: in this chart migrations
+            # are ONLY ever applied by the pre-install/pre-upgrade Job
+            # (design.md §15 "Migrations must leave startup"). The image
+            # defaults this to false too; stating it here keeps the invariant
+            # visible in `helm template` output where a reviewer looks.
+            - name: Database__MigrateOnStartup
+              value: "false"
+            {{- with .Values.api.instanceId }}
+            - name: Instance__Id
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FileStorage__Provider
+              value: {{ .Values.api.fileStorage.provider | quote }}
+            {{- if eq .Values.api.fileStorage.provider "S3" }}
+            {{- with .Values.api.fileStorage.s3.serviceUrl }}
+            - name: FileStorage__S3__ServiceUrl
+              value: {{ . | quote }}
+            {{- end }}
+            - name: FileStorage__S3__Bucket
+              value: {{ .Values.api.fileStorage.s3.bucket | quote }}
+            - name: FileStorage__S3__ForcePathStyle
+              value: {{ .Values.api.fileStorage.s3.forcePathStyle | quote }}
+            {{- with .Values.api.fileStorage.s3.region }}
+            - name: FileStorage__S3__Region
+              value: {{ . | quote }}
+            {{- end }}
+            {{- else }}
+            - name: FileStorage__FileSystem__Root
+              value: {{ .Values.api.fileStorage.fileSystem.mountPath | quote }}
+            {{- end }}
+            {{- if .Values.api.otel.enabled }}
+            # design.md §15 "Telemetry is not audit": presence of this
+            # variable is the ONLY thing that enables an exporter
+            # (ServiceDefaults gates on it), so disabled means absent means
+            # nothing leaves the pod. The endpoint must be inside the
+            # network boundary.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.api.otel.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: {{ .Values.api.otel.protocol | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ printf "%s-api" (include "rocketwiki.fullname" .) | quote }}
+            {{- end }}
+            {{- with .Values.api.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if eq .Values.api.probes.mode "http" }}
+          # Requires the ServiceDefaults follow-up — /health and /alive are
+          # Development-only today (see values.yaml api.probes for the full
+          # story). Do not select this mode until that lands in src/.
+          livenessProbe:
+            httpGet:
+              path: /alive
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          {{- else }}
+          # TCP probes: the strongest signal available TODAY without a src/
+          # change (health endpoints are mapped only in the Development
+          # environment). Proves Kestrel accepts connections; deliberately
+          # claims nothing about database health.
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          {{- end }}
+          # Generous first-start window (JIT, EF model build); after this the
+          # liveness probe takes over at its tighter cadence.
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          {{- if eq .Values.api.fileStorage.provider "FileSystem" }}
+          volumeMounts:
+            - name: attachments
+              mountPath: {{ .Values.api.fileStorage.fileSystem.mountPath | quote }}
+          {{- end }}
+      {{- if eq .Values.api.fileStorage.provider "FileSystem" }}
+      volumes:
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: {{ .Values.api.fileStorage.fileSystem.existingClaim | quote }}
+      {{- end }}

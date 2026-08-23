@@ -1,0 +1,31 @@
+RocketWiki {{ .Chart.Version }} — release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+STANDING CAVEAT (README.md "Current status"): these manifests have never been
+applied to a real cluster, the images have never been built, and the EF
+migration bundle has never executed. Reviewed, yes; verified, no.
+
+Before anything works, the operator-created Secret must exist:
+
+    kubectl -n {{ .Release.Namespace }} get secret {{ .Values.api.existingSecret }}
+
+If that fails, see deploy/README.md "Create the configuration Secret" — the
+migration Job and the API both fail closed without it (by design).
+
+What just happened / will happen:
+  1. The pre-install/pre-upgrade Job "{{ include "rocketwiki.fullname" . }}-migrate"
+     applies EF migrations to the EXTERNAL SQL Server, then the api/web
+     Deployments roll. If the upgrade hangs, check:
+         kubectl -n {{ .Release.Namespace }} logs job/{{ include "rocketwiki.fullname" . }}-migrate
+  2. {{ if .Values.ingress.enabled }}Traefik routes {{ if .Values.ingress.host }}http(s)://{{ .Values.ingress.host }}{{ else }}any host on the cluster's ingress entrypoint{{ end }}:
+     /graphql, /hubs, /attachments, /mcp → API; everything else → SPA.{{ else }}Ingress is disabled; reach the SPA via port-forward:
+         kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "rocketwiki.fullname" . }}-web 8080:{{ .Values.web.service.port }}
+     (the SPA's nginx proxies /graphql, /hubs, /attachments to the API, so
+     same-origin works through the forward too).{{ end }}
+
+Reminders that bite:
+  - api.replicaCount is locked to 1 (design.md §15 — SignalR state).
+  - Probes are TCP-only until the /health-in-Production follow-up lands in
+    src/ (values.yaml api.probes.mode).
+  - `helm rollback` does NOT roll back the database schema — see
+    deploy/README.md "Upgrade and rollback" before relying on it.
+  - Telemetry export is {{ if .Values.api.otel.enabled }}ENABLED → {{ .Values.api.otel.endpoint }} — that endpoint must be inside the network boundary (design.md §15 "Telemetry is not audit").{{ else }}disabled (design.md §15 fail-closed default).{{ end }}
