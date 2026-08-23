@@ -61,6 +61,7 @@ public class RocketWikiDbContext : DbContext
     public DbSet<SyncImportState> SyncImportStates => Set<SyncImportState>();
     public DbSet<SyncSpaceState> SyncSpaceStates => Set<SyncSpaceState>();
     public DbSet<PageEmbedding> PageEmbeddings => Set<PageEmbedding>();
+    public DbSet<PageEmbeddingState> PageEmbeddingStates => Set<PageEmbeddingState>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

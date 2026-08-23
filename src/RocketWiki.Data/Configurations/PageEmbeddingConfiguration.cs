@@ -16,15 +16,18 @@ public class PageEmbeddingConfiguration : IEntityTypeConfiguration<PageEmbedding
         builder.Property(e => e.Model).HasMaxLength(128).IsRequired();
         builder.Property(e => e.UpdatedAtUtc).HasColumnType("datetime2(3)");
 
-        // TODO(sql-server): design.md §9.3 wants a native vector(1536) column with a
-        // DiskANN cosine index. EF Core's SQL Server vector-type support is new enough
-        // that pinning the exact mapping here would need this instance's precise
-        // package versions confirmed. Until that follow-up migration lands, Embedding
-        // is stored as a flat little-endian float blob on every provider — this is
-        // exactly the "maps Embedding to a blob" behavior data-model.md already
-        // specifies for SQLite, just applied uniformly so the column round-trips real
-        // data now instead of being dropped. Cosine search runs the in-memory fallback
-        // until the native column + DiskANN index exist.
+        // TODO(sql-server, container-gated): design.md §9.3 wants a native vector(1536)
+        // column with a DiskANN cosine index. EF Core's SQL Server vector-type support
+        // is new enough that pinning the exact mapping here would need this instance's
+        // precise package versions confirmed against a real SQL Server — which needs
+        // the §14 Testcontainers tier that doesn't exist yet. Until that follow-up
+        // migration lands, Embedding is stored as a flat little-endian float blob on
+        // every provider — this is exactly the "maps Embedding to a blob" behavior
+        // data-model.md already specifies for SQLite, just applied uniformly so the
+        // column round-trips real data now instead of being dropped. Milestone 7's
+        // cosine search runs the exact-scan in-memory fallback on both providers
+        // (SearchService.SearchViaVectorsAsync); see the AddPageEmbeddingState
+        // migration's TODO for the intended native DDL and why it is not emitted early.
         //
         // No explicit HasColumnType("varbinary(max)"): that's SQL-Server-only syntax
         // and fails schema creation on SQLite (confirmed by running RocketWiki.Data.Tests

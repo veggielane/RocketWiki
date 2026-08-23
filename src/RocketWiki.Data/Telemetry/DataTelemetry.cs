@@ -37,6 +37,61 @@ public static class DataTelemetry
         Meter.CreateCounter<long>("rocketwiki.sync.outbox_entries_appended", "{entry}",
             "Sync outbox entries appended, by sync event type.");
 
+    /// <summary>
+    /// design.md §9.2/§15 (milestone 7): the embedding background job, counted — never
+    /// its inputs. Chunks embedded and pages indexed by outcome, run duration, and the
+    /// scan's pending-page count as a gauge (observed from the last run's scan, so
+    /// reading the gauge costs nothing). Chunk text, heading text, and query text are
+    /// exactly the "page content / search text" §15 bans from telemetry; nothing here
+    /// accepts a string that could carry them.
+    /// </summary>
+    public static readonly Counter<long> EmbeddingChunksEmbedded =
+        Meter.CreateCounter<long>("rocketwiki.embeddings.chunks_embedded", "{chunk}",
+            "Chunks sent to the embedding endpoint and stored, counted after commit.");
+
+    public static readonly Counter<long> EmbeddingPagesIndexed =
+        Meter.CreateCounter<long>("rocketwiki.embeddings.pages_indexed", "{page}",
+            "Pages the embedding job processed, by outcome.");
+
+    public static readonly Histogram<double> EmbeddingIndexRunDuration =
+        Meter.CreateHistogram<double>("rocketwiki.embeddings.index_run.duration", "s",
+            "Duration of one embedding index run, by outcome.");
+
+    private static long _embeddingPagesPending;
+
+    public static readonly ObservableGauge<long> EmbeddingPagesPending =
+        Meter.CreateObservableGauge("rocketwiki.embeddings.pages_pending",
+            () => Interlocked.Read(ref _embeddingPagesPending), "{page}",
+            "Pages whose current revision awaits (re-)embedding, as of the job's last scan.");
+
+    public const string EmbeddingIndexRunSpan = "rocketwiki.embeddings.index_run";
+    public const string EmbeddingPagesPendingTag = "rocketwiki.embeddings.pages_pending";
+    public const string EmbeddingPagesIndexedTag = "rocketwiki.embeddings.pages_indexed";
+    public const string EmbeddingChunksEmbeddedTag = "rocketwiki.embeddings.chunks_embedded";
+
+    public static void RecordEmbeddingRun(int chunksEmbedded, int pagesSucceeded, int pagesFailed, int pagesPending, double elapsedSeconds)
+    {
+        Interlocked.Exchange(ref _embeddingPagesPending, pagesPending);
+
+        if (chunksEmbedded > 0)
+        {
+            EmbeddingChunksEmbedded.Add(chunksEmbedded);
+        }
+
+        if (pagesSucceeded > 0)
+        {
+            EmbeddingPagesIndexed.Add(pagesSucceeded, new KeyValuePair<string, object?>(OutcomeTag, SuccessOutcome));
+        }
+
+        if (pagesFailed > 0)
+        {
+            EmbeddingPagesIndexed.Add(pagesFailed, new KeyValuePair<string, object?>(OutcomeTag, "failure"));
+        }
+
+        EmbeddingIndexRunDuration.Record(elapsedSeconds,
+            new KeyValuePair<string, object?>(OutcomeTag, pagesFailed > 0 ? "failure" : SuccessOutcome));
+    }
+
     public const string PageIdTag = "rocketwiki.page.id";
     public const string PageCountTag = "rocketwiki.page.count";
     public const string SpaceIdTag = "rocketwiki.space.id";
