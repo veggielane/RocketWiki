@@ -1,4 +1,5 @@
 using System.Reflection;
+using ModelContextProtocol.Server;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.GraphQL;
 using Xunit;
@@ -53,5 +54,69 @@ public class AuditCoverageTests
         Assert.True(problems.Count == 0,
             "Every root Query/Mutation field must declare exactly one of [AuditAction] or [NoAudit] " +
             "(design.md §7/§8). Problems found:\n" + string.Join('\n', problems));
+    }
+
+    /// <summary>
+    /// The same declaration rule, extended to the MCP channel (design.md §7: "the
+    /// attachment routes and MCP tools carry the same declarations through their own
+    /// pipelines"). Sweeps every [McpServerToolType] class in the Api assembly — the
+    /// identical universe McpToolAuditRegistry builds its runtime map from, so this
+    /// build-time guard and the call-tool filter's fail-closed check can never cover
+    /// different sets of tools. Also requires every tool's Name to be set explicitly
+    /// on the attribute: the registry keys on that name, the SDK registers it, and
+    /// design.md §8 publishes it — deriving it from the C# method name would let the
+    /// three drift.
+    /// </summary>
+    [Fact]
+    public void EveryMcpToolDeclaresExactlyOneOfAuditActionOrNoAudit_AndAnExplicitName()
+    {
+        var problems = new List<string>();
+        var toolMethodCount = 0;
+
+        var toolTypes = typeof(Api.Mcp.WikiMcpTools).Assembly.GetTypes()
+            .Where(t => t.GetCustomAttribute<McpServerToolTypeAttribute>() is not null)
+            .ToList();
+
+        // Non-vacuous: if the tool classes vanish (renamed, moved), this guard must
+        // fail rather than silently pass over an empty set.
+        Assert.NotEmpty(toolTypes);
+
+        foreach (var toolType in toolTypes)
+        {
+            const BindingFlags all = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance;
+            foreach (var method in toolType.GetMethods(all))
+            {
+                var tool = method.GetCustomAttribute<McpServerToolAttribute>();
+                if (tool is null)
+                {
+                    continue;
+                }
+
+                toolMethodCount++;
+
+                if (string.IsNullOrWhiteSpace(tool.Name))
+                {
+                    problems.Add($"{toolType.Name}.{method.Name}: [McpServerTool] must set Name explicitly.");
+                }
+
+                var hasAction = method.GetCustomAttribute<AuditActionAttribute>() is not null;
+                var hasNoAudit = method.GetCustomAttribute<NoAuditAttribute>() is not null;
+
+                switch (hasAction, hasNoAudit)
+                {
+                    case (false, false):
+                        problems.Add($"{toolType.Name}.{method.Name}: no [AuditAction] or [NoAudit] declared.");
+                        break;
+                    case (true, true):
+                        problems.Add($"{toolType.Name}.{method.Name}: both [AuditAction] and [NoAudit] declared — pick one.");
+                        break;
+                }
+            }
+        }
+
+        Assert.True(toolMethodCount > 0, "No [McpServerTool] methods found on any [McpServerToolType] class.");
+        Assert.True(problems.Count == 0,
+            "Every MCP tool must declare exactly one of [AuditAction] or [NoAudit], and an explicit " +
+            "tool Name (design.md §7/§8). Problems found:\n" + string.Join('\n', problems));
     }
 }
