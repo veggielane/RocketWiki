@@ -407,6 +407,20 @@ Being explicit about what has and hasn't been checked, rather than letting
   and an `effectivePermission` inspector with per-rule pass/fail — all
   fail-closed, all audited (`permission.inspect`). The SPA's already-built
   permission components wire up in the un-stub round.
+- **GitLab integration (backend, design.md §18)**: `gitlabIssue`/
+  `gitlabIssues`/`gitlabFile` queries proxying GitLab REST v4 under the
+  *calling user's own* encrypted PAT (no service account, ever — the
+  read-around §6 forbids; adversarial cross-user credential isolation is
+  pinned by test), fail-closed on `GitLab:BaseUrl`, live-never-cached with
+  typed degradation, audited as `gitlab.fetch`, token write-only by
+  construction. Along the way it surfaced and fixed a real audit bug:
+  `DbAuditSink`'s per-request dedup never actually spanned resolver scopes
+  (Hot Chocolate resolvers don't share the middleware's DI scope — the same
+  boundary Program.cs documents); it now dedups via `HttpContext.Items`,
+  proven by an alias test. Unverified: no live GitLab has ever answered
+  these clients — REST shapes come from docs + a faked wire. The SPA
+  rendering (issue chips, file embeds, issue lists, token settings) is the
+  in-flight phase 2.
 - **Edit conflicts show a Markdown diff** of the other author's revision
   against your draft right in the conflict dialog, so you can keep yours,
   take theirs (your text goes to the clipboard), or keep editing.

@@ -333,6 +333,17 @@ Unique `(PageId, ChunkIndex)`; DiskANN vector index on `Embedding`
 (cosine). On SQLite (tests) this table maps `Embedding` to a blob and the
 in-memory cosine fallback handles search.
 
+### GitLabCredential — per-user GitLab PAT, encrypted, instance-local
+
+| Column | Type | Notes |
+|---|---|---|
+| UserId | uniqueidentifier PK, FK → User | PK = FK (the PageEmbeddingState pattern): one credential per user |
+| ProtectedToken | nvarchar(1024) | ASP.NET Data Protection output, never plaintext; never readable via any API |
+| CreatedAtUtc / UpdatedAtUtc | datetime2(3) | |
+
+Never synced, never exported (no `SyncEventType`; the outbox classifier has
+no case for its events). `ON DELETE NO ACTION` like every FK.
+
 ### PageEmbeddingState — job bookkeeping, instance-local
 
 One row per page: `PageId` (PK = FK), `EmbeddedRevisionNumber int`,

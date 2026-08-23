@@ -117,6 +117,7 @@ deliberately constrained to GitHub-Flavored Markdown plus a few extensions:
 | Page links | `[title](page://{id})` — stable across renames |
 | Mentions | `@[display](user://{id})` |
 | Diagrams | ` ```mermaid ` fenced block (source rendered client-side); ` ```drawio ` fenced block whose body is base64 of the diagrams.net editable-SVG export — one payload renders as an inert data-URI image and reloads into the embed editor. Both are plain fenced text to the serializer, sync bundles (§12), and the importer (§13); `drawio` is a reserved fence language. Per-diagram payload cap: 512 KB of base64 |
+| GitLab references (§18) | `[text](gitlab-issue://{project}/{iid})` link mark; ` ```gitlab-file ` and ` ```gitlab-issues ` fences (reserved languages, `key=value` bodies) — host-free scheme forms, inert text to every pipeline but the SPA |
 
 **Rule:** no editor feature ships unless it round-trips (Markdown → editor →
 Markdown produces identical output). A round-trip test suite enforces this,
@@ -470,6 +471,18 @@ Append-only `AuditEvent` table:
 The `search.query` row's Details JSON carries the raw query text, facets,
 and result count — the audit table, not telemetry (§15), is where
 who-searched-what lives.
+
+`gitlab.fetch` (§18) — every GitLab read, one row per distinct resource per
+request (same resource twice in one document is one row, like `page.view`).
+Details carry the *reference* (project, iid/path/ref or the filter) and the
+outcome — exactly as `search.query` carries its query text — and never the
+fetched content; issue titles and file bodies are GitLab's data, and the
+wiki records that the fetch happened, not what came back. Outcome is always
+`success`: an upstream 403/404 is GitLab's decision about its own content,
+not a wiki access decision refusing a principal, so `denied` stays reserved
+for ABAC refusals (the same reasoning that keeps `sync.import.refused` out
+of `denied`). `settings.gitlab_token.set` / `.cleared` audit the Settings
+mutations via the domain-event pipeline, with no token material in any row.
 
 ### Emission and guarantees
 
@@ -1458,6 +1471,24 @@ instance (the AppHost defines a dev `drawio` container,
 `jgraph/drawio:31.3.2`); the public service is a dev-only opt-in the UI
 visibly flags.
 
+`GitLab:BaseUrl` (§18) follows the same fail-closed rule: **no default
+exists**, and unset means the feature is absent — every GitLab field
+answers `NOT_CONFIGURED`. This URL is where users' GitLab credentials are
+sent, so a defaulted or guessed value would be a credential-exfiltration
+bug, not a convenience. GitLab telemetry is `rocketwiki.gitlab.*` with
+bounded tags only — operation (`issue`/`issues`/`file`), outcome (fixed
+vocabulary), upstream status *class* (`2xx`/`4xx`/`5xx`/`none`) — never a
+project path, file path, issue title, or filter text; those belong in the
+`gitlab.fetch` audit row (§7), nowhere else. Two built-in leaks are closed
+structurally rather than by hope: the gitlab HttpClient's handler sets
+`ActivityHeadersPropagator = null`, which removes the DiagnosticsHandler
+entirely — no built-in client span (whose `url.full` would carry repository
+file paths), and no W3C trace context handed to GitLab (consistent with
+"propagated only to the API's own origin") — and the HttpClientFactory's
+default request logging (full URI at Information) is removed for this
+client, the one leak channel the hygiene test cannot intercept. The bounded
+`rocketwiki.gitlab.fetch` span replaces the suppressed one.
+
 #### What is instrumented
 
 | Layer | Source / meter | What it adds |
@@ -1614,3 +1645,129 @@ the highest-value unblocking action available.
       viewer presence and mouse pointers only?
 - [ ] Is live presence ("X is reading this page right now") acceptable in a
       controlled environment, or does it need an opt-out / invisible mode?
+
+---
+
+## 18. GitLab integration
+
+Pages can embed GitLab repository files, link issues with live status, and
+list issues by filter. GitLab is a separate system with its own permission
+model, so the integration is governed by one load-bearing rule and three
+consequences of it.
+
+### Every fetch runs as the calling user — no service account, ever
+
+A shared service-account credential would make the wiki a read-around: any
+issue or file the service account could see would render for any wiki user
+who pastes a reference to it, and GitLab's own authorization — which may
+embody the same export-control rules as ours — would be bypassed by exactly
+the mechanism §6.5 forbids for our own content. So every GitLab fetch
+carries the **calling user's own GitLab credential**, and a user with no
+credential gets a placeholder, not someone else's view. No standing
+broad-access credential exists anywhere in the system; the adversarial case
+(user B's fetch ever carrying user A's token) is pinned by test.
+
+**v1 mechanism: per-user personal access tokens**, stored encrypted at rest
+(ASP.NET Data Protection, purpose-versioned) in a `GitLabCredentials` row
+keyed by user, entered through a Settings surface (`setGitLabToken` /
+`clearGitLabToken`, status via `gitlabStatus.viewerHasToken`). The token is
+write-only by construction: no query, payload, or error anywhere in the
+schema returns stored token material — enforced by a test over the exported
+SDL — and the single decrypting read path hands the value straight into the
+outbound request header. Set/clear flow through the domain-event pipeline
+(`settings.gitlab_token.set` / `.cleared`, committed in the same
+transaction as the row), and the domain events are structurally unable to
+carry token material because it never enters them. Trade-offs accepted with
+PATs: users must mint and paste a token (onboarding friction), tokens are
+as broad as the user scopes them (recommend `read_api`), and revocation is
+manual in GitLab. Data Protection key custody is a deployment concern: in
+k3s the key ring must be persisted deliberately or every pod restart
+silently invalidates stored tokens — degrading to "no credential", not
+broken pages, but a support headache.
+
+**The shared-Keycloak question, answered honestly.** GitLab may
+authenticate against the same Keycloak realm as the wiki (§11). That makes
+sign-on shared; it does **not** make Keycloak token exchange (RFC 8693) a
+path to GitLab's API, because GitLab's REST API only accepts credentials
+minted by *GitLab's own* authorization server — PATs, GitLab-issued OAuth
+tokens, group/project tokens — never an external IdP's access token,
+however trusted for login. The elegant path is therefore **RocketWiki
+registered as an OAuth application in GitLab**: a per-user
+authorization-code consent from the wiki's Settings page yielding a GitLab
+access + refresh token pair stored server-side. A shared Keycloak makes
+that consent hop nearly invisible (the user is already signed in to GitLab
+via SSO), and it improves on PATs in every dimension — scoped by the app
+registration, expiring, centrally revocable, zero token-pasting. It is
+deliberately not v1 because it cannot be verified without a live GitLab to
+register the application in and run the dance against (§16's standing
+caveat applies with force). The design converges: the OAuth variant reuses
+the same credential table shape and the same per-call credential flow —
+only the credential *provider* and the outbound header change, both
+isolated to one class each.
+
+### Proxy-only: the browser never talks to GitLab
+
+All GitLab reads flow through the API — `gitlabIssue`, `gitlabIssues`,
+`gitlabFile` GraphQL fields resolving through a typed `IGitLabClient`
+(GitLab REST v4) — the same rule as attachments (§10) and for the same
+reasons: no side channel around the audit log, no GitLab credentials or
+cookies in the browser's traffic, and the SPA's network boundary stays
+exactly two origins (the API and Keycloak). The credential is a per-call
+argument on `IGitLabClient`, never client state: a client that held a token
+as a field would be one DI-lifetime bug away from cross-user reuse.
+
+### Content forms: inert text to every existing pipeline
+
+Three forms, all plain Markdown to the serializer, the round-trip suite,
+sync bundles (§12), and the importer (§13) — **nothing is added to any of
+those pipelines**; like ` ```drawio `, these are ordinary page text to
+everything but the SPA:
+
+| Feature | Markdown representation |
+|---|---|
+| Issue link | `[text](gitlab-issue://{project}/{iid})` — a link mark like `page://`; `{project}` is a numeric id or namespaced path, `{iid}` the final numeric segment |
+| File embed | ` ```gitlab-file ` fence; body is `key=value` lines: `project=`, `path=` (required), `ref=` (optional, HEAD default) |
+| Issue list | ` ```gitlab-issues ` fence; body is `key=value` lines mirroring the filter input: `project=`, `state=`, `labels=` (CSV), `search=`, `milestone=`, `orderBy=`, `sort=`, `first=` |
+
+`gitlab-file` and `gitlab-issues` join `drawio` as reserved fence languages
+(§4). **Bare-URL auto-detection was rejected**: a pasted URL carries a
+hostname, which breaks the low→high crossing (the reference should mean
+"this instance's GitLab", not "that hostname") and survives GitLab
+migrations badly; and auto-rewriting pasted text violates round-trip
+expectations. The editor *may* offer paste-time conversion of a GitLab URL
+into the scheme form as an explicit affordance — but the stored form is
+scheme-only, host-free.
+
+### Live, never cached — and legible when it can't be live
+
+Embeds are **live fetches at view time**. Nothing fetched from GitLab is
+ever persisted, cached server-side, or snapshotted into page content — a
+wiki page must never present stale GitLab state as current, and a cached
+copy would also outlive the GitLab-side permission change that should have
+hidden it. When live is impossible, the embed degrades to a **typed
+placeholder showing the reference** (which is already the page's own
+Markdown, so the placeholder discloses nothing new): `NOT_CONFIGURED` (no
+`GitLab:BaseUrl` — the steady state on a high-side replica, whose network
+cannot reach the low side's GitLab; if high runs its own GitLab, low-side
+references simply resolve to `NOT_FOUND` there, which is the honest answer
+there), `NO_CREDENTIAL`, `INVALID_CREDENTIAL` (401 — the user's token died;
+the Settings surface is the fix), `NOT_FOUND` (403/404 collapsed — GitLab
+itself blurs the two for unauthorized resources, and the wiki must not
+sharpen a distinction upstream chose to blur), `UNREACHABLE`
+(network/timeout/5xx). All of these are payload facts, never GraphQL
+errors: an embed's failure must not eat the page around it. File content is
+size-capped (`GitLab:MaxFileBytes`, default 512 KiB — checked against the
+size header before the body is buffered, then re-verified while streaming
+in case the header lies) and text-only (binary content returns metadata
+with a typed `NOT_TEXT`); over-cap and non-text embeds still render their
+metadata. Resilience is deliberately minimal: one attempt, short timeout
+(`GitLab:TimeoutSeconds`, default 5), **no retries** — the standard
+resilience handler is removed for this client, because a page with many
+embeds retrying against a down GitLab is a retry storm at exactly the wrong
+moment.
+
+Dev tooling: the AppHost deliberately defines no GitLab resource — a GitLab
+container is heavyweight (gigabytes, minutes to boot) and nothing in the
+test tiers needs it; the SQLite tier fakes the wire under the real client.
+A `gitlab/gitlab-ce` container behind `GitLab:BaseUrl` is a documented
+local option for anyone who wants end-to-end dev, not part of the topology.
