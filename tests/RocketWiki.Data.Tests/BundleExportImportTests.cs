@@ -6,6 +6,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Core.Sync;
 using RocketWiki.Data.Services;
 using RocketWiki.Storage;
 using Xunit;
@@ -18,10 +19,11 @@ namespace RocketWiki.Data.Tests;
 /// zip/JSON file format makes fully testable end-to-end - unlike SearchService's
 /// SQL-Server-only FTS path, nothing here is unexercised.
 ///
-/// Known simplification, flagged: baseline export snapshots each page's CURRENT state
-/// only, not its full PageRevision history (design.md §12 literally asks for "including
-/// revision history"). PageRevision-author shadow-user mapping also isn't implemented -
-/// only CommentAddedEvent's author path is, which is enough to prove the mechanism.
+/// Bundles are format 2 (BundleFormat): baselines carry each page's full PageRevision
+/// history and incremental PageUpserts carry the one revision they correspond to, with
+/// revision authors arriving as shadow users. The format-versioning tests at the bottom
+/// pin the era contract: a legacy format-1 bundle still imports (current-state-only), a
+/// future format is refused loudly.
 /// </summary>
 public class BundleExportImportTests : SqliteTestBase
 {
@@ -600,12 +602,13 @@ public class BundleExportImportTests : SqliteTestBase
             var exportService = new BundleExportService(lowContext, storage);
             var bundleInfo = await exportService.ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
 
-            // Tamper with events.ndjson in place, inside the zip, without touching the manifest.
+            // Tamper with the events entry in place, inside the zip, without touching the manifest.
+            var eventsEntryName = BundleFormat.EventsEntryName(BundleFormat.CurrentVersion);
             using (var archive = System.IO.Compression.ZipFile.Open(bundleInfo.BundleFilePath, System.IO.Compression.ZipArchiveMode.Update))
             {
-                var entry = archive.GetEntry("events.ndjson")!;
+                var entry = archive.GetEntry(eventsEntryName)!;
                 entry.Delete();
-                var newEntry = archive.CreateEntry("events.ndjson");
+                var newEntry = archive.CreateEntry(eventsEntryName);
                 await using var writer = new StreamWriter(newEntry.Open());
                 await writer.WriteAsync("{\"tampered\":true}");
             }
@@ -691,6 +694,303 @@ public class BundleExportImportTests : SqliteTestBase
 
                 var spaceState = highContext.SyncSpaceStates.Single(s => s.OriginInstanceId == LowInstanceId && s.SpaceId == space.Id);
                 Assert.Equal(2, spaceState.AppliedSequence);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    // --- Revision history (design.md §12: "full snapshot including revision history") --
+
+    [Fact]
+    public async Task Baseline_CarriesFullRevisionHistory_ImportMaterializesItWithShadowAuthors()
+    {
+        var alice = TestData.NewUser();
+        alice.DisplayName = "Alice Author";
+        alice.Email = "alice@example.com";
+        var bob = TestData.NewUser();
+        bob.DisplayName = "Bob Editor";
+        bob.Email = "bob@example.com";
+        var space = NewExportedSpace();
+
+        using var lowContext = CreateContext();
+        lowContext.Users.AddRange(alice, bob);
+        lowContext.Spaces.Add(space);
+        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.SaveChanges();
+
+        var pageService = new PageService(lowContext, LowInstanceId);
+        var created = await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "home", "Home", "# v1"), EditorPrincipal(), alice.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+        var edited = await pageService.UpdatePageContentAsync(
+            new UpdatePageContentRequest(created.Value.Id, 1, "Home v2", "# v2", "tightened wording"),
+            EditorPrincipal(), bob.Id, AuditCtx);
+        Assert.True(edited.IsSuccess);
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var exportService = new BundleExportService(lowContext, storage);
+            var baseline = await exportService.ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
+
+            // The bundle file declares the format it is: manifest formatVersion 2, events
+            // under the version-specific entry name, and NO legacy entry - a format-1
+            // importer must hit its missing-events.ndjson guard, never a silent absorb.
+            using (var archive = System.IO.Compression.ZipFile.OpenRead(baseline.BundleFilePath))
+            {
+                Assert.Null(archive.GetEntry("events.ndjson"));
+                Assert.NotNull(archive.GetEntry(BundleFormat.EventsEntryName(BundleFormat.CurrentVersion)));
+                using var manifestStream = archive.GetEntry("manifest.json")!.Open();
+                using var manifestJson = System.Text.Json.JsonDocument.Parse(manifestStream);
+                Assert.Equal(BundleFormat.CurrentVersion, manifestJson.RootElement.GetProperty("formatVersion").GetInt32());
+            }
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var importService = new BundleImportService(highContext, storage);
+                Assert.True((await importService.ImportAsync(baseline.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var revisions = highContext.PageRevisions
+                    .Where(r => r.PageId == created.Value.Id).OrderBy(r => r.RevisionNumber).ToList();
+                Assert.Equal(2, revisions.Count);
+                Assert.Equal("Home", revisions[0].Title);
+                Assert.Equal("# v1", revisions[0].Content);
+                Assert.Null(revisions[0].EditSummary);
+                Assert.Equal(alice.Id, revisions[0].AuthorUserId);
+                Assert.Equal("Home v2", revisions[1].Title);
+                Assert.Equal("# v2", revisions[1].Content);
+                Assert.Equal("tightened wording", revisions[1].EditSummary);
+                Assert.Equal(bob.Id, revisions[1].AuthorUserId);
+
+                // The low-side timestamps survive, so the history timeline stays honest.
+                var lowRevisions = lowContext.PageRevisions.AsNoTracking()
+                    .Where(r => r.PageId == created.Value.Id).OrderBy(r => r.RevisionNumber).ToList();
+                Assert.Equal(lowRevisions[0].CreatedAtUtc, revisions[0].CreatedAtUtc);
+                Assert.Equal(lowRevisions[1].CreatedAtUtc, revisions[1].CreatedAtUtc);
+
+                // design.md §12: revision authors arrive as shadow users - flagged
+                // external, never loginable - so bylines render on the replica.
+                var shadowAlice = highContext.Users.Single(u => u.Id == alice.Id);
+                Assert.True(shadowAlice.IsExternal);
+                Assert.Null(shadowAlice.Subject);
+                Assert.Equal("Alice Author", shadowAlice.DisplayName);
+                var shadowBob = highContext.Users.Single(u => u.Id == bob.Id);
+                Assert.True(shadowBob.IsExternal);
+                Assert.Equal("bob@example.com", shadowBob.Email);
+
+                // Overlap dedupe: the create and edit were ALSO journaled to the outbox
+                // before the baseline was cut, so the incremental bundle re-delivers
+                // revisions 1 and 2. Immutable history lands once, not twice.
+                var incremental = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
+                Assert.NotNull(incremental);
+                Assert.True((await importService.ImportAsync(incremental!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+                Assert.Equal(2, highContext.PageRevisions.Count(r => r.PageId == created.Value.Id));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Incremental_EditAfterBaseline_AppendsThatRevisionOnTheReplica_NoHistoryDrift()
+    {
+        var actor = TestData.NewUser();
+        actor.DisplayName = "Drift Author";
+        var space = NewExportedSpace();
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.Add(space);
+        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.SaveChanges();
+
+        var pageService = new PageService(lowContext, LowInstanceId);
+        var created = await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "drift", "Drift", "# v1"), EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var exportService = new BundleExportService(lowContext, storage);
+            var bundle1 = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId); // drains the create
+            Assert.NotNull(bundle1);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var importService = new BundleImportService(highContext, storage);
+                Assert.True((await importService.ImportAsync(bundle1!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+                Assert.Single(highContext.PageRevisions.Where(r => r.PageId == created.Value.Id).ToList());
+
+                // The edit happens AFTER the first bundle landed. If incremental
+                // PageUpserts carried only current content, the replica's history would
+                // silently stop at revision 1 while the page said revision 2 - the drift
+                // this test exists to rule out.
+                var edited = await pageService.UpdatePageContentAsync(
+                    new UpdatePageContentRequest(created.Value.Id, 1, "Drift v2", "# v2", "second pass"),
+                    EditorPrincipal(), actor.Id, AuditCtx);
+                Assert.True(edited.IsSuccess);
+                var bundle2 = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
+                Assert.NotNull(bundle2);
+                Assert.True((await importService.ImportAsync(bundle2!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var revisions = highContext.PageRevisions
+                    .Where(r => r.PageId == created.Value.Id).OrderBy(r => r.RevisionNumber).ToList();
+                Assert.Equal(2, revisions.Count);
+                Assert.Equal("# v2", revisions[1].Content);
+                Assert.Equal("second pass", revisions[1].EditSummary);
+                Assert.Equal(actor.Id, revisions[1].AuthorUserId);
+                Assert.True(highContext.Users.Single(u => u.Id == actor.Id).IsExternal);
+
+                var page = highContext.Pages.Single(p => p.Id == created.Value.Id);
+                Assert.Equal(2, page.CurrentRevisionNumber); // page and history agree
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    // --- Format eras (BundleFormat): accept the past, refuse the future ---------------
+
+    /// <summary>Writes a bundle zip the way a given era's exporter would - manifest as raw JSON, events under the caller's chosen entry name.</summary>
+    private static void WriteRawBundle(string path, object manifest, string? eventsEntryName, string? ndjson)
+    {
+        var webOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        using var fileStream = new FileStream(path, FileMode.CreateNew);
+        using var archive = new System.IO.Compression.ZipArchive(fileStream, System.IO.Compression.ZipArchiveMode.Create);
+
+        using (var manifestStream = new StreamWriter(archive.CreateEntry("manifest.json").Open()))
+        {
+            manifestStream.Write(System.Text.Json.JsonSerializer.Serialize(manifest, webOptions));
+        }
+
+        if (eventsEntryName is not null && ndjson is not null)
+        {
+            using var eventsStream = new StreamWriter(archive.CreateEntry(eventsEntryName).Open());
+            eventsStream.Write(ndjson);
+        }
+    }
+
+    [Fact]
+    public async Task Import_LegacyFormat1Bundle_AcceptedAsCurrentStateOnly()
+    {
+        // A bundle exactly as the format-1 exporter wrote it: no formatVersion field in
+        // the manifest, events under "events.ndjson", PageUpsert payload without a
+        // revisions array. Already-produced bundles sitting in a transfer directory (or
+        // a not-yet-upgraded low side) must keep importing - as the current-state-only
+        // snapshot format 1 always was, with no history materialized. Documented, not
+        // an error.
+        var webOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var pageId = Guid.NewGuid();
+        var spaceId = Guid.NewGuid();
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            pageId,
+            spaceId,
+            parentPageId = (Guid?)null,
+            ancestorPath = "/",
+            slug = "legacy",
+            title = "Legacy Page",
+            sortOrder = 0,
+            content = "# Legacy",
+            revisionNumber = 1,
+        }, webOptions);
+        var ndjson = System.Text.Json.JsonSerializer.Serialize(
+            new NdjsonEventRecord("LEG", spaceId, 1, nameof(SyncEventType.PageUpsert), payload, DateTime.UtcNow), webOptions) + "\n";
+        var payloadHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(ndjson)));
+
+        var outputDir = CreateBundleOutputDir();
+        Directory.CreateDirectory(outputDir);
+        var storage = CreateFileStorage(out var storageDir);
+        try
+        {
+            var bundlePath = Path.Combine(outputDir, "bundle-000001.zip");
+            WriteRawBundle(bundlePath, new
+            {
+                instanceId = LowInstanceId,
+                bundleNumber = 1,
+                previousManifestHash = (string?)null,
+                payloadSha256 = payloadHash,
+                spaceEventRanges = new Dictionary<string, object>
+                {
+                    ["LEG"] = new { spaceId, fromSequence = 1, toSequence = 1, eventCount = 1 },
+                },
+            }, "events.ndjson", ndjson);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var importService = new BundleImportService(highContext, storage);
+                var result = await importService.ImportAsync(bundlePath, LowInstanceId, AuditCtx);
+
+                Assert.True(result.IsSuccess);
+                Assert.Equal(1, result.Value.EventsApplied);
+                var page = highContext.Pages.Single(p => p.Id == pageId);
+                Assert.Equal("Legacy Page", page.Title);
+                Assert.Equal("# Legacy", page.CurrentContent);
+                Assert.Empty(highContext.PageRevisions.ToList()); // format 1 never carried history
+                Assert.Equal(1, highContext.SyncImportStates.Single().LastBundleNumber);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_FutureFormatVersion_RefusedLoudly_NothingLands()
+    {
+        // The other direction of the era contract: a manifest declaring a format NEWER
+        // than this instance understands is refused before a single event is parsed -
+        // never partially understood, same philosophy as the hash chain.
+        var outputDir = CreateBundleOutputDir();
+        Directory.CreateDirectory(outputDir);
+        var storage = CreateFileStorage(out var storageDir);
+        try
+        {
+            var bundlePath = Path.Combine(outputDir, "bundle-000001.zip");
+            WriteRawBundle(bundlePath, new
+            {
+                instanceId = LowInstanceId,
+                bundleNumber = 1,
+                previousManifestHash = (string?)null,
+                payloadSha256 = new string('0', 64),
+                spaceEventRanges = new Dictionary<string, object>(),
+                formatVersion = 99,
+            }, "events.v99.ndjson", "{\"whatever\":\"a future era's shape\"}\n");
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var importService = new BundleImportService(highContext, storage);
+                var result = await importService.ImportAsync(bundlePath, LowInstanceId, AuditCtx);
+
+                Assert.False(result.IsSuccess);
+                var error = Assert.IsType<BundleFormatUnsupportedError>(result.Error);
+                Assert.Equal(99, error.BundleFormatVersion);
+                Assert.Equal(BundleFormat.CurrentVersion, error.MaxSupportedVersion);
+                Assert.Empty(highContext.Pages.IgnoreQueryFilters().ToList());
+                Assert.Empty(highContext.SyncImportStates.ToList()); // position never advanced
             }
         }
         finally

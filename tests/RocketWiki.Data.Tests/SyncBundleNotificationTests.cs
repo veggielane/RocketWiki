@@ -7,6 +7,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Core.Sync;
 using RocketWiki.Data.Services;
 using RocketWiki.Storage;
 using Xunit;
@@ -268,9 +269,10 @@ public class SyncBundleNotificationTests : SqliteTestBase
             var bundle1 = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
 
             // Tamper with the payload so the SHA-256 check refuses the bundle.
+            var eventsEntryName = BundleFormat.EventsEntryName(BundleFormat.CurrentVersion);
             using (var archive = ZipFile.Open(bundle1!.BundleFilePath, ZipArchiveMode.Update))
             {
-                var entry = archive.GetEntry("events.ndjson")!;
+                var entry = archive.GetEntry(eventsEntryName)!;
                 string events;
                 using (var reader = new StreamReader(entry.Open()))
                 {
@@ -278,7 +280,7 @@ public class SyncBundleNotificationTests : SqliteTestBase
                 }
 
                 entry.Delete();
-                var rewritten = archive.CreateEntry("events.ndjson");
+                var rewritten = archive.CreateEntry(eventsEntryName);
                 using var writer = new StreamWriter(rewritten.Open());
                 writer.Write(events + "\n");
             }

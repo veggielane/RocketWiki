@@ -45,3 +45,11 @@ public sealed record BundlePayloadTamperedError(string Reason) : PageMutationErr
 
 /// <summary>data-model.md: SyncSpaceState.AppliedSequence is the finer-grained, per-space gap check that sits inside the coarser per-bundle one.</summary>
 public sealed record SpaceSequenceGapError(Guid SpaceId, long ExpectedSequence, long ActualSequence) : PageMutationError;
+
+/// <summary>
+/// The bundle's manifest declares a format version newer than this instance understands
+/// (RocketWiki.Core.Sync.BundleFormat). Refused before any event is parsed - a newer
+/// format is never partially understood, per the same refuse-don't-absorb philosophy as
+/// the hash chain. The fix is operational: upgrade this instance, then re-import.
+/// </summary>
+public sealed record BundleFormatUnsupportedError(int BundleFormatVersion, int MaxSupportedVersion) : PageMutationError;

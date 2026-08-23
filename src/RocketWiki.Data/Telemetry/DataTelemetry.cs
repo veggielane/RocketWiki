@@ -38,6 +38,21 @@ public static class DataTelemetry
             "Sync outbox entries appended, by sync event type.");
 
     /// <summary>
+    /// design.md §12: a space flagged exported whose OriginInstanceId is NOT this
+    /// instance is corrupt state - no app path exports a replica, and import writes
+    /// IsExported = false. The outbox writer deliberately skips journaling there (the
+    /// fail-closed outcome IS the skip: unowned content never enters the journal) while
+    /// letting the legitimately-local mutation commit. This counter is what keeps that
+    /// deliberate silence from being INVISIBLE silence: any non-zero value means an
+    /// operator should go find the mis-flagged space. Tagged by sync event type only
+    /// (bounded, §15); the space id stays off the metric - identifiers go on spans, not
+    /// metric dimensions, and the mutation's own audit row already names the target.
+    /// </summary>
+    public static readonly Counter<long> OutboxOwnershipMismatches =
+        Meter.CreateCounter<long>("rocketwiki.sync.outbox_ownership_mismatches", "{event}",
+            "Sync-relevant events not journaled because the exported space's origin is another instance (corrupt replica-flagged-exported state), by sync event type.");
+
+    /// <summary>
     /// design.md §9.2/§15 (milestone 7): the embedding background job, counted — never
     /// its inputs. Chunks embedded and pages indexed by outcome, run duration, and the
     /// scan's pending-page count as a gauge (observed from the last run's scan, so
@@ -121,6 +136,9 @@ public static class DataTelemetry
 
     public static void RecordOutboxEntryAppended(SyncEventType eventType) =>
         OutboxEntriesAppended.Add(1, new KeyValuePair<string, object?>(SyncEventTypeTag, eventType.ToString()));
+
+    public static void RecordOutboxOwnershipMismatch(SyncEventType eventType) =>
+        OutboxOwnershipMismatches.Add(1, new KeyValuePair<string, object?>(SyncEventTypeTag, eventType.ToString()));
 
     /// <summary>
     /// Marks a span with the mutation's outcome. The tag is the failure's *type name*

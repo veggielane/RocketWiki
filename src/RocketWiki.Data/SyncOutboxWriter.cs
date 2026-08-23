@@ -43,9 +43,14 @@ internal static class SyncOutboxWriter
     /// (design.md §15 — see RocketWikiDbContext.PendingTelemetry for why counting here
     /// would be wrong). Only entries that survive the skip conditions below are recorded,
     /// so the counter reflects the journal, not the events offered to it.
+    /// <paramref name="ownershipMismatchEventTypes"/> collects the opposite: every
+    /// sync-relevant event NOT journaled because the exported space's origin is another
+    /// instance (skip condition 2 below) — commit-gated the same way, since a skip that
+    /// rolled back with its mutation never happened.
     /// </summary>
     public static void AppendPendingEvents(
-        RocketWikiDbContext db, IReadOnlyList<IDomainEvent> pendingDomainEvents, ICollection<SyncEventType> appendedEventTypes)
+        RocketWikiDbContext db, IReadOnlyList<IDomainEvent> pendingDomainEvents,
+        ICollection<SyncEventType> appendedEventTypes, ICollection<SyncEventType> ownershipMismatchEventTypes)
     {
         foreach (var domainEvent in pendingDomainEvents)
         {
@@ -105,9 +110,14 @@ internal static class SyncOutboxWriter
             //    The untracked-entity throws below guard the opposite risk (an
             //    incomplete journal for owned content); here the fail-closed outcome
             //    IS the skip - content this instance doesn't own never enters its
-            //    journal, exactly like the !IsExported skip above.
+            //    journal, exactly like the !IsExported skip above. But unlike that
+            //    skip, this one only ever fires on CORRUPT state, so it must be
+            //    operator-visible rather than purely silent: the caller turns the
+            //    collected types into rocketwiki.sync.outbox_ownership_mismatches
+            //    once the (legitimate, local) mutation actually commits.
             if (!string.Equals(space.OriginInstanceId, db.LocalInstanceId, StringComparison.Ordinal))
             {
+                ownershipMismatchEventTypes.Add(eventType.Value);
                 continue;
             }
 

@@ -216,6 +216,7 @@ public static class SyncCli
         BundleChainMismatchError => "chain_mismatch",
         BundlePayloadTamperedError => "payload_hash_mismatch",
         SpaceSequenceGapError => "space_sequence_gap",
+        BundleFormatUnsupportedError => "unsupported_format",
         _ => error.GetType().Name,
     };
 
@@ -228,6 +229,10 @@ public static class SyncCli
         BundlePayloadTamperedError e => $"payload hash mismatch - {e.Reason}",
         SpaceSequenceGapError e =>
             $"per-space sequence gap in space {e.SpaceId}: expected sequence {e.ExpectedSequence}, got {e.ActualSequence}.",
+        BundleFormatUnsupportedError e =>
+            $"bundle declares format version {e.BundleFormatVersion}, but this instance understands at most " +
+            $"{e.MaxSupportedVersion} - a newer format is refused, never partially understood. Upgrade this " +
+            "instance, then re-run the import.",
         _ => error.ToString(),
     };
 

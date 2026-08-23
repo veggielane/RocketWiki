@@ -168,6 +168,67 @@ public class DataTelemetryTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task OutboxOwnershipMismatch_IncrementsTheMismatchCounter_AndTheHappyPathNever()
+    {
+        // design.md §12: a replica flagged exported is corrupt state the outbox writer
+        // deliberately skips (the mutation commits, the journal stays empty). That
+        // deliberate silence must be operator-VISIBLE silence:
+        // rocketwiki.sync.outbox_ownership_mismatches fires exactly on the skip, and
+        // never for a native exported space's ordinary journaling.
+        var actor = TestData.NewUser();
+        var nativeSpace = NewExportedSpace("NAT");
+        var replicaSpace = NewExportedSpace("REP");
+        replicaSpace.OriginInstanceId = "some-other-instance"; // replica relative to LocalInstanceId
+        var replicaPage = TestData.NewPage(replicaSpace);
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.AddRange(nativeSpace, replicaSpace);
+        context.Pages.Add(replicaPage);
+        context.AccessRules.Add(EditorGrant(nativeSpace.Id));
+        context.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.SpaceGrant,
+            SpaceId = replicaSpace.Id,
+            Role = SpaceRole.SpaceAdmin, // rule management needs SpaceAdmin
+            ExpressionJson = """{ "everyone": true }""",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = Guid.NewGuid(),
+        });
+        context.SaveChanges();
+
+        using var mismatches = new MetricCollector<long>(DataTelemetry.Meter, "rocketwiki.sync.outbox_ownership_mismatches");
+        using var appended = new MetricCollector<long>(DataTelemetry.Meter, "rocketwiki.sync.outbox_entries_appended");
+
+        // Happy path: a mutation on a NATIVE exported space journals normally and must
+        // not touch the mismatch counter.
+        var pageService = new PageService(context, LocalInstanceId);
+        var created = await pageService.CreatePageAsync(
+            new CreatePageRequest(nativeSpace.Id, null, "home", "Home", "# Home"), EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+        Assert.Single(appended.GetMeasurementSnapshot());
+        Assert.Empty(mismatches.GetMeasurementSnapshot());
+
+        // Mismatch path: rule management is the one legitimate mutation on a replica
+        // (page writes die on ReadOnlyReplicaError first - see SyncOutboxTests). With
+        // the corrupt IsExported flag set, the mutation commits, nothing is journaled,
+        // and the mismatch counter fires once, tagged with the bounded event type.
+        var ruleService = new AccessRuleService(context);
+        var rule = await ruleService.CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.PageRestriction, null, replicaPage.Id, null, PageAction.View, """{ "group": "top-secret" }"""),
+            EditorPrincipal(), isInstanceAdmin: false, actor.Id, AuditCtx);
+        Assert.True(rule.IsSuccess);
+
+        var mismatch = Assert.Single(mismatches.GetMeasurementSnapshot());
+        Assert.Equal(1, mismatch.Value);
+        Assert.Equal(nameof(SyncEventType.Restrictions), mismatch.Tags[DataTelemetry.SyncEventTypeTag]);
+        Assert.Single(appended.GetMeasurementSnapshot()); // the replica mutation journaled nothing
+        Assert.Empty(context.SyncOutboxEvents.Where(e => e.SpaceId == replicaSpace.Id).ToList());
+    }
+
+    [Fact]
     public void NothingIsCountedWhenTheTransactionNeverCommits()
     {
         // The pipeline builds the audit row and the outbox row in memory, then saves. If

@@ -19,11 +19,16 @@ namespace RocketWiki.Data.Services;
 /// ndjson, blobs) is plain zip/JSON with no SQL-Server-specific mechanics, so unlike
 /// SearchService this is fully exercised by the SQLite test tier end-to-end.
 ///
-/// Known simplification, flagged rather than silently shipped: design.md §12 calls for
-/// a baseline bundle with "full snapshot including revision history". This
-/// implementation snapshots each live page's CURRENT state only (one PageUpsert per
-/// page), not its full PageRevision history - building per-revision replay was out of
-/// reach in this pass.
+/// Bundles are written as format 2 (see <see cref="BundleFormat"/>): design.md §12's
+/// "full snapshot including revision history" is real now, not a flagged simplification.
+/// A baseline PageUpsert carries every PageRevision of its page; an incremental
+/// PageUpsert carries the ONE revision it corresponds to. Both are attached here at
+/// export time, not at journal time: revisions are immutable, so joining
+/// (pageId, revisionNumber) back to PageRevisions when the bundle is built yields
+/// exactly what journal time would have — and it means outbox rows journaled BEFORE
+/// this format existed export with their history too, instead of shipping a
+/// permanently degraded payload (mixed-era outbox streams, same reasoning as
+/// <see cref="EnrichAuthorPayloadsAsync"/>).
 /// </summary>
 public class BundleExportService : IBundleExportService
 {
@@ -63,8 +68,28 @@ public class BundleExportService : IBundleExportService
             ?? throw new InvalidOperationException($"Space {spaceId} not found.");
 
         var livePages = await _db.Pages.Where(p => p.SpaceId == spaceId).ToListAsync(cancellationToken);
+
+        // design.md §12: the baseline is a "full snapshot including revision history".
+        // Every revision of every live page rides inside that page's own PageUpsert
+        // line, each with its author resolved to shadow-user-creatable identity (batched
+        // - one Users query for the whole space, same discipline as
+        // EnrichAuthorPayloadsAsync).
+        var livePageIds = livePages.Select(p => p.Id).ToList();
+        var revisionsByPage = (await _db.PageRevisions
+                .Where(r => livePageIds.Contains(r.PageId))
+                .ToListAsync(cancellationToken))
+            .GroupBy(r => r.PageId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(r => r.RevisionNumber).ToList());
+
+        var authorIds = revisionsByPage.Values.SelectMany(rs => rs).Select(r => r.AuthorUserId).Distinct().ToList();
+        var authorsById = authorIds.Count > 0
+            ? await _db.Users.Where(u => authorIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, cancellationToken)
+            : new Dictionary<Guid, User>();
+
         var lines = livePages
-            .Select(p => new BundleEventLine(space.Key, space.Id, SequenceNumber: 0, SyncEventType.PageUpsert, SerializePageUpsert(p), DateTime.UtcNow))
+            .Select(p => new BundleEventLine(
+                space.Key, space.Id, SequenceNumber: 0, SyncEventType.PageUpsert,
+                SerializePageUpsert(p, revisionsByPage.GetValueOrDefault(p.Id, []), authorsById), DateTime.UtcNow))
             .ToList();
 
         return await WriteBundleAsync(outputDirectory, localInstanceId, lines, cancellationToken);
@@ -107,6 +132,7 @@ public class BundleExportService : IBundleExportService
             .ToDictionaryAsync(s => s.Id, s => s.Key, cancellationToken);
 
         var enrichedPayloads = await EnrichAuthorPayloadsAsync(pendingEvents, cancellationToken);
+        enrichedPayloads = await EnrichRevisionPayloadsAsync(pendingEvents, enrichedPayloads, cancellationToken);
 
         var lines = pendingEvents
             .Select(e => new BundleEventLine(spaceKeysById[e.SpaceId], e.SpaceId, e.SequenceNumber, e.EventType, enrichedPayloads[e.Id], e.CreatedAtUtc))
@@ -179,6 +205,71 @@ public class BundleExportService : IBundleExportService
         return result;
     }
 
+    /// <summary>
+    /// Attaches to every incremental PageUpsert payload the ONE PageRevision it
+    /// corresponds to (the payload's own pageId + revisionNumber, joined back to the
+    /// immutable PageRevisions table), as a one-element <c>revisions</c> array in the
+    /// same shape a baseline uses - one payload key, one import path. Done at EXPORT
+    /// time, like author enrichment, and for the same two reasons: journal payloads stay
+    /// lean, and outbox rows journaled before this format existed (which carry no
+    /// revision data at all) still export with their history - the revision row they
+    /// point at is immutable and still there. A payload whose revision row genuinely
+    /// cannot be found is left untouched; the import side treats an absent
+    /// <c>revisions</c> key as current-state-only, exactly like a legacy bundle.
+    /// </summary>
+    private async Task<Dictionary<long, string>> EnrichRevisionPayloadsAsync(
+        List<SyncOutboxEvent> events, Dictionary<long, string> payloads, CancellationToken cancellationToken)
+    {
+        var wanted = new Dictionary<long, (Guid PageId, int RevisionNumber)>();
+        foreach (var evt in events.Where(e => e.EventType == SyncEventType.PageUpsert))
+        {
+            using var document = JsonDocument.Parse(payloads[evt.Id]);
+            var root = document.RootElement;
+            if (root.TryGetProperty("pageId", out var pageIdElement) && pageIdElement.ValueKind == JsonValueKind.String
+                && Guid.TryParse(pageIdElement.GetString(), out var pageId)
+                && root.TryGetProperty("revisionNumber", out var revisionElement) && revisionElement.ValueKind == JsonValueKind.Number)
+            {
+                wanted[evt.Id] = (pageId, revisionElement.GetInt32());
+            }
+        }
+
+        if (wanted.Count == 0)
+        {
+            return payloads;
+        }
+
+        // One query for the whole drain. pageIds x revisionNumbers over-fetches the
+        // (small) cross product rather than issuing a per-page query or a
+        // provider-specific composite-key IN; the exact (pageId, revisionNumber) match
+        // happens in memory.
+        var pageIds = wanted.Values.Select(w => w.PageId).Distinct().ToList();
+        var revisionNumbers = wanted.Values.Select(w => w.RevisionNumber).Distinct().ToList();
+        var revisionsByKey = (await _db.PageRevisions
+                .Where(r => pageIds.Contains(r.PageId) && revisionNumbers.Contains(r.RevisionNumber))
+                .ToListAsync(cancellationToken))
+            .ToDictionary(r => (r.PageId, r.RevisionNumber));
+
+        var authorIds = revisionsByKey.Values.Select(r => r.AuthorUserId).Distinct().ToList();
+        var authorsById = authorIds.Count > 0
+            ? await _db.Users.Where(u => authorIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, cancellationToken)
+            : new Dictionary<Guid, User>();
+
+        foreach (var (eventId, key) in wanted)
+        {
+            if (!revisionsByKey.TryGetValue(key, out var revision))
+            {
+                continue;
+            }
+
+            var node = JsonNode.Parse(payloads[eventId])!.AsObject();
+            node["revisions"] = JsonSerializer.SerializeToNode(
+                new[] { RevisionPayload(revision, authorsById.GetValueOrDefault(revision.AuthorUserId)) }, JsonOptions);
+            payloads[eventId] = node.ToJsonString(JsonOptions);
+        }
+
+        return payloads;
+    }
+
     private static string AuthorIdPropertyName(SyncEventType eventType) =>
         eventType == SyncEventType.Attachment ? "uploadedByUserId" : "authorUserId";
 
@@ -211,7 +302,8 @@ public class BundleExportService : IBundleExportService
             .GroupBy(l => l.SpaceKey)
             .ToDictionary(g => g.Key, g => new SpaceEventRange(g.First().SpaceId, g.Min(l => l.SequenceNumber), g.Max(l => l.SequenceNumber), g.Count()));
 
-        var manifest = new BundleManifest(localInstanceId, bundleNumber, previousManifestHash, payloadHash, spaceRanges);
+        var manifest = new BundleManifest(
+            localInstanceId, bundleNumber, previousManifestHash, payloadHash, spaceRanges, BundleFormat.CurrentVersion);
         var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
 
         var bundlePath = Path.Combine(outputDirectory, BundleFileName(bundleNumber));
@@ -219,7 +311,10 @@ public class BundleExportService : IBundleExportService
         using (var archive = new ZipArchive(fileStream, ZipArchiveMode.Create))
         {
             await WriteEntryAsync(archive, "manifest.json", manifestBytes, cancellationToken);
-            await WriteEntryAsync(archive, "events.ndjson", ndjsonBytes, cancellationToken);
+            // The version-specific entry name is part of the format contract: it is what
+            // makes a format-1 importer refuse this bundle loudly instead of silently
+            // dropping its revision history - see BundleFormat.
+            await WriteEntryAsync(archive, BundleFormat.EventsEntryName(BundleFormat.CurrentVersion), ndjsonBytes, cancellationToken);
             await WriteBlobsAsync(archive, lines, cancellationToken);
         }
 
@@ -311,18 +406,41 @@ public class BundleExportService : IBundleExportService
         return Convert.ToHexString(SHA256.HashData(memory.ToArray()));
     }
 
-    private static string SerializePageUpsert(Page page) => JsonSerializer.Serialize(
-        new
-        {
-            pageId = page.Id,
-            spaceId = page.SpaceId,
-            parentPageId = page.ParentPageId,
-            ancestorPath = page.AncestorPath,
-            slug = page.Slug,
-            title = page.Title,
-            sortOrder = page.SortOrder,
-            content = page.CurrentContent,
-            revisionNumber = page.CurrentRevisionNumber,
-        },
-        JsonOptions);
+    /// <summary>Baseline line: the page's current state plus its complete revision history (design.md §12).</summary>
+    private static string SerializePageUpsert(Page page, IReadOnlyList<PageRevision> revisions, IReadOnlyDictionary<Guid, User> authorsById) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                pageId = page.Id,
+                spaceId = page.SpaceId,
+                parentPageId = page.ParentPageId,
+                ancestorPath = page.AncestorPath,
+                slug = page.Slug,
+                title = page.Title,
+                sortOrder = page.SortOrder,
+                content = page.CurrentContent,
+                revisionNumber = page.CurrentRevisionNumber,
+                revisions = revisions.Select(r => RevisionPayload(r, authorsById.GetValueOrDefault(r.AuthorUserId))).ToList(),
+            },
+            JsonOptions);
+
+    /// <summary>
+    /// One entry of a PageUpsert payload's <c>revisions</c> array. Carries the same
+    /// generic authorDisplayName/authorEmail keys comments and attachments use, so the
+    /// import side's EnsureShadowUserAsync handles a revision author identically
+    /// (design.md §12: "Authors arrive as shadow users"). A missing local User row (only
+    /// reachable with pathological data) degrades to identity-less - the import side
+    /// then creates the shadow user from the Guid alone.
+    /// </summary>
+    private static object RevisionPayload(PageRevision revision, User? author) => new
+    {
+        revisionNumber = revision.RevisionNumber,
+        title = revision.Title,
+        content = revision.Content,
+        editSummary = revision.EditSummary,
+        authorUserId = revision.AuthorUserId,
+        authorDisplayName = author?.DisplayName,
+        authorEmail = author?.Email,
+        createdAtUtc = revision.CreatedAtUtc,
+    };
 }
