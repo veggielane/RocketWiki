@@ -26,6 +26,17 @@ var minio = builder.AddContainer("minio", "minio/minio")
     .WithEnvironment("MINIO_ROOT_PASSWORD", "minioadmin")
     .WithArgs("server", "/data", "--console-address", ":9001");
 
+// Dev-only convenience: a self-hosted draw.io (diagrams.net) instance for the
+// SPA's embedded diagram editor. Hand-wired like MinIO above (no Aspire hosting
+// package). Nothing references it yet — the Vite app isn't wired into the
+// AppHost (see the TODO below), so set VITE_DRAWIO_URL to this container's
+// endpoint by hand (web/.env.example). Production points at its own in-network
+// instance instead (design.md §15: the editor URL must never leave the
+// boundary). Tag pinned deliberately; the standing caveat (§16) applies — no
+// container runtime has ever run this, so it is config-reviewed, not verified.
+builder.AddContainer("drawio", "jgraph/drawio", "31.3.2")
+    .WithHttpEndpoint(targetPort: 8080, name: "http");
+
 // Dev-only Keycloak instance. Production points RocketWiki.Api at an existing
 // realm via configuration instead (design.md §15 "Production"). The `rocketwiki`
 // realm — clients, groups, protocol mappers for `groups`/`nationality`, and dev

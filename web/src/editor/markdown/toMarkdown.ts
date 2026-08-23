@@ -61,6 +61,13 @@ function serializeBlock(node: JSONContent): string {
     case 'table':
       return serializeTable(node)
 
+    case 'drawioDiagram': {
+      // The mirror of fromMarkdown.ts's drawio branch: a plain fenced block
+      // with the reserved `drawio` language, payload emitted verbatim.
+      const payload = (node.attrs?.payload as string | undefined) ?? ''
+      return `\`\`\`drawio\n${payload}\n\`\`\``
+    }
+
     case 'callout': {
       const calloutType = (node.attrs?.calloutType as string | undefined) ?? 'info'
       const inner = serializeChildBlocks(node.content ?? [])

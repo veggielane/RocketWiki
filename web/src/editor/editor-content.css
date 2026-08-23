@@ -132,6 +132,110 @@
   gap: 0.4em;
 }
 
+/* --- Diagrams (mermaid preview + draw.io) ------------------------------- */
+
+.rw-mermaid-block {
+  margin: 0 0 0.75em;
+}
+
+.rw-mermaid-block .rw-mermaid-source {
+  margin: 0;
+}
+
+/* Editing: source beside live preview; stacks on narrow screens. */
+.rw-mermaid-block-editing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.75em;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .rw-mermaid-block-editing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.rw-mermaid-preview {
+  min-width: 0;
+}
+
+/* Read mode shows the diagram alone — unless it fails to render, in which
+   case the source comes back so the content is never invisible. The source
+   element stays in the DOM either way (ProseMirror's contentDOM). */
+.rw-mermaid-block-readonly .rw-mermaid-source {
+  display: none;
+}
+
+.rw-mermaid-block-readonly[data-render-state='error'] .rw-mermaid-source {
+  display: block;
+  margin-bottom: 0.5em;
+}
+
+/* Always-light surface behind rendered diagrams: mermaid's `neutral` theme
+   and typical draw.io exports are drawn for light backgrounds. */
+.rw-diagram-surface {
+  background: #fff;
+  border: 1px solid var(--rw-border, #c9ccd1);
+  border-radius: 6px;
+  padding: 0.75em;
+  overflow-x: auto;
+}
+
+.rw-diagram-surface svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.rw-diagram-error {
+  border-left: 4px solid #d64545;
+  background: rgba(214, 69, 69, 0.08);
+  border-radius: 6px;
+  padding: 0.6em 0.9em;
+  font-size: 0.9em;
+}
+
+.rw-diagram-hint {
+  color: var(--rw-muted, #5b6270);
+  font-size: 0.85em;
+  font-style: italic;
+  padding: 0.5em 0;
+}
+
+.rw-drawio {
+  margin: 0 0 0.75em;
+}
+
+.rw-drawio-img {
+  display: block;
+  max-width: 100%;
+  background: #fff;
+  border: 1px solid var(--rw-border, #c9ccd1);
+  border-radius: 6px;
+  padding: 0.5em;
+}
+
+.rw-drawio-actions {
+  margin-top: 0.4em;
+}
+
+.rw-diagram-button {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 0.25em 0.75em;
+  border: 1px solid var(--rw-border, #c9ccd1);
+  border-radius: 6px;
+  background: var(--rw-code-bg, #f2f3f5);
+  color: inherit;
+  cursor: pointer;
+}
+
+.rw-diagram-button:hover,
+.rw-diagram-button:focus-visible {
+  border-color: var(--rw-link, #1a56db);
+  color: var(--rw-link, #1a56db);
+}
+
 @media (prefers-color-scheme: dark) {
   .rw-editor-content {
     --rw-border: #383c46;

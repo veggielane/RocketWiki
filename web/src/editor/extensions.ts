@@ -1,5 +1,6 @@
 import StarterKit from '@tiptap/starter-kit'
 import Image from '@tiptap/extension-image'
+import CodeBlock from '@tiptap/extension-code-block'
 import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
 import { TableKit } from '@tiptap/extension-table'
@@ -7,6 +8,7 @@ import type { AnyExtension } from '@tiptap/core'
 import { PageLink } from './marks/PageLink'
 import { Mention } from './nodes/Mention'
 import { Callout } from './nodes/Callout'
+import { DrawioDiagram } from './nodes/DrawioDiagram'
 
 /**
  * The full v1 extension set (design.md §4). This list is the schema: it is
@@ -22,7 +24,19 @@ import { Callout } from './nodes/Callout'
  * `RichTextEditor.tsx` swaps in `AttachmentImage` for the real editor;
  * both share the exact same node name/attrs/schema, so this swap is purely
  * about *rendering*, never about what gets serialized.
+ *
+ * The same pattern covers diagrams: `codeBlockExtension` below is the stock
+ * code block (pulled out of StarterKit so it's swappable by identity), and
+ * `DrawioDiagram` is the schema-only diagram node — RichTextEditor swaps in
+ * `MermaidCodeBlock` / `DrawioDiagramWithView`, whose NodeViews live-render
+ * ```mermaid fences and draw.io payloads. Neither the mermaid library nor
+ * any React rendering ever runs in the headless round-trip suite.
  */
+
+/** Stock code block, extracted from StarterKit so RichTextEditor can swap its rendering by identity. */
+export const codeBlockExtension = CodeBlock.configure({
+  HTMLAttributes: { class: 'rw-code-block' },
+})
 export const editorExtensions: AnyExtension[] = [
   StarterKit.configure({
     link: {
@@ -32,9 +46,9 @@ export const editorExtensions: AnyExtension[] = [
       openOnClick: false,
       protocols: ['http', 'https'],
     },
-    codeBlock: {
-      HTMLAttributes: { class: 'rw-code-block' },
-    },
+    // Provided by `codeBlockExtension` above (identical configuration) so
+    // the real editor can swap in the mermaid-previewing variant.
+    codeBlock: false,
     // No markdown representation exists for underline in the v1 feature
     // set (design.md §4 is GFM + our extensions, and GFM has no underline
     // syntax). Leaving it enabled would let a user apply a mark that
@@ -43,9 +57,11 @@ export const editorExtensions: AnyExtension[] = [
     // trap.
     underline: false,
   }),
+  codeBlockExtension,
   PageLink,
   Mention,
   Callout,
+  DrawioDiagram,
   Image,
   TaskList,
   TaskItem.configure({ nested: true }),

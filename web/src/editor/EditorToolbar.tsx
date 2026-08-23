@@ -23,11 +23,13 @@ import LinkIcon from '@mui/icons-material/Link'
 import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule'
 import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
 import CodeOffIcon from '@mui/icons-material/DataObject'
+import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
 import type { CalloutType } from './nodes/Callout'
 import { CALLOUT_TYPES } from './nodes/Callout'
 
 export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const [calloutMenuAnchor, setCalloutMenuAnchor] = useState<HTMLElement | null>(null)
+  const [diagramMenuAnchor, setDiagramMenuAnchor] = useState<HTMLElement | null>(null)
 
   if (!editor) {
     return null
@@ -48,6 +50,19 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
 
   const insertTable = () => {
     editor.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run()
+  }
+
+  const insertMermaid = () => {
+    // A mermaid diagram IS a code block with language `mermaid` — the node
+    // view adds the live preview (nodes/CodeBlockView.tsx); markdown stays
+    // a plain fence.
+    editor.chain().focus().setCodeBlock({ language: 'mermaid' }).run()
+    setDiagramMenuAnchor(null)
+  }
+
+  const insertDrawio = () => {
+    editor.chain().focus().insertContent({ type: 'drawioDiagram' }).run()
+    setDiagramMenuAnchor(null)
   }
 
   return (
@@ -225,6 +240,20 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
             {type[0]!.toUpperCase() + type.slice(1)}
           </MenuItem>
         ))}
+      </Menu>
+      <Tooltip title="Diagram">
+        <IconButton
+          size="small"
+          onClick={(e) => setDiagramMenuAnchor(e.currentTarget)}
+          aria-label="Insert diagram"
+          aria-haspopup="menu"
+        >
+          <AccountTreeOutlinedIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <Menu anchorEl={diagramMenuAnchor} open={Boolean(diagramMenuAnchor)} onClose={() => setDiagramMenuAnchor(null)}>
+        <MenuItem onClick={insertMermaid}>Mermaid diagram</MenuItem>
+        <MenuItem onClick={insertDrawio}>draw.io diagram</MenuItem>
       </Menu>
       <Tooltip title="Horizontal rule">
         <IconButton

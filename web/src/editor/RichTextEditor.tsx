@@ -3,8 +3,11 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import Image from '@tiptap/extension-image'
 import type { EditorView } from '@tiptap/pm/view'
 import { Alert, Box, Paper, Snackbar } from '@mui/material'
-import { editorExtensions } from './extensions'
+import { codeBlockExtension, editorExtensions } from './extensions'
 import { AttachmentImage } from './nodes/AttachmentImage'
+import { MermaidCodeBlock } from './nodes/MermaidCodeBlock'
+import { DrawioDiagram } from './nodes/DrawioDiagram'
+import { DrawioDiagramWithView } from './nodes/DrawioDiagramWithView'
 import { markdownToJson } from './markdown/fromMarkdown'
 import { jsonToMarkdown } from './markdown/toMarkdown'
 import { EditorToolbar } from './EditorToolbar'
@@ -12,10 +15,15 @@ import { uploadAttachment } from '../attachments/attachmentApi'
 import { computeHeadingAnchors, type HeadingInfo } from './headingAnchors'
 import './editor-content.css'
 
-// Same node name/attrs/schema as the plain `Image` used by
+// Same node names/attrs/schema as the plain extensions used by
 // `editorExtensions` (see extensions.ts's comment) — only the rendering
-// differs, so this swap never affects what gets serialized.
-const richTextExtensions = editorExtensions.map((ext) => (ext === Image ? AttachmentImage : ext))
+// differs, so these swaps never affect what gets serialized.
+const richTextExtensions = editorExtensions.map((ext) => {
+  if (ext === Image) return AttachmentImage
+  if (ext === codeBlockExtension) return MermaidCodeBlock
+  if (ext === DrawioDiagram) return DrawioDiagramWithView
+  return ext
+})
 
 export interface RichTextEditorHandle {
   /** Current document, serialized back to Markdown for saving. */

@@ -41,6 +41,27 @@ describe('Markdown round trip — required v1 feature set (design.md §4)', () =
     ['pipe table multi-row', '| Name | Age |\n| --- | --- |\n| Ada | 36 |\n| Alan | 41 |\n'],
     ['fenced code block with language', '```js\nconst a = 1;\nconsole.log(a);\n```\n'],
     ['fenced code block no language', '```\nplain text\n```\n'],
+    // Diagrams (design.md §17 resolution): both are *plain fenced blocks*
+    // in Markdown — rendering is a NodeView concern; the serializer, sync
+    // bundles, and the Confluence importer treat them as inert text.
+    ['mermaid fence (rendered as a diagram, stored as a plain fence)', '```mermaid\ngraph TD\n  A --> B\n```\n'],
+    [
+      'mermaid fence with blank line and non-mermaid-looking text (payload is opaque)',
+      '```mermaid\nsequenceDiagram\n\nAlice->>Bob: hi **not markdown**\n```\n',
+    ],
+    [
+      'drawio fence (base64 editable-SVG payload)',
+      '```drawio\nPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNvbnRlbnQ9IiZsdDtteGZpbGUmZ3Q7Jmx0Oy9teGZpbGUmZ3Q7Ij48cmVjdCB3aWR0aD0iMTAiIGhlaWdodD0iMTAiLz48L3N2Zz4=\n```\n',
+    ],
+    [
+      'drawio fence with a hand-wrapped (multi-line) payload survives verbatim',
+      '```drawio\nPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5v\ncmcvMjAwMC9zdmciLz4=\n```\n',
+    ],
+    [
+      'drawio fence with a payload that is not even base64 survives verbatim (renders as an inline error, never lost)',
+      '```drawio\nnot really base64!!\n```\n',
+    ],
+    ['empty drawio fence (freshly inserted, not yet drawn)', '```drawio\n\n```\n'],
     ['task list', '- [ ] todo\n- [x] done\n'],
     ['image / attachment', '![diagram](attachment://file-123)\n'],
     ['image / attachment with title', '![diagram](attachment://file-123 "A diagram")\n'],
@@ -85,6 +106,15 @@ describe('Markdown round trip — required v1 feature set (design.md §4)', () =
         '',
         '```bash',
         'npm install',
+        '```',
+        '',
+        '```mermaid',
+        'graph LR',
+        '  start --> done',
+        '```',
+        '',
+        '```drawio',
+        'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4=',
         '```',
         '',
         '| Step | Owner |',

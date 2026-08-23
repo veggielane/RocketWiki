@@ -76,6 +76,13 @@ function parseBlock(cursor: TokenCursor): JSONContent {
     cursor.next()
     const language = tok.info.trim()
     const code = tok.content.replace(/\n$/, '')
+    if (language === 'drawio') {
+      // ```drawio is the reserved storage form of the draw.io diagram node
+      // (base64 editable-SVG payload — see nodes/DrawioDiagram.ts). The
+      // payload is the fence body verbatim, so whatever bytes were stored
+      // serialize back out unchanged even when they're not valid base64.
+      return { type: 'drawioDiagram', attrs: { payload: code } }
+    }
     return {
       type: 'codeBlock',
       attrs: { language: language.length > 0 ? language : null },
