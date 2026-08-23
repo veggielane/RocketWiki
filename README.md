@@ -445,6 +445,24 @@ Being explicit about what has and hasn't been checked, rather than letting
   (`tests/RocketWiki.SqlServer.Tests`); on machines without Docker the tier
   skips visibly and these claims are only as fresh as the last green CI
   run.
+- **Ask the wiki (backend, design.md §9.5)** — `askWiki(question)` answers
+  from wiki content with per-section citations, retrieving only pages *you*
+  can view (the same permission-filtered search and canView-gated reads as
+  everything else) before any text reaches the model — proven by a test
+  that records every message sent to a fake model and asserts a restricted
+  page's sentinel never appears for a non-cleared asker. Honest scope: your
+  question and the retrieved viewable content are sent to the
+  operator-configured, in-network LLM endpoint; unconfigured instances
+  answer `NOT_CONFIGURED`, and every ask is audited (`assistant.ask`) with
+  the question and the pages involved. The chat UI is the pending phase 2.
+- **Native vector search (design.md §9.3)** — `PageEmbedding` now uses SQL
+  Server 2025's `vector(1536)` column with in-engine `VECTOR_DISTANCE`
+  scoring (CI-verified by the Testcontainers tier, including §6.7 on that
+  path). The DiskANN index is deliberately deferred with engine-verified
+  reasons (`VECTOR_DISTANCE` is index-blind by documentation; boxed 2025's
+  index format is preview-gated and makes the table read-only) — both
+  limitations are tripwire-tested so their lifting is detected, not hoped
+  for.
 - **Real-time co-editing (backend, design.md §8)** — Yjs relay sessions
   over the SignalR hub: canEdit-gated and session-audited (join denials
   recorded with their failing restriction), seeder/reseed protocol with log

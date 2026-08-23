@@ -498,6 +498,16 @@ joining an *edit* session consumes a canEdit authorization and opens a
 content-bearing channel, which is what makes it §7-worthy. The save's
 `page.edit` details now include `contributors` for session saves.
 
+`assistant.ask` (§9.5) — every ask, one row, Details carrying the question
+text (exactly as `search.query` carries its query text), the disposition,
+the ids of pages whose content was sent to the model, and the validated
+cited page ids. Outcome is always `success` — an unavailable result is
+still a completed ask, and `denied` stays reserved for ABAC refusals, which
+retrieval already enforced by making restricted pages absent; the race-only
+mid-retrieval denial audits as an ordinary `page.view` Denied row.
+Anonymous asks are refused before any work with no row. Telemetry
+(`rocketwiki.assistant.*`) sees dispositions, counts and durations only.
+
 `gitlab.fetch` (§18) — every GitLab read, one row per distinct resource per
 request (same resource twice in one document is one row, like `page.view`).
 Details carry the *reference* (project, iid/path/ref or the filter) and the
@@ -944,18 +954,30 @@ embedding model, called through `Microsoft.Extensions.AI`'s
 ### 9.3 Vector storage and hybrid retrieval
 
 - `PageEmbedding` rows: page id, chunk index, heading path, content hash,
-  and the vector in SQL Server 2025's native **`vector`** column type, ANN
-  index (DiskANN) + `VECTOR_DISTANCE` for cosine similarity. EF Core maps it
-  via `SqlVector<float>`. Model name + dimensions are stamped per row — an
-  index only ever contains one model's vectors.
+  and the vector in SQL Server 2025's native **`vector(1536)`** column type,
+  EF-mapped via `SqlVector<float>` (provider-conditional: SQLite keeps the
+  float-blob converter). Cosine scoring is in-engine, exact
+  `VECTOR_DISTANCE` — which per its own documentation **never uses a vector
+  index, even if one exists**. The DiskANN index is deliberately deferred
+  with three engine-verified reasons (see the
+  AlterPageEmbeddingToNativeVector migration's doc-comment): index creation
+  requires ≥100 non-NULL rows (a from-zero migration chain always fails it),
+  on boxed SQL Server 2025 the index is preview-gated AND makes the indexed
+  table read-only (the full-DML index format is currently Azure SQL/Fabric
+  only — which would kill the §9.2 background indexer), and index-assisted
+  ANN needs the separate preview `VECTOR_SEARCH` TVF anyway. Both
+  limitations are **tripwire-tested** in the SQL Server tier so the day an
+  engine build lifts them, CI says so — detection, not hope. Model name +
+  dimensions are stamped per row, and a startup guard fails the host loudly
+  when configured dimensions disagree with the column.
 - Hybrid query: over-fetch top-K from FTS and vector search, fuse with
   **reciprocal rank fusion**, then filter by `canView` (§6.7) and return the
   top N. Over-fetching before the permission filter keeps restricted-heavy
   result sets from coming back empty.
 - Behind `ISearchService` like everything provider-specific: SQLite
   integration tests use the LIKE fallback plus in-memory cosine similarity;
-  the real FTS + DiskANN path is covered by the SQL Server Testcontainers
-  suite (§14).
+  the real FTS + native-vector path is covered by the SQL Server
+  Testcontainers suite (§14).
 
 ### 9.4 Instances and compliance
 
@@ -969,8 +991,39 @@ embedding model, called through `Microsoft.Extensions.AI`'s
   suggestion.
 
 This index also powers "ask the wiki" through MCP (§8): the user's own
-assistant does the generation over permission-aware retrieval. Whether a
-built-in assistant UI is wanted on top remains an open question.
+assistant does the generation over permission-aware retrieval. A built-in
+assistant now exists as well — §9.5.
+
+### 9.5 Ask the wiki
+
+A built-in assistant answers questions from wiki content — resolving §17's
+open bullet: the MCP path (§8) remains for users' own agents, and a
+built-in `askWiki` GraphQL field now exists for everyone else. The
+non-negotiable is the same either way and is enforced by construction, not
+by prompt: **answers only from pages the asker can view.** Retrieval runs
+under the caller's own principal through the same permission-filtered
+hybrid search as §9.3 (`ISearchService`) and the same canView-gated content
+loads as every resolver (`IPageReadService`, pattern-matched `ReadResult`);
+a page the asker cannot view is silently absent from the model context, so
+the model cannot leak what retrieval never saw. Context chunks come from
+the §9.2 chunker (same heading anchors as search deep links), capped by a
+configured char budget and rank-ordered; the model is instructed to answer
+only from the provided context and cite positional `[Sn]` markers, which
+the server validates against the exact context it issued — an in-range
+marker is a viewable section by construction, and fabricated markers are
+stripped. Zero retrieved content means the model is never called
+(`NO_RESULTS`); the LLM is plumbing, access control is the feature.
+
+The chat endpoint is configured like the embedding endpoint and carries the
+same honesty: **the user's question and the retrieved (viewable) page
+content travel to it** — that is the feature — so it is inside the security
+boundary (§9.4), reached via the Aspire `assistant` connection string or
+`Ai:ChatModel` against the shared `Ai:BaseUrl`, and fail-closed (§15): no
+default exists, unset means the feature is absent and `askWiki` answers a
+typed `NOT_CONFIGURED` payload fact (never a GraphQL error — the §18
+degradation pattern, including `UNREACHABLE` on endpoint failure: one
+attempt, bounded timeout, no retries). v1 is non-streaming and stateless:
+no conversation memory, each ask retrieves fresh under the current token.
 
 ---
 
@@ -1674,10 +1727,13 @@ the highest-value unblocking action available.
 - [ ] k3s: one API replica (simplest — no backplane, no migration Job) or
       scale-out from the start? This decides whether Redis becomes a
       dependency.
-- [ ] "Ask the wiki": MCP (§8) already gives assistants permission-aware
-      retrieval under the user's own token. Is a built-in assistant UI still
-      wanted on top? Same non-negotiable either way: answers only from pages
-      the asker can view.
+- [x] "Ask the wiki" — resolved: both. MCP (§8) stays the path for users'
+      own assistants; a built-in `askWiki` field (§9.5) now does RAG
+      server-side under the caller's principal against a fail-closed
+      in-network chat endpoint. Same non-negotiable, enforced by
+      construction: answers only from pages the asker can view — the model
+      context is built exclusively from permission-filtered retrieval, so
+      restricted content never reaches the model at all.
 - [ ] MCP write tools: should agents ever create or edit pages, and under
       what review process? v1 is deliberately read-only.
 - [ ] Email/digest notifications as well as in-app, or in-app only? (Email

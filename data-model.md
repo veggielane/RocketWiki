@@ -325,13 +325,17 @@ the per-space high-water mark that makes import idempotent and gap-refusing.
 | ChunkIndex | int | |
 | HeadingPath | nvarchar(1000) | for section deep-links |
 | ChunkHash | binary(32) | skip unchanged chunks on re-embed |
-| Embedding | vector(1536) | SQL Server 2025 native type — **dimensions are fixed per column**; changing the model is a migration + full re-embed. *Currently mapped to `varbinary(max)` via a value converter; the native type and DiskANN index land with milestone 7 (design.md §9).* |
+| Embedding | vector(1536) | SQL Server 2025 native type (landed via `AlterPageEmbeddingToNativeVector`; SQLite maps a float blob) — **dimensions are fixed per column**; changing the model is a migration + full re-embed, enforced by a startup guard |
 | Model | nvarchar(128) | sanity check against config at query time |
 | UpdatedAtUtc | | |
 
-Unique `(PageId, ChunkIndex)`; DiskANN vector index on `Embedding`
-(cosine). On SQLite (tests) this table maps `Embedding` to a blob and the
-in-memory cosine fallback handles search.
+Unique `(PageId, ChunkIndex)`. The DiskANN vector index is deliberately
+deferred (see the AlterPageEmbeddingToNativeVector migration doc-comment;
+`VECTOR_DISTANCE` is index-blind by documentation and boxed SQL Server
+2025's index format makes the table read-only) — search is in-engine exact
+`VECTOR_DISTANCE`, tripwire-tested for the day the engine lifts its limits.
+On SQLite (tests) this table maps `Embedding` to a blob and the in-memory
+cosine fallback handles search.
 
 ### GitLabCredential — per-user GitLab PAT, encrypted, instance-local
 
