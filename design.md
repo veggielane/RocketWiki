@@ -1290,12 +1290,23 @@ Three tiers, matching how fakeable each dependency is:
    temp directory. Fast, no containers, runs anywhere — this is the bulk of
    the suite. Keeping these green forces the EF model and LINQ to stay
    provider-agnostic.
-3. **Provider-specific tests** — a smaller CI suite against real SQL Server,
-   covering what SQLite cannot emulate: Full-Text Search queries, native
-   `vector` + DiskANN search, audit-table partitioning and grants, and the
-   checked-in migrations themselves. `Aspire.Hosting.Testing` spins up the
-   AppHost's real resources for these, so the test topology is the same
-   definition as dev and prod.
+3. **Provider-specific tests** — `tests/RocketWiki.SqlServer.Tests`, a
+   smaller suite against real SQL Server 2025 via Testcontainers (a derived
+   `mssql/server:2025-latest` image with `mssql-server-fts` installed — the
+   stock image cannot apply the InitialCreate migration's FULLTEXT DDL).
+   One container per run, one database per test, schema from the real
+   checked-in migrations. Covers what SQLite cannot emulate: the migrations
+   themselves, Full-Text queries (CONTAINSTABLE with inflectional
+   stemming), migrate-on-startup through the real API host, and the most
+   dialect-sensitive service behaviors (outbox sequence uniqueness under
+   racing writers, audit-transaction rollback, CHECK/length enforcement).
+   Docker presence is the switch: without a daemon the whole project skips
+   visibly and the solution stays green; CI's `sqlserver` job is the tier's
+   first-class home and fails if any of its tests skip there. Native
+   `vector` + DiskANN and audit partitioning/grants remain the tier's next
+   tenants once their DDL exists. This supersedes the earlier intent to
+   drive this tier through `Aspire.Hosting.Testing`; the AppHost topology
+   itself is still only exercised by `aspire run`.
 
 Anything inherently provider-specific stays behind an interface
 (`ISearchService` for FTS and vector search) with naive fallbacks for SQLite
@@ -1581,7 +1592,11 @@ bucket. Full-text search, the `vector` type, DiskANN, audit partitioning and
 the append-only grants are all SQL Server features the SQLite tier cannot
 exercise — they remain TODO-flagged in the migration and unproven.
 
-That gap closes the day a container runtime is installed, and closing it is
+The SQL Server slice of that gap now closes on every CI run — the §14
+Testcontainers tier applies the real migrations and exercises FTS against a
+real engine in the `sqlserver` job — but only in CI; no container has yet
+run on a developer machine. The rest of the gap closes the day a local
+container runtime works, and closing it is
 the highest-value unblocking action available.
 
 ---

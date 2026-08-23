@@ -352,12 +352,10 @@ Being explicit about what has and hasn't been checked, rather than letting
   have never actually been started by `aspire run`. Resource wiring
   (`WithReference`, service discovery, connection string injection) is
   correct by inspection and compiles, but has not been observed working at
-  runtime. Concretely: `RocketWikiDbContext` is proven correct against
-  SQLite (see above), but the checked-in EF Core migrations are SQL
-  Server-specific and have never actually been applied to a real SQL Server
-  — `Database:MigrateOnStartup`'s happy path is unverified even though its
-  failure path (an unreachable server) was confirmed to fail loudly rather
-  than silently.
+  runtime. (The migrations themselves and `MigrateOnStartup`'s happy path
+  are no longer in this list — CI's `sqlserver` job now proves them against
+  a real engine; see the CI-verified bullet above. What remains unverified
+  here is the Aspire wiring itself.)
 - **The Keycloak dev realm import**
   (`src/RocketWiki.AppHost/keycloak/rocketwiki-realm.json`). The JSON is
   syntactically valid and was checked by decompiling the Aspire Keycloak
@@ -407,6 +405,23 @@ Being explicit about what has and hasn't been checked, rather than letting
   and an `effectivePermission` inspector with per-rule pass/fail — all
   fail-closed, all audited (`permission.inspect`). The SPA's already-built
   permission components wire up in the un-stub round.
+- **CI-verified against real SQL Server (never yet on a developer
+  machine):** the checked-in migrations apply from zero to a real,
+  FTS-enabled SQL Server 2025 container — including the FULLTEXT
+  catalog/index DDL, filtered indexes, CHECK constraints, and the
+  AuditEvents IDENTITY — and `Database:MigrateOnStartup`'s happy path boots
+  the real API host, migrates, and answers `/graphql`. Keyword search's
+  CONTAINSTABLE branch is exercised for real (stemming-only matches, FTS
+  ranking, permission filtering on that branch), as are outbox sequence
+  gap-freedom, audit-transaction rollback, and declared-length enforcement.
+  Building this tier surfaced two real bugs before any engine ever ran the
+  code: the FULLTEXT DDL could never have applied inside EF's migration
+  transaction (now `suppressTransaction: true`), and raw user queries were
+  CONTAINS-grammar syntax errors (now a quoted `FORMSOF(INFLECTIONAL, …)`
+  builder, unit-tested). All of this runs only in CI's `sqlserver` job
+  (`tests/RocketWiki.SqlServer.Tests`); on machines without Docker the tier
+  skips visibly and these claims are only as fresh as the last green CI
+  run.
 - **GitLab integration (backend, design.md §18)**: `gitlabIssue`/
   `gitlabIssues`/`gitlabFile` queries proxying GitLab REST v4 under the
   *calling user's own* encrypted PAT (no service account, ever — the
