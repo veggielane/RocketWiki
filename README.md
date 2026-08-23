@@ -8,7 +8,9 @@ export-control requirements: WYSIWYG editing over a Markdown storage format, a
 ![Page view — rendered Markdown with custom emojis, labels, watch toggle, and a mirrored-space nav](docs/screenshots/page-view.png)
 
 <details>
-<summary>More screenshots: search with section-attributed results, and the Settings page (avatar upload + GitLab token)</summary>
+<summary>More screenshots: Ask the wiki, search with section-attributed results, and the Settings page</summary>
+
+![Ask the wiki — a cited answer drawing only on pages the asker can view](docs/screenshots/ask.png)
 
 ![Search results with heading-path attribution and permission-filtered totals](docs/screenshots/search.png)
 
@@ -470,7 +472,13 @@ Being explicit about what has and hasn't been checked, rather than letting
   question and the retrieved viewable content are sent to the
   operator-configured, in-network LLM endpoint; unconfigured instances
   answer `NOT_CONFIGURED`, and every ask is audited (`assistant.ask`) with
-  the question and the pages involved. The chat UI is the pending phase 2.
+  the question and the pages involved. The chat UI lives at `/ask` (an app-bar
+  entry beside search, plus a "Can't find it?" hand-off from search results):
+  a session-local transcript, `[Sn]` markers rendered as superscript
+  deep-links into the cited page sections, the model's output rendered
+  strictly as text, and every affordance collapsing for the session on an
+  unconfigured instance — the attempt is the probe, since no status field
+  exists.
 - **Native vector search (design.md §9.3)** — `PageEmbedding` now uses SQL
   Server 2025's `vector(1536)` column with in-engine `VECTOR_DISTANCE`
   scoring (CI-verified by the Testcontainers tier, including §6.7 on that

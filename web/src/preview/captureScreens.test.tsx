@@ -22,6 +22,8 @@ import { AppShell } from '../app/AppShell'
 import { PageViewPage } from '../pages/PageViewPage'
 import { SearchPage } from '../pages/SearchPage'
 import { SettingsPage } from '../pages/SettingsPage'
+import { AskWikiPage } from '../pages/AskWikiPage'
+import { fireEvent } from '@testing-library/react'
 import { ColorModeProvider } from '../theme/ColorModeProvider'
 import { createMockUrqlClient } from '../test/mockUrqlClient'
 import { setEmojiRegistry } from '../emoji/registry'
@@ -215,6 +217,20 @@ function mockClient() {
           ],
         },
       }
+    if (name === 'AskWiki')
+      return {
+        askWiki: {
+          answer:
+            'The 270 ms delay traces to turbopump inlet pressure sagging below the chill-in redline [S1]. ' +
+            'The igniter feed transient was masked by the telemetry filter — the unfiltered channel confirms it [S2]. ' +
+            'The corrective actions are an extended pre-press hold and an unfiltered igniter-feed channel [S1].',
+          citations: [
+            { pageId: 'page-1', title: 'Stage two ignition anomaly review', headingPath: ['Findings so far'], anchorId: 'findings-so-far' },
+            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed' },
+          ],
+          unavailable: null,
+        },
+      }
     if (name === 'SearchFacets')
       return { spaces: spaces.map((s) => ({ key: s.key, name: s.name })), labels: ['anomaly', 'propulsion', 'ops'] }
     return undefined
@@ -254,6 +270,23 @@ it('composes the README screens (writes HTML only when PREVIEW_OUT is set)', asy
   await capture('page-view.html', '/pages/page-1', 'pages/:pageId', <PageViewPage />)
   await capture('search.html', '/search?q=ignition', 'search', <SearchPage />)
   await capture('settings.html', '/settings', 'settings', <SettingsPage />)
+
+  // The Ask page with one answered question in the transcript: prefill via ?q=,
+  // fire the submit, let the mocked askWiki resolve, then capture.
+  {
+    const r = render(
+      shell('/ask?q=Why%20did%20the%20stage%20two%20ignition%20delay%3F', 'ask', <AskWikiPage />),
+    )
+    await settle()
+    const box = r.container.querySelector('textarea:not([aria-hidden])')
+    if (box) fireEvent.change(box, { target: { value: 'Why did the stage two ignition delay?' } })
+    // Enter submits (the page's own keyboard path — jsdom doesn't auto-submit
+    // forms from button clicks, and this is the same route the tests use).
+    if (box) fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' })
+    await settle()
+    screens.push({ file: 'ask.html', html: r.container.innerHTML })
+    cleanup()
+  }
 
   const outDir = process.env.PREVIEW_OUT
   if (!outDir) return
