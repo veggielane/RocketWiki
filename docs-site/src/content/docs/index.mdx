@@ -1,0 +1,77 @@
+---
+title: RocketWiki
+description: A self-hosted Confluence replacement with Markdown storage, GraphQL, and attribute-based access control.
+template: splash
+hero:
+  tagline: A self-hosted Confluence replacement for organizations with export-control requirements — WYSIWYG editing over plain Markdown, a .NET/GraphQL backend, and attribute-based access control.
+  actions:
+    - text: Read the design
+      link: /RocketWiki/design/00-overview/
+      icon: open-book
+    - text: Current status
+      link: /RocketWiki/status/
+      icon: information
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/veggielane/RocketWiki
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+:::caution[Under active, parallel construction]
+RocketWiki is being built by many agents in parallel and **nothing has been
+deployed or run end to end on a real machine** — no container runtime was
+available where it was developed. What *is* verified is verified by tests
+(including a real SQL Server tier on every CI run), and the
+[Status page](/RocketWiki/status/) is explicit about which is which. Read it
+before assuming anything works.
+:::
+
+## What it is
+
+<CardGrid stagger>
+	<Card title="WYSIWYG over Markdown" icon="pencil">
+		Pages are stored as plain GFM Markdown (plus callout directives and
+		`page://` / `attachment://` / `user://` links). The editor round-trips
+		byte-identically — Markdown in, the same Markdown out — so sync,
+		import, and diffs stay honest. [Design §4](/RocketWiki/design/04-content-model-wysiwyg-over-markdown/)
+	</Card>
+	<Card title="Attribute-based access control" icon="seti:lock">
+		Rules like “engineering AND nationality NZ or US”, evaluated
+		fail-closed from Keycloak claims, with no admin bypass. Restricted
+		pages are *absent*, not forbidden — byte-identical to pages that don't
+		exist. [Design §6](/RocketWiki/design/06-access-control/)
+	</Card>
+	<Card title="Audit logging" icon="magnifier">
+		Reads, writes, and denials land in an append-only audit log, with the
+		reason a denial fired. Telemetry is deliberately *not* the audit
+		record. [Design §7](/RocketWiki/design/07-audit-logging/)
+	</Card>
+	<Card title="Multi-instance sync" icon="random">
+		One-way low-to-high replication for split networks: replica spaces are
+		read-only mirrors, and what travels vs. what stays local is designed,
+		not accidental. [Design §12](/RocketWiki/design/12-multi-instance-sync-low-high/)
+	</Card>
+	<Card title="GraphQL + MCP" icon="setting">
+		A single Hot Chocolate GraphQL API, plain-HTTP attachment routes
+		through the same authorization pipeline, and a read-only MCP server so
+		agents get the same permission filtering people do.
+		[Design §8](/RocketWiki/design/08-api-design/)
+	</Card>
+	<Card title="Confluence migration" icon="seti:folder">
+		An importer that converts Confluence storage format to the supported
+		Markdown set, with byte-exact converted-corpus fixtures.
+		[Design §13](/RocketWiki/design/13-confluence-migration/)
+	</Card>
+</CardGrid>
+
+## About this site
+
+Everything here except this page and the
+[documentation map](/RocketWiki/docs-map/) is **generated at build time from
+the canonical documents in the repository** — `design.md`, `data-model.md`,
+`DEVELOPING.md`, the deployment and Keycloak READMEs, and the README's
+"Current status" section. The site never forks content: to change a page,
+edit the source document it names at the top.
