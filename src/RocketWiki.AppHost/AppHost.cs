@@ -53,11 +53,18 @@ var keycloak = builder.AddKeycloakContainer("keycloak")
 // connection string, never a container Aspire runs, in every environment.
 var embeddings = builder.AddConnectionString("embeddings");
 
+// External OpenAI-compatible chat endpoint for "ask the wiki" (design.md §9) —
+// same rules as embeddings: connection string only, in-network by §9.4's boundary
+// requirement, fail-closed absent (askWiki answers NOT_CONFIGURED when unset).
+// Typically the same gateway as embeddings serving a second model.
+var assistant = builder.AddConnectionString("assistant");
+
 var api = builder.AddProject<Projects.RocketWiki_Api>("api")
     .WithReference(sql)
     .WithReference(minio.GetEndpoint("http"))
     .WithReference(keycloak)
-    .WithReference(embeddings);
+    .WithReference(embeddings)
+    .WithReference(assistant);
 
 // TODO(frontend agent / milestone 0): wire the Vite app once web/ has a working
 // dev server script. Uncomment once confirmed:

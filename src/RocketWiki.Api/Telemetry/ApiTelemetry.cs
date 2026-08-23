@@ -312,6 +312,49 @@ public static class ApiTelemetry
     public static void RecordCoEditLogReset(string reason) =>
         CoEditLogResets.Add(1, new KeyValuePair<string, object?>(CoEditResetReasonTag, reason));
 
+    // --- "Ask the wiki" assistant (design.md §9 assistant; §15 discipline) ---
+    // Dispositions, counts and durations only. The question, the retrieved content,
+    // and the citations are exactly the §15-forbidden categories (search text, page
+    // content, titles); they live in the assistant.ask audit row's Details (§7) and
+    // nowhere else — AssistantTelemetryHygieneTests sweeps every source and meter
+    // for them.
+
+    public static readonly Counter<long> AssistantAsks =
+        Meter.CreateCounter<long>("rocketwiki.assistant.asks", "{ask}",
+            "Ask-the-wiki requests, by disposition.");
+
+    /// <summary>How many pages' content entered the model context per ask — the
+    /// retrieval-count signal ("is retrieval finding anything") with no page
+    /// identity attached.</summary>
+    public static readonly Histogram<long> AssistantRetrievedPages =
+        Meter.CreateHistogram<long>("rocketwiki.assistant.retrieved_pages", "{page}",
+            "Pages whose content entered the model context, per ask, by disposition.");
+
+    public static readonly Histogram<double> AssistantAskDuration =
+        Meter.CreateHistogram<double>("rocketwiki.assistant.ask.duration", "s",
+            "Duration of ask-the-wiki requests end to end (retrieval + generation), by disposition.");
+
+    /// <summary>Constant span name (low-cardinality, §15); disposition rides as a tag.</summary>
+    public const string AssistantAskSpan = "rocketwiki.assistant.ask";
+
+    public const string AssistantDispositionTag = "rocketwiki.assistant.disposition";
+
+    public const string AssistantDispositionAnswered = "answered";
+    public const string AssistantDispositionNoResults = "no_results";
+    public const string AssistantDispositionNotConfigured = "not_configured";
+    public const string AssistantDispositionUnreachable = "unreachable";
+
+    public static void RecordAssistantAsk(string disposition, int retrievedPageCount, TimeSpan duration)
+    {
+        var tags = new KeyValuePair<string, object?>[]
+        {
+            new(AssistantDispositionTag, disposition),
+        };
+        AssistantAsks.Add(1, tags);
+        AssistantRetrievedPages.Record(retrievedPageCount, tags);
+        AssistantAskDuration.Record(duration.TotalSeconds, tags);
+    }
+
     /// <summary>Recipient was connected and passed canView at send time: row persisted
     /// with a title snapshot and pushed to their live connection.</summary>
     public const string NotificationDeliveredLive = "delivered_live";
