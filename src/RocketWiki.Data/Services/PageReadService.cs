@@ -11,6 +11,13 @@ namespace RocketWiki.Data.Services;
 /// RocketWiki.Data for the same reason PageService does: it needs RocketWikiDbContext
 /// directly, and Data already references Core, so an EF-dependent service can't live in
 /// Core without a circular project reference.
+///
+/// Denial auditing deliberately does NOT happen here (design.md §6.7's split): this
+/// service returns the internal not-found-vs-denied ReadResult, and the API layer -
+/// which owns IAuditSink, the request-scoped dedup, and the channel context - audits
+/// the Denied case before collapsing it to null. Auditing from inside this service
+/// would drag the Api project's audit seam into Core/Data (a circular reference) and
+/// would bypass the per-request deduplication design.md §8 requires.
 /// </summary>
 public class PageReadService : IPageReadService
 {
@@ -21,57 +28,66 @@ public class PageReadService : IPageReadService
         _db = db;
     }
 
-    public async Task<Page?> GetPageAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default)
+    public async Task<ReadResult<Page>> GetPageAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default)
     {
         var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);
         if (page is null)
         {
-            return null;
+            return new ReadResult<Page>.NotFound();
         }
 
         var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         if (space is null)
         {
-            return null;
+            return new ReadResult<Page>.NotFound();
         }
 
-        var canView = await ComputeCanViewAsync(space, page, principal, cancellationToken);
-        return canView ? page : null;
+        var permission = await ComputePermissionAsync(space, page, principal, cancellationToken);
+        return permission.CanView
+            ? new ReadResult<Page>.Found(page)
+            : new ReadResult<Page>.Denied(permission.ViewDenialReason ?? "no-space-role");
     }
 
-    public async Task<IReadOnlyList<PageRevision>?> GetRevisionHistoryAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default)
+    public async Task<ReadResult<IReadOnlyList<PageRevision>>> GetRevisionHistoryAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default)
     {
         // Revision history needs nothing beyond the exact same canView gate as the page
         // itself (design.md §6.7) - reusing GetPageAsync keeps that a single source of truth.
-        var page = await GetPageAsync(pageId, principal, cancellationToken);
-        if (page is null)
+        switch (await GetPageAsync(pageId, principal, cancellationToken))
         {
-            return null;
+            case ReadResult<Page>.NotFound:
+                return new ReadResult<IReadOnlyList<PageRevision>>.NotFound();
+            case ReadResult<Page>.Denied denied:
+                return new ReadResult<IReadOnlyList<PageRevision>>.Denied(denied.Reason);
         }
 
-        return await _db.PageRevisions
+        var revisions = await _db.PageRevisions
             .Where(r => r.PageId == pageId)
             .OrderByDescending(r => r.RevisionNumber)
             .ToListAsync(cancellationToken);
+        return new ReadResult<IReadOnlyList<PageRevision>>.Found(revisions);
     }
 
-    public async Task<IReadOnlyList<PageTreeNode>> GetPageTreeAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken = default)
+    public async Task<ReadResult<IReadOnlyList<PageTreeNode>>> GetPageTreeAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken = default)
     {
         var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == spaceId, cancellationToken);
         if (space is null)
         {
-            return Array.Empty<PageTreeNode>();
+            return new ReadResult<IReadOnlyList<PageTreeNode>>.NotFound();
         }
 
         var spaceGrants = await _db.AccessRules
             .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
             .ToListAsync(cancellationToken);
 
-        // No space role at all means no view of anything in it - an empty tree, not an
-        // error, matching "invisible, not merely unopenable" (design.md §6.7).
+        // No space role at all means no view of anything in it - to the caller an empty
+        // tree, not an error, matching "invisible, not merely unopenable" (design.md
+        // §6.7); internally a Denied so §7 can record the refused browse. This is the
+        // only Denied this method produces: a node pruned during the walk below is not
+        // a denied request - the browse succeeded and simply shows less (see the
+        // interface doc) - so pruning stays unreported on purpose.
         if (EffectivePermissionCalculator.ComputeSpaceRole(spaceGrants, principal) is null)
         {
-            return Array.Empty<PageTreeNode>();
+            return new ReadResult<IReadOnlyList<PageTreeNode>>.Denied("no-space-role");
         }
 
         // Two queries total regardless of tree depth or size: every live page in the
@@ -104,7 +120,7 @@ public class PageReadService : IPageReadService
             }
         }
 
-        return result;
+        return new ReadResult<IReadOnlyList<PageTreeNode>>.Found(result);
     }
 
     /// <summary>
@@ -147,7 +163,7 @@ public class PageReadService : IPageReadService
         return new PageTreeNode(page.Id, page.Title, page.Slug, page.SortOrder, children);
     }
 
-    private async Task<bool> ComputeCanViewAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
+    private async Task<EffectivePermission> ComputePermissionAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
     {
         var spaceGrants = await _db.AccessRules
             .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
@@ -162,7 +178,10 @@ public class PageReadService : IPageReadService
 
         // Replica status is irrelevant to canView (design.md §6.4: it only ever affects
         // canEdit), so this is always false here regardless of the space's origin.
-        var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplicaSpace: false, principal);
-        return permission.CanView;
+        // The permission-check counter (rocketwiki.access.permission_checks) and its
+        // bounded denial-category tag are emitted inside Compute itself (design.md §15)
+        // - unchanged by the richer ReadResult return, which carries the *specific*
+        // reason to the audit row only.
+        return EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplicaSpace: false, principal);
     }
 }

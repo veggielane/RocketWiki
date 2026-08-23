@@ -89,7 +89,11 @@ public sealed class NotificationsHub(
             return;
         }
 
-        var page = await pageReadService.GetPageAsync(pageId, principal, Context.ConnectionAborted);
+        // ValueOrNull: presence only needs "viewable or not". Denied joins are counted
+        // below but deliberately not audit-rowed - presence joins aren't audited at all
+        // yet (success or denial, no [AuditAction] exists for them), and recording only
+        // the denials would make the audit log imply joins are covered when they aren't.
+        var page = (await pageReadService.GetPageAsync(pageId, principal, Context.ConnectionAborted)).ValueOrNull();
         if (page is null)
         {
             // Counted, not distinguished to the caller: the three silent-return branches

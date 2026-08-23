@@ -25,7 +25,7 @@ public sealed class SpaceType : ObjectType<Space>
 
         descriptor.Field("homepage")
             .Type<PageType>()
-            .ResolveWith<SpaceFieldResolvers>(r => r.GetHomepageAsync(default!, default!, default!, default));
+            .ResolveWith<SpaceFieldResolvers>(r => r.GetHomepageAsync(default!, default!, default!, default!, default));
 
         descriptor.Field("grants")
             .Type<NonNullType<ListType<NonNullType<AccessRuleType>>>>()

@@ -17,13 +17,16 @@ namespace RocketWiki.Api.Audit;
 /// resolvers themselves, where the typed error (with its reason) is available —
 /// this middleware only ever sees Outcome.Success.
 ///
-/// A null result is never audited (fail closed against the read side specifically): per
-/// <c>IPageReadService</c>'s contract, null means "not found or not viewable" and the two
-/// are indistinguishable by design (design.md §6.7) — there is nothing here to tell
-/// whether a denial even happened, so this middleware cannot honestly record one. See
-/// AuditPipelineTests / the root README for the known gap this leaves: a denied *read*
-/// goes unaudited rather than risk falsely recording a Denied event that's actually a
-/// plain 404, or a Success that's actually a denial.
+/// A null result is never audited here: by the time this middleware runs, the resolver
+/// has already collapsed the internal ReadResult (design.md §6.7) to null, and the two
+/// things null can mean diverge in what they deserve — a denial was *already audited by
+/// the resolver itself* (with the failing-restriction reason this middleware could never
+/// see; ReadDenialAudit is that path), while a genuine not-found is deliberately not
+/// audited at all (no access decision was made; see ReadDenialAudit's doc). So "skip
+/// null" is not a gap anymore, it is the success-only half of the split. For non-null
+/// results that a resolver collapsed a denial *into* (an empty tree), DbAuditSink
+/// suppresses this middleware's Success row for a subject already recorded as Denied
+/// this request.
 /// </summary>
 public sealed class AuditFieldMiddleware(FieldDelegate next)
 {

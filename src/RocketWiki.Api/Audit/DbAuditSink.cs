@@ -15,9 +15,16 @@ namespace RocketWiki.Api.Audit;
 /// Deduplicates within one request (design.md §8: "resolving Page.content or
 /// Page.revisions emits page.view, deduplicated per request... a query fetching one page
 /// through three paths is one view, not three"). Scoped per HTTP request, so the
-/// dedup set naturally resets between requests. Keyed on (Action, SubjectId, Outcome) —
-/// a Denied and a Success for the same subject are kept distinct on purpose, though that
-/// combination shouldn't arise in practice.
+/// dedup set naturally resets between requests. Keyed on (Action, SubjectId, Outcome),
+/// with one deliberate asymmetry: a Success is skipped when the same (Action, SubjectId)
+/// was already recorded as Denied this request. That combination is real since denied
+/// reads became auditable (design.md §6.7): a resolver audits the Denied and then
+/// collapses it to an empty-but-non-null shape (pageTree's [], revisions' []), which
+/// AuditFieldMiddleware would otherwise dutifully record as a Success for the very
+/// subject that was just refused — a denial must never also claim success. The reverse
+/// order (Success then Denied, same subject) is left alone: two genuine, contradictory
+/// decisions in one request means a rule changed mid-flight, and both rows are the
+/// honest record of that.
 /// </summary>
 public sealed class DbAuditSink(
     RocketWikiDbContext db, IActingUserAccessor actingUser, ICurrentAuditContextAccessor auditContextAccessor) : IAuditSink
@@ -26,6 +33,12 @@ public sealed class DbAuditSink(
 
     public async Task RecordAsync(AuditRecord record, CancellationToken ct)
     {
+        if (record.Outcome == AuditOutcome.Success
+            && _recordedThisRequest.Contains((record.Action, record.SubjectId, AuditOutcome.Denied)))
+        {
+            return;
+        }
+
         var dedupKey = (record.Action, record.SubjectId, record.Outcome);
         if (!_recordedThisRequest.Add(dedupKey))
         {

@@ -16,13 +16,10 @@ namespace RocketWiki.Api.Audit;
 /// <see cref="AuditContextMiddleware"/>), not from the caller — a resolver
 /// calling this shouldn't need to know or restate which channel it's on.
 ///
-/// TODO(milestone 2+): a field middleware that reads
-/// <see cref="AuditActionAttribute"/> off the resolved GraphQL field and calls
-/// this automatically. Not built yet — there is no field with
-/// <see cref="AuditActionAttribute"/> today (<c>Query.Me</c> is
-/// <see cref="NoAuditAttribute"/>) to safely prove it against without adding a
-/// real content resolver, which is out of this scope (IPageService's read
-/// services are mid-flight elsewhere). Until then this sink is tested directly.
+/// Two callers feed reads through this seam today: <see cref="AuditFieldMiddleware"/>
+/// (successes, from <see cref="AuditActionAttribute"/> declarations) and
+/// <see cref="ReadDenialAudit"/> (denials, with the failing-restriction reason the
+/// read services now return internally per design.md §6.7).
 /// </summary>
 public interface IAuditSink
 {

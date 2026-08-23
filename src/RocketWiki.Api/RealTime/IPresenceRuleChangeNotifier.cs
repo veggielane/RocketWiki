@@ -60,7 +60,10 @@ public sealed class PresenceRuleChangeNotifier(
         var evicted = 0;
         foreach (var (pageId, connectionId, principal) in connections)
         {
-            var page = await pageReadService.GetPageAsync(pageId, principal, cancellationToken);
+            // ValueOrNull: this sweep only needs "still viewable or not" - the eviction
+            // itself is a consequence of a rule change (whose mutation was audited),
+            // not a user's read request, so there is no denied *read* to audit here.
+            var page = (await pageReadService.GetPageAsync(pageId, principal, cancellationToken)).ValueOrNull();
             if (page is not null)
             {
                 continue;
