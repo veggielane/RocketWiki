@@ -445,6 +445,22 @@ Being explicit about what has and hasn't been checked, rather than letting
   (`tests/RocketWiki.SqlServer.Tests`); on machines without Docker the tier
   skips visibly and these claims are only as fresh as the last green CI
   run.
+- **Collaborative editor (SPA, design.md §8)** — the TipTap editor now
+  co-edits over the existing hub connection: a hand-rolled SignalR Yjs
+  provider (no y-websocket) joins the relay session, seeds or replays per
+  the server's role assignment, batches keystrokes into merged updates and
+  throttles carets on the real awareness protocol, and handles log-cap
+  save-and-reseed, seeder loss, eviction to read-only, and reconnect
+  (rejoin-and-replay; the one divergent-lineage corner that can duplicate
+  text is documented in the provider, not hidden). A refused or unreachable
+  join falls back to the unchanged solo editor — co-editing is progressive
+  enhancement. Session saves submit against the session base revision and
+  toast the server-resolved contributors; presence pointers ride along on
+  the edit route. Building it surfaced a real round-trip bug (StarterKit
+  v3's trailing-node chrome serialized as a phantom blank paragraph — fixed
+  at the serializer, corpus still byte-identical). Two real editors syncing
+  over a scripted relay are under test; per the standing caveat, no browser
+  has yet driven the live hub.
 - **Ask the wiki (backend, design.md §9.5)** — `askWiki(question)` answers
   from wiki content with per-section citations, retrieving only pages *you*
   can view (the same permission-filtered search and canView-gated reads as

@@ -14,12 +14,19 @@ namespace RocketWiki.SqlServer.Tests;
 /// doc-comment for the full argument, doc-sourced from CREATE VECTOR INDEX's reference
 /// page, checked 2026-08-23):
 ///
+///   0. Discovered by the first real run (CI #31), an even earlier blocker the docs
+///      don't lead with: the engine requires the indexed table to have a clustered
+///      primary key on a SINGLE 4-BYTE INT column (error 42217). PageEmbeddings'
+///      key does not qualify and reshaping it for an index the query path can't
+///      use anyway (VECTOR_DISTANCE is index-blind) would be absurd.
 ///   1. A vector index cannot be created on a table with fewer than 100 non-NULL
 ///      vectors (error 42266) — so a from-zero migration chain, which always runs
-///      against an empty PageEmbeddings, can never contain CREATE VECTOR INDEX.
+///      against an empty table, can never contain CREATE VECTOR INDEX.
 ///   2. On boxed SQL Server 2025 the index is preview-gated (PREVIEW_FEATURES) and
 ///      uses the earlier index format, which makes the indexed table READ-ONLY —
 ///      incompatible with the §9.2 background indexer ("page saved → re-embed").
+///      (Probed on a synthetic table shaped to satisfy blockers 0 and 1, since
+///      PageEmbeddings itself can never get past 42217.)
 ///
 /// These are tripwires by design: when a future SQL Server build lifts either
 /// limitation, the corresponding test FAILS with instructions, and shipping the
@@ -52,52 +59,88 @@ public sealed class DiskAnnIndexTripwireTests : SqlServerTestBase
         var ex = await Assert.ThrowsAsync<SqlException>(
             () => ExecuteDdlAsync(CreateVectorIndexSql));
 
-        // 42266 is the documented "at least 100 rows required" error. Any other error
-        // still proves the DDL cannot ship, but should be looked at - surface it.
-        Assert.True(ex.Number == 42266,
-            $"CREATE VECTOR INDEX on a near-empty table failed with error {ex.Number} instead of the " +
-            $"documented 42266 (>=100 non-NULL vectors required): \"{ex.Message}\". If the minimum-row " +
-            "requirement was lifted, revisit AlterPageEmbeddingToNativeVector's decision to keep the " +
-            "DiskANN index out of the migration chain.");
+        // The engine refuses on the FIRST unmet precondition. On PageEmbeddings'
+        // actual schema that is 42217 (clustered PK must be a single 4-byte INT —
+        // discovered by CI run #31, and an even stronger reason the index cannot
+        // ship on this table); 42266 (>=100 non-NULL vectors) is the documented
+        // row-count blocker that fires once the key shape qualifies. Either proves
+        // the DDL cannot live in the migration chain; anything ELSE — above all
+        // success — means the engine changed and the decision needs revisiting.
+        Assert.True(ex.Number is 42217 or 42266,
+            $"CREATE VECTOR INDEX on PageEmbeddings failed with unexpected error {ex.Number}: " +
+            $"\"{ex.Message}\". Expected 42217 (single 4-byte INT clustered PK required) or 42266 " +
+            "(>=100 non-NULL vectors required). The engine's preconditions have changed — revisit " +
+            "AlterPageEmbeddingToNativeVector's decision to keep the DiskANN index out of the " +
+            "migration chain.");
 
         Assert.Equal(0, await CountVectorIndexesAsync());
     }
 
     [SqlServerFact]
-    public async Task CreateVectorIndex_With100Rows_Succeeds_ButMakesTheTableReadOnly()
+    public async Task CreateVectorIndex_OnAQualifyingTable_Succeeds_ButMakesItReadOnly()
     {
-        // The second blocker: even created out-of-band (enough rows, preview flag on),
-        // the boxed-2025 earlier-format index freezes the table - which would kill the
-        // §9.2 embedding indexer. The day the INSERT below starts succeeding, boxed
-        // SQL Server has the full-DML index format and the index becomes shippable.
+        // The read-only blocker, probed on a synthetic table shaped to satisfy the
+        // engine's preconditions (single 4-byte INT clustered PK — which
+        // PageEmbeddings itself can never satisfy, see the other tripwire — plus
+        // >=100 non-NULL vectors and PREVIEW_FEATURES). Even then, the boxed-2025
+        // earlier-format index freezes the table — which would kill the §9.2
+        // embedding indexer. The day the INSERT below starts succeeding, boxed
+        // SQL Server has the full-DML index format and the calculus changes.
         using var context = CreateContext();
         await EnablePreviewFeaturesAsync(context);
-        await SeedEmbeddingRowsAsync(context, rowCount: 120);
+
+        await ExecuteDdlAsync("""
+            CREATE TABLE dbo.VectorTripwireProbe (
+                Id INT NOT NULL IDENTITY PRIMARY KEY CLUSTERED,
+                Embedding VECTOR(8) NOT NULL);
+            """);
+        var seed = string.Join(";", Enumerable.Range(0, 120).Select(i =>
+            $"INSERT INTO dbo.VectorTripwireProbe (Embedding) VALUES (CAST('[{i % 7 + 1}, {i % 5 + 1}, 1, 0, 0, 0, 0, 0]' AS VECTOR(8)))"));
+        await ExecuteDdlAsync(seed);
 
         try
         {
-            await ExecuteDdlAsync(CreateVectorIndexSql);
+            await ExecuteDdlAsync(
+                "CREATE VECTOR INDEX IX_VectorTripwireProbe_Embedding ON dbo.VectorTripwireProbe (Embedding) " +
+                "WITH (METRIC = 'cosine', TYPE = 'diskann');");
         }
         catch (SqlException ex)
         {
             Assert.Fail(
-                $"CREATE VECTOR INDEX failed on the 2025 container even with {120} rows and " +
-                $"PREVIEW_FEATURES ON — error {ex.Number}: \"{ex.Message}\". The mssql/server:2025 " +
-                "image may lack the vector-index preview feature entirely; update " +
-                "AlterPageEmbeddingToNativeVector's doc-comment with this finding.");
+                $"CREATE VECTOR INDEX failed on a table satisfying every documented precondition " +
+                $"(single INT clustered PK, 120 rows, PREVIEW_FEATURES ON) — error {ex.Number}: " +
+                $"\"{ex.Message}\". The mssql/server:2025 image's vector-index preview may have " +
+                "changed shape; update AlterPageEmbeddingToNativeVector's doc-comment with this finding.");
         }
 
         // The documented catalog view for vector indexes.
-        Assert.Equal(1, await CountVectorIndexesAsync());
+        await using (var connection = new SqlConnection(ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var count = new SqlCommand(
+                "SELECT COUNT(*) FROM sys.vector_indexes WHERE object_id = OBJECT_ID('dbo.VectorTripwireProbe')",
+                connection);
+            Assert.Equal(1, (int)(await count.ExecuteScalarAsync())!);
+        }
 
         // DML against the now-indexed table: expected to be REJECTED on boxed 2025.
-        var insertError = await TryInsertOneMoreRowAsync(context);
+        SqlException? insertError = null;
+        try
+        {
+            await ExecuteDdlAsync(
+                "INSERT INTO dbo.VectorTripwireProbe (Embedding) VALUES (CAST('[9, 9, 9, 0, 0, 0, 0, 0]' AS VECTOR(8)))");
+        }
+        catch (SqlException ex)
+        {
+            insertError = ex;
+        }
+
         Assert.True(insertError is not null,
-            "INSERT into a vector-indexed PageEmbeddings SUCCEEDED — boxed SQL Server now supports " +
-            "full DML on vector-indexed tables (the latest index format has reached on-prem). The main " +
-            "obstacle to the §9.3 DiskANN index is gone: revisit AlterPageEmbeddingToNativeVector and " +
-            "plan the index (mind the >=100-row creation minimum, which still rules out the from-zero " +
-            "migration chain).");
+            "INSERT into a vector-indexed table SUCCEEDED — boxed SQL Server now supports full DML " +
+            "on vector-indexed tables (the latest index format has reached on-prem). One obstacle to " +
+            "the §9.3 DiskANN index is gone: revisit AlterPageEmbeddingToNativeVector (mind the " +
+            "remaining blockers: the single-INT-PK table-shape requirement that PageEmbeddings fails, " +
+            "the >=100-row creation minimum, and VECTOR_DISTANCE being index-blind).");
     }
 
     private async Task ExecuteDdlAsync(string sql)
@@ -164,29 +207,4 @@ public sealed class DiskAnnIndexTripwireTests : SqlServerTestBase
         return (int)(await command.ExecuteScalarAsync())!;
     }
 
-    private async Task<SqlException?> TryInsertOneMoreRowAsync(RocketWiki.Data.RocketWikiDbContext context)
-    {
-        var pageId = await context.Pages.Select(p => p.Id).FirstAsync();
-        context.PageEmbeddings.Add(new PageEmbedding
-        {
-            PageId = pageId,
-            ChunkIndex = 100_000,
-            HeadingPath = "Post-index insert",
-            ChunkHash = new byte[32],
-            Embedding = Enumerable.Range(0, PageEmbeddingConfiguration.EmbeddingDimensions)
-                .Select(i => i == 0 ? 1f : 0f).ToArray(),
-            Model = "fake-model",
-            UpdatedAtUtc = DateTime.UtcNow,
-        });
-
-        try
-        {
-            await context.SaveChangesAsync();
-            return null;
-        }
-        catch (DbUpdateException ex) when (ex.GetBaseException() is SqlException sqlEx)
-        {
-            return sqlEx;
-        }
-    }
 }

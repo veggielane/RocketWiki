@@ -960,14 +960,19 @@ embedding model, called through `Microsoft.Extensions.AI`'s
   `VECTOR_DISTANCE` — which per its own documentation **never uses a vector
   index, even if one exists**. The DiskANN index is deliberately deferred
   with three engine-verified reasons (see the
-  AlterPageEmbeddingToNativeVector migration's doc-comment): index creation
-  requires ≥100 non-NULL rows (a from-zero migration chain always fails it),
-  on boxed SQL Server 2025 the index is preview-gated AND makes the indexed
-  table read-only (the full-DML index format is currently Azure SQL/Fabric
-  only — which would kill the §9.2 background indexer), and index-assisted
-  ANN needs the separate preview `VECTOR_SEARCH` TVF anyway. Both
-  limitations are **tripwire-tested** in the SQL Server tier so the day an
-  engine build lifts them, CI says so — detection, not hope. Model name +
+  AlterPageEmbeddingToNativeVector migration's doc-comment), plus a fourth
+  the first real CI run discovered (error 42217): the engine requires the
+  indexed table to have a clustered PK on a single 4-byte INT column, which
+  `PageEmbeddings`' key deliberately is not. The doc-sourced three: index
+  creation requires ≥100 non-NULL rows (a from-zero migration chain always
+  fails it), on boxed SQL Server 2025 the index is preview-gated AND makes
+  the indexed table read-only (the full-DML index format is currently
+  Azure SQL/Fabric only — which would kill the §9.2 background indexer),
+  and index-assisted ANN needs the separate preview `VECTOR_SEARCH` TVF
+  anyway. The limitations are **tripwire-tested** in the SQL Server tier
+  (the read-only probe runs on a synthetic table shaped to satisfy the
+  preconditions) so the day an engine build lifts them, CI says so —
+  detection, not hope. Model name +
   dimensions are stamped per row, and a startup guard fails the host loudly
   when configured dimensions disagree with the column.
 - Hybrid query: over-fetch top-K from FTS and vector search, fuse with
@@ -1661,7 +1666,7 @@ caveat below the table.
 | 7 | Semantic search | **done** (fake endpoint; exact-scan vectors) | Heading-boundary chunker over the shared anchor primitives; `PageEmbeddingState`-driven polling background job (covers sync-CLI writes; per-chunk hash re-embed; failure backoff; trash purge); `IEmbeddingGenerator` via Microsoft.Extensions.AI.OpenAI from the Aspire `embeddings` connection string — unconfigured means keyword-only, structurally; hybrid RRF inside the same `search` field (no schema change), canView after fusion, semantic hits deep-link via chunk attribution recomputed post-canView; `rocketwiki.embeddings.*` telemetry with a sentinel hygiene test. Native `vector` + DiskANN remain TODO-flagged (the conversion is deliberately not shipped ahead of the container tier — see the AddPageEmbeddingState migration); the exact-scan cosine fallback runs on both providers until then |
 | 8 | MCP server | **done** (no live Keycloak/OAuth dance yet) | `/mcp` (streamable HTTP, stateless, in-process) via the official C# SDK; RFC 9728 resource-metadata discovery pointing at Keycloak; four read-only tools over the shared service layer; per-call `mcp`-channel audit incl. client name and denied-read reasons; audit-declaration guard extended to tools; `rocketwiki.mcp.*` telemetry |
 | 9 | k3s deployment | **authored, unexercised** | Dockerfiles + Helm chart in-repo (`deploy/`), migration Job via EF bundle, Traefik ingress with WebSocket upgrade, secrets by reference, probes (TCP until health endpoints get a non-Dev config gate), offline image path. `helm lint`/`template` pass; nothing applied to a cluster; restore drill unrun |
-| 10 | Co-editing | **backend done** (SPA is phase 2) | Relay-only Yjs edit sessions over the existing hub: canEdit-gated join with denied-join auditing, seeder designation + reseed protocol, log cap + empty-session GC, rule-change eviction extended to edit groups, PageRevisionContributor attribution wired through updatePageContent (forgery-proof: server-side session data only), session-scoped audit on the new realtime channel, `rocketwiki.coedit.*` telemetry with sentinel hygiene test |
+| 10 | Co-editing | **done** (live hub unexercised) | Relay-only Yjs edit sessions over the existing hub: canEdit-gated join with denied-join auditing, seeder designation + reseed protocol, log cap + empty-session GC, rule-change eviction extended to edit groups, PageRevisionContributor attribution wired through updatePageContent (forgery-proof: server-side session data only), session-scoped audit on the new realtime channel, `rocketwiki.coedit.*` telemetry with sentinel hygiene test. SPA phase 2: SignalR Yjs provider over the shared hub connection (join/seed/replay, batched updates, awareness carets, log-cap auto-save-and-reseed, eviction, documented reconnect), collaborative TipTap mode with solo fallback as the default degradation, session-base saves with contributor attribution surfaced on save, presence pointers on the edit route |
 
 ### The standing caveat
 
