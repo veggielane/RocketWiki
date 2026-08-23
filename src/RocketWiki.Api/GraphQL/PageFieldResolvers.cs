@@ -154,6 +154,15 @@ public sealed class PageFieldResolvers
             .OrderBy(a => a.CreatedAtUtc)
             .ToListAsync(cancellationToken);
 
+    /// <summary>Batched via <see cref="SpaceKeyBySpaceIdDataLoader"/> (see its doc for
+    /// why this is metadata resolution, not an authorization decision). A missing key
+    /// would mean a Page row pointing at no Space row — an FK-impossible state worth
+    /// crashing on, not defaulting away.</summary>
+    public async Task<string> GetSpaceKeyAsync(
+        [Parent] Page page, SpaceKeyBySpaceIdDataLoader spaceKeyLoader, CancellationToken cancellationToken) =>
+        await spaceKeyLoader.LoadAsync(page.SpaceId, cancellationToken)
+            ?? throw new InvalidOperationException($"Page {page.Id} references space {page.SpaceId}, which does not exist.");
+
     public async Task<IReadOnlyList<string>> GetLabelsAsync(
         [Parent] Page page, [Service] RocketWikiDbContext db, CancellationToken cancellationToken) =>
         await db.PageLabels

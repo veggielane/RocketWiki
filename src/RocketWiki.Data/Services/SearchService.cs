@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Search;
 using RocketWiki.Core.Services;
 
 namespace RocketWiki.Data.Services;
@@ -58,7 +59,7 @@ public class SearchService : ISearchService
             return Array.Empty<SearchHit>();
         }
 
-        return await FilterByCanViewAsync(candidates, principal, maxResults, cancellationToken);
+        return await FilterByCanViewAsync(candidates, request.Query, principal, maxResults, cancellationToken);
     }
 
     /// <summary>
@@ -78,8 +79,9 @@ public class SearchService : ISearchService
             INNER JOIN CONTAINSTABLE(Pages, (Title, CurrentContent), {query}) AS ft ON p.Id = ft.[KEY]
             INNER JOIN Spaces s ON s.Id = p.SpaceId
             WHERE p.IsDeleted = 0
+              AND s.IsDeleted = 0
               AND ({spaceKey} IS NULL OR s.[Key] = {spaceKey})
-            ORDER BY ft.RANK DESC
+            ORDER BY ft.RANK DESC, p.Id
             """).ToListAsync(cancellationToken);
 
         return rows.Select(r => new SearchCandidate(r.Id, r.Title, r.SpaceId, r.SpaceKey, r.CurrentContent, r.AncestorPath)).ToList();
@@ -98,7 +100,11 @@ public class SearchService : ISearchService
         }
 
         var rows = await pagesQuery
+            // Deterministic order matters beyond aesthetics: the API layer paginates over
+            // this sequence with positional cursors, so ties (bulk-imported pages sharing
+            // one UpdatedAtUtc) must not reshuffle between "load more" requests.
             .OrderByDescending(p => p.UpdatedAtUtc)
+            .ThenBy(p => p.Id)
             .Take(overFetchCount)
             .Select(p => new { p.Id, p.Title, p.SpaceId, SpaceKey = p.Space!.Key, p.CurrentContent, p.AncestorPath })
             .ToListAsync(cancellationToken);
@@ -125,7 +131,7 @@ public class SearchService : ISearchService
     /// are found rather than scoring every candidate.
     /// </summary>
     private async Task<IReadOnlyList<SearchHit>> FilterByCanViewAsync(
-        List<SearchCandidate> candidates, Principal principal, int maxResults, CancellationToken cancellationToken)
+        List<SearchCandidate> candidates, string query, Principal principal, int maxResults, CancellationToken cancellationToken)
     {
         var spaceIds = candidates.Select(c => c.SpaceId).Distinct().ToArray();
         var spaceGrantsBySpace = await _db.AccessRules
@@ -157,15 +163,54 @@ public class SearchService : ISearchService
             var permission = EffectivePermissionCalculator.Compute(spaceGrants, applicableRestrictions, isReplicaSpace: false, principal);
             if (permission.CanView)
             {
-                hits.Add(new SearchHit(candidate.PageId, candidate.Title, candidate.SpaceKey, BuildSnippet(candidate.CurrentContent)));
+                // Snippet/heading/anchor are computed HERE, strictly after canView passed
+                // - restricted content never reaches the excerpting code at all
+                // (design.md §6.7: a hidden page must not leak via title, snippet, or count).
+                hits.Add(BuildHit(candidate, query));
             }
         }
 
         return hits;
     }
 
-    private static string BuildSnippet(string content) =>
-        content.Length <= SnippetLength ? content : content[..SnippetLength] + "…";
+    /// <summary>
+    /// Attributes the hit to the section containing the first literal term match:
+    /// heading breadcrumb (design.md §9's deep-link contract) + anchor id via the
+    /// ported cross-language algorithm, and a plain-text excerpt centered on the
+    /// match. A hit this literal scan can't locate in the body (title-only match,
+    /// or an FTS stem match on the SQL Server path) degrades to a leading excerpt
+    /// with no section attribution - correct, just less specific.
+    /// </summary>
+    private static SearchHit BuildHit(SearchCandidate candidate, string query)
+    {
+        var content = candidate.CurrentContent;
+        var matchIndex = SnippetBuilder.LocateFirstMatch(content, query, out var matchLength);
+        var snippet = matchIndex >= 0
+            ? SnippetBuilder.Build(content, matchIndex, matchLength, SnippetLength)
+            : SnippetBuilder.Build(content, 0, 0, SnippetLength);
+
+        IReadOnlyList<string> headingPath = [];
+        var anchorId = string.Empty;
+
+        if (matchIndex >= 0)
+        {
+            var headings = MarkdownHeadings.Extract(content);
+            var sectionIndex = -1;
+            for (var i = 0; i < headings.Count && headings[i].Offset <= matchIndex; i++)
+            {
+                sectionIndex = i;
+            }
+
+            if (sectionIndex >= 0)
+            {
+                var infos = headings.Select(h => new HeadingInfo(h.Level, h.Text)).ToArray();
+                headingPath = HeadingAnchors.ComputeHeadingPaths(infos)[sectionIndex];
+                anchorId = HeadingAnchors.ComputeHeadingAnchors(infos)[sectionIndex];
+            }
+        }
+
+        return new SearchHit(candidate.PageId, candidate.Title, candidate.SpaceKey, snippet, headingPath, anchorId);
+    }
 
     private static IEnumerable<Guid> ParseAncestorIds(string ancestorPath) =>
         string.IsNullOrEmpty(ancestorPath) || ancestorPath == "/"
