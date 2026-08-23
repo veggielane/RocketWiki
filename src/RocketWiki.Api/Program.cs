@@ -121,6 +121,11 @@ builder.Services.AddScoped<IAccessRuleService, AccessRuleService>();
 // the FTS path stays TODO-flagged/unverified until the Testcontainers tier exists).
 builder.Services.AddScoped<ISearchService, SearchService>();
 
+// --- Watches and the persisted notification list (design.md §8, milestone 4b) ---
+builder.Services.AddScoped<IWatchService>(sp => new WatchService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+builder.Services.AddScoped<INotificationReadModelService>(sp =>
+    new NotificationReadModelService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+
 // --- Real-time: SignalR (design.md §8) ---
 // design.md §15: a Redis backplane is needed once replicas > 1; at one replica (today)
 // the default in-memory backplane is correct and this is a real decision to revisit at

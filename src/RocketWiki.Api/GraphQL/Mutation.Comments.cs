@@ -1,5 +1,6 @@
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
+using RocketWiki.Api.RealTime;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -19,6 +20,7 @@ public partial class Mutation
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         [Service] IAuditSink auditSink,
+        [Service] INotificationDispatcher notificationDispatcher,
         CancellationToken cancellationToken)
     {
         var (principal, actingUserId, auditContext, unauthenticated) =
@@ -34,6 +36,10 @@ public partial class Mutation
             await MutationAuthHelper.AuditDenialIfApplicableAsync(auditSink, "comment.add", result.Error, AuditSubjectType.Comment, subjectId: null, cancellationToken);
             return new AddCommentPayload(null, PageMutationErrorView.From(result.Error));
         }
+
+        // design.md §8/§4: mentions in a comment body notify at save, per-recipient
+        // canView at send time (see NotificationDispatcher).
+        await notificationDispatcher.NotifyCommentPostedAsync(result.Value.Id, actingUserId.Value, cancellationToken);
 
         return new AddCommentPayload(result.Value, null);
     }

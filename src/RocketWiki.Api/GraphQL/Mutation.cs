@@ -29,6 +29,7 @@ public partial class Mutation
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         [Service] IAuditSink auditSink,
+        [Service] INotificationDispatcher notificationDispatcher,
         CancellationToken cancellationToken)
     {
         var (principal, actingUserId, auditContext, unauthenticated) =
@@ -44,6 +45,10 @@ public partial class Mutation
             await MutationAuthHelper.AuditDenialIfApplicableAsync(auditSink, "page.create", result.Error, AuditSubjectType.Page, subjectId: null, cancellationToken);
             return new CreatePagePayload(null, PageMutationErrorView.From(result.Error));
         }
+
+        // design.md §8: a brand-new page notifies its space's watchers, and anyone
+        // mentioned in the initial content (revision 1, so every mention is "new").
+        await notificationDispatcher.NotifyPageChangedAsync(result.Value.Id, actingUserId.Value, NotificationType.PageUpdated, cancellationToken);
 
         return new CreatePagePayload(result.Value, null);
     }

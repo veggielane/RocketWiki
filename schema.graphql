@@ -26,12 +26,9 @@ type Query {
   page(id: UUID!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
   me: CurrentUser!
-  labels(spaceKey: String): [String!]! @cost(weight: "10")
-  search(query: String!, spaceKey: String, labels: [String!], after: String): SearchConnection!
-    @cost(weight: "10")
+  notifications: [Notification!]! @cost(weight: "10")
   spaces: [Space!]! @cost(weight: "10")
   space(key: String!): Space @cost(weight: "10")
-  syncStatus: SyncStatusView! @cost(weight: "10")
 }
 
 type Mutation {
@@ -66,6 +63,8 @@ type Mutation {
     @cost(weight: "10")
   detachLabel(input: DetachLabelRequestInput!): DetachLabelPayload!
     @cost(weight: "10")
+  markNotificationRead(input: MarkNotificationReadInput!): MarkNotificationReadPayload!
+    @cost(weight: "10")
   createSpace(
     input: CreateSpaceRequestInput!
     initialGrant: InitialSpaceGrantInput!
@@ -75,6 +74,14 @@ type Mutation {
   archiveSpace(input: ArchiveSpaceRequestInput!): ArchiveSpacePayload!
     @cost(weight: "10")
   restoreSpace(input: RestoreSpaceRequestInput!): RestoreSpacePayload!
+    @cost(weight: "10")
+  watchPage(input: WatchPageRequestInput!): WatchPagePayload!
+    @cost(weight: "10")
+  unwatchPage(input: UnwatchPageRequestInput!): UnwatchPagePayload!
+    @cost(weight: "10")
+  watchSpace(input: WatchSpaceRequestInput!): WatchSpacePayload!
+    @cost(weight: "10")
+  unwatchSpace(input: UnwatchSpaceRequestInput!): UnwatchSpacePayload!
     @cost(weight: "10")
 }
 
@@ -225,14 +232,6 @@ type EditCommentPayload {
   error: PageMutationErrorView
 }
 
-type ExportedSpaceSyncStatusView {
-  spaceId: UUID!
-  spaceKey: String!
-  lastOutboxSequence: Long!
-  pendingEventCount: Int!
-  lastExportedBundle: Int
-}
-
 type Label {
   id: UUID!
   spaceId: UUID!
@@ -241,9 +240,25 @@ type Label {
   pageLabels: [PageLabel!]!
 }
 
+type MarkNotificationReadPayload {
+  notification: Notification
+  error: PageMutationErrorView
+}
+
 type MovePagePayload {
   page: Page
   error: PageMutationErrorView
+}
+
+type Notification {
+  id: String!
+  type: String!
+  pageId: UUID
+  spaceKey: String
+  pageTitle: String
+  actorDisplayName: String!
+  createdAtUtc: DateTime!
+  readAtUtc: DateTime
 }
 
 type Page {
@@ -254,7 +269,6 @@ type Page {
   comments: [Comment!]! @cost(weight: "10")
   attachments: [Attachment!]! @cost(weight: "10")
   labels: [String!]! @cost(weight: "10")
-  spaceKey: String! @cost(weight: "10")
   id: UUID!
   spaceId: UUID!
   parentPageId: UUID
@@ -304,7 +318,6 @@ type PageMutationErrorView {
   latestTitle: String
   latestContent: String
   spaceId: UUID
-  originInstanceId: String
   blockedPageCount: Int
   notFoundId: UUID
 }
@@ -353,29 +366,6 @@ type RestoreSpacePayload {
   error: PageMutationErrorView
 }
 
-type SearchConnection {
-  totalCount: Int!
-  edges: [SearchEdge!]!
-  pageInfo: SearchPageInfo!
-}
-
-type SearchEdge {
-  cursor: String!
-  node: SearchHit!
-}
-
-type SearchHit {
-  page: Page! @cost(weight: "10")
-  snippet: String!
-  headingPath: [String!]!
-  anchorId: String!
-}
-
-type SearchPageInfo {
-  hasNextPage: Boolean!
-  endCursor: String
-}
-
 type Space {
   grants: [AccessRule!]! @cost(weight: "10")
   trashedPages: [Page!]! @cost(weight: "10")
@@ -395,24 +385,14 @@ type Space {
   createdByUserId: UUID!
 }
 
-type SyncOriginSpaceStatusView {
-  spaceId: UUID!
-  spaceKey: String!
-  appliedSequence: Long!
+type UnwatchPagePayload {
+  watch: WatchView
+  error: PageMutationErrorView
 }
 
-type SyncOriginStatusView {
-  originInstanceId: String!
-  lastBundleNumber: Int!
-  lastManifestHash: String!
-  lastImportAtUtc: DateTime!
-  spaces: [SyncOriginSpaceStatusView!]!
-}
-
-type SyncStatusView {
-  localInstanceId: String!
-  exportedSpaces: [ExportedSpaceSyncStatusView!]!
-  origins: [SyncOriginStatusView!]!
+type UnwatchSpacePayload {
+  watch: WatchView
+  error: PageMutationErrorView
 }
 
 type UpdateAccessRulePayload {
@@ -423,6 +403,23 @@ type UpdateAccessRulePayload {
 type UpdatePageContentPayload {
   page: Page
   error: PageMutationErrorView
+}
+
+type WatchPagePayload {
+  watch: WatchView
+  error: PageMutationErrorView
+}
+
+type WatchSpacePayload {
+  watch: WatchView
+  error: PageMutationErrorView
+}
+
+type WatchView {
+  id: UUID!
+  pageId: UUID
+  spaceId: UUID
+  createdAtUtc: DateTime!
 }
 
 input AddCommentRequestInput {
@@ -509,6 +506,10 @@ input InitialSpaceGrantInput {
   expressionJson: String!
 }
 
+input MarkNotificationReadInput {
+  notificationId: String!
+}
+
 input MovePageRequestInput {
   pageId: UUID!
   newParentPageId: UUID
@@ -535,6 +536,14 @@ input RestoreSpaceRequestInput {
   spaceId: UUID!
 }
 
+input UnwatchPageRequestInput {
+  pageId: UUID!
+}
+
+input UnwatchSpaceRequestInput {
+  spaceId: UUID!
+}
+
 input UpdateAccessRuleRequestInput {
   accessRuleId: UUID!
   expressionJson: String!
@@ -548,6 +557,14 @@ input UpdatePageContentRequestInput {
   title: String!
   content: String!
   editSummary: String
+}
+
+input WatchPageRequestInput {
+  pageId: UUID!
+}
+
+input WatchSpaceRequestInput {
+  spaceId: UUID!
 }
 
 enum AccessRuleKind {
