@@ -26,6 +26,12 @@ deployed or run end to end on a real machine — see
 [Current status](#current-status) before assuming anything works. To work
 on it, start with [DEVELOPING.md](DEVELOPING.md).
 
+A browsable version of all of these documents is published at
+<https://veggielane.github.io/RocketWiki/>, regenerated from this repo on
+every push to `main` — edit the canonical files here, never the site
+(`docs-site/README.md` explains the scheme). Note: the repo is private but
+the docs site is publicly readable by anyone with the URL.
+
 The source of truth for *why* things are built this way is
 [`design.md`](design.md) (architecture, access control, audit, deployment) and
 [`data-model.md`](data-model.md) (the concrete EF Core / SQL Server schema).
