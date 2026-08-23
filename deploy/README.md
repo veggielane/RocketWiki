@@ -35,9 +35,9 @@ the standing caveat applies with full force here):
 - **The EF migrations bundle has never executed** — and the checked-in
   migration itself has never been applied to a real SQL Server (it carries
   TODO-flagged SQL Server-only features: FTS, `vector`, partitioning).
-- **The probe endpoints don't exist in Production yet** (see "Probes",
-  below), the SignalR path has never carried a real WebSocket, and nothing
-  has ever authenticated against a real Keycloak.
+- **The probe endpoints are config-gated but have never answered a real
+  kubelet** (see "Probes", below), the SignalR path has never carried a real
+  WebSocket, and nothing has ever authenticated against a real Keycloak.
 
 Assume nothing here works until the container-runtime task resumes and each
 of these is exercised. The first `docker build`, first `helm install`, and
@@ -215,24 +215,17 @@ Cadence: on any schema-migration release, and otherwise on a fixed calendar
 (quarterly at minimum). Log each drill's date, chart/image versions, and
 time-to-verified.
 
-## Probes (the health-endpoint situation, stated plainly)
+## Probes
 
-`/health` and `/alive` exist in the code (ServiceDefaults) but are mapped
-**only when `ASPNETCORE_ENVIRONMENT=Development`**
-(`src/RocketWiki.ServiceDefaults/Extensions.cs`, `MapDefaultEndpoints` — the
-stock Aspire guard, because exposing health detail has security
-implications). Running Development in production is not an acceptable
-workaround: it also disables `RequireHttpsMetadata` for Keycloak and enables
-detailed error surfaces (`Program.cs`).
-
-So the chart defaults to **TCP probes** (`api.probes.mode: tcp`) — honest
-about what they prove (Kestrel is up) and don't (the DB is reachable).
-`api.probes.mode: http` wires `/alive` → liveness and `/health` → readiness
-per §15's intent, but requires a **src/ follow-up that this deployment work
-deliberately did not make**: map the health endpoints outside Development,
-config-gated, keeping them unrouted at the ingress (probes come from the
-kubelet, so not routing `/health` at Traefik/nginx keeps them off the
-network). Flip the value the day that lands.
+`/health` and `/alive` are mapped in Development and, outside it, behind the
+explicit `HealthEndpoints:Enabled` opt-in (default false —
+`src/RocketWiki.ServiceDefaults/Extensions.cs`). The chart now defaults to
+**HTTP probes** (`api.probes.mode: http`): `/alive` → liveness, `/health` →
+readiness, with the chart setting `HealthEndpoints__Enabled` on the api
+container. Safe because probes come from the kubelet over the pod network
+and the ingress never routes either path to the api Service (they fall into
+the SPA catch-all). `mode: tcp` remains as the fallback for operators who
+want the endpoints unmapped even in-pod.
 
 ## Other known follow-ups (tracked, not hidden)
 

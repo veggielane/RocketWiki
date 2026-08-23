@@ -928,6 +928,13 @@ renames never touch storage; the `Attachment` row owns all meaning.
   row + audit event in one DB transaction. A nightly janitor deletes storage
   objects with no matching row (failed uploads); a row whose object is
   missing surfaces as a flagged error, not a 500.
+- **Size limit:** `Attachments:MaxSizeBytes` (default 100 MiB, matching the
+  nginx `client_max_body_size` in front of the API — the proxy line now
+  mirrors the API's limit instead of defining the system's only cap) is
+  enforced in the upload route before any blob write or row insert,
+  returning a structured 413. A refused-too-big upload is not audited: like
+  a validation failure, it involves no access decision (§7's outcome
+  vocabulary).
 
 ```json
 "FileStorage": {
@@ -1017,10 +1024,16 @@ bundle-000041.zip
 
 **Exported-ness is a low-side property.** Only a native space can be
 exported; a replica must never emit sync events for content it doesn't own.
-The outbox writer currently trusts `Space.IsExported` alone — a follow-up
-should also require `OriginInstanceId == localInstanceId`, so the invariant
-is enforced rather than assumed. Defense in depth: the one-way guarantee is
-the whole point of the design.
+The outbox writer enforces this rather than assuming it: an outbox entry is
+written only when `Space.IsExported` **and** `OriginInstanceId` equals the
+local instance id (threaded into the DbContext via `UseLocalInstanceId` on
+its options). A replica flagged exported — corrupt state, since no app path
+exports a replica and import writes `IsExported = false` — journals nothing
+while the local mutation itself (e.g. replica-side rule management, which is
+legitimately local) still commits; a context that never declared its
+instance id fails loudly the moment an exported space needs journaling, so a
+misconfigured writer can never silently produce an incomplete sync stream.
+Defense in depth: the one-way guarantee is the whole point of the design.
 
 ### What travels, what stays local
 

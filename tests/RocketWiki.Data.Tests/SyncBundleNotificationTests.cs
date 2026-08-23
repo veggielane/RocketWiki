@@ -34,6 +34,12 @@ public class SyncBundleNotificationTests : SqliteTestBase
 {
     private const string LowInstanceId = "low-instance";
     private const string HighInstanceId = "high-instance";
+
+    // This class's primary context plays the low side: its exported spaces carry
+    // OriginInstanceId = LowInstanceId, and the outbox writer's ownership invariant
+    // (UseLocalInstanceId, design.md §12) journals nothing unless the context's own
+    // instance id matches — same override BundleExportImportTests makes.
+    protected override string DefaultLocalInstanceId => LowInstanceId;
     private static readonly AuditContext AuditCtx = new(AuditChannel.Sync, "sync-job-1", "127.0.0.1");
 
     private static Principal EditorPrincipal(params string[] groups) => Principal.Create("editor-sub", groups);
