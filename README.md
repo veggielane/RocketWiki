@@ -395,6 +395,12 @@ Being explicit about what has and hasn't been checked, rather than letting
   `web/.env.example` documents the variables for standalone `vite dev`,
   including the easily-missed detail that the dashboard's OTLP/HTTP port is
   18890, not the gRPC 18889.
+- **Permissions shape the UI** (design.md §6.6): `Page` exposes
+  `canEdit`/`canComment`/`canManageAccess` for the current caller (batched,
+  replica-aware), a manage-gated `restrictions` listing, tree lock markers,
+  and an `effectivePermission` inspector with per-rule pass/fail — all
+  fail-closed, all audited (`permission.inspect`). The SPA's already-built
+  permission components wire up in the un-stub round.
 - **Diagrams**: ` ```mermaid ` blocks render inline (live preview while
   editing), and draw.io diagrams embed as base64 editable SVG with in-place
   editing via a configured diagrams.net instance (`VITE_DRAWIO_URL`,

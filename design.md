@@ -405,6 +405,16 @@ Rule systems fail in the UI, not the engine:
   inspector that stops there can only ever show one reason, which is the
   least useful answer when several rules are in play. The explain path is a
   separate method, never a relaxation of the gate.
+  *Shipped: the inspector is the root query `effectivePermission(pageId,
+  subject?)` — self-inspection for anyone who can view the page; a
+  principal-shaped `subject` (instance admins only) for inspecting or
+  what-if-testing another principal, since no other user's token exists to
+  build a real Principal from. The non-short-circuiting path is
+  `EffectivePermissionCalculator.Explain`, pinned by test to agree with the
+  enforcement gate's verdict and reasons exactly. The caller's own canView
+  gates every mode — the inspector is not a read-around, even for admins.
+  Every inspection is audited as `permission.inspect` with the inspected
+  principal's id (never their attribute values).*
 - **Restriction banner** — a page with active restrictions shows a lock badge
   listing the effective rules, so authors know a page is limited.
 - Known groups are accumulated from observed logins (plus manual add), avoiding
@@ -603,13 +613,22 @@ admins only, the User mirror; suggestion-vocabulary, never authority),
 `labelDetails` (Query + Page) giving labels ids, `archivedSpaces` (scoped
 exactly to who `restoreSpace` accepts), `UserRef` display-name resolution
 for comment/attachment/trash authors, viewer watch state, tree-node labels,
-and audit `totalCount`. New §7 action: `permission.vocabulary` (success +
-audited denial); watch-state and tree-label nested fields deliberately emit
-no audit rows of their own. Still open (in flight): viewer-permission
-fields (`canEdit`/`canComment`/`canManageAccess`), the restrictions read
-path, the `effectivePermission` inspector, `PageTreeNode.hasRestrictions`,
-and `CurrentUser.isInstanceAdmin`/`localUserId` — until those land the SPA
-degrades explicitly (marked `NOTE (schema reconciliation)` in code).
+and audit `totalCount`. New §7 actions: `permission.vocabulary` (success +
+audited denial) and `permission.inspect` (every inspector call, success and
+denial, self and foreign); watch-state and tree-label nested fields
+deliberately emit no audit rows of their own. The permission half is closed
+too: `Page.canEdit`/`canComment`/`canManageAccess` (batched — 4 queries per
+page batch — and replica-aware), the manage-gated `Page.restrictions`
+listing (own + inherited flagged), the §6.6 inspector (as the root query
+`effectivePermission` rather than the sketch's `Page.effectivePermission`
+field — a deliberate divergence so the non-admin refusal happens before any
+page lookup), tree restriction markers
+(`PageTreeNode.hasRestrictions`/`ownViewRestrictions`, a list where the
+SPA's placeholder guessed a singular) for §6.4's move warning, and
+`CurrentUser.isInstanceAdmin`/`localUserId`. Remaining SPA-side wiring of
+these shapes (enum casing, expressionJson parsing, the singular→list
+adaptation) is the un-stub round's work — the `NOTE (schema
+reconciliation)` markers come out as it lands.
 
 ### Non-GraphQL routes: attachment binary
 
