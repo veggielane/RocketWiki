@@ -12,6 +12,7 @@ mutation AddComment($input: AddCommentRequestInput!) {
       author {
         id
         displayName
+        hasAvatar
       }
       createdAtUtc
       editedAtUtc

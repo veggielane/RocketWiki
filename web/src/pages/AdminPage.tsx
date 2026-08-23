@@ -12,6 +12,11 @@ const LIVE_SECTIONS = [
     description: 'Per-space outbox positions and pending events; per-origin bundle import history (§12).',
     to: '/admin/sync',
   },
+  {
+    title: 'Custom emojis',
+    description: 'Curate the :name: registry every signed-in user can render (§19).',
+    to: '/admin/emojis',
+  },
 ]
 
 const PLACEHOLDER_SECTIONS = [

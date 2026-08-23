@@ -13,5 +13,6 @@ query CurrentUser {
     isAuthenticated
     isInstanceAdmin
     localUserId
+    hasAvatar
   }
 }

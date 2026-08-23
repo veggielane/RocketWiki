@@ -46,7 +46,9 @@ function renderPage({ configured = true, hasTokenInitially = false } = {}) {
 describe('SettingsPage — hidden when unconfigured (§15/§18 fail-closed)', () => {
   it('shows no GitLab section, and no mention of GitLab at all', async () => {
     renderPage({ configured: false })
-    expect(await screen.findByText('There are no integration settings on this instance.')).toBeInTheDocument()
+    // The profile-picture section (§19) is instance-independent and always
+    // present; the GitLab section must be absent without a trace.
+    expect(await screen.findByText('Profile picture')).toBeInTheDocument()
     expect(screen.queryByText(/GitLab/)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/Personal access token/)).not.toBeInTheDocument()
   })

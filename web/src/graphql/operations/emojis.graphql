@@ -1,0 +1,13 @@
+# The custom-emoji registry (design.md §19): the names an authenticated
+# renderer may turn into images — an unknown `:name:` stays literal text —
+# plus each entry's `etag` (the stored bytes' content hash), the cache key
+# the SPA's blob cache is built on. The images themselves come from the
+# plain HTTP route `GET /emojis/{name}` (bytes don't belong in GraphQL),
+# fetched with the bearer token and rendered via blob: URLs, same as
+# attachments and avatars.
+query CustomEmojis {
+  customEmojis {
+    name
+    etag
+  }
+}

@@ -136,7 +136,10 @@ describe('PageViewPage server-resolved read state', () => {
   it('renders comment authors and attachment uploaders by display name, not id stand-ins', async () => {
     renderPage()
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument()
-    expect(screen.getByText(/uploaded by Grace Hopper/)).toBeInTheDocument()
+    // The uploader line now interleaves an avatar between "uploaded by"
+    // and the name (design.md §19) — the two text runs are siblings.
+    expect(screen.getByText(/uploaded by/)).toBeInTheDocument()
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument()
     expect(screen.queryByText(/User user-ada/)).not.toBeInTheDocument()
   })
 

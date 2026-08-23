@@ -104,6 +104,19 @@
   font-weight: 500;
 }
 
+/* Custom emojis (design.md §19): decoration-rendered images sized to the
+   surrounding text. The literal `:name:` source span is hidden only once
+   its image widget is actually in place (EmojiDecorations.ts) — content is
+   never blanked while a blob loads. */
+.rw-emoji {
+  height: 1.25em;
+  vertical-align: text-bottom;
+}
+
+.rw-emoji-source-hidden {
+  display: none;
+}
+
 .rw-editor-content table {
   border-collapse: collapse;
   width: 100%;

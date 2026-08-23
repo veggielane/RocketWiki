@@ -107,6 +107,14 @@ describe('Markdown round trip — required v1 feature set (design.md §4)', () =
     ['callout with multiple paragraphs', ':::info\nFirst.\n\nSecond.\n:::\n'],
     ['page link', 'See [Getting Started](page://page-abc).\n'],
     ['mention', 'Thanks @[Ada Lovelace](user://user-42) for the review.\n'],
+    // Custom emojis (design.md §19): `:name:` is plain text end to end —
+    // rendering is a read-mode *decoration* (editor/emoji/), deliberately
+    // not a schema node, so the serializer never sees an emoji at all.
+    // These vectors prove the bytes survive regardless of registry state.
+    ['emoji text (decoration-rendered, stored as plain text)', 'Launch :rocket: now.\n'],
+    ['adjacent emoji text', 'Cheers :tada::rocket:\n'],
+    ['clock times with colons stay text', 'Standup at 10:30:45 sharp.\n'],
+    ['unknown emoji name stays literal text', 'This :not-a-real-emoji: is just text.\n'],
     ['horizontal rule (bonus, not in v1 table but trivial + prevents data loss)', 'above\n\n---\n\nbelow\n'],
     [
       'compound: link + page link + mention in one paragraph',

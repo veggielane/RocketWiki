@@ -33,6 +33,7 @@ import { InsertGitLabFileDialog } from './gitlab/InsertGitLabFileDialog'
 import { InsertGitLabIssuesDialog } from './gitlab/InsertGitLabIssuesDialog'
 import { buildFileFenceBody, buildIssuesFenceBody, type GitLabFileRef, type GitLabIssuesSpec } from '../gitlab/fenceBody'
 import type { GitLabIssueRef } from '../gitlab/issueScheme'
+import { EmojiPickerButton } from './emoji/EmojiPickerButton'
 
 export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const [calloutMenuAnchor, setCalloutMenuAnchor] = useState<HTMLElement | null>(null)
@@ -307,6 +308,9 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
         <MenuItem onClick={insertMermaid}>Mermaid diagram</MenuItem>
         <MenuItem onClick={insertDrawio}>draw.io diagram</MenuItem>
       </Menu>
+      {/* Hidden when the registry is empty (EmojiPickerButton) — same
+          absent-not-disabled posture as the GitLab menu below. */}
+      <EmojiPickerButton editor={editor} />
       {gitlabConfigured && (
         <>
           <Tooltip title="GitLab">

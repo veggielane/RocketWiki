@@ -206,6 +206,7 @@ export function PageViewPage() {
     isDeleted: c.isDeleted,
     authorUserId: c.authorUserId,
     authorDisplayName: c.author.displayName,
+    authorHasAvatar: c.author.hasAvatar,
     createdAtUtc: c.createdAtUtc,
     editedAtUtc: c.editedAtUtc,
   }))
@@ -215,7 +216,9 @@ export function PageViewPage() {
     fileName: a.fileName,
     contentType: a.contentType,
     sizeBytes: a.sizeBytes,
+    uploadedById: a.uploadedBy.id,
     uploadedByDisplayName: a.uploadedBy.displayName,
+    uploadedByHasAvatar: a.uploadedBy.hasAvatar,
   }))
 
   const saveLabels = async (names: string[]) => {
