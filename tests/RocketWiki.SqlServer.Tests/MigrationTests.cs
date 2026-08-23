@@ -36,7 +36,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260823084715_AddPageEmbeddingState", applied);
         Assert.Contains("20260823103019_AddGitLabCredentials", applied);
         Assert.Contains("20260823133434_AddUserAvatars", applied);
-        Assert.Equal(4, applied.Count);
+        Assert.Contains("20260823134425_AddCustomEmojis", applied);
+        Assert.Equal(5, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -100,6 +101,11 @@ public sealed class MigrationTests : SqlServerTestBase
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_UserAvatars_EmailHashMd5' AND has_filter = 1 AND is_unique = 0"));
         Assert.Equal(1, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_UserAvatars_EmailHashSha256' AND has_filter = 1 AND is_unique = 0"));
+        // AddCustomEmojis: the registry's uniqueness lives in this index (the grammar
+        // keeps it effectively case-insensitive - lowercase only can ever be inserted),
+        // so it must land unique on the real engine, not just under SQLite's EnsureCreated.
+        Assert.Equal(1, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_CustomEmojis_Name' AND is_unique = 1"));
 
         // data-model.md: AuditEvents clustered PK (TimestampUtc, Id) with Id remaining
         // a native bigint IDENTITY despite being only part of the key.

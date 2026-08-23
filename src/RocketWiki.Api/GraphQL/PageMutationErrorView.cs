@@ -48,6 +48,9 @@ public sealed record PageMutationErrorView(
         ValidationError e => new PageMutationErrorView(
             "Validation", e.Message, null, null, null, null, null, null, null, null),
 
+        NameTakenError e => new PageMutationErrorView(
+            "NameTaken", $"An emoji named '{e.Name}' already exists.", null, null, null, null, null, null, null, null),
+
         _ => throw new NotSupportedException(
             $"No PageMutationErrorView mapping for '{error.GetType().Name}' - add one before shipping a new PageMutationError subtype."),
     };

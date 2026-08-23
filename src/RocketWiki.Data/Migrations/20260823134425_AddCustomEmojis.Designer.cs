@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RocketWiki.Data;
 
@@ -11,9 +12,11 @@ using RocketWiki.Data;
 namespace RocketWiki.Data.Migrations
 {
     [DbContext(typeof(RocketWikiDbContext))]
-    partial class RocketWikiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260823134425_AddCustomEmojis")]
+    partial class AddCustomEmojis
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -807,48 +810,6 @@ namespace RocketWiki.Data.Migrations
                     b.ToTable("Users", (string)null);
                 });
 
-            modelBuilder.Entity("RocketWiki.Core.Entities.UserAvatar", b =>
-                {
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<byte[]>("ContentHash")
-                        .IsRequired()
-                        .HasColumnType("binary(32)");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("datetime2(3)");
-
-                    b.Property<string>("EmailHashMd5")
-                        .HasColumnType("varchar(32)");
-
-                    b.Property<string>("EmailHashSha256")
-                        .HasColumnType("varchar(64)");
-
-                    b.Property<long>("SizeBytes")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("StorageKey")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<DateTime>("UpdatedAtUtc")
-                        .HasColumnType("datetime2(3)");
-
-                    b.HasKey("UserId");
-
-                    b.HasIndex("EmailHashMd5")
-                        .HasDatabaseName("IX_UserAvatars_EmailHashMd5")
-                        .HasFilter("[EmailHashMd5] IS NOT NULL");
-
-                    b.HasIndex("EmailHashSha256")
-                        .HasDatabaseName("IX_UserAvatars_EmailHashSha256")
-                        .HasFilter("[EmailHashSha256] IS NOT NULL");
-
-                    b.ToTable("UserAvatars", (string)null);
-                });
-
             modelBuilder.Entity("RocketWiki.Core.Entities.Watch", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1121,17 +1082,6 @@ namespace RocketWiki.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Space");
-                });
-
-            modelBuilder.Entity("RocketWiki.Core.Entities.UserAvatar", b =>
-                {
-                    b.HasOne("RocketWiki.Core.Entities.User", "User")
-                        .WithOne()
-                        .HasForeignKey("RocketWiki.Core.Entities.UserAvatar", "UserId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("RocketWiki.Core.Entities.Watch", b =>
