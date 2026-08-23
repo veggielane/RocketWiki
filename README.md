@@ -418,9 +418,14 @@ Being explicit about what has and hasn't been checked, rather than letting
   (Hot Chocolate resolvers don't share the middleware's DI scope — the same
   boundary Program.cs documents); it now dedups via `HttpContext.Items`,
   proven by an alias test. Unverified: no live GitLab has ever answered
-  these clients — REST shapes come from docs + a faked wire. The SPA
-  rendering (issue chips, file embeds, issue lists, token settings) is the
-  in-flight phase 2.
+  these clients — REST shapes come from docs + a faked wire.
+- **GitLab integration (SPA)** — link issues with live open/closed status,
+  embed repository files, and list issues by filter, all fetched through
+  the wiki API with *your own* GitLab token (set it under Settings;
+  `read_api` scope is enough). References are host-free and stay plain
+  Markdown, so pages sync and export unchanged even where GitLab is
+  unreachable. Every GitLab affordance (toolbar menu, chips, settings
+  section) vanishes entirely when `GitLab:BaseUrl` is unconfigured.
 - **Edit conflicts show a Markdown diff** of the other author's revision
   against your draft right in the conflict dialog, so you can keep yours,
   take theirs (your text goes to the clipboard), or keep editing.
