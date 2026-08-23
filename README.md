@@ -5,9 +5,12 @@ export-control requirements: WYSIWYG editing over a Markdown storage format, a
 .NET/GraphQL backend, and attribute-based access control designed for
 "engineering AND nationality NZ or US" style rules.
 
-**This is under active, parallel construction (milestone 0/1 of design.md
-§16).** Nothing here has been deployed or run end to end — see
-[Current status](#current-status) before assuming anything works.
+**This is under active, parallel construction.** Every design.md §16
+milestone except the Confluence migration trial is implemented and
+test-verified (the SQL Server slice on every CI run), but nothing has been
+deployed or run end to end on a real machine — see
+[Current status](#current-status) before assuming anything works. To work
+on it, start with [DEVELOPING.md](DEVELOPING.md).
 
 The source of truth for *why* things are built this way is
 [`design.md`](design.md) (architecture, access control, audit, deployment) and
