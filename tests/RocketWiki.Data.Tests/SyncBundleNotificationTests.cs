@@ -402,7 +402,7 @@ public class SyncBundleNotificationTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task MarkRead_OnSyncImportedRow_WithholdsPageIdAndSpaceKey()
+    public async Task MarkRead_OnSyncImportedRow_SucceedsForCallerWithAccess_ButWithholdsPageIdAndSpaceKey()
     {
         using var db = CreateContext();
         var (recipientId, _, _) = SeedReplicaRowsForReadModel(db);
@@ -410,17 +410,39 @@ public class SyncBundleNotificationTests : SqliteTestBase
             .First(n => n.RecipientUserId == recipientId && n.Type == NotificationType.SyncImported && n.PageId != null).Id;
 
         var service = new NotificationReadModelService(db, HighInstanceId);
-        var marked = await service.MarkNotificationReadAsync(rowId, recipientId,
+        var marked = await service.MarkNotificationReadAsync(rowId, recipientId, EditorPrincipal("eng"),
             new AuditContext(AuditChannel.GraphQl, "req-mark", "127.0.0.1"));
 
-        // Mark-read has no Principal to run the deferred canView the list performs, so
-        // for a SyncImported row it must not echo the subject back - marking sequential
-        // ids read must not become a side channel around the list's suppression.
+        // The caller's live Principal passes the existence gate, so the mark succeeds -
+        // but the receipt still withholds the subject: mark-read spends its canView on
+        // the row's EXISTENCE only, and the list is the one disclosure surface.
         Assert.True(marked.IsSuccess);
         Assert.NotNull(marked.Value.ReadAtUtc);
         Assert.Null(marked.Value.PageId);
         Assert.Null(marked.Value.SpaceKey);
         Assert.Null(marked.Value.PageTitle);
+    }
+
+    [Fact]
+    public async Task MarkRead_OnExistenceGatedRow_IsNotFoundForCallerWithoutAccess_AndLeavesRowUnread()
+    {
+        using var db = CreateContext();
+        var (recipientId, _, _) = SeedReplicaRowsForReadModel(db);
+        var rowId = db.Notifications.AsNoTracking()
+            .First(n => n.RecipientUserId == recipientId && n.Type == NotificationType.SyncImported && n.PageId != null).Id;
+
+        var service = new NotificationReadModelService(db, HighInstanceId);
+        var marked = await service.MarkNotificationReadAsync(rowId, recipientId, EditorPrincipal(/* not in "eng" */),
+            new AuditContext(AuditChannel.GraphQl, "req-mark-probe", "127.0.0.1"));
+
+        // The list suppresses this row's existence for a caller who fails the gate, and
+        // mark-read must not become the probe around that: even the bare receipt (type +
+        // timestamp) would confirm the row exists. NotFound, indistinguishable from a
+        // nonexistent id - and the row stays unread, so it surfaces intact if access is
+        // ever restored.
+        Assert.False(marked.IsSuccess);
+        Assert.IsType<NotFoundError>(marked.Error);
+        Assert.Null(db.Notifications.AsNoTracking().Single(n => n.Id == rowId).ReadAtUtc);
     }
 
     [Fact]

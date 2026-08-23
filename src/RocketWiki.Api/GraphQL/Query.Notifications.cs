@@ -13,13 +13,17 @@ public partial class Query
     /// plain capped list rather than a connection: the shipped frontend operation
     /// (web/src/graphql/operations/notifications.graphql) selects a flat list, and 100
     /// most-recent rows is the whole product surface (a bell dropdown), not a browsable
-    /// history. Dispatcher-written rows only ever exist for recipients who passed
-    /// canView at send time; canView is STILL re-checked per row here, nulling
-    /// <c>pageTitle</c> for pages since lost (data-model.md: "stale titles must not
-    /// resurface") — which the frontend renders as "a page you can no longer view".
-    /// SyncImported rows, written offline by the sync CLI with no send-time check
-    /// possible, get their ONLY canView evaluation here and are suppressed entirely
-    /// when it fails (NotificationReadModelService.SurvivesReadTimeCheck).
+    /// history. Rows delivered live (they carry a title snapshot from the send-time
+    /// canView) get canView STILL re-checked per row here, nulling <c>pageTitle</c>
+    /// for pages since lost (data-model.md: "stale titles must not resurface") — which
+    /// the frontend renders as "a page you can no longer view". Rows written with no
+    /// send-time check possible — SyncImported rows from the offline sync CLI, and the
+    /// dispatcher's deferred rows for recipients who were offline at send time — get
+    /// their ONLY canView evaluation here: suppressed entirely when it fails,
+    /// surfaced with the page's live title when it passes
+    /// (NotificationReadModelService.SurvivesReadTimeCheck). This fetch is therefore
+    /// also the delivery for offline recipients, per design.md §8's "the table is the
+    /// record and the next fetch is the delivery".
     /// </summary>
     [AuditAction("notification.list")]
     [UseAuditDispatch]

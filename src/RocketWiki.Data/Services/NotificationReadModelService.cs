@@ -13,8 +13,10 @@ namespace RocketWiki.Data.Services;
 /// (data-model.md: "re-check canView when rendering the list anyway... stale titles
 /// must not resurface") — batched the same way PageService's subtree checks are: one
 /// grants query, one restrictions query over every involved page's ancestors+self,
-/// then pure in-memory evaluation per row. For SyncImported rows the read-time check
-/// is not a re-check but THE check — see <see cref="SurvivesReadTimeCheck"/>.
+/// then pure in-memory evaluation per row. For rows written without a send-time
+/// canView — marked by a null TitleSnapshot: sync-imported rows from the offline CLI,
+/// and deferred rows the dispatcher writes for offline recipients — the read-time
+/// check is not a re-check but THE check — see <see cref="SurvivesReadTimeCheck"/>.
 /// </summary>
 public class NotificationReadModelService : INotificationReadModelService
 {
@@ -63,10 +65,11 @@ public class NotificationReadModelService : INotificationReadModelService
             .Where(u => actorIds.Contains(u.Id))
             .ToDictionaryAsync(u => u.Id, cancellationToken);
 
-        // Space-scoped SyncImported rows need their space's grants too (for the
+        // Space-scoped existence-gated rows (null TitleSnapshot, no page id - the
+        // space-scoped SyncImported shape) need their space's grants too (for the
         // any-space-role check below), not only the spaces of page-scoped rows.
         var involvedSpaceIds = pages.Values.Select(p => p.SpaceId)
-            .Concat(rows.Where(n => n.Type == NotificationType.SyncImported && n.SpaceId != null).Select(n => n.SpaceId!.Value))
+            .Concat(rows.Where(n => n.TitleSnapshot == null && n.SpaceId != null).Select(n => n.SpaceId!.Value))
             .Distinct().ToArray();
         var grantsBySpace = (await _db.AccessRules.AsNoTracking()
                 .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId != null && involvedSpaceIds.Contains(r.SpaceId.Value))
@@ -109,23 +112,31 @@ public class NotificationReadModelService : INotificationReadModelService
     }
 
     /// <summary>
-    /// Read-time gate on a row's EXISTENCE, not just its title. Rows the dispatcher
-    /// wrote (watch/mention/reply) passed canView at send time, so they always survive
-    /// - the recipient legitimately learned of the event then, and only the stale
-    /// title is withheld (ToListItem). SyncImported rows are the exception: they are
-    /// written by the offline sync CLI, where no recipient has a live token to
-    /// evaluate canView against (see BundleImportService), so the check those rows
-    /// never got happens HERE, against the caller's live token-built Principal - page
-    /// rows need canView on the page now, space rows the same any-space-role gate that
-    /// watching the space required (WatchService). Fail closed: an unresolvable
-    /// subject (deleted page, missing grants, malformed row) suppresses the row
-    /// entirely - a sync notification must never be the way someone without access
-    /// learns a replica page still exists and is active.
+    /// Read-time gate on a row's EXISTENCE, not just its title. The discriminator is
+    /// the TitleSnapshot, not the row's type: a snapshot is only ever written after a
+    /// send-time canView against the recipient's live Principal
+    /// (NotificationDispatcher, connected recipients), so a row carrying one always
+    /// survives - the recipient legitimately learned of the event then, and only the
+    /// stale title is withheld (ToListItem). A null TitleSnapshot means NO send-time
+    /// authorization ever ran, in either of the two ways that happens: the row was
+    /// written by the offline sync CLI (SyncImported, see BundleImportService), or by
+    /// the dispatcher for a recipient with no live connection (deferred
+    /// watch/mention/reply rows). For those, the check the row never got happens HERE,
+    /// against the caller's live token-built Principal - page rows need canView on the
+    /// page now, space rows the same any-space-role gate that watching the space
+    /// required (WatchService). Fail closed: an unresolvable subject (deleted page,
+    /// missing grants, malformed row) suppresses the row entirely - a notification
+    /// must never be the way someone without access learns a restricted page exists,
+    /// is active, or mentions them. That answers both deferred-row questions the same
+    /// way: a recipient who was offline and cannot view never learns the row existed,
+    /// and one who could view at send time but lost access before fetching has the row
+    /// suppressed too - nothing was disclosed at send time, so there is nothing
+    /// legitimately learned to preserve.
     /// </summary>
     private static bool SurvivesReadTimeCheck(
         Notification row, HashSet<Guid> viewablePageIds, Dictionary<Guid, List<AccessRule>> grantsBySpace, Principal principal)
     {
-        if (row.Type != NotificationType.SyncImported)
+        if (row.TitleSnapshot is not null)
         {
             return true;
         }
@@ -141,7 +152,7 @@ public class NotificationReadModelService : INotificationReadModelService
     }
 
     public async Task<PageMutationResult<NotificationListItem>> MarkNotificationReadAsync(
-        long notificationId, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+        long notificationId, Guid actingUserId, Principal principal, AuditContext auditContext, CancellationToken cancellationToken = default)
     {
         // Owner-scoped by construction: another recipient's row (or a nonexistent id)
         // is the same NotFound - a notification's existence is visible to its
@@ -149,6 +160,23 @@ public class NotificationReadModelService : INotificationReadModelService
         var notification = await _db.Notifications.FirstOrDefaultAsync(
             n => n.Id == notificationId && n.RecipientUserId == actingUserId, cancellationToken);
         if (notification is null)
+        {
+            return PageMutationResult<NotificationListItem>.Failure(new NotFoundError(Guid.Empty));
+        }
+
+        // Existence-gated rows (null TitleSnapshot - see SurvivesReadTimeCheck) are
+        // gated here too, against the same live Principal the list uses. Withholding
+        // subject fields alone would not be airtight for the dispatcher's deferred
+        // rows: the bare receipt (type + actor + timestamp) already tells a probing
+        // recipient without canView that, say, someone mentioned them on a page they
+        // cannot see - exactly the existence disclosure the list suppresses. So a
+        // gated row that fails the check is NotFound, indistinguishable from a row
+        // that does not exist, and is NOT marked read: if access is later restored,
+        // it surfaces unread. (The failure is deliberately a miss, not a recorded
+        // denial, for the same reason the owner-scope miss above is - to this caller
+        // the row does not exist.)
+        if (notification.TitleSnapshot is null
+            && !await GatedRowSurvivesAsync(notification, principal, cancellationToken))
         {
             return PageMutationResult<NotificationListItem>.Failure(new NotFoundError(Guid.Empty));
         }
@@ -162,16 +190,14 @@ public class NotificationReadModelService : INotificationReadModelService
             await _db.SaveChangesAsync(cancellationToken);
         }
 
-        // The mark-read response reuses the same title discipline as the list: no
-        // fresh canView evaluation is spent here, so the title is simply omitted -
-        // the shipped MarkNotificationRead operation selects only { id readAtUtc }.
-        // A SyncImported row's page id and space key are withheld too: unlike
-        // dispatcher-written rows no canView ever held at send time, this method has
-        // no Principal to run the deferred check the list performs
-        // (SurvivesReadTimeCheck), and marking sequential ids read must not become a
-        // side channel for subjects the list is currently suppressing. Fail closed;
-        // the caller still gets their receipt (id + readAtUtc).
-        var withholdSubject = notification.Type == NotificationType.SyncImported;
+        // The mark-read response is a receipt, not a disclosure surface: the title is
+        // always omitted (the shipped MarkNotificationRead operation selects only
+        // { id readAtUtc }), and for existence-gated rows the page id and space key
+        // are withheld too. The gate above spent its canView on the row's EXISTENCE
+        // only; the list is where subjects are rendered, with the full batched
+        // re-check. Keeping the receipt subject-free means the answer to a mark-read
+        // is never richer than "your row, now read".
+        var withholdSubject = notification.TitleSnapshot is null;
         var spaceKey = !withholdSubject && notification.SpaceId is { } spaceId
             ? await _db.Spaces.AsNoTracking().IgnoreQueryFilters()
                 .Where(s => s.Id == spaceId).Select(s => s.Key).FirstOrDefaultAsync(cancellationToken)
@@ -191,6 +217,54 @@ public class NotificationReadModelService : INotificationReadModelService
             notification.ReadAtUtc));
     }
 
+    /// <summary>
+    /// Single-row form of <see cref="SurvivesReadTimeCheck"/> for the mark-read path,
+    /// same rules, fetched fresh: page rows require canView on the page NOW (page
+    /// resolved through the normal query filter, so a soft-deleted page fails closed;
+    /// space resolved ignoring filters, same as the list), space-scoped rows the same
+    /// any-space-role gate watching required. A row with no subject at all is
+    /// malformed and fails closed.
+    /// </summary>
+    private async Task<bool> GatedRowSurvivesAsync(Notification row, Principal principal, CancellationToken cancellationToken)
+    {
+        if (row.PageId is { } pageId)
+        {
+            var page = await _db.Pages.AsNoTracking().FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);
+            if (page is null)
+            {
+                return false;
+            }
+
+            var space = await _db.Spaces.AsNoTracking().IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
+            if (space is null)
+            {
+                return false;
+            }
+
+            var grants = await _db.AccessRules.AsNoTracking()
+                .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == page.SpaceId)
+                .ToListAsync(cancellationToken);
+            var ancestorIds = page.GetAncestorIds();
+            var restrictions = await _db.AccessRules.AsNoTracking()
+                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null
+                    && (r.PageId == page.Id || ancestorIds.Contains(r.PageId.Value)))
+                .ToListAsync(cancellationToken);
+            return EffectivePermissionCalculator.Compute(
+                grants, restrictions, space.IsReplicaOf(_localInstanceId), principal).CanView;
+        }
+
+        if (row.SpaceId is { } spaceId)
+        {
+            var grants = await _db.AccessRules.AsNoTracking()
+                .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
+                .ToListAsync(cancellationToken);
+            return grants.Count > 0 && EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is not null;
+        }
+
+        return false;
+    }
+
     private static NotificationListItem ToListItem(
         Notification row,
         HashSet<Guid> viewablePageIds,
@@ -201,13 +275,13 @@ public class NotificationReadModelService : INotificationReadModelService
         var canViewPage = row.PageId is { } pageId && viewablePageIds.Contains(pageId);
 
         // TitleSnapshot was already "as permitted at send time" (data-model.md);
-        // surfacing it still requires canView to hold NOW. A SyncImported row has no
-        // snapshot at all (the offline CLI could attest nothing - BundleImportService),
-        // so its title is the page's LIVE title instead: this row only survived
-        // SurvivesReadTimeCheck because the caller's live Principal passes canView on
-        // that page right now, and a title the caller can open the page to read is not
-        // a disclosure.
-        var title = row.Type == NotificationType.SyncImported
+        // surfacing it still requires canView to hold NOW. A null-snapshot row has
+        // nothing attested at write time (the offline sync CLI, or the dispatcher's
+        // deferred rows for offline recipients), so its title is the page's LIVE title
+        // instead: such a row only survived SurvivesReadTimeCheck because the caller's
+        // live Principal passes canView on that page right now, and a title the caller
+        // can open the page to read is not a disclosure.
+        var title = row.TitleSnapshot is null
             ? (canViewPage && pages.TryGetValue(row.PageId!.Value, out var page) ? page.Title : null)
             : (canViewPage ? row.TitleSnapshot : null);
 

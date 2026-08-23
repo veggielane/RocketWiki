@@ -20,10 +20,13 @@ namespace RocketWiki.Api.Tests.Integration;
 /// actually stopping the flow. Hub connections use LongPolling for the same
 /// TestServer reason NotificationsHubTests documents.
 ///
-/// The dispatcher only evaluates recipients with an open hub connection (the
-/// documented offline gap in INotificationDispatcher), so every would-be recipient in
-/// these tests connects first — which also means each test exercises the full wire
+/// Recipients with an open hub connection get send-time canView plus a live push, so
+/// the connected-path tests connect first — which also exercises the full wire
 /// contract the frontend shipped (web/src/realtime/types.ts NotificationPayload).
+/// Recipients WITHOUT a connection get the deferred path (INotificationDispatcher):
+/// a row with no TitleSnapshot whose existence and title are resolved at the
+/// notifications fetch, exactly like SyncImported rows — the offline-recipient tests
+/// below deliberately never connect.
 /// </summary>
 public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
 {
@@ -97,13 +100,13 @@ public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClass
             result.RootElement.GetProperty("data").GetProperty("createAccessRule").GetProperty("error").ValueKind);
     }
 
-    private async Task EditPageAsync(HttpClient editor, Guid pageId, int expectedRevision, string content)
+    private async Task EditPageAsync(HttpClient editor, Guid pageId, int expectedRevision, string content, string title = "Watched Page")
     {
         using var result = await editor.PostGraphQLAsync($$"""
             mutation {
               updatePageContent(input: {
                 pageId: "{{pageId}}", expectedRevisionNumber: {{expectedRevision}},
-                title: "Watched Page", content: {{JsonSerializer.Serialize(content)}}, editSummary: null
+                title: {{JsonSerializer.Serialize(title)}}, content: {{JsonSerializer.Serialize(content)}}, editSummary: null
               }) { page { id currentRevisionNumber } error { kind message } }
             }
             """);
@@ -713,5 +716,205 @@ public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClass
         var row = Assert.Single(await RowsForAsync(watcherId));
         Assert.Equal(NotificationType.PageUpdated, row.Type);
         Assert.Equal(spaceId, row.SpaceId);
+    }
+
+    // --- offline recipients: the deferred path (INotificationDispatcher) --------------
+    // No hub connection means no live Principal, so no canView can run at send time.
+    // The dispatcher writes a row with TitleSnapshot null - nothing disclosed - and
+    // the notifications fetch is both the authorization check and the delivery,
+    // exactly like SyncImported rows (design.md §8). These recipients NEVER connect.
+
+    [Fact]
+    public async Task OfflineWatcher_GetsDeferredRow_SurfacedOnFetchWithLiveTitle()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var watcherSub = $"offline-watcher-{Guid.NewGuid()}";
+        var watcherId = await ProvisionUserAsync(watcherSub);
+        var watcherClient = AuthedClient(watcherSub);
+        using var watchResult = await watcherClient.PostGraphQLAsync($$"""
+            mutation { watchPage(input: { pageId: "{{pageId}}" }) { watch { id } error { kind } } }
+            """);
+        Assert.Equal(JsonValueKind.Null,
+            watchResult.RootElement.GetProperty("data").GetProperty("watchPage").GetProperty("error").ValueKind);
+        // Deliberately no ConnectAsync: the watcher is offline for the whole event.
+
+        var actorSub = $"offline-editor-{Guid.NewGuid()}";
+        await ProvisionUserAsync(actorSub);
+        var actorClient = AuthedClient(actorSub);
+        await EditPageAsync(actorClient, pageId, expectedRevision: 0, content: "Edited while watcher offline.");
+        // A second edit renames the page - proving the fetch serves the LIVE title,
+        // not anything captured at send time.
+        await EditPageAsync(actorClient, pageId, expectedRevision: 1, content: "Renamed too.", title: "Renamed While Watcher Away");
+
+        // The persisted rows are blind: no snapshot, because no principal existed to
+        // authorize any disclosure at send time.
+        var rows = await RowsForAsync(watcherId);
+        Assert.Equal(2, rows.Count);
+        Assert.All(rows, r => Assert.Equal(NotificationType.PageUpdated, r.Type));
+        Assert.All(rows, r => Assert.Null(r.TitleSnapshot));
+        Assert.All(rows, r => Assert.Equal(pageId, r.PageId));
+
+        // The fetch is the delivery: existence gate passes (the watcher can view), and
+        // the title is the page's CURRENT one.
+        using var list = await watcherClient.PostGraphQLAsync(
+            "query { notifications { id type pageId pageTitle actorDisplayName readAtUtc } }");
+        var items = list.RootElement.GetProperty("data").GetProperty("notifications").EnumerateArray().ToList();
+        Assert.Equal(2, items.Count);
+        Assert.All(items, i => Assert.Equal("page_watched_changed", i.GetProperty("type").GetString()));
+        Assert.All(items, i => Assert.Equal("Renamed While Watcher Away", i.GetProperty("pageTitle").GetString()));
+        Assert.All(items, i => Assert.Equal(pageId.ToString(), i.GetProperty("pageId").GetString()));
+        Assert.All(items, i => Assert.Equal(actorSub, i.GetProperty("actorDisplayName").GetString()));
+
+        // Mark-read works for a deferred row the caller can view - the receipt carries
+        // id + readAtUtc but withholds the subject (mark-read is a receipt, the list
+        // is the disclosure surface).
+        var notificationId = items[0].GetProperty("id").GetString();
+        using var mark = await watcherClient.PostGraphQLAsync($$"""
+            mutation { markNotificationRead(input: { notificationId: "{{notificationId}}" }) { notification { id pageId pageTitle readAtUtc } error { kind } } }
+            """);
+        var marked = mark.RootElement.GetProperty("data").GetProperty("markNotificationRead");
+        Assert.Equal(JsonValueKind.Null, marked.GetProperty("error").ValueKind);
+        Assert.NotEqual(JsonValueKind.Null, marked.GetProperty("notification").GetProperty("readAtUtc").ValueKind);
+        Assert.Equal(JsonValueKind.Null, marked.GetProperty("notification").GetProperty("pageId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, marked.GetProperty("notification").GetProperty("pageTitle").ValueKind);
+    }
+
+    [Fact]
+    public async Task OfflineWatcherWithoutCanView_FetchesNothing_AndMarkReadProbeRevealsNothing()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var watcherSub = $"nz-offline-{Guid.NewGuid()}";
+        var watcherId = await ProvisionUserAsync(watcherSub, nationality: ["NZ"]);
+        var watcherClient = AuthedClient(watcherSub, nationality: ["NZ"]);
+        using var watchResult = await watcherClient.PostGraphQLAsync($$"""
+            mutation { watchPage(input: { pageId: "{{pageId}}" }) { watch { id } error { kind } } }
+            """);
+        Assert.Equal(JsonValueKind.Null,
+            watchResult.RootElement.GetProperty("data").GetProperty("watchPage").GetProperty("error").ValueKind);
+
+        // Access lost while offline; then the page changes.
+        await RestrictPageViewToUsAsync(pageId);
+        var actorSub = $"us-offline-editor-{Guid.NewGuid()}";
+        await ProvisionUserAsync(actorSub, nationality: ["US"]);
+        await EditPageAsync(AuthedClient(actorSub, nationality: ["US"]), pageId, expectedRevision: 0, content: "US-only while watcher offline.");
+
+        // The blind row exists (written with no authorization decision, none possible)...
+        var row = Assert.Single(await RowsForAsync(watcherId));
+        Assert.Null(row.TitleSnapshot);
+
+        // ...but the recipient must never learn it does: the fetch runs the deferred
+        // check against their live Principal and suppresses the row's EXISTENCE, the
+        // same fail-closed shape as SyncImported rows (design.md §8).
+        using var list = await watcherClient.PostGraphQLAsync("query { notifications { id } }");
+        Assert.Equal(0, list.RootElement.GetProperty("data").GetProperty("notifications").GetArrayLength());
+
+        // Nor may markNotificationRead become the probe around that suppression: the
+        // row id (sequential bigint) yields NotFound - indistinguishable from a
+        // nonexistent id - with no receipt, no type, no subject. And the row stays
+        // unread, so it surfaces intact if access is ever restored.
+        using var mark = await watcherClient.PostGraphQLAsync($$"""
+            mutation { markNotificationRead(input: { notificationId: "{{row.Id}}" }) { notification { id readAtUtc } error { kind } } }
+            """);
+        var marked = mark.RootElement.GetProperty("data").GetProperty("markNotificationRead");
+        Assert.Equal(JsonValueKind.Null, marked.GetProperty("notification").ValueKind);
+        Assert.Equal("NotFound", marked.GetProperty("error").GetProperty("kind").GetString());
+        Assert.Null(Assert.Single(await RowsForAsync(watcherId)).ReadAtUtc);
+    }
+
+    [Fact]
+    public async Task OfflineMentionedUser_GetsDeferredMentionRow_SurfacedOnFetch()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var mentionedSub = $"offline-mentioned-{Guid.NewGuid()}";
+        var mentionedId = await ProvisionUserAsync(mentionedSub);
+        // No connection, no watch - the mention alone is the candidacy.
+
+        var actorSub = $"mentioning-author-{Guid.NewGuid()}";
+        await ProvisionUserAsync(actorSub);
+        await EditPageAsync(AuthedClient(actorSub), pageId, expectedRevision: 0,
+            content: $"Heads up, @[{mentionedSub}](user://{mentionedId}).");
+
+        var row = Assert.Single(await RowsForAsync(mentionedId));
+        Assert.Equal(NotificationType.Mention, row.Type);
+        Assert.Null(row.TitleSnapshot);
+
+        using var list = await AuthedClient(mentionedSub).PostGraphQLAsync(
+            "query { notifications { type pageId pageTitle } }");
+        var item = Assert.Single(list.RootElement.GetProperty("data").GetProperty("notifications").EnumerateArray());
+        Assert.Equal("mention", item.GetProperty("type").GetString());
+        Assert.Equal(pageId.ToString(), item.GetProperty("pageId").GetString());
+        Assert.Equal("Watched Page", item.GetProperty("pageTitle").GetString()); // live title
+    }
+
+    [Fact]
+    public async Task OfflineWatcherWhoIsAlsoMentioned_GetsOneDeferredRow_OfTypeMention()
+    {
+        // The most-specific-type-wins precedence (mention beats watch) is resolved
+        // over the WHOLE candidate set before connectivity splits it, so it must hold
+        // on the deferred half too: one event, one row, type Mention.
+        var (_, pageId) = await SeedEditablePageAsync();
+        var bothSub = $"offline-both-{Guid.NewGuid()}";
+        var bothId = await ProvisionUserAsync(bothSub);
+        var bothClient = AuthedClient(bothSub);
+        using var watchResult = await bothClient.PostGraphQLAsync($$"""
+            mutation { watchPage(input: { pageId: "{{pageId}}" }) { watch { id } error { kind } } }
+            """);
+        Assert.Equal(JsonValueKind.Null,
+            watchResult.RootElement.GetProperty("data").GetProperty("watchPage").GetProperty("error").ValueKind);
+
+        var actorSub = $"both-editor-{Guid.NewGuid()}";
+        await ProvisionUserAsync(actorSub);
+        await EditPageAsync(AuthedClient(actorSub), pageId, expectedRevision: 0,
+            content: $"Watched AND mentioned: @[{bothSub}](user://{bothId}).");
+
+        var row = Assert.Single(await RowsForAsync(bothId));
+        Assert.Equal(NotificationType.Mention, row.Type);
+        Assert.Null(row.TitleSnapshot);
+    }
+
+    [Fact]
+    public async Task ReplyToOfflineParentAuthor_WritesDeferredCommentReplyRow_SurfacedOnFetch()
+    {
+        var (_, pageId) = await SeedEditablePageAsync();
+        var parentAuthorSub = $"offline-parent-{Guid.NewGuid()}";
+        var parentAuthorId = await ProvisionUserAsync(parentAuthorSub);
+        var parentCommentId = await AddCommentAsync(AuthedClient(parentAuthorSub), pageId, "Posted, then went home.");
+        // The parent author never connects to the hub.
+
+        var replierSub = $"evening-replier-{Guid.NewGuid()}";
+        await ProvisionUserAsync(replierSub);
+        await AddCommentAsync(AuthedClient(replierSub), pageId, "Replying after hours.", parentCommentId);
+
+        var row = Assert.Single(await RowsForAsync(parentAuthorId));
+        Assert.Equal(NotificationType.CommentReply, row.Type);
+        Assert.Null(row.TitleSnapshot);
+        Assert.Equal(pageId, row.PageId);
+
+        using var list = await AuthedClient(parentAuthorSub).PostGraphQLAsync(
+            "query { notifications { type pageTitle actorDisplayName } }");
+        var item = Assert.Single(list.RootElement.GetProperty("data").GetProperty("notifications").EnumerateArray());
+        Assert.Equal("comment_reply", item.GetProperty("type").GetString());
+        Assert.Equal("Watched Page", item.GetProperty("pageTitle").GetString());
+        Assert.Equal(replierSub, item.GetProperty("actorDisplayName").GetString());
+    }
+
+    [Fact]
+    public async Task MentionOfNonexistentUserId_ProducesNoRow_AndDoesNotFailTheSave()
+    {
+        // Mention ids are parsed from user-typed Markdown; an id naming no local User
+        // is always "offline", and blindly writing its deferred row would be an FK
+        // violation failing the whole mutation. It must simply produce nothing.
+        var (_, pageId) = await SeedEditablePageAsync();
+        var ghostId = Guid.NewGuid();
+
+        var actorSub = $"ghost-author-{Guid.NewGuid()}";
+        await ProvisionUserAsync(actorSub);
+        await EditPageAsync(AuthedClient(actorSub), pageId, expectedRevision: 0,
+            content: $"Ping to nobody: @[ghost](user://{ghostId})."); // EditPageAsync asserts the save succeeded
+
+        Assert.Empty(await RowsForAsync(ghostId));
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        Assert.Empty(await db.Notifications.AsNoTracking().Where(n => n.PageId == pageId).ToListAsync());
     }
 }

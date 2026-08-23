@@ -78,8 +78,9 @@ public partial class Mutation
             return new UpdatePageContentPayload(null, PageMutationErrorView.From(result.Error));
         }
 
-        // design.md §8: watchers of this page/space, per-recipient canView at send time
-        // (see NotificationDispatcher's own doc for the currently-connected-only scope).
+        // design.md §8: watchers of this page/space - per-recipient canView at send
+        // time for connected recipients, deferred fetch-time-gated rows for offline
+        // ones (see NotificationDispatcher's own doc).
         await notificationDispatcher.NotifyPageChangedAsync(result.Value.Id, actingUserId.Value, NotificationType.PageUpdated, cancellationToken);
 
         return new UpdatePageContentPayload(result.Value, null);

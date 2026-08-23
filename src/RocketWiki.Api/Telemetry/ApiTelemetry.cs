@@ -164,16 +164,22 @@ public static class ApiTelemetry
     public const string PresenceLeaveExplicit = "explicit";
     public const string PresenceLeaveDisconnected = "disconnected";
 
-    /// <summary>Delivered: persisted and pushed to a live connection.</summary>
-    public const string NotificationDelivered = "delivered";
+    /// <summary>Recipient was connected and passed canView at send time: row persisted
+    /// with a title snapshot and pushed to their live connection.</summary>
+    public const string NotificationDeliveredLive = "delivered_live";
 
     /// <summary>
-    /// Skipped because the recipient has no open connection, so no live Principal exists
-    /// to evaluate canView against — the gap INotificationDispatcher documents. This
-    /// counter is how big that gap actually is in production, rather than an assumption.
+    /// Recipient had no open connection, so no live Principal existed to evaluate
+    /// canView against at send time. A deferred row was persisted with no title
+    /// snapshot; both its existence and its title are resolved at the recipient's next
+    /// notifications fetch against their live token-built Principal
+    /// (NotificationReadModelService) — the same pattern as sync-imported rows
+    /// (design.md §8). This counter measures how much of the fan-out is deferred, not
+    /// how much is lost: nothing is dropped on this path.
     /// </summary>
-    public const string NotificationSkippedOffline = "skipped_offline";
+    public const string NotificationDeferredOffline = "deferred_offline";
 
-    /// <summary>Skipped because canView failed for that recipient at send time (design.md §8).</summary>
+    /// <summary>Skipped because canView failed for that connected recipient at send time
+    /// (design.md §8): no row, no push — the only disposition that persists nothing.</summary>
     public const string NotificationSkippedNotViewable = "skipped_not_viewable";
 }
