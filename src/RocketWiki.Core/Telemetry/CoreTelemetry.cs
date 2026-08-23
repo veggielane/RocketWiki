@@ -100,6 +100,11 @@ public static class CoreTelemetry
     /// <summary>Written by IAuditSink directly (reads and denials, which aren't domain events).</summary>
     public const string AuditWriterSink = "sink";
 
+    /// <summary>Written by the SignalR hub's edit-session path (design.md §8 co-editing) —
+    /// hub invocations can't use IAuditSink's HttpContext-derived context, so they write
+    /// rows on AuditChannel.Realtime themselves; see EditSessionAudit in RocketWiki.Api.</summary>
+    public const string AuditWriterRealtimeHub = "realtime_hub";
+
     public static void RecordRuleEvaluation(AccessRuleKind kind, RuleEvaluationResult result) =>
         RuleEvaluations.Add(1,
             new KeyValuePair<string, object?>(RuleKindTag, TagFor(kind)),

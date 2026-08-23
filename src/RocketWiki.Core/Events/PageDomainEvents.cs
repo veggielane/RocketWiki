@@ -3,8 +3,18 @@ namespace RocketWiki.Core.Events;
 /// <summary>design.md §8: createPage mutation.</summary>
 public sealed record PageCreatedEvent(Guid PageId, Guid SpaceId, string SpaceKey, Guid? ActorUserId, string Title) : IDomainEvent;
 
-/// <summary>design.md §8: updatePage mutation - a new PageRevision was saved.</summary>
-public sealed record PageContentUpdatedEvent(Guid PageId, Guid SpaceId, string SpaceKey, Guid? ActorUserId, int RevisionNumber) : IDomainEvent;
+/// <summary>
+/// design.md §8: updatePage mutation - a new PageRevision was saved.
+/// <paramref name="ContributorUserIds"/> is non-null only for a save that snapshots a
+/// live co-editing session (design.md §8 CRDT co-editing): the distinct users whose
+/// session updates fed this revision, resolved by the server's edit-session registry —
+/// never from client input. Null/empty for an ordinary solo save, keeping those audit
+/// rows' details shape unchanged. The sync outbox is unaffected either way: its
+/// PageUpsert payload is built from the tracked Page entity, not from this record.
+/// </summary>
+public sealed record PageContentUpdatedEvent(
+    Guid PageId, Guid SpaceId, string SpaceKey, Guid? ActorUserId, int RevisionNumber,
+    IReadOnlyList<Guid>? ContributorUserIds = null) : IDomainEvent;
 
 /// <summary>design.md §8: movePage mutation. AncestorPath rewrites happen alongside this, not represented here.</summary>
 public sealed record PageMovedEvent(

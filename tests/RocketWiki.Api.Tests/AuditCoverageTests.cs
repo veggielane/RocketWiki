@@ -1,7 +1,9 @@
 using System.Reflection;
+using Microsoft.AspNetCore.SignalR;
 using ModelContextProtocol.Server;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.GraphQL;
+using RocketWiki.Api.RealTime;
 using Xunit;
 
 namespace RocketWiki.Api.Tests;
@@ -118,5 +120,55 @@ public class AuditCoverageTests
         Assert.True(problems.Count == 0,
             "Every MCP tool must declare exactly one of [AuditAction] or [NoAudit], and an explicit " +
             "tool Name (design.md §7/§8). Problems found:\n" + string.Join('\n', problems));
+    }
+
+    /// <summary>
+    /// The declaration rule, extended to the realtime channel (design.md §7: every
+    /// channel lands in the same audit table; §8 co-editing made the hub carry an
+    /// audited, canEdit-consuming action for the first time). Sweeps every
+    /// client-invokable method on the hub — public instance methods this hub declares,
+    /// excluding overrides of the Hub base lifecycle (OnConnectedAsync/
+    /// OnDisconnectedAsync, which SignalR never dispatches to clients). Presence
+    /// methods carry [NoAudit] with §8's stated reasoning; edit-session join/leave
+    /// carry [AuditAction], emitted by the hub itself on AuditChannel.Realtime (the
+    /// attribute is the declaration, emission is manual — the same split mutations use).
+    /// </summary>
+    [Fact]
+    public void EveryHubMethodDeclaresExactlyOneOfAuditActionOrNoAudit()
+    {
+        var problems = new List<string>();
+
+        var hubMethods = typeof(NotificationsHub)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Where(m => !m.IsSpecialName)
+            // Overrides of Hub's own members (lifecycle callbacks, Dispose) are not
+            // client-invokable: SignalR's dispatcher excludes methods whose base
+            // definition lives on the Hub base type.
+            .Where(m => m.GetBaseDefinition().DeclaringType == typeof(NotificationsHub))
+            .ToList();
+
+        // Non-vacuous: the hub has real methods; an empty sweep means the reflection
+        // filter broke, not that the hub went quiet.
+        Assert.NotEmpty(hubMethods);
+
+        foreach (var method in hubMethods)
+        {
+            var hasAction = method.GetCustomAttribute<AuditActionAttribute>() is not null;
+            var hasNoAudit = method.GetCustomAttribute<NoAuditAttribute>() is not null;
+
+            switch (hasAction, hasNoAudit)
+            {
+                case (false, false):
+                    problems.Add($"NotificationsHub.{method.Name}: no [AuditAction] or [NoAudit] declared.");
+                    break;
+                case (true, true):
+                    problems.Add($"NotificationsHub.{method.Name}: both [AuditAction] and [NoAudit] declared — pick one.");
+                    break;
+            }
+        }
+
+        Assert.True(problems.Count == 0,
+            "Every client-invokable hub method must declare exactly one of [AuditAction] or [NoAudit] " +
+            "(design.md §7/§8). Problems found:\n" + string.Join('\n', problems));
     }
 }

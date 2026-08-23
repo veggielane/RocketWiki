@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RocketWiki.Api.Telemetry;
+using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
+using RocketWiki.Data;
 
 namespace RocketWiki.Api.RealTime;
 
@@ -20,6 +23,16 @@ namespace RocketWiki.Api.RealTime;
 /// right now), and canView is cheap by design (§6.7: "pure in-process boolean logic"),
 /// so the simple, obviously-correct sweep beats a more surgical one that has to get
 /// the blast radius exactly right to avoid under-evicting.
+///
+/// The same sweep covers EDIT sessions (design.md §8 co-editing) against canEdit: an
+/// editor whose rules changed loses the relay, not just the viewer list. Unlike a
+/// presence eviction (silent — the next ViewersChanged says everything), an evicted
+/// editor gets an explicit <c>EvictedFromEditSession</c> event: silently cutting the
+/// relay would leave them typing into a local doc whose updates go nowhere, and the
+/// event reveals nothing they didn't already legitimately have — they were IN the
+/// session; what changed is that they may no longer be, which is exactly the fact
+/// they must act on (§6.7's absent-not-forbidden protects existence from those with
+/// no right to know it, not this).
 /// </summary>
 public interface IPresenceRuleChangeNotifier
 {
@@ -28,11 +41,14 @@ public interface IPresenceRuleChangeNotifier
 
 public sealed class PresenceRuleChangeNotifier(
     IRealtimeConnectionRegistry registry,
+    IEditSessionRegistry editSessions,
     IServiceScopeFactory scopeFactory,
     IHubContext<NotificationsHub> hubContext) : IPresenceRuleChangeNotifier
 {
     public async Task NotifyRulesChangedAsync(CancellationToken cancellationToken)
     {
+        await ReauthorizeEditSessionsAsync(cancellationToken);
+
         var connections = registry.GetAllPageConnections();
         if (connections.Count == 0)
         {
@@ -90,5 +106,69 @@ public sealed class PresenceRuleChangeNotifier(
                 .ToArray();
             await hubContext.Clients.Group(NotificationsHub.GroupName(pageId)).SendAsync("ViewersChanged", views, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// The edit-session half of the sweep: every (page, member) pair re-checked
+    /// against canEdit through the same calculator path the join used. Evicted
+    /// members lose registry membership, the SignalR group (the relay), and receive
+    /// EvictedFromEditSession; the departure is recorded as page.edit_session.left
+    /// with reason "evicted" (§7 - the join row was written, so the session record
+    /// closes honestly; the eviction's CAUSE is the already-audited rule change).
+    /// Same telemetry stance as presence: an aggregate eviction count, no per-subject
+    /// trace facts.
+    /// </summary>
+    private async Task ReauthorizeEditSessionsAsync(CancellationToken cancellationToken)
+    {
+        var members = editSessions.GetAllMembers();
+        if (members.Count == 0)
+        {
+            return;
+        }
+
+        using var scope = scopeFactory.CreateScope();
+        var permissionReadService = scope.ServiceProvider.GetRequiredService<IPagePermissionReadService>();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var evicted = 0;
+        foreach (var (pageId, member) in members)
+        {
+            var facts = await permissionReadService.GetPermissionFactsAsync([pageId], member.Principal, cancellationToken);
+            if (facts.TryGetValue(pageId, out var fact) && fact.Permission.CanEdit)
+            {
+                continue;
+            }
+
+            var departure = editSessions.Leave(pageId, member.ConnectionId);
+            if (departure is null)
+            {
+                continue; // already gone (raced a disconnect)
+            }
+
+            await hubContext.Groups.RemoveFromGroupAsync(
+                member.ConnectionId, NotificationsHub.EditGroupName(pageId), cancellationToken);
+            await hubContext.Clients.Client(member.ConnectionId)
+                .SendAsync("EvictedFromEditSession", pageId, cancellationToken);
+
+            if (departure.Demand is not null)
+            {
+                await hubContext.Clients.Client(departure.Demand.ConnectionId).SendAsync(
+                    "ReseedRequired", pageId, departure.Demand.BaseRevisionNumber, departure.Demand.Reason, cancellationToken);
+            }
+
+            var spaceKey = await db.Pages.AsNoTracking()
+                .Where(p => p.Id == pageId)
+                .Select(p => p.Space!.Key)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            await EditSessionAudit.RecordAsync(
+                db, member.UserId, EditSessionAudit.LeftAction, AuditOutcome.Success,
+                pageId, spaceKey, EditSessionAudit.ReasonDetails(EditSessionAudit.LeftReasonEvicted),
+                member.ConnectionId, member.ClientIp, cancellationToken);
+
+            evicted++;
+        }
+
+        ApiTelemetry.CoEditEvictions.Add(evicted);
     }
 }

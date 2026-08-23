@@ -199,6 +199,57 @@ public class PageServiceTests : SqliteTestBase
         Assert.Equal(2, result.Value.CurrentRevisionNumber);
         Assert.Equal("Updated title", result.Value.Title);
         Assert.Equal(2, context.PageRevisions.Count(r => r.PageId == page.Id));
+
+        // A solo (non-session) save: no contributor rows, and the page.edit audit
+        // row keeps its original details shape - no "contributors" key at all
+        // (design.md §8 co-editing: absent means "no session", not "empty session").
+        Assert.Empty(context.PageRevisionContributors.ToList());
+        var audit = context.AuditEvents.Single(e => e.Action == "page.edit");
+        Assert.DoesNotContain("contributors", audit.DetailsJson);
+    }
+
+    /// <summary>
+    /// design.md §8 co-editing / §7: a session save records its contributors as
+    /// PageRevisionContributor rows in the SAME transaction as the revision, and the
+    /// page.edit audit row names them. AuthorUserId stays "who pressed save".
+    /// </summary>
+    [Fact]
+    public async Task UpdatePageContent_WithSessionContributors_WritesAttributionRowsAndAuditDetails()
+    {
+        var actor = TestData.NewUser();
+        var coAuthor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+        page.CurrentRevisionNumber = 1;
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Users.Add(coAuthor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.PageRevisions.Add(TestData.NewRevision(page, actor, revisionNumber: 1));
+        await GrantSpaceRoleAsync(context, space.Id, SpaceRole.Editor, actor.Id);
+        context.SaveChanges();
+
+        var service = new PageService(context, LocalInstanceId);
+        var result = await service.UpdatePageContentAsync(
+            new UpdatePageContentRequest(page.Id, 1, "Co-edited", "# co-edited", null),
+            EditorPrincipal(), actor.Id, AuditCtx,
+            sessionContributorUserIds: [actor.Id, coAuthor.Id, coAuthor.Id]); // dupes are defense-in-depth deduped
+
+        Assert.True(result.IsSuccess);
+        var revision = context.PageRevisions.Single(r => r.PageId == page.Id && r.RevisionNumber == 2);
+        Assert.Equal(actor.Id, revision.AuthorUserId);
+
+        var contributorIds = context.PageRevisionContributors
+            .Where(c => c.PageRevisionId == revision.Id)
+            .Select(c => c.UserId)
+            .ToList();
+        Assert.Equal(new[] { actor.Id, coAuthor.Id }.OrderBy(g => g), contributorIds.OrderBy(g => g));
+
+        var audit = context.AuditEvents.Single(e => e.Action == "page.edit");
+        Assert.Contains("contributors", audit.DetailsJson);
+        Assert.Contains(coAuthor.Id.ToString(), audit.DetailsJson);
     }
 
     [Fact]

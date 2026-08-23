@@ -63,7 +63,8 @@ public sealed class FakePageService : IPageService
     }
 
     public Task<PageMutationResult<Page>> UpdatePageContentAsync(
-        UpdatePageContentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+        UpdatePageContentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext,
+        IReadOnlyCollection<Guid>? sessionContributorUserIds = null, CancellationToken cancellationToken = default)
     {
         UpdateCalls.Add(request);
 

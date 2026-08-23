@@ -246,6 +246,72 @@ public static class ApiTelemetry
     public const string PresenceLeaveExplicit = "explicit";
     public const string PresenceLeaveDisconnected = "disconnected";
 
+    // --- Co-editing (design.md §8 CRDT co-editing; §15 discipline throughout) ---
+    // Everything here is counts, byte SIZES, and bounded vocabularies. Update payloads
+    // are page content in CRDT form and never appear in telemetry in any encoding;
+    // a byte COUNT is a bounded operational fact — the same line §10's storage
+    // instrumentation already draws ("duration, count and byte count per operation",
+    // never the bytes themselves). Who edited what lives in the audit log
+    // (page.edit_session.*, §7) and the PageRevisionContributor table, not here.
+
+    public static readonly Counter<long> CoEditSessionsStarted =
+        Meter.CreateCounter<long>("rocketwiki.coedit.sessions_started", "{session}",
+            "Edit sessions created (first member joined).");
+
+    public static readonly Counter<long> CoEditJoins =
+        Meter.CreateCounter<long>("rocketwiki.coedit.joins", "{join}",
+            "Edit-session join attempts, by outcome.");
+
+    /// <summary>Same shape as presence evictions: the rule-change mutation is one audit
+    /// row whether it evicted nobody or everybody; only this counter separates them.</summary>
+    public static readonly Counter<long> CoEditEvictions =
+        Meter.CreateCounter<long>("rocketwiki.coedit.evictions", "{eviction}",
+            "Edit-session members evicted after an access-rule change removed their canEdit.");
+
+    /// <summary>Payload SIZE distribution per relayed message, by kind (update vs
+    /// awareness). Size is the §15-safe shadow of relay volume: it answers "is the
+    /// relay hot, are updates huge" without a single content byte leaving the hub.</summary>
+    public static readonly Histogram<long> CoEditRelayBytes =
+        Meter.CreateHistogram<long>("rocketwiki.coedit.relay_bytes", "By",
+            "Size of each relayed co-editing message, by kind.");
+
+    public static readonly Counter<long> CoEditLogResets =
+        Meter.CreateCounter<long>("rocketwiki.coedit.log_resets", "{reset}",
+            "Update-log resets, by reason (cap-triggered reseed vs empty-session expiry).");
+
+    public const string CoEditOutcomeTag = "rocketwiki.coedit.outcome";
+    public const string CoEditKindTag = "rocketwiki.coedit.kind";
+    public const string CoEditResetReasonTag = "rocketwiki.coedit.reset_reason";
+
+    public const string CoEditJoined = "joined";
+    public const string CoEditJoinNoPrincipal = "no_principal";
+    public const string CoEditJoinNoLocalUser = "no_local_user";
+    /// <summary>No such live page. Split from denied here (unlike the caller-facing
+    /// response, which §6.7 keeps identical) for the same reason presence splits its
+    /// silent branches: the operator needs to know which one is firing, and an
+    /// aggregate count with no page/user id preserves the caller-facing shape.</summary>
+    public const string CoEditJoinNotFound = "not_found";
+    public const string CoEditJoinDenied = "denied";
+
+    public const string CoEditKindUpdate = "update";
+    public const string CoEditKindAwareness = "awareness";
+    /// <summary>A message dropped for exceeding its size cap (CoEditOptions): recorded
+    /// on the relay histogram under this kind with its offending size, so a client
+    /// stuck above the cap is operator-visible rather than silently mute.</summary>
+    public const string CoEditKindOversized = "oversized";
+
+    public const string CoEditLogResetCapReseed = "cap_reseed";
+    public const string CoEditLogResetExpired = "expired";
+
+    public static void RecordCoEditJoin(string outcome) =>
+        CoEditJoins.Add(1, new KeyValuePair<string, object?>(CoEditOutcomeTag, outcome));
+
+    public static void RecordCoEditRelay(string kind, long sizeBytes) =>
+        CoEditRelayBytes.Record(sizeBytes, new KeyValuePair<string, object?>(CoEditKindTag, kind));
+
+    public static void RecordCoEditLogReset(string reason) =>
+        CoEditLogResets.Add(1, new KeyValuePair<string, object?>(CoEditResetReasonTag, reason));
+
     /// <summary>Recipient was connected and passed canView at send time: row persisted
     /// with a title snapshot and pushed to their live connection.</summary>
     public const string NotificationDeliveredLive = "delivered_live";

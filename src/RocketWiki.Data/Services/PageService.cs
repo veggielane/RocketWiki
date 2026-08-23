@@ -106,7 +106,8 @@ public class PageService : IPageService
     }
 
     public async Task<PageMutationResult<Page>> UpdatePageContentAsync(
-        UpdatePageContentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+        UpdatePageContentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext,
+        IReadOnlyCollection<Guid>? sessionContributorUserIds = null, CancellationToken cancellationToken = default)
     {
         var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == request.PageId, cancellationToken);
         if (page is null)
@@ -142,7 +143,7 @@ public class PageService : IPageService
 
         var now = DateTime.UtcNow;
         var newRevisionNumber = page.CurrentRevisionNumber + 1;
-        _db.PageRevisions.Add(new PageRevision
+        var revision = new PageRevision
         {
             PageId = page.Id,
             RevisionNumber = newRevisionNumber,
@@ -151,7 +152,23 @@ public class PageService : IPageService
             EditSummary = request.EditSummary,
             AuthorUserId = actingUserId,
             CreatedAtUtc = now,
-        });
+        };
+        _db.PageRevisions.Add(revision);
+
+        // design.md §8 co-editing: contributor attribution rows commit in the SAME
+        // transaction as the revision they describe - like the audit row, a revision
+        // and its attribution cannot exist without each other. The ids arrive only
+        // from the server's edit-session registry (see the interface doc); dedup here
+        // is defense in depth, not an invitation to pass duplicates.
+        var contributorIds = sessionContributorUserIds?.Distinct().ToArray() ?? [];
+        foreach (var contributorUserId in contributorIds)
+        {
+            _db.PageRevisionContributors.Add(new PageRevisionContributor
+            {
+                PageRevisionId = revision.Id,
+                UserId = contributorUserId,
+            });
+        }
 
         page.Title = request.Title;
         page.CurrentContent = request.Content;
@@ -159,7 +176,9 @@ public class PageService : IPageService
         page.UpdatedAtUtc = now;
 
         _db.AuditContext = auditContext;
-        _db.RaiseDomainEvent(new PageContentUpdatedEvent(page.Id, space.Id, space.Key, actingUserId, newRevisionNumber));
+        _db.RaiseDomainEvent(new PageContentUpdatedEvent(
+            page.Id, space.Id, space.Key, actingUserId, newRevisionNumber,
+            contributorIds.Length > 0 ? contributorIds : null));
 
         await _db.SaveChangesAsync(cancellationToken);
         return PageMutationResult<Page>.Success(page);

@@ -37,7 +37,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260823103019_AddGitLabCredentials", applied);
         Assert.Contains("20260823133434_AddUserAvatars", applied);
         Assert.Contains("20260823134425_AddCustomEmojis", applied);
-        Assert.Equal(5, applied.Count);
+        Assert.Contains("20260823173233_AddPageRevisionContributors", applied);
+        Assert.Equal(6, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -106,6 +107,30 @@ public sealed class MigrationTests : SqlServerTestBase
         // so it must land unique on the real engine, not just under SQLite's EnsureCreated.
         Assert.Equal(1, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_CustomEmojis_Name' AND is_unique = 1"));
+
+        // AddPageRevisionContributors (design.md §8 co-editing attribution): composite
+        // PK (PageRevisionId, UserId), the per-user attribution index, and both FKs
+        // landing as NO ACTION on the real engine (data-model.md: "no cascade deletes"
+        // - deletion is an explicit audited operation, never a side effect).
+        var contributorPkColumns = await ExecuteColumnAsync("""
+            SELECT col.name
+            FROM sys.indexes i
+            INNER JOIN sys.index_columns ic
+                ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            INNER JOIN sys.columns col
+                ON col.object_id = ic.object_id AND col.column_id = ic.column_id
+            WHERE i.object_id = OBJECT_ID('dbo.PageRevisionContributors') AND i.is_primary_key = 1
+            ORDER BY ic.key_ordinal
+            """);
+        Assert.Equal(["PageRevisionId", "UserId"], contributorPkColumns);
+        Assert.Equal(1, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_PageRevisionContributors_UserId'"));
+        Assert.Equal(2, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.foreign_keys
+            WHERE parent_object_id = OBJECT_ID('dbo.PageRevisionContributors')
+              AND delete_referential_action_desc = 'NO_ACTION'
+            """));
 
         // data-model.md: AuditEvents clustered PK (TimestampUtc, Id) with Id remaining
         // a native bigint IDENTITY despite being only part of the key.

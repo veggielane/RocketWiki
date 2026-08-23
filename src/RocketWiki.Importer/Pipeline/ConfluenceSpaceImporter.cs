@@ -191,7 +191,7 @@ public sealed class ConfluenceSpaceImporter
 
             var updateResult = await _pageService.UpdatePageContentAsync(
                 new UpdatePageContentRequest(realPageId, ExpectedRevisionNumber: 1, page.Title, conversion.Markdown, EditSummary: "Imported from Confluence"),
-                options.ImporterPrincipal, options.ActingUserId, options.AuditContext, cancellationToken);
+                options.ImporterPrincipal, options.ActingUserId, options.AuditContext, cancellationToken: cancellationToken);
 
             var skippedReason = updateResult.IsSuccess
                 ? null

@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Services;
@@ -29,11 +31,34 @@ namespace RocketWiki.Api.RealTime;
 /// is rebuilt fresh from it via <see cref="PrincipalBuilder"/> on every call instead.
 /// </summary>
 [Authorize]
-public sealed class NotificationsHub(
-    IRealtimeConnectionRegistry registry,
-    IPageReadService pageReadService,
-    RocketWikiDbContext db) : Hub
+public sealed partial class NotificationsHub : Hub
 {
+    // Explicit fields rather than a primary constructor: primary-constructor
+    // parameters are only in scope in the partial declaration that declares them,
+    // and the edit-session half of this hub lives in NotificationsHub.EditSessions.cs.
+    private readonly IRealtimeConnectionRegistry registry;
+    private readonly IEditSessionRegistry editSessions;
+    private readonly IPageReadService pageReadService;
+    private readonly IPagePermissionReadService pagePermissionReadService;
+    private readonly IOptions<CoEditOptions> coEditOptions;
+    private readonly RocketWikiDbContext db;
+
+    public NotificationsHub(
+        IRealtimeConnectionRegistry registry,
+        IEditSessionRegistry editSessions,
+        IPageReadService pageReadService,
+        IPagePermissionReadService pagePermissionReadService,
+        IOptions<CoEditOptions> coEditOptions,
+        RocketWikiDbContext db)
+    {
+        this.registry = registry;
+        this.editSessions = editSessions;
+        this.pageReadService = pageReadService;
+        this.pagePermissionReadService = pagePermissionReadService;
+        this.coEditOptions = coEditOptions;
+        this.db = db;
+    }
+
     internal static string GroupName(Guid pageId) => $"page:{pageId}";
     internal static string UserGroupName(Guid userId) => $"user:{userId}";
 
@@ -70,6 +95,10 @@ public sealed class NotificationsHub(
             await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
         }
 
+        // Edit sessions (design.md §8 co-editing): depart every session this
+        // connection was in - see NotificationsHub.EditSessions.cs.
+        await HandleEditSessionDisconnectAsync();
+
         await base.OnDisconnectedAsync(exception);
     }
 
@@ -80,6 +109,9 @@ public sealed class NotificationsHub(
     /// (§6.7): a caller probing a restricted page id sees no different behaviour than
     /// probing a nonexistent one.
     /// </summary>
+    [NoAudit("Presence is deliberately unaudited (design.md §8: 'no table, no audit rows'; " +
+        "data-model.md: 'Presence has no table') - the page view itself is already audited, and presence adds no new record. " +
+        "Contrast JoinEditSession, which IS audited: joining an edit session consumes canEdit and opens a content-bearing channel.")]
     public async Task JoinPage(Guid pageId)
     {
         var principal = PrincipalBuilder.Build(Context.User);
@@ -125,6 +157,7 @@ public sealed class NotificationsHub(
     /// <see cref="OnDisconnectedAsync"/> (which only fires when the connection itself
     /// closes, not on a route change that keeps the same connection alive).
     /// </summary>
+    [NoAudit("Presence is deliberately unaudited (design.md §8) - see JoinPage.")]
     public async Task LeavePage(Guid pageId)
     {
         registry.LeavePage(pageId, Context.ConnectionId);
@@ -132,6 +165,7 @@ public sealed class NotificationsHub(
         await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
     }
 
+    [NoAudit("Ephemeral presence broadcast, never persisted or audited (design.md §8) - see JoinPage.")]
     public Task PointerMove(Guid pageId, double x, double y)
     {
         var viewer = registry.GetViewers(pageId).FirstOrDefault(v => v.ConnectionId == Context.ConnectionId);

@@ -57,6 +57,7 @@ public partial class Mutation
     public async Task<UpdatePageContentPayload> UpdatePageContent(
         UpdatePageContentRequest input,
         [Service] IPageService pageService,
+        [Service] IEditSessionRegistry editSessions,
         [Service] ICurrentPrincipalAccessor principalAccessor,
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
@@ -71,11 +72,27 @@ public partial class Mutation
             return new UpdatePageContentPayload(null, unauthenticated);
         }
 
-        var result = await pageService.UpdatePageContentAsync(input, principal!, actingUserId!.Value, auditContext!, cancellationToken);
+        // Co-editing attribution (design.md §8/§7): contributor ids come EXCLUSIVELY
+        // from the server's own edit-session registry, resolved by the acting user's
+        // live membership in this page's session - never from the request. There is
+        // deliberately no `contributors` input field for a client to forge; a
+        // non-member's save (content produced outside the session) attaches nothing.
+        var sessionContributors = editSessions.SnapshotContributorsForSave(input.PageId, actingUserId!.Value);
+
+        var result = await pageService.UpdatePageContentAsync(
+            input, principal!, actingUserId.Value, auditContext!, sessionContributors?.UserIds, cancellationToken);
         if (!result.IsSuccess)
         {
             await MutationAuthHelper.AuditDenialIfApplicableAsync(auditSink, "page.edit", result.Error, AuditSubjectType.Page, input.PageId, cancellationToken);
             return new UpdatePageContentPayload(null, PageMutationErrorView.From(result.Error));
+        }
+
+        if (sessionContributors is not null)
+        {
+            // Drain only up to the snapshot's sequence: keystrokes that landed while
+            // this save was in flight stay marked for the next revision. Also advances
+            // the session's base revision so late joiners save against the new number.
+            editSessions.OnSaved(input.PageId, sessionContributors.MaxSequence, result.Value.CurrentRevisionNumber);
         }
 
         // design.md §8: watchers of this page/space - per-recipient canView at send

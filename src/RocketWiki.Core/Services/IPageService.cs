@@ -21,8 +21,20 @@ public interface IPageService
     Task<PageMutationResult<Page>> CreatePageAsync(
         CreatePageRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// <paramref name="sessionContributorUserIds"/> (design.md §8 co-editing): the
+    /// distinct users whose live edit-session updates fed this save, recorded as
+    /// PageRevisionContributor rows in the same transaction as the revision. This is
+    /// a SERVER-side parameter only — it must come from the API's edit-session
+    /// registry (membership canEdit-gated at join), never from any client-supplied
+    /// list, or attribution would be forgeable (§7). It is deliberately not part of
+    /// <see cref="UpdatePageContentRequest"/>, because that record doubles as the
+    /// GraphQL input type and a field there would be exactly such a client channel.
+    /// Null/empty means an ordinary solo save: no contributor rows.
+    /// </summary>
     Task<PageMutationResult<Page>> UpdatePageContentAsync(
-        UpdatePageContentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
+        UpdatePageContentRequest request, Principal principal, Guid actingUserId, AuditContext auditContext,
+        IReadOnlyCollection<Guid>? sessionContributorUserIds = null, CancellationToken cancellationToken = default);
 
     Task<PageMutationResult<Page>> MovePageAsync(
         MovePageRequest request, Principal principal, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);

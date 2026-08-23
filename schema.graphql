@@ -486,6 +486,7 @@ type PageRestrictionDetail {
 }
 
 type PageRevision {
+  contributors: [UserRef!]! @cost(weight: "10")
   id: UUID!
   pageId: UUID!
   revisionNumber: Int!
@@ -832,6 +833,7 @@ enum AuditChannel {
   ATTACHMENT
   SYNC
   SYSTEM
+  REALTIME
 }
 
 enum AuditOutcome {

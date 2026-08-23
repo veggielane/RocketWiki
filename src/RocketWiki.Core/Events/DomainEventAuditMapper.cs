@@ -39,8 +39,14 @@ public static class DomainEventAuditMapper
         PageCreatedEvent e => ("page.create", AuditSubjectType.Page, e.PageId, e.SpaceKey,
             JsonSerializer.Serialize(new { title = e.Title })),
 
+        // Session saves (design.md §8 co-editing) add the contributor list to the
+        // details - the audit row is the regulated record, and "whose keystrokes are
+        // in this revision" belongs exactly here (§7). Solo saves keep the original
+        // shape: an absent key means "no session", not "empty session".
         PageContentUpdatedEvent e => ("page.edit", AuditSubjectType.Page, e.PageId, e.SpaceKey,
-            JsonSerializer.Serialize(new { revisionNumber = e.RevisionNumber })),
+            e.ContributorUserIds is { Count: > 0 }
+                ? JsonSerializer.Serialize(new { revisionNumber = e.RevisionNumber, contributors = e.ContributorUserIds })
+                : JsonSerializer.Serialize(new { revisionNumber = e.RevisionNumber })),
 
         PageMovedEvent e => ("page.move", AuditSubjectType.Page, e.PageId, e.SpaceKey,
             JsonSerializer.Serialize(new { oldParentPageId = e.OldParentPageId, newParentPageId = e.NewParentPageId })),

@@ -2,6 +2,7 @@ using HotChocolate.Diagnostics;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using RocketWiki.Api.Attachments;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Avatars;
@@ -191,8 +192,23 @@ builder.AddRocketWikiGitLab();
 // design.md §15: a Redis backplane is needed once replicas > 1; at one replica (today)
 // the default in-memory backplane is correct and this is a real decision to revisit at
 // deployment time, not a gap in this wiring.
+// Bound here (not via IOptions) because the hub's transport limit below must be
+// derived from the same values before the container is built.
+var coEditCaps = builder.Configuration.GetSection(CoEditOptions.SectionName).Get<CoEditOptions>() ?? new CoEditOptions();
 builder.Services
-    .AddSignalR(o => o.EnableDetailedErrors = builder.Environment.IsDevelopment())
+    .AddSignalR(o =>
+    {
+        o.EnableDetailedErrors = builder.Environment.IsDevelopment();
+        // SignalR's default MaximumReceiveMessageSize is 32 KB - fine for presence
+        // frames, far too small for co-editing's Yjs payloads (a seed update or a
+        // reseed snapshot is a whole document, design.md §8). The transport limit is
+        // derived from the application-level caps in CoEditOptions plus framing
+        // slack, so the application caps (which drop oversized messages with
+        // telemetry) fire before the transport kills the connection - the transport
+        // limit is the backstop, not the policy.
+        o.MaximumReceiveMessageSize =
+            Math.Max(Math.Max(coEditCaps.SnapshotMaxBytes, coEditCaps.UpdateMaxBytes), 32 * 1024) + 64 * 1024;
+    })
     .AddMessagePackProtocol();
 
 // Singleton: ephemeral, in-memory connection/presence state that must be shared across
@@ -200,6 +216,16 @@ builder.Services
 // is (design.md §8: presence "no table, no audit rows" — this IS the only copy).
 builder.Services.AddSingleton<IRealtimeConnectionRegistry, RealtimeConnectionRegistry>();
 builder.Services.AddSingleton<IPresenceRuleChangeNotifier, PresenceRuleChangeNotifier>();
+
+// --- Co-editing (design.md §8 CRDT co-editing, resolving §17's open bullet) ---
+// Relay-only edit sessions over the same hub: opaque Yjs updates + a session-scoped
+// update log, in-memory exactly like presence (gone on restart — the authoritative
+// write stays updatePageContent). See NotificationsHub.EditSessions.cs for the full
+// decision note. Options carry the sanity caps; TimeProvider makes the empty-session
+// grace sweep deterministic in tests.
+builder.Services.Configure<CoEditOptions>(builder.Configuration.GetSection(CoEditOptions.SectionName));
+builder.Services.TryAddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IEditSessionRegistry, EditSessionRegistry>();
 builder.Services.AddScoped<INotificationDispatcher>(sp =>
     new NotificationDispatcher(
         sp.GetRequiredService<RocketWikiDbContext>(),
