@@ -236,6 +236,219 @@
   color: var(--rw-link, #1a56db);
 }
 
+/* --- GitLab embeds (design.md §18) -------------------------------------- */
+
+.rw-gitlab-issue-link {
+  color: var(--rw-link, #1a56db);
+  text-decoration: none;
+  border-bottom: 1px dashed currentColor;
+}
+
+/* Live chip (read mode, issue resolved). */
+.rw-gitlab-issue-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0 0.45em;
+  border: 1px solid var(--rw-border, #c9ccd1);
+  border-radius: 999px;
+  background: var(--rw-code-bg, #f2f3f5);
+  color: var(--rw-link, #1a56db);
+  text-decoration: none;
+  line-height: 1.4;
+}
+
+.rw-gitlab-issue-chip:hover,
+.rw-gitlab-issue-chip:focus-visible {
+  border-color: var(--rw-link, #1a56db);
+}
+
+.rw-gitlab-issue-state {
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0 0.45em;
+  border-radius: 999px;
+  background: rgba(138, 143, 152, 0.25);
+  color: inherit;
+}
+
+.rw-gitlab-issue-state[data-state='opened'] {
+  background: rgba(46, 160, 67, 0.2);
+  color: #1a7f37;
+}
+
+.rw-gitlab-issue-state[data-state='closed'] {
+  background: rgba(130, 80, 223, 0.18);
+  color: #6639ba;
+}
+
+/* Degraded chip: plain link text with a subtle marker; the title/sr text
+   explains, and for credential reasons points at Settings (§18). */
+.rw-gitlab-issue-degraded {
+  border-bottom-style: dotted;
+  color: inherit;
+  cursor: help;
+}
+
+.rw-gitlab-marker {
+  font-size: 0.7em;
+  font-weight: 700;
+  vertical-align: super;
+  margin-left: 0.15em;
+  color: var(--rw-muted, #5b6270);
+}
+
+.rw-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Fence blocks: same editing/readonly frame as mermaid. */
+.rw-gitlab-block {
+  margin: 0 0 0.75em;
+}
+
+.rw-gitlab-block .rw-gitlab-source {
+  margin: 0;
+}
+
+.rw-gitlab-block-editing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.75em;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .rw-gitlab-block-editing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.rw-gitlab-preview {
+  min-width: 0;
+}
+
+.rw-gitlab-block-readonly .rw-gitlab-source {
+  display: none;
+}
+
+.rw-gitlab-block-readonly[data-render-state='error'] .rw-gitlab-source {
+  display: block;
+  margin-bottom: 0.5em;
+}
+
+.rw-gitlab-file,
+.rw-gitlab-issues,
+.rw-gitlab-placeholder {
+  border: 1px solid var(--rw-border, #c9ccd1);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.rw-gitlab-file-header,
+.rw-gitlab-issues-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.75em;
+  padding: 0.5em 0.9em;
+  background: var(--rw-code-bg, #f2f3f5);
+  border-bottom: 1px solid var(--rw-border, #c9ccd1);
+  font-size: 0.85em;
+}
+
+.rw-gitlab-file-name {
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  font-weight: 600;
+}
+
+.rw-gitlab-file-meta {
+  color: var(--rw-muted, #5b6270);
+}
+
+.rw-gitlab-file-link {
+  margin-left: auto;
+  color: var(--rw-link, #1a56db);
+}
+
+/* Third-party text in a scrollable pre — rendered as text, never markup. */
+.rw-gitlab-file-content {
+  margin: 0;
+  border-radius: 0;
+  max-height: 24em;
+  overflow: auto;
+  white-space: pre;
+}
+
+.rw-gitlab-file-withheld {
+  padding: 0.6em 0.9em;
+  color: var(--rw-muted, #5b6270);
+  font-style: italic;
+  font-size: 0.9em;
+}
+
+.rw-gitlab-issues table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0;
+  font-size: 0.9em;
+}
+
+.rw-gitlab-issues th,
+.rw-gitlab-issues td {
+  border: 0;
+  border-top: 1px solid var(--rw-border, #c9ccd1);
+  padding: 0.4em 0.9em;
+  text-align: left;
+}
+
+.rw-gitlab-issues thead th {
+  border-top: 0;
+  background: transparent;
+  color: var(--rw-muted, #5b6270);
+  font-weight: 600;
+}
+
+.rw-gitlab-issues a {
+  color: var(--rw-link, #1a56db);
+  text-decoration: none;
+}
+
+.rw-gitlab-issues a:hover {
+  text-decoration: underline;
+}
+
+/* Typed placeholder (§18): reason + the reference, which is already the
+   page's own Markdown and so discloses nothing new. */
+.rw-gitlab-placeholder {
+  padding: 0.6em 0.9em;
+}
+
+.rw-gitlab-placeholder-reason {
+  color: var(--rw-muted, #5b6270);
+  font-size: 0.9em;
+  margin-bottom: 0.35em;
+}
+
+.rw-gitlab-placeholder-reason a {
+  color: var(--rw-link, #1a56db);
+}
+
+.rw-gitlab-placeholder-ref {
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--rw-code-bg, #f2f3f5);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
 @media (prefers-color-scheme: dark) {
   .rw-editor-content {
     --rw-border: #383c46;

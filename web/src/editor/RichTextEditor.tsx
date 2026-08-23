@@ -8,6 +8,8 @@ import { AttachmentImage } from './nodes/AttachmentImage'
 import { MermaidCodeBlock } from './nodes/MermaidCodeBlock'
 import { DrawioDiagram } from './nodes/DrawioDiagram'
 import { DrawioDiagramWithView } from './nodes/DrawioDiagramWithView'
+import { GitLabIssueLink } from './marks/GitLabIssueLink'
+import { GitLabIssueLinkWithView } from './marks/GitLabIssueLinkWithView'
 import { markdownToJson } from './markdown/fromMarkdown'
 import { jsonToMarkdown } from './markdown/toMarkdown'
 import { EditorToolbar } from './EditorToolbar'
@@ -22,6 +24,7 @@ const richTextExtensions = editorExtensions.map((ext) => {
   if (ext === Image) return AttachmentImage
   if (ext === codeBlockExtension) return MermaidCodeBlock
   if (ext === DrawioDiagram) return DrawioDiagramWithView
+  if (ext === GitLabIssueLink) return GitLabIssueLinkWithView
   return ext
 })
 

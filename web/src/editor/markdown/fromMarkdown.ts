@@ -3,6 +3,7 @@ import type { Token } from 'markdown-it'
 import { createMarkdownIt } from './markdownIt'
 import type { CalloutType } from '../nodes/Callout'
 import { TokenCursor } from './tokenCursor'
+import { parseGitLabIssueTarget } from '../../gitlab/issueScheme'
 
 type MarkJSON = NonNullable<JSONContent['marks']>[number]
 
@@ -227,7 +228,15 @@ function parseInlineChildren(children: Token[]): JSONContent[] {
       case 'link_open': {
         const href = String(child.attrGet('href') ?? '')
         const title = child.attrGet('title')
-        if (href.startsWith('page://')) {
+        // `[text](gitlab-issue://{project}/{iid})` becomes its own mark
+        // (design.md §18) — but only the exact well-formed, title-less
+        // shape. Anything else (non-numeric iid, empty project, a title)
+        // stays an ordinary link so the author's bytes survive the round
+        // trip instead of being "fixed" into the scheme.
+        const gitlabIssue = title === null ? parseGitLabIssueTarget(href) : null
+        if (gitlabIssue) {
+          stack.push({ type: 'gitlabIssueLink', attrs: { project: gitlabIssue.project, iid: gitlabIssue.iid } })
+        } else if (href.startsWith('page://')) {
           stack.push({ type: 'pageLink', attrs: { pageId: href.slice('page://'.length) } })
         } else {
           stack.push({ type: 'link', attrs: { href, title: title !== null ? String(title) : null } })

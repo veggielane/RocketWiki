@@ -135,7 +135,7 @@ const MARK_DELIMITERS: Record<string, [string, string]> = {
 }
 
 function openDelim(mark: MarkJSON): string {
-  if (mark.type === 'link' || mark.type === 'pageLink') {
+  if (mark.type === 'link' || mark.type === 'pageLink' || mark.type === 'gitlabIssueLink') {
     return '['
   }
   const pair = MARK_DELIMITERS[mark.type]
@@ -154,6 +154,11 @@ function closeDelim(mark: MarkJSON): string {
   if (mark.type === 'pageLink') {
     return `](page://${mark.attrs?.pageId as string})`
   }
+  if (mark.type === 'gitlabIssueLink') {
+    // design.md §18 — scheme-only, host-free; attrs hold the author's raw
+    // digits/path so this is byte-identical to what was parsed.
+    return `](gitlab-issue://${mark.attrs?.project as string}/${mark.attrs?.iid as string})`
+  }
   const pair = MARK_DELIMITERS[mark.type]
   if (!pair) {
     throw new Error(`jsonToMarkdown: unsupported mark "${mark.type}"`)
@@ -163,7 +168,7 @@ function closeDelim(mark: MarkJSON): string {
 
 function marksEqual(a: MarkJSON, b: MarkJSON): boolean {
   if (a.type !== b.type) return false
-  if (a.type === 'link' || a.type === 'pageLink') {
+  if (a.type === 'link' || a.type === 'pageLink' || a.type === 'gitlabIssueLink') {
     return JSON.stringify(a.attrs ?? null) === JSON.stringify(b.attrs ?? null)
   }
   return true

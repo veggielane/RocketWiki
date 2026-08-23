@@ -1,26 +1,37 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { NodeViewContent, NodeViewWrapper } from '@tiptap/react'
 import type { NodeViewProps } from '@tiptap/core'
 import { renderMermaid, type MermaidRenderResult } from '../diagrams/mermaidRenderer'
+import { parseFileFence, parseIssuesFence } from '../../gitlab/fenceBody'
+import { GitLabFileBlock } from '../../gitlab/GitLabFileBlock'
+import { GitLabIssuesBlock } from '../../gitlab/GitLabIssuesBlock'
 
 /**
- * NodeView for every `codeBlock`. Non-mermaid languages render exactly as
- * the stock extension would (a `pre > code` with the same class); a
- * ` ```mermaid ` block additionally gets a live rendered preview:
- *   - editing: source beside preview (stacked on narrow screens), preview
- *     re-rendered debounced as you type,
- *   - read mode (page view — same component, `editable: false`, per the
- *     one-renderer rule): the diagram alone, unless it fails to render, in
- *     which case the source is shown next to an inline error block so the
- *     content is never invisible.
+ * NodeView for every `codeBlock`. Ordinary languages render exactly as the
+ * stock extension would (a `pre > code` with the same class); the reserved
+ * fence languages additionally get a live rendered preview:
+ *   - ` ```mermaid ` — the diagram,
+ *   - ` ```gitlab-file ` / ` ```gitlab-issues ` — live GitLab embeds
+ *     (design.md §18), fetched through the API only,
+ * with the shared layout: editing shows source beside preview (stacked on
+ * narrow screens, preview debounced as you type); read mode (page view —
+ * same component, `editable: false`, per the one-renderer rule) shows the
+ * preview alone, unless the source doesn't parse, in which case the source
+ * comes back so the content is never invisible.
  *
- * The *Markdown* form stays a plain fenced code block either way — this
- * file changes rendering only, never serialization.
+ * The *Markdown* form stays a plain fenced code block for all of them —
+ * this file changes rendering only, never serialization.
  */
 export function CodeBlockView(props: NodeViewProps) {
   const language = (props.node.attrs.language as string | null) ?? null
   if (language === 'mermaid') {
     return <MermaidBlock {...props} />
+  }
+  if (language === 'gitlab-file') {
+    return <GitLabFileFence {...props} />
+  }
+  if (language === 'gitlab-issues') {
+    return <GitLabIssuesFence {...props} />
   }
   return (
     <NodeViewWrapper>
@@ -92,5 +103,90 @@ function MermaidBlock({ node, editor }: NodeViewProps) {
         )}
       </div>
     </NodeViewWrapper>
+  )
+}
+
+/**
+ * While typing in a gitlab fence, wait for the keystrokes to settle before
+ * re-parsing (and therefore re-fetching — each variables change is a live
+ * API call). Read mode passes 0: the source is static, render immediately.
+ */
+function useDebouncedValue(value: string, delayMs: number): string {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    if (delayMs === 0) return
+    const timer = setTimeout(() => setDebounced(value), delayMs)
+    return () => clearTimeout(timer)
+  }, [value, delayMs])
+  // Zero delay derives directly — no state write, no extra render.
+  return delayMs === 0 ? value : debounced
+}
+
+function GitLabFileFence({ node, editor }: NodeViewProps) {
+  const editable = editor.isEditable
+  const source = useDebouncedValue(node.textContent, editable ? PREVIEW_DEBOUNCE_MS : 0)
+  const parsed = parseFileFence(source)
+  return (
+    <GitLabFenceLayout editable={editable} ok={parsed.ok}>
+      {parsed.ok ? (
+        <GitLabFileBlock fileRef={parsed.ref} />
+      ) : (
+        <GitLabFenceIncomplete kind="gitlab-file" missing={parsed.missing} />
+      )}
+    </GitLabFenceLayout>
+  )
+}
+
+function GitLabIssuesFence({ node, editor }: NodeViewProps) {
+  const editable = editor.isEditable
+  const source = useDebouncedValue(node.textContent, editable ? PREVIEW_DEBOUNCE_MS : 0)
+  const parsed = parseIssuesFence(source)
+  return (
+    <GitLabFenceLayout editable={editable} ok={parsed.ok}>
+      {parsed.ok ? (
+        <GitLabIssuesBlock spec={parsed.spec} />
+      ) : (
+        <GitLabFenceIncomplete kind="gitlab-issues" missing={parsed.missing} />
+      )}
+    </GitLabFenceLayout>
+  )
+}
+
+/**
+ * Shared frame for both gitlab fences, mirroring MermaidBlock: the source
+ * (ProseMirror's contentDOM) always stays in the DOM; CSS shows it in edit
+ * mode and hides it in read mode unless the fence doesn't parse
+ * (`data-render-state="error"` brings it back so content is never
+ * invisible).
+ */
+function GitLabFenceLayout({
+  editable,
+  ok,
+  children,
+}: {
+  editable: boolean
+  ok: boolean
+  children: ReactNode
+}) {
+  return (
+    <NodeViewWrapper
+      className={`rw-gitlab-block ${editable ? 'rw-gitlab-block-editing' : 'rw-gitlab-block-readonly'}`}
+      data-render-state={ok ? 'ok' : 'error'}
+    >
+      <pre className="rw-code-block rw-gitlab-source" spellCheck={false}>
+        <NodeViewContent<'code'> as="code" />
+      </pre>
+      <div className="rw-gitlab-preview" contentEditable={false}>
+        {children}
+      </div>
+    </NodeViewWrapper>
+  )
+}
+
+function GitLabFenceIncomplete({ kind, missing }: { kind: string; missing: string[] }) {
+  return (
+    <div className="rw-diagram-hint">
+      Incomplete {kind} reference — missing {missing.join(', ')}. Body is key=value lines.
+    </div>
   )
 }

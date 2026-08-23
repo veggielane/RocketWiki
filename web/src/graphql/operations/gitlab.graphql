@@ -1,0 +1,97 @@
+# GitLab integration reads (design.md §18). All three content queries are
+# proxy-only live fetches through the API — the browser never talks to
+# GitLab — and every failure mode is a payload fact (`unavailable`), never
+# a GraphQL error, so one dead embed can't eat the page around it.
+
+fragment GitLabUnavailable on GitLabUnavailableView {
+  reason
+  upstreamStatus
+}
+
+# `configured: false` means the feature is absent on this instance
+# (§15/§18 fail-closed — no GitLab:BaseUrl, the steady state on a high-side
+# replica). Every GitLab affordance in the UI gates on it.
+query GitLabStatus {
+  gitlabStatus {
+    configured
+    baseUrl
+    viewerHasToken
+  }
+}
+
+query GitLabIssue($projectId: String!, $iid: Int!) {
+  gitlabIssue(projectId: $projectId, iid: $iid) {
+    issue {
+      project
+      iid
+      title
+      state
+      labels
+      webUrl
+    }
+    unavailable {
+      ...GitLabUnavailable
+    }
+  }
+}
+
+query GitLabIssues($projectId: String!, $filter: GitLabIssueFilterInput, $first: Int) {
+  gitlabIssues(projectId: $projectId, filter: $filter, first: $first) {
+    issues {
+      project
+      iid
+      title
+      state
+      labels
+      assigneeNames
+      milestone
+      updatedAtUtc
+      webUrl
+    }
+    unavailable {
+      ...GitLabUnavailable
+    }
+  }
+}
+
+query GitLabFile($projectId: String!, $path: String!, $ref: String) {
+  gitlabFile(projectId: $projectId, path: $path, ref: $ref) {
+    file {
+      project
+      filePath
+      ref
+      fileName
+      sizeBytes
+      lastCommitId
+      content
+      contentIssue
+    }
+    unavailable {
+      ...GitLabUnavailable
+    }
+  }
+}
+
+# The token is write-only by construction (§18): these mutations return only
+# `hasToken`, and no query anywhere returns stored token material.
+mutation SetGitLabToken($input: SetGitLabTokenRequestInput!) {
+  setGitLabToken(input: $input) {
+    tokenState {
+      hasToken
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
+mutation ClearGitLabToken {
+  clearGitLabToken {
+    tokenState {
+      hasToken
+    }
+    error {
+      ...MutationError
+    }
+  }
+}

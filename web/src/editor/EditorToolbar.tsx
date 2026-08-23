@@ -24,12 +24,25 @@ import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule'
 import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
 import CodeOffIcon from '@mui/icons-material/DataObject'
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
+import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined'
 import type { CalloutType } from './nodes/Callout'
 import { CALLOUT_TYPES } from './nodes/Callout'
+import { useGitLabStatusQuery } from '../graphql/generated/graphql'
+import { InsertGitLabIssueLinkDialog } from './gitlab/InsertGitLabIssueLinkDialog'
+import { InsertGitLabFileDialog } from './gitlab/InsertGitLabFileDialog'
+import { InsertGitLabIssuesDialog } from './gitlab/InsertGitLabIssuesDialog'
+import { buildFileFenceBody, buildIssuesFenceBody, type GitLabFileRef, type GitLabIssuesSpec } from '../gitlab/fenceBody'
+import type { GitLabIssueRef } from '../gitlab/issueScheme'
 
 export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const [calloutMenuAnchor, setCalloutMenuAnchor] = useState<HTMLElement | null>(null)
   const [diagramMenuAnchor, setDiagramMenuAnchor] = useState<HTMLElement | null>(null)
+  const [gitlabMenuAnchor, setGitlabMenuAnchor] = useState<HTMLElement | null>(null)
+  const [gitlabDialog, setGitlabDialog] = useState<'issue-link' | 'file' | 'issues' | null>(null)
+  // §15/§18 fail-closed extends to UI affordances: no GitLab:BaseUrl means
+  // the feature is absent, so the whole GitLab menu is hidden, not disabled.
+  const [{ data: gitlabStatusData }] = useGitLabStatusQuery()
+  const gitlabConfigured = gitlabStatusData?.gitlabStatus.configured === true
 
   if (!editor) {
     return null
@@ -64,6 +77,45 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
     editor.chain().focus().insertContent({ type: 'drawioDiagram' }).run()
     setDiagramMenuAnchor(null)
   }
+
+  const openGitlabDialog = (dialog: 'issue-link' | 'file' | 'issues') => {
+    setGitlabDialog(dialog)
+    setGitlabMenuAnchor(null)
+  }
+
+  const selectionText = () => {
+    const { from, to } = editor.state.selection
+    return editor.state.doc.textBetween(from, to, ' ')
+  }
+
+  const insertGitlabIssueLink = (ref: GitLabIssueRef, text: string) => {
+    // Replaces the selection (if any) with the linked text; the mark is
+    // `inclusive: false`, so typing after it doesn't extend the link.
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: 'text',
+        text,
+        marks: [{ type: 'gitlabIssueLink', attrs: { project: ref.project, iid: ref.iid } }],
+      })
+      .run()
+  }
+
+  const insertGitlabFence = (language: 'gitlab-file' | 'gitlab-issues', body: string) => {
+    editor
+      .chain()
+      .focus()
+      .insertContent({
+        type: 'codeBlock',
+        attrs: { language },
+        content: [{ type: 'text', text: body }],
+      })
+      .run()
+  }
+
+  const insertGitlabFile = (ref: GitLabFileRef) => insertGitlabFence('gitlab-file', buildFileFenceBody(ref))
+  const insertGitlabIssues = (spec: GitLabIssuesSpec) => insertGitlabFence('gitlab-issues', buildIssuesFenceBody(spec))
 
   return (
     <Box
@@ -255,6 +307,41 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
         <MenuItem onClick={insertMermaid}>Mermaid diagram</MenuItem>
         <MenuItem onClick={insertDrawio}>draw.io diagram</MenuItem>
       </Menu>
+      {gitlabConfigured && (
+        <>
+          <Tooltip title="GitLab">
+            <IconButton
+              size="small"
+              onClick={(e) => setGitlabMenuAnchor(e.currentTarget)}
+              aria-label="Insert GitLab content"
+              aria-haspopup="menu"
+            >
+              <BugReportOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          <Menu anchorEl={gitlabMenuAnchor} open={Boolean(gitlabMenuAnchor)} onClose={() => setGitlabMenuAnchor(null)}>
+            <MenuItem onClick={() => openGitlabDialog('issue-link')}>Issue link</MenuItem>
+            <MenuItem onClick={() => openGitlabDialog('file')}>File embed</MenuItem>
+            <MenuItem onClick={() => openGitlabDialog('issues')}>Issue list</MenuItem>
+          </Menu>
+          <InsertGitLabIssueLinkDialog
+            open={gitlabDialog === 'issue-link'}
+            initialText={gitlabDialog === 'issue-link' ? selectionText() : ''}
+            onClose={() => setGitlabDialog(null)}
+            onInsert={insertGitlabIssueLink}
+          />
+          <InsertGitLabFileDialog
+            open={gitlabDialog === 'file'}
+            onClose={() => setGitlabDialog(null)}
+            onInsert={insertGitlabFile}
+          />
+          <InsertGitLabIssuesDialog
+            open={gitlabDialog === 'issues'}
+            onClose={() => setGitlabDialog(null)}
+            onInsert={insertGitlabIssues}
+          />
+        </>
+      )}
       <Tooltip title="Horizontal rule">
         <IconButton
           size="small"

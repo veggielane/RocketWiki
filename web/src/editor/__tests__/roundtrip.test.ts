@@ -62,6 +62,42 @@ describe('Markdown round trip — required v1 feature set (design.md §4)', () =
       '```drawio\nnot really base64!!\n```\n',
     ],
     ['empty drawio fence (freshly inserted, not yet drawn)', '```drawio\n\n```\n'],
+    // GitLab references (design.md §18): the link is a mark like page://,
+    // the fences are *plain code blocks* — all three are inert text to the
+    // serializer, and nothing GitLab-specific runs in this headless suite.
+    ['gitlab issue link, numeric project id', 'Tracked in [the pump issue](gitlab-issue://142/57).\n'],
+    [
+      'gitlab issue link, namespaced project path',
+      'Tracked in [the pump issue](gitlab-issue://propulsion/turbopump/57).\n',
+    ],
+    [
+      'gitlab issue link with a leading-zero iid survives verbatim',
+      'See [old tracker](gitlab-issue://legacy/007).\n',
+    ],
+    [
+      'malformed gitlab-issue link (non-numeric iid) stays an ordinary link, bytes intact',
+      'See [broken](gitlab-issue://proj/not-a-number).\n',
+    ],
+    [
+      'malformed gitlab-issue link (no project segment) stays an ordinary link, bytes intact',
+      'See [broken](gitlab-issue://57).\n',
+    ],
+    [
+      'gitlab-file fence (project/path/ref key=value body)',
+      '```gitlab-file\nproject=propulsion/turbopump\npath=docs/spec.md\nref=main\n```\n',
+    ],
+    [
+      'gitlab-file fence, minimal body plus an unknown key survives verbatim',
+      '```gitlab-file\nproject=142\npath=README.md\nfuture-key=whatever\n```\n',
+    ],
+    [
+      'gitlab-issues fence with a full filter body',
+      '```gitlab-issues\nproject=propulsion/turbopump\nstate=opened\nlabels=bug,priority::high\nsearch=vibration\nmilestone=v2\norderBy=updated_at\nsort=desc\nfirst=10\n```\n',
+    ],
+    [
+      'gitlab-issues fence whose body is junk survives verbatim (validity is a rendering concern)',
+      '```gitlab-issues\nthis is not key=value\n\nat all\n```\n',
+    ],
     ['task list', '- [ ] todo\n- [x] done\n'],
     ['image / attachment', '![diagram](attachment://file-123)\n'],
     ['image / attachment with title', '![diagram](attachment://file-123 "A diagram")\n'],

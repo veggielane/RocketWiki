@@ -26,6 +26,7 @@ import Brightness4Icon from '@mui/icons-material/Brightness4'
 import Brightness7Icon from '@mui/icons-material/Brightness7'
 import SpaceDashboardOutlinedIcon from '@mui/icons-material/SpaceDashboardOutlined'
 import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined'
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import LogoutIcon from '@mui/icons-material/Logout'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate } from 'react-router-dom'
@@ -141,6 +142,17 @@ export function AppShell() {
           <Menu anchorEl={userMenuAnchor} open={Boolean(userMenuAnchor)} onClose={() => setUserMenuAnchor(null)}>
             <MenuItem disabled>{auth.user?.profile.email ?? 'Not signed in'}</MenuItem>
             <Divider />
+            <MenuItem
+              onClick={() => {
+                setUserMenuAnchor(null)
+                navigate('/settings')
+              }}
+            >
+              <ListItemIcon>
+                <SettingsOutlinedIcon fontSize="small" />
+              </ListItemIcon>
+              Settings
+            </MenuItem>
             <MenuItem
               onClick={() => {
                 setUserMenuAnchor(null)

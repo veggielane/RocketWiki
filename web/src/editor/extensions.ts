@@ -6,6 +6,7 @@ import TaskItem from '@tiptap/extension-task-item'
 import { TableKit } from '@tiptap/extension-table'
 import type { AnyExtension } from '@tiptap/core'
 import { PageLink } from './marks/PageLink'
+import { GitLabIssueLink } from './marks/GitLabIssueLink'
 import { Mention } from './nodes/Mention'
 import { Callout } from './nodes/Callout'
 import { DrawioDiagram } from './nodes/DrawioDiagram'
@@ -59,6 +60,7 @@ export const editorExtensions: AnyExtension[] = [
   }),
   codeBlockExtension,
   PageLink,
+  GitLabIssueLink,
   Mention,
   Callout,
   DrawioDiagram,

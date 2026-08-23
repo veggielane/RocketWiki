@@ -124,6 +124,16 @@ export const router = createBrowserRouter([
           return { Component: SearchPage }
         },
       },
+      // Per-user settings (design.md §18's GitLab token surface). Reachable
+      // by anyone; sections gate themselves on server-reported state
+      // (gitlabStatus.configured) rather than router-level guards.
+      {
+        path: 'settings',
+        lazy: async () => {
+          const { SettingsPage } = await import('../pages/SettingsPage')
+          return { Component: SettingsPage }
+        },
+      },
       {
         path: 'admin',
         element: (
