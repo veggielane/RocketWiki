@@ -23,6 +23,29 @@ public sealed class SpaceType : ObjectType<Space>
         descriptor.Ignore(s => s.Labels);
         descriptor.Ignore(s => s.Homepage);
 
+        // Implicit inference used to export the entity's IsReplicaOf(localInstanceId)
+        // helper as an argument-taking field no browser could call - the client has no
+        // way to know the local instance id (design.md §8's known-deltas list; nothing
+        // in the SPA or the tests ever queried it). Removed in favor of the
+        // server-resolved `isReplica` below.
+        descriptor.Ignore(s => s.IsReplicaOf(default!));
+
+        // design.md §12: the client-usable replica flag, computed server-side against
+        // the configured InstanceIdentity so the "mirrored from X - read-only" banner
+        // needs no admin-only lookup. `originInstanceId` (already exposed above via
+        // inference, and already handed to every viewer through ReadOnlyReplicaError)
+        // names the origin the banner shows; exposing it to all viewers of the space
+        // is deliberate - see GetIsReplica's doc.
+        descriptor.Field("isReplica")
+            .Type<NonNullType<BooleanType>>()
+            .ResolveWith<SpaceFieldResolvers>(r => r.GetIsReplica(default!, default!));
+
+        // Viewer-relative watch state - the caller's own Watch row, no audit of its
+        // own (see ViewerWatchesSpaceDataLoader's doc).
+        descriptor.Field("viewerIsWatching")
+            .Type<NonNullType<BooleanType>>()
+            .ResolveWith<SpaceFieldResolvers>(r => r.GetViewerIsWatchingAsync(default!, default!, default));
+
         descriptor.Field("homepage")
             .Type<PageType>()
             .ResolveWith<SpaceFieldResolvers>(r => r.GetHomepageAsync(default!, default!, default!, default!, default));

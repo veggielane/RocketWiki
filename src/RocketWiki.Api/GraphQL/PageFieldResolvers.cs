@@ -163,12 +163,29 @@ public sealed class PageFieldResolvers
         await spaceKeyLoader.LoadAsync(page.SpaceId, cancellationToken)
             ?? throw new InvalidOperationException($"Page {page.Id} references space {page.SpaceId}, which does not exist.");
 
+    /// <summary>Batched via <see cref="LabelRefsByPageIdDataLoader"/> (previously a
+    /// direct per-page query — an N+1 when a query resolved labels across children).</summary>
     public async Task<IReadOnlyList<string>> GetLabelsAsync(
-        [Parent] Page page, [Service] RocketWikiDbContext db, CancellationToken cancellationToken) =>
-        await db.PageLabels
-            .Where(pl => pl.PageId == page.Id)
-            .Select(pl => pl.Label!.Name)
-            .ToListAsync(cancellationToken);
+        [Parent] Page page, LabelRefsByPageIdDataLoader labelLoader, CancellationToken cancellationToken)
+    {
+        var labels = await labelLoader.LoadAsync(page.Id, cancellationToken);
+        return (labels ?? []).Select(l => l.Name).ToList();
+    }
+
+    /// <summary>The id-carrying twin of <see cref="GetLabelsAsync"/>, so the SPA's
+    /// label editor can round-trip attach/detach by id (see Query.labelDetails' doc
+    /// for why this is additive next to the names-only field). Same loader, so
+    /// selecting both fields still costs one PageLabels query.</summary>
+    public async Task<IReadOnlyList<LabelRef>> GetLabelDetailsAsync(
+        [Parent] Page page, LabelRefsByPageIdDataLoader labelLoader, CancellationToken cancellationToken) =>
+        await labelLoader.LoadAsync(page.Id, cancellationToken) ?? [];
+
+    /// <summary>See <see cref="ViewerWatchesPageDataLoader"/> for the viewer-relative
+    /// contract and why this emits no audit row of its own (the caller's own
+    /// subscription-bookkeeping, inside an already-audited page read - design.md §7).</summary>
+    public async Task<bool> GetViewerIsWatchingAsync(
+        [Parent] Page page, ViewerWatchesPageDataLoader watchLoader, CancellationToken cancellationToken) =>
+        await watchLoader.LoadAsync(page.Id, cancellationToken);
 
     private static PageTreeNode? FindNode(IReadOnlyList<PageTreeNode> nodes, Guid id)
     {

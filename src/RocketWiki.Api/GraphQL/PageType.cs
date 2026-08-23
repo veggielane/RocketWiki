@@ -66,6 +66,25 @@ public sealed class PageType : ObjectType<Page>
             .Type<NonNullType<ListType<NonNullType<StringType>>>>()
             .ResolveWith<PageFieldResolvers>(r => r.GetLabelsAsync(default!, default!, default));
 
+        // Additive next to the names-only `labels` (which shipped SPA operations
+        // already select): id + name, so attachLabel/detachLabel become reachable
+        // end to end. See Query.labelDetails' doc.
+        descriptor.Field("labelDetails")
+            .Type<NonNullType<ListType<NonNullType<ObjectType<LabelRef>>>>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetLabelDetailsAsync(default!, default!, default));
+
+        // Viewer-relative watch state (design.md §8's known-deltas list); display of
+        // the caller's own Watch row, no audit of its own - see the resolver's doc.
+        descriptor.Field("viewerIsWatching")
+            .Type<NonNullType<BooleanType>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetViewerIsWatchingAsync(default!, default!, default));
+
+        // Who trashed this page, for the trash listing - display-only resolution of
+        // DeletedByUserId via the local User mirror (see UserRefFieldResolvers' doc).
+        descriptor.Field("deletedBy")
+            .Type<ObjectType<UserRef>>()
+            .ResolveWith<UserRefFieldResolvers>(r => r.GetDeletedByAsync(default!, default!, default));
+
         // The SPA's contract (schema.placeholder.graphql / operations/search.graphql)
         // addresses pages by space KEY, not space id — search results link as
         // /spaces/{spaceKey}/... — so Page carries its space's key directly.

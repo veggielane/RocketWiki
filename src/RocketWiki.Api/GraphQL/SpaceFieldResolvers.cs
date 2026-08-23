@@ -19,6 +19,26 @@ namespace RocketWiki.Api.GraphQL;
 /// </summary>
 public sealed class SpaceFieldResolvers
 {
+    /// <summary>
+    /// design.md §12: replica-ness is "origin instance != this instance", computed
+    /// against the configured <see cref="InstanceIdentity"/> — the same comparison the
+    /// rule engine's read-only invariant uses, now readable by the client so the
+    /// "mirrored from LOW — read-only" banner renders proactively instead of only
+    /// after a failed write. Visible to every viewer of the space on purpose: §12
+    /// specifies that banner for anyone browsing a replica, and the origin id itself
+    /// already reaches every such viewer through <c>ReadOnlyReplicaError</c>'s
+    /// <c>originInstanceId</c> (§12: "so the client can render 'mirrored from
+    /// LOW'") — this reveals nothing a blocked edit didn't already say.
+    /// </summary>
+    public bool GetIsReplica([Parent] Space space, [Service] InstanceIdentity instanceIdentity) =>
+        space.IsReplicaOf(instanceIdentity.LocalInstanceId);
+
+    /// <summary>See <see cref="ViewerWatchesSpaceDataLoader"/> for the viewer-relative
+    /// contract and why this emits no audit row of its own.</summary>
+    public async Task<bool> GetViewerIsWatchingAsync(
+        [Parent] Space space, ViewerWatchesSpaceDataLoader watchLoader, CancellationToken cancellationToken) =>
+        await watchLoader.LoadAsync(space.Id, cancellationToken);
+
     public async Task<Page?> GetHomepageAsync(
         [Parent] Space space,
         [Service] IPageReadService readService,
