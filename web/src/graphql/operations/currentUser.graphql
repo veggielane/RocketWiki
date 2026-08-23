@@ -1,8 +1,14 @@
+# The real schema's CurrentUser is claims-shaped: `id` is the token subject
+# (NOT the local User row id that Comment.authorUserId etc. carry), `name`
+# and `email` are nullable, and there is no `isInstanceAdmin` flag — the
+# instance-admin gate reads the `roles` claim from the ID token instead
+# (auth/useIsInstanceAdmin.ts), mirroring the server's InstanceRoleAccessor.
 query CurrentUser {
   me {
     id
-    displayName
     email
-    isInstanceAdmin
+    name
+    groups
+    isAuthenticated
   }
 }

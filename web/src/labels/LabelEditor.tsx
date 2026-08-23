@@ -8,7 +8,17 @@ export interface LabelEditorProps {
   onCancel: () => void
 }
 
-/** Space-scoped label editor: freeSolo Autocomplete so a new label can be typed, with existing ones offered as suggestions. */
+/**
+ * Space-scoped label editor: freeSolo Autocomplete so a new label can be
+ * typed, with existing ones offered as suggestions.
+ *
+ * NOTE (schema reconciliation): currently unmounted. The real API's label
+ * mutations (attachLabel/detachLabel) take label *ids*, but no query
+ * exposes them — `labels(spaceKey)` and `Page.labels` return names only —
+ * so a full edit round-trip is impossible (reported contract gap).
+ * PageViewPage shows labels read-only until an id read path exists; this
+ * component is kept ready for that day.
+ */
 export function LabelEditor({ labels, knownLabels, onSave, onCancel }: LabelEditorProps) {
   const [value, setValue] = useState<string[]>(labels)
   const [saving, setSaving] = useState(false)

@@ -1,15 +1,25 @@
-# A separate, deeper query than SpaceTree (spaces.graphql) — the move
-# dialog needs each node's own restriction rules so it can compute the
-# accumulated ancestor-restriction set for any candidate target
-# (access/move/visibilityChange.ts). Real recursion isn't possible in
-# GraphQL, so this just goes a few levels deeper than the nav tree query;
-# fine for typical wiki nesting depth in this scaffold.
-query SpaceTreeForMove($key: String!) {
-  space(key: $key) {
-    key
-    labels
-    tree {
+# The candidate-parent tree for the move dialog. Real recursion isn't
+# possible in GraphQL, so this goes a few levels deeper than casual nav
+# needs; fine for typical wiki nesting depth.
+#
+# NOTE (schema reconciliation): the real PageTreeNode carries NO restriction
+# information (the placeholder's ownViewRestriction is gone, with no
+# replacement), so the move dialog can no longer compute whether a move
+# changes who can see the page — it shows an honest "can't verify" caution
+# instead of a false "no change" reassurance (see MovePageDialog.tsx).
+# Reported as a contract gap against design.md §6.4's "the move UI warns
+# when a move would change who can see a page".
+query SpaceTreeForMove($spaceId: UUID!) {
+  pageTree(spaceId: $spaceId) {
+    ...MoveTreeNode
+    children {
       ...MoveTreeNode
+      children {
+        ...MoveTreeNode
+        children {
+          ...MoveTreeNode
+        }
+      }
     }
   }
 }
@@ -17,32 +27,5 @@ query SpaceTreeForMove($key: String!) {
 fragment MoveTreeNode on PageTreeNode {
   id
   title
-  ownViewRestriction {
-    ruleId
-    expressionJson
-  }
-  children {
-    id
-    title
-    ownViewRestriction {
-      ruleId
-      expressionJson
-    }
-    children {
-      id
-      title
-      ownViewRestriction {
-        ruleId
-        expressionJson
-      }
-      children {
-        id
-        title
-        ownViewRestriction {
-          ruleId
-          expressionJson
-        }
-      }
-    }
-  }
+  sortOrder
 }

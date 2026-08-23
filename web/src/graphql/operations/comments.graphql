@@ -1,31 +1,32 @@
-mutation AddComment($input: AddCommentInput!) {
+# The real Comment type carries `authorUserId` (local User row id) only —
+# no authorDisplayName resolver yet (contract gap, reported): the thread UI
+# falls back to a shortened id.
+mutation AddComment($input: AddCommentRequestInput!) {
   addComment(input: $input) {
     comment {
       id
       parentCommentId
       body
       isDeleted
-      authorDisplayName
+      authorUserId
       createdAtUtc
       editedAtUtc
     }
-    readOnlyReplicaError {
-      message
-      originInstanceId
+    error {
+      ...MutationError
     }
   }
 }
 
-mutation DeleteComment($input: DeleteCommentInput!) {
+mutation DeleteComment($input: DeleteCommentRequestInput!) {
   deleteComment(input: $input) {
     comment {
       id
       isDeleted
       body
     }
-    readOnlyReplicaError {
-      message
-      originInstanceId
+    error {
+      ...MutationError
     }
   }
 }

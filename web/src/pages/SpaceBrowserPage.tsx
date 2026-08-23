@@ -1,12 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Alert,
-  Autocomplete,
   Box,
-  Breadcrumbs,
   Button,
-  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -23,23 +20,31 @@ import {
 import { Link as RouterLink } from 'react-router-dom'
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
-import HistoryEduOutlinedIcon from '@mui/icons-material/HistoryEduOutlined'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined'
-import { useArchiveSpaceMutation, useRenameSpaceMutation, useSpaceTreeQuery } from '../graphql/generated/graphql'
-import { filterTreeByLabel } from '../labels/filterTreeByLabel'
+import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined'
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
+import {
+  useArchiveSpaceMutation,
+  useRenameSpaceMutation,
+  useSpaceTreeQuery,
+  useSpacePageTreeQuery,
+  useWatchSpaceMutation,
+  useUnwatchSpaceMutation,
+} from '../graphql/generated/graphql'
+import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
+import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
 
 /**
  * The generated query type only nests as deep as the `.graphql` operation
- * asked for (3 levels), so a genuinely recursive tree component needs its
+ * asked for (4 levels), so a genuinely recursive tree component needs its
  * own recursive shape rather than one extracted from the query result —
  * the deepest selected level structurally satisfies this via its optional
- * `children`/`labels`.
+ * `children`.
  */
 interface PageTreeNode {
   id: string
   title: string
-  labels?: string[]
   children?: PageTreeNode[]
 }
 
@@ -60,47 +65,91 @@ function PageTreeList({ nodes, depth = 0 }: { nodes: PageTreeNode[]; depth?: num
   )
 }
 
+/**
+ * NOTE (schema reconciliation): three placeholder-era affordances are gone
+ * because the real schema carries no data for them (each reported as a
+ * contract gap): the replica banner (no client-usable isReplica), the
+ * label filter facet (PageTreeNode has no labels), and the import-report
+ * link (no importReports query — the importer is milestone 5, not
+ * started). Space management is gated on `grants` being non-empty: the
+ * server returns grant rows only to instance/space admins ("absent, not
+ * forbidden"), and a space always has at least one grant by construction,
+ * so an empty list means "not yours to manage".
+ */
 export function SpaceBrowserPage() {
   const { spaceKey } = useParams<{ spaceKey: string }>()
   const navigate = useNavigate()
   const [{ data, fetching, error }, refetch] = useSpaceTreeQuery({ variables: { key: spaceKey ?? '' }, pause: !spaceKey })
+  const spaceId = data?.space?.id
+  const [{ data: treeData }] = useSpacePageTreeQuery({ variables: { spaceId: spaceId ?? '' }, pause: !spaceId })
   const [, renameSpace] = useRenameSpaceMutation()
   const [, archiveSpace] = useArchiveSpaceMutation()
-  const [labelFilter, setLabelFilter] = useState<string | null>(null)
+  const [, watchSpace] = useWatchSpaceMutation()
+  const [, unwatchSpace] = useUnwatchSpaceMutation()
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [archiveOpen, setArchiveOpen] = useState(false)
-
-  const matches = useMemo(() => {
-    if (!labelFilter || !data?.space) return null
-    return filterTreeByLabel(
-      data.space.tree.map((n) => ({ ...n, labels: n.labels })),
-      labelFilter,
-    )
-  }, [data, labelFilter])
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
+  // No read path for "am I watching?" (reported contract gap) — the toggle
+  // reflects only what this visit did, same as the page-level watch button.
+  const [watching, setWatching] = useState<boolean | null>(null)
 
   if (fetching) {
     return <Skeleton variant="rectangular" height={300} />
   }
 
   if (error || !data?.space) {
-    return <Alert severity="info">Couldn't load this space — there's no live API in this environment yet.</Alert>
+    return <Alert severity="info">Couldn't load this space.</Alert>
   }
 
   const space = data.space
+  const canManage = space.grants.length > 0
+
+  const surfaceError = (mutationError: Parameters<typeof asReadOnlyReplica>[0]): boolean => {
+    const replica = asReadOnlyReplica(mutationError)
+    if (replica) {
+      setReplicaOrigin(replica.originInstanceId ?? 'its origin instance')
+      return true
+    }
+    const text = describeMutationError(mutationError)
+    if (text) {
+      setActionError(text)
+      return true
+    }
+    return false
+  }
+
+  const handleToggleWatch = async () => {
+    setActionError(null)
+    if (watching === true) {
+      const result = await unwatchSpace({ input: { spaceId: space.id } })
+      if (!surfaceError(result.data?.unwatchSpace.error)) setWatching(false)
+      return
+    }
+    // design.md §8: watching a space is how a user hears that a sync
+    // bundle changed it — deliberately allowed on replica spaces too (a
+    // Watch row is instance-local user metadata, not a replica write).
+    const result = await watchSpace({ input: { spaceId: space.id } })
+    if (!surfaceError(result.data?.watchSpace.error)) setWatching(true)
+  }
 
   return (
     <Stack spacing={2}>
       <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-          <Typography variant="h4" component="h1">
-            {space.name}
-          </Typography>
-          {space.isReplica && (
-            <Chip label={`Mirrored from ${space.originInstanceId ?? 'origin'} — read-only`} color="default" />
-          )}
-        </Stack>
+        <Typography variant="h4" component="h1">
+          {space.name}
+        </Typography>
         <Stack direction="row" spacing={1}>
+          <Button
+            startIcon={watching === true ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
+            variant="outlined"
+            size="small"
+            onClick={() => void handleToggleWatch()}
+            aria-pressed={watching === true}
+          >
+            {watching === true ? 'Watching' : 'Watch'}
+          </Button>
           {/* No client-side gate here — the trash query itself is
               permission-filtered server-side, same "let the server decide
               what's visible" approach as everywhere else, rather than
@@ -108,7 +157,7 @@ export function SpaceBrowserPage() {
           <Button component={RouterLink} to={`/spaces/${space.key}/trash`} startIcon={<DeleteOutlinedIcon />} variant="outlined" size="small">
             Trash
           </Button>
-          {space.canManageAccess && (
+          {canManage && (
             <Button
               component={RouterLink}
               to={`/spaces/${space.key}/grants`}
@@ -119,13 +168,10 @@ export function SpaceBrowserPage() {
               Grants
             </Button>
           )}
-          <Button component={RouterLink} to={`/spaces/${space.key}/import-report`} startIcon={<HistoryEduOutlinedIcon />} variant="outlined" size="small">
-            Import report
-          </Button>
           {/* design.md §6.5.1: rename/archive require instance admin OR
-              this space's own space-admin — same canManageAccess union
-              used everywhere else, not a separate check. */}
-          {space.canManageAccess && (
+              this space's own space-admin — the same server-computed
+              signal (non-empty grants) gates both. */}
+          {canManage && (
             <Button
               startIcon={<DriveFileRenameOutlineIcon />}
               variant="outlined"
@@ -138,7 +184,7 @@ export function SpaceBrowserPage() {
               Rename
             </Button>
           )}
-          {space.canManageAccess && (
+          {canManage && (
             <Button
               startIcon={<ArchiveOutlinedIcon />}
               variant="outlined"
@@ -152,46 +198,15 @@ export function SpaceBrowserPage() {
         </Stack>
       </Stack>
 
-      {space.labels.length > 0 && (
-        <Autocomplete
-          size="small"
-          options={space.labels}
-          value={labelFilter}
-          onChange={(_e, value) => setLabelFilter(value)}
-          renderInput={(params) => <TextField {...params} label="Filter by label" />}
-          sx={{ maxWidth: 280 }}
-        />
+      {actionError && (
+        <Alert severity="warning" onClose={() => setActionError(null)}>
+          {actionError}
+        </Alert>
       )}
 
-      {matches ? (
-        <Stack spacing={1}>
-          {matches.length === 0 && (
-            <Typography variant="body2" color="text.secondary">
-              No pages labeled "{labelFilter}".
-            </Typography>
-          )}
-          {matches.map((match) => (
-            <Stack key={match.id} spacing={0}>
-              {match.path.length > 0 && (
-                <Breadcrumbs separator="›" sx={{ fontSize: '0.75rem' }}>
-                  {match.path.map((title, i) => (
-                    <Typography key={i} variant="caption" color="text.secondary">
-                      {title}
-                    </Typography>
-                  ))}
-                </Breadcrumbs>
-              )}
-              <ListItemButton component={RouterLink} to={`/pages/${match.id}`} disableGutters sx={{ pl: 0 }}>
-                <ListItemText primary={match.title} />
-              </ListItemButton>
-            </Stack>
-          ))}
-        </Stack>
-      ) : (
-        <Box role="region" aria-label="Page tree">
-          <PageTreeList nodes={space.tree} />
-        </Box>
-      )}
+      <Box role="region" aria-label="Page tree">
+        <PageTreeList nodes={treeData?.pageTree ?? []} />
+      </Box>
 
       <Dialog open={renameOpen} onClose={() => setRenameOpen(false)}>
         <DialogTitle>Rename "{space.name}"</DialogTitle>
@@ -211,9 +226,15 @@ export function SpaceBrowserPage() {
             variant="contained"
             disabled={renameValue.trim().length === 0}
             onClick={async () => {
-              await renameSpace({ input: { spaceKey: space.key, newName: renameValue.trim() } })
+              const result = await renameSpace({
+                // Description passed through unchanged — the input replaces
+                // it wholesale, so omitting it would clear it.
+                input: { spaceId: space.id, name: renameValue.trim(), description: space.description },
+              })
               setRenameOpen(false)
-              refetch({ requestPolicy: 'network-only' })
+              if (!surfaceError(result.data?.renameSpace.error)) {
+                refetch({ requestPolicy: 'network-only' })
+              }
             }}
           >
             Rename
@@ -225,8 +246,7 @@ export function SpaceBrowserPage() {
         <DialogTitle>Archive "{space.name}"?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            The space and its pages become read-only and disappear from the active spaces list. It can be restored
-            later from Archived spaces.
+            The space and its pages become read-only and disappear from the active spaces list.
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -237,15 +257,23 @@ export function SpaceBrowserPage() {
             color="warning"
             variant="contained"
             onClick={async () => {
-              await archiveSpace({ input: { spaceKey: space.key } })
+              const result = await archiveSpace({ input: { spaceId: space.id } })
               setArchiveOpen(false)
-              navigate('/')
+              if (!surfaceError(result.data?.archiveSpace.error)) {
+                navigate('/')
+              }
             }}
           >
             Archive
           </Button>
         </DialogActions>
       </Dialog>
+
+      <ReadOnlyReplicaDialog
+        open={replicaOrigin !== null}
+        originInstanceId={replicaOrigin}
+        onClose={() => setReplicaOrigin(null)}
+      />
     </Stack>
   )
 }

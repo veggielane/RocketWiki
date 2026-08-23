@@ -21,11 +21,11 @@
  *     entirely (e.g. random ids), which would fail the "deterministic"
  *     requirement instead. Genuinely rare in practice.
  *
- * This same algorithm is the contract `SearchHit.anchorId` needs the
- * backend to replicate exactly (see schema.placeholder.graphql) — the
- * frontend defines it here first since there's no backend yet to author
- * it against; whoever implements the real resolver should port this file
- * exactly, not re-derive it.
+ * This same algorithm is the contract `SearchHit.anchorId` replicates
+ * server-side (the search API's anchor computation was ported from this
+ * file, verified against the shared corpus in
+ * tests/fixtures/heading-anchors/) — any change here must change both
+ * sides together, or every search deep link silently breaks.
  */
 
 export interface HeadingInfo {

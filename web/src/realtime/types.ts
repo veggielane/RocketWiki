@@ -1,8 +1,9 @@
 /**
- * design.md §8: the SignalR hub (`/hubs/notifications`) doesn't exist yet
- * (milestone 4b), so these are the wire contracts a real implementation
- * must satisfy — deliberately documented before the hub is built, not
- * reverse-engineered from it afterward.
+ * design.md §8: wire contracts for the SignalR hub (`/hubs/notifications`).
+ * These names started as this frontend's proposal and were adopted verbatim
+ * by the backend (NotificationsHub.cs documents "adopt or negotiate, never
+ * silently diverge") — method names `JoinPage`/`LeavePage`/`PointerMove`,
+ * event names `Notification`/`ViewersChanged`/`PointerMoved`.
  */
 
 /**
@@ -16,15 +17,17 @@
  * it's read, and the server evaluates `canView` fresh at send time (§8).
  * Rendering code must treat a null title as "can't show this," never
  * attempt to backfill it from another source, and never treat its absence
- * as exceptional.
+ * as exceptional. `pageId`/`spaceKey` are nullable to match the persisted
+ * rows (the server nulls what the recipient may no longer see).
  */
 export interface NotificationPayload {
   id: string
   type: NotificationType
-  pageId: string
-  spaceKey: string
+  pageId: string | null
+  spaceKey: string | null
   pageTitle: string | null
-  actorDisplayName: string
+  /** Null for rows produced by a process rather than a person (sync imports) — rendered actor-less. */
+  actorDisplayName: string | null
   timestampUtc: string
   readAtUtc: string | null
 }
@@ -43,17 +46,29 @@ export interface NotificationsTransport {
  * mouse pointers. Never persisted, never audited beyond the page view
  * itself, and payloads carry display name + colour only — **never**
  * attributes (nationality is sensitive, §6.2) and never content.
+ *
+ * Keyed by `userId`, not connection id — the hub's `ViewersChanged` and
+ * `PointerMoved` payloads deliberately expose no connection ids
+ * (NotificationsHub.ToPublicViews), and the colour is server-assigned so
+ * every viewer sees the same one for a given user.
  */
 export interface PresenceViewer {
-  connectionId: string
   userId: string
   displayName: string
   colour: string
 }
 
-/** Viewport-relative fractions (0..1 of the content area's width/height), so a pointer position means the same thing regardless of each viewer's window size. */
+/**
+ * One viewer's live pointer. `x`/`y` are viewport-relative fractions (0..1
+ * of the content area's width/height), so a position means the same thing
+ * regardless of each viewer's window size. Carries the sender's identity
+ * inline (the hub attributes every relayed sample) so rendering never
+ * needs to join against the viewer list.
+ */
 export interface PointerPosition {
-  connectionId: string
+  userId: string
+  displayName: string
+  colour: string
   x: number
   y: number
 }
@@ -71,6 +86,12 @@ export interface PresenceTransport {
   leavePage(pageId: string): Promise<void>
   onViewersChanged(handler: (viewers: PresenceViewer[]) => void): () => void
   onPointerMoved(handler: (position: PointerPosition) => void): () => void
-  /** Callers must throttle before calling this — the transport sends whatever it's given, one message per call (see realtime/pointerSampler.ts). */
-  sendPointerPosition(x: number, y: number): void
+  /**
+   * Callers must throttle before calling this — the transport sends
+   * whatever it's given, one message per call (see realtime/pointerSampler.ts).
+   * Takes the pageId because the hub's `PointerMove(pageId, x, y)` needs to
+   * know which page group to relay into (one connection can have joined
+   * several pages over its lifetime).
+   */
+  sendPointerPosition(pageId: string, x: number, y: number): void
 }

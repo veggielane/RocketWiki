@@ -1,8 +1,0 @@
-query AccessRegistry {
-  groups
-  attributeRegistry {
-    key
-    displayName
-    allowedValues
-  }
-}

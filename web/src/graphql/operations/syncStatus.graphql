@@ -1,0 +1,28 @@
+# design.md §12: the admin sync status page — per exported space the outbox
+# position, pending event count and last drained bundle; per origin the
+# last bundle applied, its manifest hash (the link the next bundle must
+# chain from), the import time, and per-space applied sequences. Admin-only
+# server-side, audited as `sync.status`.
+query SyncStatus {
+  syncStatus {
+    localInstanceId
+    exportedSpaces {
+      spaceId
+      spaceKey
+      lastOutboxSequence
+      pendingEventCount
+      lastExportedBundle
+    }
+    origins {
+      originInstanceId
+      lastBundleNumber
+      lastManifestHash
+      lastImportAtUtc
+      spaces {
+        spaceId
+        spaceKey
+        appliedSequence
+      }
+    }
+  }
+}

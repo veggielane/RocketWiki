@@ -4,13 +4,14 @@ import type { NotificationPayload, NotificationsTransport } from './types'
 
 /**
  * Real implementation of `NotificationsTransport` against
- * `/hubs/notifications` (design.md §8). The hub doesn't exist yet
- * (milestone 4b) — this has never been connected to a live server, so
- * treat the hub method/event name below (`Notification`) as this
- * frontend's proposal for the contract, not a confirmed one. Same bearer
- * token as every other channel (design.md §11), read fresh per (re)connect
- * rather than once, so a token refresh during a long-lived connection
- * doesn't leave it authenticating with a stale one.
+ * `/hubs/notifications` (design.md §8) — the hub exists now (milestone 4b)
+ * and adopted this event name (`Notification`) and payload shape verbatim
+ * (NotificationsHub.cs / INotificationDispatcher.cs). Same bearer identity
+ * as every other channel (design.md §11): `accessTokenFactory` reads the
+ * in-memory token fresh per (re)connect, and the SignalR browser client
+ * sends it as the `access_token` query string for WebSockets (a browser
+ * cannot set an Authorization header on a WebSocket handshake) — which the
+ * API accepts on `/hubs` paths only.
  */
 export class SignalRNotificationsTransport implements NotificationsTransport {
   private readonly connection: signalR.HubConnection

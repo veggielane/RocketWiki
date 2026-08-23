@@ -37,6 +37,19 @@ function corpusDirectory(): string {
   return path.resolve(currentDir, '../../../../tests/fixtures/converted-markdown')
 }
 
+/**
+ * The corpus is committed with LF endings (`git ls-files --eol` reports
+ * i/lf), but a Windows checkout with `core.autocrlf=true` smudges the
+ * working copies to CRLF. That's a checkout artifact, not corpus content —
+ * this reconstructs the committed bytes so the byte-identity assertion
+ * tests the canonical corpus, not the local git config. It cannot mask an
+ * editor regression: only the *fixture* side is normalized; if the editor
+ * ever emitted CRLF itself, `roundTrip`'s output would still mismatch.
+ */
+function readCorpusFile(filePath: string): string {
+  return readFileSync(filePath, 'utf-8').replaceAll('\r\n', '\n')
+}
+
 // nested-unordered-list.md uses a loose list (blank line before its nested
 // sub-list). That's a documented, accepted normalization — see the "loose
 // lists ... tighten up" case in roundtrip.test.ts's "Known, documented
@@ -60,12 +73,12 @@ describe('converted-markdown corpus (Confluence importer output, design.md §13)
   })
 
   it.each(exactFiles)('%s round-trips byte-identically through the editor', (fileName) => {
-    const markdown = readFileSync(path.join(dir, fileName), 'utf-8')
+    const markdown = readCorpusFile(path.join(dir, fileName))
     expect(roundTrip(markdown)).toBe(markdown)
   })
 
   it('nested-unordered-list.md tightens up on round-trip (documented normalization, not a converter bug)', () => {
-    const markdown = readFileSync(path.join(dir, 'nested-unordered-list.md'), 'utf-8')
+    const markdown = readCorpusFile(path.join(dir, 'nested-unordered-list.md'))
     const tightened = '- Item 1\n- Item 2\n  - Nested A\n  - Nested B\n'
     expect(roundTrip(markdown)).toBe(tightened)
   })

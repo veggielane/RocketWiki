@@ -4,13 +4,15 @@ import { getAccessToken } from '../graphql/authToken'
 import type { PointerPosition, PresenceTransport, PresenceViewer } from './types'
 
 /**
- * Real implementation of `PresenceTransport` against a presence hub
- * (design.md §8). Doesn't exist yet (milestone 4b) — the hub method/event
- * names below are this frontend's proposal, unconfirmed against a live
- * server. Uses MessagePack (design.md §8: "the hub uses the MessagePack
- * protocol to keep frames small — which the Yjs binary updates will want
- * anyway") rather than the default JSON protocol, since this is the
- * highest-frequency channel in the app.
+ * Real implementation of `PresenceTransport`. Presence lives on the same
+ * hub as notifications (`/hubs/notifications` — NotificationsHub.cs owns
+ * `JoinPage`/`LeavePage`/`PointerMove` and broadcasts `ViewersChanged`/
+ * `PointerMoved`), which adopted this frontend's proposed method/event
+ * names verbatim. Uses MessagePack (registered server-side via
+ * `AddMessagePackProtocol`) rather than the default JSON protocol, since
+ * this is the highest-frequency channel in the app. Token plumbing is the
+ * same as SignalRNotificationsTransport: in-memory token via
+ * `accessTokenFactory`, sent as the `access_token` query string on `/hubs`.
  */
 export class SignalRPresenceTransport implements PresenceTransport {
   private readonly connection: signalR.HubConnection
@@ -52,11 +54,12 @@ export class SignalRPresenceTransport implements PresenceTransport {
     return () => this.connection.off('PointerMoved', handler)
   }
 
-  sendPointerPosition(x: number, y: number): void {
+  sendPointerPosition(pageId: string, x: number, y: number): void {
     // Fire-and-forget: a dropped pointer sample is invisible (the next one
     // arrives in under 50ms), so this deliberately doesn't await or queue
     // — awaiting per-call would let a slow connection back up a queue of
-    // increasingly-stale positions.
-    void this.connection.invoke('PointerMove', x, y)
+    // increasingly-stale positions. `catch` swallows the rejection a
+    // not-yet-connected invoke produces for the same reason.
+    this.connection.invoke('PointerMove', pageId, x, y).catch(() => {})
   }
 }

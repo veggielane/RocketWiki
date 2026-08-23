@@ -1,9 +1,11 @@
 import type { NotificationPayload, NotificationsTransport } from './types'
 
 /**
- * Stands in for a real `/hubs/notifications` connection, which doesn't
- * exist yet (design.md §8, milestone 4b). `emit` is the test/dev hook for
- * simulating an incoming push — nothing here talks to a network.
+ * Stands in for a real `/hubs/notifications` connection, for tests and for
+ * running the SPA without a backend (`VITE_FAKE_REALTIME=true` — see
+ * realtime/transports.ts, the seam that decides which implementation the
+ * app gets). `emit` is the test/dev hook for simulating an incoming push —
+ * nothing here talks to a network.
  */
 export class FakeNotificationsTransport implements NotificationsTransport {
   private handlers = new Set<(notification: NotificationPayload) => void>()

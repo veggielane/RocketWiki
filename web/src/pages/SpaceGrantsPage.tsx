@@ -13,55 +13,95 @@ import {
 } from '@mui/material'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined'
 import AddIcon from '@mui/icons-material/Add'
-import { useAccessRegistryQuery, useSetSpaceGrantsMutation, useSpaceGrantsQuery } from '../graphql/generated/graphql'
+import {
+  useCreateAccessRuleMutation,
+  useDeleteAccessRuleMutation,
+  useSpaceGrantsQuery,
+  useUpdateAccessRuleMutation,
+  type SpaceRole,
+} from '../graphql/generated/graphql'
+import { describeMutationError } from '../graphql/mutationError'
 import { AccessGate } from '../auth/AccessGate'
 import { RuleBuilder } from '../access/RuleBuilder'
 import { parseRuleNode, serializeRuleNode } from '../access/ruleSerializer'
 import type { ValidationResult } from '../access/builderState'
 import type { RuleNode } from '../access/ruleTypes'
 
-const ROLE_LABELS: Record<string, string> = { viewer: 'Viewer', editor: 'Editor', spaceAdmin: 'Space admin' }
+const ROLE_LABELS: Record<SpaceRole, string> = { VIEWER: 'Viewer', EDITOR: 'Editor', SPACE_ADMIN: 'Space admin' }
 
 interface GrantRow {
   clientId: string
   id: string | null // null = not yet saved
-  role: string
+  role: SpaceRole
+  initialRole: SpaceRole | null
+  initialExpressionJson: string | null
   initialExpression: RuleNode
 }
 
 interface SpaceGrantsEditorProps {
-  spaceKey: string
-  initialGrants: { id: string; role: string; expressionJson: string }[]
+  spaceId: string
+  initialGrants: { id: string; role: SpaceRole | null; expressionJson: string }[]
+  onSaved: () => void
 }
 
 /**
  * design.md §6.4: "multiple grants OR together; your role is the highest
- * whose expression you satisfy" — reuses the same `RuleBuilder` the page
- * restrictions editor does, one per grant, each independently validated
- * before Save is enabled.
+ * whose expression you satisfy" — reuses the same `RuleBuilder` the create-
+ * space form does, one per grant, each independently validated before Save
+ * is enabled.
+ *
+ * The real API manages rules individually (createAccessRule/
+ * updateAccessRule/deleteAccessRule — an append-only audited history, not a
+ * set replacement), so Save diffs the rows against what was loaded: added
+ * rows are created, edited rows updated, removed rows deleted.
+ *
+ * NOTE (schema reconciliation): the placeholder's `groups`/
+ * `attributeRegistry` pickers have no backend queries (reported contract
+ * gap) — the group condition falls back to free text (the picker is
+ * freeSolo), and attribute conditions can't be authored until the registry
+ * is exposed.
  */
-function SpaceGrantsEditor({ spaceKey, initialGrants }: SpaceGrantsEditorProps) {
-  const [registryQuery] = useAccessRegistryQuery()
-  const [, setSpaceGrants] = useSetSpaceGrantsMutation()
+function SpaceGrantsEditor({ spaceId, initialGrants, onSaved }: SpaceGrantsEditorProps) {
+  const [, createAccessRule] = useCreateAccessRuleMutation()
+  const [, updateAccessRule] = useUpdateAccessRuleMutation()
+  const [, deleteAccessRule] = useDeleteAccessRuleMutation()
 
   const [rows, setRows] = useState<GrantRow[]>(() =>
     initialGrants.map((g) => ({
       clientId: g.id,
       id: g.id,
-      role: g.role,
+      role: g.role ?? 'VIEWER',
+      initialRole: g.role,
+      initialExpressionJson: g.expressionJson,
       initialExpression: parseRuleNode(g.expressionJson),
     })),
   )
+  const [removedRuleIds, setRemovedRuleIds] = useState<string[]>([])
   const [validation, setValidation] = useState<Record<string, ValidationResult>>({})
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   const addGrant = () => {
     const clientId = crypto.randomUUID()
-    setRows((prev) => [...prev, { clientId, id: null, role: 'viewer', initialExpression: { kind: 'group', group: '' } }])
+    setRows((prev) => [
+      ...prev,
+      {
+        clientId,
+        id: null,
+        role: 'VIEWER',
+        initialRole: null,
+        initialExpressionJson: null,
+        initialExpression: { kind: 'group', group: '' },
+      },
+    ])
   }
 
   const removeGrant = (clientId: string) => {
+    const row = rows.find((r) => r.clientId === clientId)
+    if (row?.id) {
+      setRemovedRuleIds((prev) => [...prev, row.id!])
+    }
     setRows((prev) => prev.filter((r) => r.clientId !== clientId))
     setValidation((prev) => {
       const { [clientId]: _removed, ...rest } = prev
@@ -69,30 +109,57 @@ function SpaceGrantsEditor({ spaceKey, initialGrants }: SpaceGrantsEditorProps) 
     })
   }
 
-  const setRole = (clientId: string, role: string) => {
+  const setRole = (clientId: string, role: SpaceRole) => {
     setRows((prev) => prev.map((r) => (r.clientId === clientId ? { ...r, role } : r)))
   }
 
   const allValid = rows.length > 0 && rows.every((r) => validation[r.clientId]?.valid)
 
   const handleSave = async () => {
-    if (!allValid) return
+    if (!allValid || saving) return
     setSaveError(null)
     setSaved(false)
-    const result = await setSpaceGrants({
-      input: {
-        spaceKey,
-        grants: rows.map((r) => {
-          const v = validation[r.clientId]
-          if (!v?.valid) throw new Error('unreachable: allValid already checked')
-          return { id: r.id, role: r.role, expressionJson: serializeRuleNode(v.node) }
-        }),
-      },
-    })
-    if (result.data?.setSpaceGrants.malformedRuleError) {
-      setSaveError(result.data.setSpaceGrants.malformedRuleError.message)
-    } else {
+    setSaving(true)
+    try {
+      for (const row of rows) {
+        const v = validation[row.clientId]
+        if (!v?.valid) throw new Error('unreachable: allValid already checked')
+        const expressionJson = serializeRuleNode(v.node)
+
+        if (row.id === null) {
+          const result = await createAccessRule({
+            input: { kind: 'SPACE_GRANT', spaceId, role: row.role, expressionJson },
+          })
+          const errorText = describeMutationError(result.data?.createAccessRule.error)
+          if (errorText) {
+            setSaveError(errorText)
+            return
+          }
+        } else if (expressionJson !== row.initialExpressionJson || row.role !== row.initialRole) {
+          const result = await updateAccessRule({
+            input: { accessRuleId: row.id, role: row.role, expressionJson },
+          })
+          const errorText = describeMutationError(result.data?.updateAccessRule.error)
+          if (errorText) {
+            setSaveError(errorText)
+            return
+          }
+        }
+      }
+
+      for (const ruleId of removedRuleIds) {
+        const result = await deleteAccessRule({ input: { accessRuleId: ruleId } })
+        const errorText = describeMutationError(result.data?.deleteAccessRule.error)
+        if (errorText) {
+          setSaveError(errorText)
+          return
+        }
+      }
+
       setSaved(true)
+      onSaved()
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -110,10 +177,10 @@ function SpaceGrantsEditor({ spaceKey, initialGrants }: SpaceGrantsEditorProps) 
               <Select
                 size="small"
                 value={row.role}
-                onChange={(e) => setRole(row.clientId, e.target.value)}
+                onChange={(e) => setRole(row.clientId, e.target.value as SpaceRole)}
                 aria-label="Grant role"
               >
-                {Object.entries(ROLE_LABELS).map(([value, label]) => (
+                {(Object.entries(ROLE_LABELS) as [SpaceRole, string][]).map(([value, label]) => (
                   <MenuItem key={value} value={value}>
                     {label}
                   </MenuItem>
@@ -128,11 +195,8 @@ function SpaceGrantsEditor({ spaceKey, initialGrants }: SpaceGrantsEditorProps) 
             <RuleBuilder
               initialValue={row.initialExpression}
               onChange={(result) => setValidation((prev) => ({ ...prev, [row.clientId]: result }))}
-              groups={registryQuery.data?.groups ?? []}
-              attributes={
-                registryQuery.data?.attributeRegistry.map((a) => ({ ...a, displayName: a.displayName ?? undefined })) ??
-                []
-              }
+              groups={[]}
+              attributes={[]}
             />
           </Paper>
         ))}
@@ -142,7 +206,7 @@ function SpaceGrantsEditor({ spaceKey, initialGrants }: SpaceGrantsEditorProps) 
         <Button startIcon={<AddIcon />} onClick={addGrant}>
           Add grant
         </Button>
-        <Button variant="contained" disabled={!allValid} onClick={handleSave}>
+        <Button variant="contained" disabled={!allValid || saving} onClick={() => void handleSave()}>
           Save grants
         </Button>
         {rows.length === 0 && (
@@ -153,31 +217,44 @@ function SpaceGrantsEditor({ spaceKey, initialGrants }: SpaceGrantsEditorProps) 
       </Stack>
 
       {saveError && <Alert severity="error">{saveError}</Alert>}
-      {saved && (
-        <Alert severity="success">
-          Saved. (This scaffold doesn't refresh rows with server-assigned ids for newly added grants — there's no
-          live API to round-trip against yet.)
-        </Alert>
-      )}
+      {saved && <Alert severity="success">Saved.</Alert>}
     </Stack>
   )
 }
 
 export function SpaceGrantsPage() {
   const { spaceKey } = useParams<{ spaceKey: string }>()
-  const [{ data, fetching, error }] = useSpaceGrantsQuery({ variables: { key: spaceKey ?? '' }, pause: !spaceKey })
+  const [{ data, fetching, error }, refetch] = useSpaceGrantsQuery({
+    variables: { key: spaceKey ?? '' },
+    pause: !spaceKey,
+  })
 
   if (!spaceKey) return null
+
+  const space = data?.space
+  // `grants` is the server-computed admin signal: rows come back only to
+  // instance/space admins ("absent, not forbidden"), and a space always
+  // has at least one grant by construction (creation is atomic with its
+  // first grant, design.md §6.5.1) — empty means "not yours to manage".
+  const canManage = (space?.grants.length ?? 0) > 0
 
   return (
     <Stack spacing={2}>
       <Typography variant="h4" component="h1">
-        Grants: {data?.space?.name ?? spaceKey}
+        Grants: {space?.name ?? spaceKey}
       </Typography>
-      <AccessGate allowed={!error && data?.space?.canManageAccess} loading={fetching}>
-        {/* AccessGate only renders children once `allowed` is true, which
-            requires `data.space` to exist — safe to assume it here. */}
-        {data?.space && <SpaceGrantsEditor spaceKey={spaceKey} initialGrants={data.space.grants} />}
+      <AccessGate allowed={!error && canManage} loading={fetching}>
+        {space && (
+          <SpaceGrantsEditor
+            // Remount the editor after a save-triggered refetch so row
+            // baselines (initialExpressionJson etc.) reset to the fresh
+            // server state, including server-assigned ids for new rows.
+            key={space.grants.map((g) => g.id).join(',')}
+            spaceId={space.id}
+            initialGrants={space.grants}
+            onSaved={() => refetch({ requestPolicy: 'network-only' })}
+          />
+        )}
       </AccessGate>
     </Stack>
   )

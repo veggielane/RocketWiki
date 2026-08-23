@@ -1,26 +1,25 @@
-query AuditEvents($filter: AuditFilter!, $after: String) {
-  auditEvents(filter: $filter, after: $after) {
-    totalCount
+# design.md §7: admin audit viewer. Real connection shape: cursor paging
+# via first/after, enum-typed filter, no totalCount. `userDisplayName` is
+# nullable (system events); `channel`/`outcome`/`subjectType` are enums.
+query AuditEvents($filter: AuditFilterInput!, $first: Int, $after: String) {
+  auditEvents(filter: $filter, first: $first, after: $after) {
     pageInfo {
       hasNextPage
       endCursor
     }
-    edges {
-      cursor
-      node {
-        id
-        timestampUtc
-        userId
-        userDisplayName
-        action
-        subjectType
-        subjectId
-        subjectSpaceKey
-        outcome
-        channel
-        mcpClientName
-        detailsJson
-      }
+    nodes {
+      id
+      timestampUtc
+      userId
+      userDisplayName
+      action
+      subjectType
+      subjectId
+      spaceKey
+      outcome
+      channel
+      mcpClient
+      detailsJson
     }
   }
 }

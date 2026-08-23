@@ -1,14 +1,17 @@
 import { List, ListItemButton, ListItemIcon, ListItemText, Skeleton, Typography, Box } from '@mui/material'
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined'
-import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { useSpaceListQuery } from '../graphql/generated/graphql'
 
 /**
- * Space list in the nav drawer. There is no live API yet (design.md
- * milestone 0/1 — the backend hasn't been scaffolded), so this renders
- * against `schema.placeholder.graphql`'s shape and will simply show its
- * error/empty state until a real `/graphql` endpoint exists.
+ * Space list in the nav drawer — server-filtered to spaces the caller can
+ * view (design.md §6.7).
+ *
+ * NOTE (schema reconciliation): the placeholder's `isReplica` flag is gone —
+ * the real Space only offers `isReplicaOf(localInstanceId!)`, an argument
+ * the browser can't supply (reported contract gap), so replica spaces are
+ * not marked here; replica-ness still surfaces on any write via the typed
+ * ReadOnlyReplica error (design.md §12).
  */
 export function SpaceTreeNav() {
   const [{ data, fetching, error }] = useSpaceListQuery()
@@ -27,7 +30,7 @@ export function SpaceTreeNav() {
     return (
       <Box sx={{ px: 2, py: 1 }}>
         <Typography variant="caption" color="text.secondary">
-          No spaces loaded yet — the API isn't running in this environment.
+          No spaces loaded.
         </Typography>
       </Box>
     )
@@ -38,9 +41,9 @@ export function SpaceTreeNav() {
       {data.spaces.map((space) => (
         <ListItemButton key={space.key} component={RouterLink} to={`/spaces/${space.key}`}>
           <ListItemIcon>
-            {space.isReplica ? <LockOutlinedIcon fontSize="small" /> : <FolderOutlinedIcon fontSize="small" />}
+            <FolderOutlinedIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary={space.name} secondary={space.isReplica ? 'Read-only replica' : undefined} />
+          <ListItemText primary={space.name} />
         </ListItemButton>
       ))}
     </List>

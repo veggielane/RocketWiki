@@ -1,20 +1,20 @@
-query PageById($id: ID!) {
+# NOTE (schema reconciliation): the real Page type exposes no
+# viewer-permission fields — no canEdit/canComment/canManageAccess, no
+# `restrictions` summary. Until the API grows them (reported as a contract
+# gap; design.md §8's sketch includes `restrictions` and an effective-
+# permission inspector), the UI cannot hide edit affordances per user — it
+# offers them and renders the server's typed refusal (`error.kind ===
+# "Forbidden"`) gracefully instead.
+query PageById($id: UUID!) {
   page(id: $id) {
     id
+    spaceId
     spaceKey
     title
     slug
     content
-    revisionNumber
-    canEdit
-    canComment
-    canManageAccess
+    currentRevisionNumber
     labels
-    restrictions {
-      hasViewRestriction
-      hasEditRestriction
-      summary
-    }
     parent {
       id
       title
@@ -28,7 +28,6 @@ query PageById($id: ID!) {
       body
       isDeleted
       authorUserId
-      authorDisplayName
       createdAtUtc
       editedAtUtc
     }
@@ -37,26 +36,21 @@ query PageById($id: ID!) {
       fileName
       contentType
       sizeBytes
-      uploadedByDisplayName
+      uploadedByUserId
     }
   }
 }
 
-mutation UpdatePage($input: UpdatePageInput!) {
-  updatePage(input: $input) {
+mutation UpdatePageContent($input: UpdatePageContentRequestInput!) {
+  updatePageContent(input: $input) {
     page {
       id
-      revisionNumber
+      title
       content
-    }
-    staleRevisionError {
-      message
       currentRevisionNumber
-      currentContent
     }
-    readOnlyReplicaError {
-      message
-      originInstanceId
+    error {
+      ...MutationError
     }
   }
 }

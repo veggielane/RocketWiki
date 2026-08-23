@@ -10,7 +10,12 @@ export interface AttachmentSummary {
   fileName: string
   contentType: string
   sizeBytes: number
-  uploadedByDisplayName: string
+  /**
+   * NOTE (schema reconciliation): the real Attachment carries
+   * `uploadedByUserId` only — no display-name resolver (reported contract
+   * gap) — so the uploader line is omitted when absent.
+   */
+  uploadedByDisplayName?: string
 }
 
 /**
@@ -68,7 +73,11 @@ export function AttachmentList({ attachments }: { attachments: AttachmentSummary
             </ListItemIcon>
             <ListItemText
               primary={attachment.fileName}
-              secondary={`${formatBytes(attachment.sizeBytes)} · uploaded by ${attachment.uploadedByDisplayName}`}
+              secondary={
+                attachment.uploadedByDisplayName
+                  ? `${formatBytes(attachment.sizeBytes)} · uploaded by ${attachment.uploadedByDisplayName}`
+                  : formatBytes(attachment.sizeBytes)
+              }
             />
           </ListItem>
         ))}

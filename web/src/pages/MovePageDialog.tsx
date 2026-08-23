@@ -29,6 +29,14 @@ export interface MovePageDialogProps {
   currentAncestorRestrictions: RestrictionSummary[]
   /** Candidate new parents (typically the space's page tree, minus the page's own subtree). */
   targetOptions: MoveTargetOption[]
+  /**
+   * NOTE (schema reconciliation): true when the tree the targets came from
+   * carries no restriction data (the real PageTreeNode exposes none —
+   * reported contract gap). The dialog then shows an honest "can't verify"
+   * caution instead of computing a change from empty sets, which would
+   * render a false "No change to who can see this page" reassurance.
+   */
+  restrictionDataUnavailable?: boolean
   onConfirm: (targetParentId: string | null) => void
 }
 
@@ -44,6 +52,7 @@ export function MovePageDialog({
   pageTitle,
   currentAncestorRestrictions,
   targetOptions,
+  restrictionDataUnavailable = false,
   onConfirm,
 }: MovePageDialogProps) {
   const [selectedId, setSelectedId] = useState<string | 'root' | null>(null)
@@ -51,9 +60,9 @@ export function MovePageDialog({
   const selectedOption = targetOptions.find((t) => (t.id ?? 'root') === selectedId) ?? null
 
   const change = useMemo(() => {
-    if (!selectedOption) return null
+    if (!selectedOption || restrictionDataUnavailable) return null
     return computeVisibilityChange(currentAncestorRestrictions, selectedOption.ancestorRestrictions)
-  }, [currentAncestorRestrictions, selectedOption])
+  }, [currentAncestorRestrictions, selectedOption, restrictionDataUnavailable])
 
   const handleConfirm = () => {
     if (!selectedOption) return
@@ -108,6 +117,14 @@ export function MovePageDialog({
         {selectedOption && change && !change.changed && (
           <Alert severity="success" variant="outlined" sx={{ mt: 2 }}>
             No change to who can see this page.
+          </Alert>
+        )}
+
+        {selectedOption && restrictionDataUnavailable && (
+          <Alert severity="info" variant="outlined" sx={{ mt: 2 }}>
+            Restrictions are positional — moving under a restricted parent means inheriting its restrictions
+            (design.md §6.4). The API doesn't yet expose restriction data for the tree, so this dialog can't verify
+            whether this move changes who can see the page.
           </Alert>
         )}
       </DialogContent>

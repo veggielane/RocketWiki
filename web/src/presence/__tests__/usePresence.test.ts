@@ -40,12 +40,10 @@ describe('usePresence', () => {
     const { result } = renderHook(() => usePresence('page-1', transport))
 
     act(() => {
-      transport.emitViewers([{ connectionId: 'c1', userId: 'u1', displayName: 'Ada', colour: '#f00' }])
+      transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00' }])
     })
 
-    expect(result.current.viewers).toEqual([
-      { connectionId: 'c1', userId: 'u1', displayName: 'Ada', colour: '#f00' },
-    ])
+    expect(result.current.viewers).toEqual([{ userId: 'u1', displayName: 'Ada', colour: '#f00' }])
   })
 
   it('resets viewers and pointers to empty when leaving a page — stale presence from the old page must not bleed into the new one', () => {
@@ -55,8 +53,8 @@ describe('usePresence', () => {
     })
 
     act(() => {
-      transport.emitViewers([{ connectionId: 'c1', userId: 'u1', displayName: 'Ada', colour: '#f00' }])
-      transport.emitPointer({ connectionId: 'c1', x: 0.5, y: 0.5 })
+      transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00' }])
+      transport.emitPointer({ userId: 'u1', displayName: 'Ada', colour: '#f00', x: 0.5, y: 0.5 })
     })
     expect(result.current.viewers).toHaveLength(1)
     expect(result.current.pointers.size).toBe(1)
@@ -67,15 +65,21 @@ describe('usePresence', () => {
     expect(result.current.pointers.size).toBe(0)
   })
 
-  it('tracks another viewer\'s pointer by connection id', () => {
+  it("tracks another viewer's pointer by user id (the hub exposes no connection ids)", () => {
     const transport = new FakePresenceTransport()
     const { result } = renderHook(() => usePresence('page-1', transport))
 
     act(() => {
-      transport.emitPointer({ connectionId: 'c1', x: 0.25, y: 0.75 })
+      transport.emitPointer({ userId: 'u1', displayName: 'Ada', colour: '#f00', x: 0.25, y: 0.75 })
     })
 
-    expect(result.current.pointers.get('c1')).toEqual({ x: 0.25, y: 0.75 })
+    expect(result.current.pointers.get('u1')).toEqual({
+      userId: 'u1',
+      displayName: 'Ada',
+      colour: '#f00',
+      x: 0.25,
+      y: 0.75,
+    })
   })
 
   it('recordPointer does not call sendPointerPosition synchronously — it goes through the throttled sampler, not straight to the transport', () => {
@@ -85,6 +89,19 @@ describe('usePresence', () => {
     result.current.recordPointer(1, 2)
 
     expect(transport.sentPositions).toEqual([])
+  })
+
+  it('stamps sent pointer positions with the page they belong to — the hub needs the page group per sample', async () => {
+    const transport = new FakePresenceTransport()
+    const { result } = renderHook(() => usePresence('page-1', transport))
+
+    await act(async () => {
+      result.current.recordPointer(0.5, 0.5)
+      // The sampler flushes on its ~50ms cadence.
+      await new Promise((resolve) => setTimeout(resolve, 80))
+    })
+
+    expect(transport.sentPositions).toEqual([{ pageId: 'page-1', x: 0.5, y: 0.5 }])
   })
 
   it('does not leave a page it never joined when unmounted before any effect ran twice (no duplicate leave calls)', () => {

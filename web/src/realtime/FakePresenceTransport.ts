@@ -1,8 +1,9 @@
 import type { PointerPosition, PresenceTransport, PresenceViewer } from './types'
 
 /**
- * Stands in for a real presence hub connection (design.md §8, milestone
- * 4b — no hub exists yet). Tracks joined pages and sent pointer positions
+ * Stands in for a real presence connection, for tests and for running the
+ * SPA without a backend (`VITE_FAKE_REALTIME=true` — see
+ * realtime/transports.ts). Tracks joined pages and sent pointer positions
  * so tests can assert teardown actually happens, which is the entire
  * point of this feature ("a leaked hub subscription is a live data leak,
  * not just a memory leak" — design.md §8).
@@ -13,7 +14,7 @@ export class FakePresenceTransport implements PresenceTransport {
 
   joinedPages: string[] = []
   leftPages: string[] = []
-  sentPositions: { x: number; y: number }[] = []
+  sentPositions: { pageId: string; x: number; y: number }[] = []
 
   async joinPage(pageId: string): Promise<void> {
     this.joinedPages.push(pageId)
@@ -44,8 +45,8 @@ export class FakePresenceTransport implements PresenceTransport {
     return () => this.pointerHandlers.delete(handler)
   }
 
-  sendPointerPosition(x: number, y: number): void {
-    this.sentPositions.push({ x, y })
+  sendPointerPosition(pageId: string, x: number, y: number): void {
+    this.sentPositions.push({ pageId, x, y })
   }
 
   /** Test/dev only: simulates the hub broadcasting an updated viewer list. */

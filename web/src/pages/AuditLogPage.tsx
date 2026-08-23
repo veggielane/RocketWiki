@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   Alert,
   Box,
+  Button,
   Chip,
   MenuItem,
   Select,
@@ -11,26 +12,36 @@ import {
   type SelectChangeEvent,
 } from '@mui/material'
 import { DataGrid, GridToolbar, type GridColDef } from '@mui/x-data-grid'
-import { useAuditEventsQuery } from '../graphql/generated/graphql'
+import {
+  useAuditEventsQuery,
+  type AuditOutcome,
+  type AuditSubjectType,
+  type AuditEventsQuery,
+} from '../graphql/generated/graphql'
 
-const OUTCOME_OPTIONS = ['', 'success', 'denied'] as const
+const SUBJECT_TYPE_OPTIONS: AuditSubjectType[] = ['PAGE', 'SPACE', 'ATTACHMENT', 'COMMENT', 'RULE']
+const PAGE_SIZE = 100
+
+type AuditRow = NonNullable<NonNullable<AuditEventsQuery['auditEvents']>['nodes']>[number]
 
 /**
  * design.md §7: filter by user/action/subject/outcome/date range, CSV
- * export. Denied events are shown alongside successes, never hidden or
- * defaulted-out — probing restricted content is a signal worth seeing, not
- * noise to filter away by default. Viewing this page is itself audited as
- * `audit.view` — that's a server-side resolver concern (every root field
- * declares its audit action, design.md §7/§8), not something the client
- * needs to trigger separately; the query executing *is* the audited action.
+ * export (DataGrid's toolbar). Denied events are shown alongside
+ * successes, never hidden or defaulted-out — probing restricted content is
+ * a signal worth seeing, not noise to filter away by default. Viewing this
+ * page is itself audited as `audit.view` server-side; the query executing
+ * *is* the audited action. The real connection is cursor-paged with no
+ * totalCount; "Load more" appends the next page.
  */
 export function AuditLogPage() {
   const [userId, setUserId] = useState('')
   const [action, setAction] = useState('')
-  const [subjectType, setSubjectType] = useState('')
-  const [outcome, setOutcome] = useState<(typeof OUTCOME_OPTIONS)[number]>('')
+  const [subjectType, setSubjectType] = useState<AuditSubjectType | ''>('')
+  const [outcome, setOutcome] = useState<AuditOutcome | ''>('')
   const [fromUtc, setFromUtc] = useState('')
   const [toUtc, setToUtc] = useState('')
+  const [after, setAfter] = useState<string | null>(null)
+  const [loadedRows, setLoadedRows] = useState<AuditRow[]>([])
 
   const filter = useMemo(
     () => ({
@@ -44,9 +55,27 @@ export function AuditLogPage() {
     [userId, action, subjectType, outcome, fromUtc, toUtc],
   )
 
-  const [{ data, fetching, error }] = useAuditEventsQuery({ variables: { filter } })
+  // A changed filter restarts pagination (`after` reset by the setters
+  // below via key comparison): accumulated rows belong to the old filter.
+  const filterKey = JSON.stringify(filter)
+  const [loadedForFilter, setLoadedForFilter] = useState(filterKey)
+  if (loadedForFilter !== filterKey) {
+    setLoadedForFilter(filterKey)
+    setAfter(null)
+    setLoadedRows([])
+  }
 
-  const rows = useMemo(() => data?.auditEvents.edges.map((e) => e.node) ?? [], [data])
+  const [{ data, fetching, error }] = useAuditEventsQuery({
+    variables: { filter, first: PAGE_SIZE, after },
+  })
+
+  const rows = useMemo(() => {
+    const fresh = data?.auditEvents?.nodes ?? []
+    const seen = new Set(loadedRows.map((r) => r.id))
+    return [...loadedRows, ...fresh.filter((r) => !seen.has(r.id))]
+  }, [data, loadedRows])
+
+  const pageInfo = data?.auditEvents?.pageInfo
 
   const columns: GridColDef[] = [
     { field: 'timestampUtc', headerName: 'Timestamp (UTC)', width: 200 },
@@ -57,7 +86,7 @@ export function AuditLogPage() {
       headerName: 'Subject',
       width: 220,
       valueGetter: (_value, row) =>
-        [row.subjectType, row.subjectId, row.subjectSpaceKey && `(${row.subjectSpaceKey})`].filter(Boolean).join(' '),
+        [row.subjectType, row.subjectId, row.spaceKey && `(${row.spaceKey})`].filter(Boolean).join(' '),
     },
     {
       field: 'outcome',
@@ -67,13 +96,13 @@ export function AuditLogPage() {
         <Chip
           label={params.value}
           size="small"
-          color={params.value === 'denied' ? 'error' : 'success'}
-          variant={params.value === 'denied' ? 'filled' : 'outlined'}
+          color={params.value === 'DENIED' ? 'error' : 'success'}
+          variant={params.value === 'DENIED' ? 'filled' : 'outlined'}
         />
       ),
     },
     { field: 'channel', headerName: 'Channel', width: 110 },
-    { field: 'mcpClientName', headerName: 'MCP client', width: 140 },
+    { field: 'mcpClient', headerName: 'MCP client', width: 140 },
   ]
 
   return (
@@ -98,25 +127,32 @@ export function AuditLogPage() {
           size="small"
           sx={{ minWidth: 200 }}
         />
-        <TextField
-          label="Subject type"
+        <Select
           value={subjectType}
-          onChange={(e) => setSubjectType(e.target.value)}
-          placeholder="page, space, attachment, …"
+          onChange={(e: SelectChangeEvent) => setSubjectType(e.target.value as AuditSubjectType | '')}
           size="small"
-          sx={{ minWidth: 180 }}
-        />
+          displayEmpty
+          sx={{ minWidth: 170 }}
+          aria-label="Subject type"
+        >
+          <MenuItem value="">All subject types</MenuItem>
+          {SUBJECT_TYPE_OPTIONS.map((value) => (
+            <MenuItem key={value} value={value}>
+              {value.charAt(0) + value.slice(1).toLowerCase()}
+            </MenuItem>
+          ))}
+        </Select>
         <Select
           value={outcome}
-          onChange={(e: SelectChangeEvent) => setOutcome(e.target.value as typeof outcome)}
+          onChange={(e: SelectChangeEvent) => setOutcome(e.target.value as AuditOutcome | '')}
           size="small"
           displayEmpty
           sx={{ minWidth: 140 }}
           aria-label="Outcome"
         >
           <MenuItem value="">All outcomes</MenuItem>
-          <MenuItem value="success">Success</MenuItem>
-          <MenuItem value="denied">Denied</MenuItem>
+          <MenuItem value="SUCCESS">Success</MenuItem>
+          <MenuItem value="DENIED">Denied</MenuItem>
         </Select>
         <TextField
           label="From"
@@ -136,9 +172,7 @@ export function AuditLogPage() {
         />
       </Stack>
 
-      {error && (
-        <Alert severity="info">Couldn't load audit events — there's no live API in this environment yet.</Alert>
-      )}
+      {error && <Alert severity="info">Couldn't load audit events.</Alert>}
 
       <Box sx={{ flexGrow: 1, minHeight: 400 }}>
         <DataGrid
@@ -154,6 +188,21 @@ export function AuditLogPage() {
           disableRowSelectionOnClick
         />
       </Box>
+
+      {pageInfo?.hasNextPage && (
+        <Button
+          variant="outlined"
+          size="small"
+          disabled={fetching}
+          onClick={() => {
+            setLoadedRows(rows)
+            setAfter(pageInfo.endCursor ?? null)
+          }}
+          sx={{ alignSelf: 'flex-start' }}
+        >
+          Load more
+        </Button>
+      )}
     </Stack>
   )
 }

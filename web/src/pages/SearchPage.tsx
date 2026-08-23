@@ -21,8 +21,8 @@ type SearchEdge = SearchPagesQuery['search']['edges'][number]
  * design.md §9: hybrid keyword + semantic ranking is entirely a server
  * concern — this just renders whatever order the server returns. Each
  * result deep-links straight to its matching section via `anchorId`
- * (heading-path-derived, see editor/headingAnchors.ts — the id contract
- * `SearchHit.anchorId` documents in schema.placeholder.graphql).
+ * (heading-path-derived — the server ports editor/headingAnchors.ts's
+ * algorithm exactly, verified against the shared corpus).
  */
 export function SearchPage() {
   const [params, setParams] = useSearchParams()
