@@ -93,6 +93,21 @@ public static class DomainEventAuditMapper
         AccessRuleChangedEvent e => ("permission.change", AuditSubjectType.Rule, e.AccessRuleId, e.SpaceKey,
             JsonSerializer.Serialize(new AccessRuleChangeDetails(e.AccessRuleId, e.Before, e.After), AccessRuleAuditJson.Options)),
 
+        // design.md §8: "watch changes are audited as user actions". Subject is the
+        // watched thing itself (page or space — the Watch row's xor guarantees exactly
+        // one), not the Watch row id, which is meaningless to an auditor.
+        WatchAddedEvent e => ("watch.add", e.PageId is not null ? AuditSubjectType.Page : AuditSubjectType.Space,
+            e.PageId ?? e.SpaceId, e.SpaceKey, null),
+
+        WatchRemovedEvent e => ("watch.remove", e.PageId is not null ? AuditSubjectType.Page : AuditSubjectType.Space,
+            e.PageId ?? e.SpaceId, e.SpaceKey, null),
+
+        // No AuditSubjectType fits a Notification (data-model.md's subject list is
+        // page/space/attachment/comment/rule, and the bigint row id isn't a Guid
+        // anyway) - the id goes in DetailsJson instead, same pattern as sync.import.
+        NotificationMarkedReadEvent e => ("notification.markRead", null, null, null,
+            JsonSerializer.Serialize(new { notificationId = e.NotificationId })),
+
         SpaceCreatedEvent e => ("space.create", AuditSubjectType.Space, e.SpaceId, e.Key, null),
 
         SpaceRenamedEvent e => ("space.rename", AuditSubjectType.Space, e.SpaceId, e.Key,
