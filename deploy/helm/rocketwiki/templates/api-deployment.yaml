@@ -78,6 +78,15 @@ spec:
             # visible in `helm template` output where a reviewer looks.
             - name: Database__MigrateOnStartup
               value: "false"
+            {{- if eq .Values.api.probes.mode "http" }}
+            # Explicit opt-in for /health + /alive outside Development
+            # (ServiceDefaults MapDefaultEndpoints, fail closed without it).
+            # Safe to enable here because probes come from the kubelet over
+            # the pod network, and the ingress never routes either path to
+            # the api Service — see values.yaml api.probes for the posture.
+            - name: HealthEndpoints__Enabled
+              value: "true"
+            {{- end }}
             {{- with .Values.api.instanceId }}
             - name: Instance__Id
               value: {{ . | quote }}
@@ -118,9 +127,9 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- if eq .Values.api.probes.mode "http" }}
-          # Requires the ServiceDefaults follow-up — /health and /alive are
-          # Development-only today (see values.yaml api.probes for the full
-          # story). Do not select this mode until that lands in src/.
+          # Paired with HealthEndpoints__Enabled above: the endpoints exist in
+          # the pod because this mode asked for them, and stay unrouted at the
+          # ingress (see values.yaml api.probes).
           livenessProbe:
             httpGet:
               path: /alive
@@ -133,10 +142,10 @@ spec:
               port: http
             periodSeconds: 10
           {{- else }}
-          # TCP probes: the strongest signal available TODAY without a src/
-          # change (health endpoints are mapped only in the Development
-          # environment). Proves Kestrel accepts connections; deliberately
-          # claims nothing about database health.
+          # TCP probes: proves Kestrel accepts connections; deliberately
+          # claims nothing about database health. The fallback for operators
+          # who want the health endpoints unmapped even inside the pod
+          # network (values.yaml api.probes).
           livenessProbe:
             tcpSocket:
               port: http

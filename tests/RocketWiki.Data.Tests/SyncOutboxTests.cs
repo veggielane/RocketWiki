@@ -325,6 +325,77 @@ public class SyncOutboxTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task ReplicaFlaggedExported_StillProducesNoOutboxEvent_OwnershipBeatsTheFlag()
+    {
+        // design.md §12's stated follow-up, proven by breaking the guard it closes:
+        // IsExported is a low-side-only property, so a replica carrying it is corrupt
+        // state (import writes IsExported = false; no app path exports a replica). The
+        // writer used to trust the flag alone - this state would have journaled sync
+        // events for content this instance doesn't own. Now OriginInstanceId must ALSO
+        // match the context's own instance id: the legitimate local mutation commits
+        // (rule management on a replica is locally scoped - same event as the test
+        // above), but the journal stays empty and the sequence untouched. The
+        // native-and-exported positive control is CreatePage_OnExportedSpace_... at
+        // the top of this file.
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+        space.OriginInstanceId = "some-other-instance"; // replica relative to LocalInstanceId
+        space.IsExported = true;                        // the corrupt low-side-only flag
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new AccessRuleService(context);
+        var result = await service.CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.PageRestriction, null, page.Id, null, PageAction.View, """{ "group": "top-secret" }"""),
+            EditorPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess); // the local mutation is not held hostage by the corrupt flag
+        Assert.Empty(context.SyncOutboxEvents); // fail closed: nothing journaled for unowned content
+        Assert.Equal(0, context.Spaces.Single(s => s.Id == space.Id).LastOutboxSequence);
+    }
+
+    [Fact]
+    public async Task ContextWithoutLocalInstanceId_MutatingAnExportedSpace_ThrowsAndCommitsNothing()
+    {
+        // The other half of the writer's fail-closed posture: with no instance id
+        // configured on the context at all, ownership of an exported space cannot be
+        // verified, and silently skipping would silently break sync for content this
+        // instance genuinely owns - so the writer throws (same loudness as its
+        // untracked-entity guard), and because that happens before base.SaveChanges,
+        // the mutation, its audit row, and any would-be outbox row all roll back
+        // together.
+        var actor = TestData.NewUser();
+        var space = NewExportedSpace();
+
+        using (var seedContext = CreateContext())
+        {
+            seedContext.Users.Add(actor);
+            seedContext.Spaces.Add(space);
+            seedContext.AccessRules.Add(EditorGrant(space.Id));
+            seedContext.SaveChanges();
+        }
+
+        using (var unconfiguredContext = CreateContext(localInstanceId: null))
+        {
+            var service = new PageService(unconfiguredContext, LocalInstanceId);
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreatePageAsync(
+                new CreatePageRequest(space.Id, null, "home", "Home", "# Home"), EditorPrincipal(), actor.Id, AuditCtx));
+            Assert.Contains("UseLocalInstanceId", exception.Message);
+        }
+
+        using var verifyContext = CreateContext();
+        Assert.Empty(verifyContext.SyncOutboxEvents);
+        Assert.Empty(verifyContext.Pages);
+        Assert.Equal(0, verifyContext.Spaces.Single(s => s.Id == space.Id).LastOutboxSequence);
+    }
+
+    [Fact]
     public async Task SpaceLifecycleEvents_NeverProduceOutboxEvents_EvenOnAnExportedSpace()
     {
         // No SyncEventType exists for space metadata (data-model.md); renaming an

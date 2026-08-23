@@ -14,7 +14,18 @@ public class RocketWikiDbContext : DbContext
     public RocketWikiDbContext(DbContextOptions<RocketWikiDbContext> options)
         : base(options)
     {
+        LocalInstanceId = options.FindExtension<LocalInstanceDbContextOptionsExtension>()?.LocalInstanceId;
     }
+
+    /// <summary>
+    /// This instance's id (design.md §12), from <c>UseLocalInstanceId</c> on the
+    /// context options — get-only, so no unit of work can swap identity mid-flight.
+    /// Null means the options never declared one; <see cref="SyncOutboxWriter"/>
+    /// treats that as a configuration error the moment an exported space needs
+    /// journaling, and no other consumer exists (services that need the id for
+    /// authorization keep receiving it explicitly — see Program.cs).
+    /// </summary>
+    public string? LocalInstanceId { get; }
 
     /// <summary>
     /// Request/channel metadata for any audit rows this unit of work produces. The

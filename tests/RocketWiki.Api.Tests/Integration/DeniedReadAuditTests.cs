@@ -285,6 +285,68 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
     }
 
     [Fact]
+    public async Task DeniedSpaceLookup_NoSpaceRole_IsAudited_AndByteIdenticalToAMissingKey()
+    {
+        // The seam the denied-read work initially left open, now closed: space(key) is
+        // a *specific-space* lookup, so a caller holding no role gets the same Denied
+        // space.browse row a refused pageTree browse gets (same SpaceReads seam as
+        // MCP's get_page_tree - see McpToolTests for that channel), while the response
+        // stays byte-identical to a key that names nothing (§6.7). A genuinely-missing
+        // key still audits nothing, and the listing shape (spaces) deliberately keeps
+        // its no-per-item-audit behavior - a filtered listing is not a denial
+        // (ReadDenialAudit's doc; PrunedChildOfPermittedParent_... above is the page
+        // twin of that rule).
+        Guid spaceId;
+        string spaceKey;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+            var creator = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
+            db.Users.Add(creator);
+            var space = new Space
+            {
+                Key = $"NSR{Guid.NewGuid():N}"[..8],
+                Name = "No Role Space",
+                OriginInstanceId = "standalone",
+                CreatedAtUtc = DateTime.UtcNow,
+                CreatedByUserId = creator.Id,
+            };
+            db.Spaces.Add(space); // no grants at all - ComputeSpaceRole is null for everyone
+            await db.SaveChangesAsync();
+            spaceId = space.Id;
+            spaceKey = space.Key;
+        }
+
+        var client = factory.CreateClient();
+        client.SetTestUser(sub: $"roleless-{Guid.NewGuid()}");
+        var missingKey = $"MIS{Guid.NewGuid():N}"[..8];
+
+        var deniedResponse = await client.PostAsJsonAsync("/graphql", new { query = $$"""{ space(key: "{{spaceKey}}") { id name } }""" });
+
+        // The missing-key control writes nothing at all (§7: no access decision
+        // exists for a subject that isn't there) - checked by total row count since a
+        // nonexistent space has no subject id to filter on.
+        var rowsBeforeMissing = await TotalAuditRowsAsync();
+        var missingResponse = await client.PostAsJsonAsync("/graphql", new { query = $$"""{ space(key: "{{missingKey}}") { id name } }""" });
+        Assert.Equal(rowsBeforeMissing, await TotalAuditRowsAsync());
+
+        // §6.7's response half at the transport: both keys are 8 chars, interpolated
+        // into the request and never echoed back, so the bodies must match byte for byte.
+        Assert.Equal(HttpStatusCode.OK, deniedResponse.StatusCode);
+        Assert.Equal(missingResponse.StatusCode, deniedResponse.StatusCode);
+        Assert.Equal(await missingResponse.Content.ReadAsStringAsync(), await deniedResponse.Content.ReadAsStringAsync());
+
+        var rows = await AuditRowsForSubjectAsync(spaceId);
+        var denial = Assert.Single(rows);
+        Assert.Equal("space.browse", denial.Action);
+        Assert.Equal(AuditOutcome.Denied, denial.Outcome);
+        Assert.Equal(AuditSubjectType.Space, denial.SubjectType);
+        Assert.Equal(AuditChannel.GraphQl, denial.Channel);
+        Assert.NotNull(denial.DetailsJson);
+        Assert.Equal("no-space-role", JsonDocument.Parse(denial.DetailsJson).RootElement.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public async Task DeniedAttachmentDownload_IsAudited_AndByteIdenticalToAMissing404()
     {
         // Same contract on the attachment channel (design.md §8/§10): the service's

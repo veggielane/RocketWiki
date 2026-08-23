@@ -67,12 +67,46 @@ internal static class SyncOutboxWriter
                     "tracked in this unit of work. The sync outbox writer can only see entities the calling " +
                     "service already loaded - load the Space before raising a sync-relevant domain event.");
 
-            // design.md §12: IsExported is documented as a "low side only" flag - a
-            // replica should never carry it, so trusting that invariant here (rather
-            // than re-deriving instance identity, which would require threading a
-            // localInstanceId into RocketWikiDbContext) keeps the context free of that
-            // dependency. Only exported, native spaces ever reach this point.
             if (!space.IsExported)
+            {
+                continue;
+            }
+
+            // design.md §12: "Exported-ness is a low-side property. Only a native space
+            // can be exported; a replica must never emit sync events for content it
+            // doesn't own." The writer used to trust Space.IsExported alone; §12's
+            // stated follow-up is enforced here: the space must ALSO originate from
+            // this instance before anything is journaled. Two failure modes, handled
+            // differently on purpose:
+            //
+            // 1. No local instance id configured at all (UseLocalInstanceId never
+            //    called on this context's options): throw. Silently skipping would
+            //    silently break sync for content this instance genuinely owns - the
+            //    exact "silently incomplete sync stream" the untracked-entity throws
+            //    below exist to prevent. Same precedent, same loudness.
+            if (db.LocalInstanceId is null)
+            {
+                throw new InvalidOperationException(
+                    $"Domain event '{domainEvent.GetType().Name}' touches exported space '{spaceKey}', but this " +
+                    "RocketWikiDbContext has no local instance id (design.md §12). Configure it with " +
+                    "UseLocalInstanceId(...) on the context options so the sync outbox writer can verify the " +
+                    "space is native before journaling - without it, ownership cannot be checked and nothing " +
+                    "is committed.");
+            }
+
+            // 2. Configured, but the exported space's origin is another instance: a
+            //    replica flagged exported - corrupt state (import writes replicas with
+            //    IsExported = false, and no app path flags a replica exported). Skip,
+            //    don't throw: the mutation itself can be legitimate (rule management
+            //    on a replica is locally scoped and allowed, see design.md §12's
+            //    "stays local" table and ReplicaSpace_ProducesNoOutboxEvent... in
+            //    SyncOutboxTests), and holding it hostage to a mis-set low-side-only
+            //    flag would trade a working wiki for a row that must not exist anyway.
+            //    The untracked-entity throws below guard the opposite risk (an
+            //    incomplete journal for owned content); here the fail-closed outcome
+            //    IS the skip - content this instance doesn't own never enters its
+            //    journal, exactly like the !IsExported skip above.
+            if (!string.Equals(space.OriginInstanceId, db.LocalInstanceId, StringComparison.Ordinal))
             {
                 continue;
             }

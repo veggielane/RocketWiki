@@ -79,8 +79,9 @@ api:
   # ASPNETCORE_ENVIRONMENT. Must stay "Production" (or "Staging") in any real
   # deployment: Development flips RequireHttpsMetadata off for the Keycloak
   # authority and turns on detailed GraphQL/SignalR error surfaces
-  # (Program.cs). Do NOT set "Development" to get /health endpoints — see
-  # probes.mode below for the honest story there.
+  # (Program.cs). Never set "Development" to get /health endpoints — the
+  # config-gated opt-in wired by probes.mode "http" (below) enables exactly
+  # those endpoints without any of that collateral.
   aspnetcoreEnvironment: Production
 
   # design.md §12: instance identity for low/high sync (native vs replica
@@ -88,29 +89,28 @@ api:
   instanceId: ""
 
   probes:
-    # "tcp" (default) or "http".
+    # "http" (default) or "tcp".
     #
-    # THE HONEST STORY: ServiceDefaults maps /health and /alive only when
-    # ASPNETCORE_ENVIRONMENT == Development
-    # (src/RocketWiki.ServiceDefaults/Extensions.cs, MapDefaultEndpoints — the
-    # stock Aspire template guard, kept because exposing health detail
-    # publicly has security implications). In Production those paths are 404,
-    # and running Development in production is not an option (see
-    # aspnetcoreEnvironment above). So:
-    #
-    #   tcp  — what works TODAY: liveness/readiness open a TCP connection to
-    #          8080. Proves Kestrel is up; says nothing about the DB. Weak but
-    #          truthful.
-    #   http — what the design intends (§15 "wire them to liveness/readiness"):
-    #          /alive for liveness, /health for readiness. REQUIRES a src/
-    #          change that is deliberately NOT made by this deployment work:
-    #          MapDefaultEndpoints must map the endpoints outside Development
-    #          (config-gated, and they should stay unreachable through the
-    #          ingress — probes come from the kubelet, not the ingress, so
-    #          simply not routing /health at Traefik/nginx covers that).
-    #          Tracked as a required follow-up in deploy/README.md. Flip this
-    #          to "http" the day that lands.
-    mode: tcp
+    #   http — what design.md §15 intends: /alive → liveness, /health →
+    #          readiness. Outside Development those endpoints exist only
+    #          behind an explicit opt-in (HealthEndpoints:Enabled, default
+    #          false — src/RocketWiki.ServiceDefaults/Extensions.cs,
+    #          MapDefaultEndpoints; they're unauthenticated and /health
+    #          aggregates dependency state, so accidental exposure is the
+    #          risk being managed). This chart sets HealthEndpoints__Enabled
+    #          on the api container whenever this mode is selected, which is
+    #          safe HERE because probes come from the kubelet over the pod
+    #          network and the ingress never routes either path to the api
+    #          Service — /health and /alive fall into the SPA catch-all
+    #          (templates/ingress.yaml) — so they're enabled in the pod yet
+    #          unreachable from outside the cluster. Keeping them off the api
+    #          routes is this chart's job; the app's job is only refusing to
+    #          map the endpoints unless asked.
+    #   tcp  — fallback: liveness/readiness open a TCP connection to 8080.
+    #          Proves Kestrel is up; says nothing about the DB. Weaker but
+    #          dependency-free — the right choice if the health endpoints
+    #          must stay unmapped even inside the pod network.
+    mode: http
 
   resources:
     # Deliberately modest; nothing has ever measured this app under load
