@@ -33,6 +33,16 @@ public interface ICurrentAuditContextAccessor
 
 public sealed class CurrentAuditContextAccessor(IHttpContextAccessor httpContextAccessor) : ICurrentAuditContextAccessor
 {
+    /// <summary>
+    /// design.md §7: the audit row carries the MCP client's self-reported name. The MCP
+    /// layer (the call-tool filter in <c>McpServerConfiguration</c>) stashes it here
+    /// before the tool runs, because client identity lives in the MCP protocol
+    /// (initialize / per-request <c>_meta</c>), not anywhere this accessor could derive
+    /// it from the HTTP request itself. Null when the client never identified itself —
+    /// recorded as null, honestly, rather than guessed from e.g. User-Agent.
+    /// </summary>
+    public const string McpClientItemKey = "RocketWiki.Api.McpClient";
+
     public AuditContext? Current
     {
         get
@@ -49,10 +59,17 @@ public sealed class CurrentAuditContextAccessor(IHttpContextAccessor httpContext
                 return null;
             }
 
+            string? mcpClient = null;
+            if (channel == AuditChannel.Mcp && context.Items.TryGetValue(McpClientItemKey, out var value))
+            {
+                mcpClient = value as string;
+            }
+
             return new AuditContext(
                 channel.Value,
                 context.TraceIdentifier,
-                context.Connection.RemoteIpAddress?.ToString() ?? "unknown");
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                mcpClient);
         }
     }
 

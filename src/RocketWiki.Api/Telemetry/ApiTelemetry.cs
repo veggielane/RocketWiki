@@ -59,6 +59,22 @@ public static class ApiTelemetry
         Meter.CreateCounter<long>("rocketwiki.notifications.fanout", "{recipient}",
             "Per-recipient notification fan-out outcomes, by notification type and disposition.");
 
+    /// <summary>
+    /// design.md §8/§15: one measurement per MCP tool invocation, by tool and outcome.
+    /// Both tags are bounded vocabularies (§15): the tool tag is only ever a name from
+    /// <see cref="Mcp.McpToolAuditRegistry"/> — a client-supplied unknown tool name is
+    /// collapsed to <see cref="McpToolUnknown"/> rather than minting a series per probe —
+    /// and outcomes are the fixed set below. Never arguments, never content: the query a
+    /// user searched for belongs in the audit row's Details (§7), nowhere else.
+    /// </summary>
+    public static readonly Counter<long> McpToolCalls =
+        Meter.CreateCounter<long>("rocketwiki.mcp.tool_calls", "{call}",
+            "MCP tool invocations, by tool name and outcome.");
+
+    public static readonly Histogram<double> McpToolCallDuration =
+        Meter.CreateHistogram<double>("rocketwiki.mcp.tool_call.duration", "s",
+            "Duration of MCP tool invocations, by tool name and outcome.");
+
     public const string JitResultTag = "rocketwiki.identity.result";
     public const string PresenceOutcomeTag = "rocketwiki.presence.outcome";
     public const string PresenceReasonTag = "rocketwiki.presence.reason";
@@ -70,6 +86,46 @@ public static class ApiTelemetry
 
     public const string NotificationFanOutSpan = "rocketwiki.notifications.fanout";
     public const string PresenceReauthorizeSpan = "rocketwiki.presence.reauthorize";
+
+    /// <summary>Constant span name (low-cardinality, §15); the tool rides as a tag.</summary>
+    public const string McpToolCallSpan = "rocketwiki.mcp.tool_call";
+
+    public const string McpToolTag = "rocketwiki.mcp.tool";
+    public const string McpOutcomeTag = "rocketwiki.mcp.outcome";
+
+    /// <summary>Tool ran and produced a non-error result.</summary>
+    public const string McpOutcomeSuccess = "success";
+
+    /// <summary>Tool produced an error result — including the deliberate constant
+    /// "not found" for absent/restricted subjects (§6.7 makes those one category by
+    /// design; telemetry doesn't get to split what the caller can't).</summary>
+    public const string McpOutcomeError = "error";
+
+    /// <summary>Rejected by the filter's defense-in-depth check before any tool ran —
+    /// should be unreachable behind the endpoint's RequireAuthorization.</summary>
+    public const string McpOutcomeUnauthenticated = "unauthenticated";
+
+    /// <summary>A registered tool with no audit declaration — refused, never run
+    /// (design.md §7 fail-closed). A green build makes this unreachable.</summary>
+    public const string McpOutcomeUndeclared = "undeclared";
+
+    /// <summary>Call to a tool name this server doesn't register at all.</summary>
+    public const string McpOutcomeUnknownTool = "unknown_tool";
+
+    /// <summary>Stand-in tool tag for names outside the registry (unbounded client
+    /// input must not become a metric dimension, §15).</summary>
+    public const string McpToolUnknown = "unknown";
+
+    public static void RecordMcpToolCall(string toolTag, string outcome, TimeSpan duration)
+    {
+        var tags = new KeyValuePair<string, object?>[]
+        {
+            new(McpToolTag, toolTag),
+            new(McpOutcomeTag, outcome),
+        };
+        McpToolCalls.Add(1, tags);
+        McpToolCallDuration.Record(duration.TotalSeconds, tags);
+    }
 
     public static void RecordJitProvisioning(bool created) =>
         JitProvisionings.Add(1, new KeyValuePair<string, object?>(

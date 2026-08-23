@@ -6,6 +6,7 @@ using RocketWiki.Api.Attachments;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.GraphQL;
 using RocketWiki.Api.Identity;
+using RocketWiki.Api.Mcp;
 using RocketWiki.Api.RealTime;
 using RocketWiki.Core.Services;
 using RocketWiki.Data;
@@ -125,6 +126,14 @@ builder.Services.AddScoped<ISearchService, SearchService>();
 builder.Services.AddScoped<IWatchService>(sp => new WatchService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<INotificationReadModelService>(sp =>
     new NotificationReadModelService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+
+// --- MCP server (design.md §8, milestone 8) ---
+// /mcp in this same process/pipeline: OAuth discovery against Keycloak (derived from
+// the same Keycloak:* configuration as the JWT bearer authority above), the same
+// bearer identity and JIT provisioning as GraphQL, read-only tools over the shared
+// service layer, and per-call audit on AuditChannel.Mcp. See McpServerConfiguration
+// for why in-process (and stateless) is load-bearing, not a convenience.
+builder.AddRocketWikiMcp();
 
 // --- Real-time: SignalR (design.md §8) ---
 // design.md §15: a Redis backplane is needed once replicas > 1; at one replica (today)
@@ -247,9 +256,9 @@ app.MapGraphQL();
 // audit pipeline as GraphQL (see AttachmentEndpoints's own doc). No presigned URLs.
 app.MapAttachmentEndpoints();
 
-// TODO(milestone 8): MCP server at /mcp via the official MCP C# SDK
-// (design.md §8). OAuth 2.1 via Keycloak, same principal/rule engine/audit as
-// every other channel — no parallel, subtly-different read path.
+// design.md §8: MCP at /mcp — anonymous requests are rejected by the endpoint's
+// authorization policy before any tool code runs (McpServerConfiguration).
+app.MapRocketWikiMcp();
 
 // design.md §8: one hub for both durable per-user notifications and ephemeral
 // page-scoped presence (see NotificationsHub's own doc for why one hub, not two).
