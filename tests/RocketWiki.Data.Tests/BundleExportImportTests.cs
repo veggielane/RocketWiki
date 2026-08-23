@@ -26,6 +26,13 @@ namespace RocketWiki.Data.Tests;
 public class BundleExportImportTests : SqliteTestBase
 {
     private const string LowInstanceId = "low-instance";
+
+    /// <summary>CreateContext() builds the "low" side here, whose exported spaces
+    /// carry OriginInstanceId = LowInstanceId — the outbox writer only journals when
+    /// the context's own instance id matches (design.md §12). The "high" side
+    /// (CreateSecondaryDatabase) deliberately configures none: import raises no
+    /// sync-relevant events, so ownership is never checked there.</summary>
+    protected override string DefaultLocalInstanceId => LowInstanceId;
     private static readonly AuditContext AuditCtx = new(AuditChannel.Sync, "sync-job-1", "127.0.0.1");
 
     private static Principal EditorPrincipal(params string[] groups) => Principal.Create("editor-sub", groups);

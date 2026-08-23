@@ -17,16 +17,33 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
+// design.md §12: this instance's identity, read up-front because both the DbContext
+// options below and the mutation services further down need it. See the "Page
+// services" section for the singleton/service wiring.
+var localInstanceId = builder.Configuration["Instance:Id"] ?? "standalone";
+
 // --- Database (design.md §14/§15) ---
 // Official Aspire client integration: wires RocketWikiDbContext to the
 // "rocketwiki" connection string the AppHost injects via service discovery
 // (the database resource name in AppHost.cs), plus a health check, retry, and
 // OpenTelemetry for free — the idiomatic Aspire path rather than hand-rolled
-// AddDbContext/UseSqlServer.
-builder.AddSqlServerDbContext<RocketWikiDbContext>("rocketwiki");
+// AddDbContext/UseSqlServer. UseLocalInstanceId stamps the instance id into the
+// context options (per-deployment config, pool-safe) so the sync outbox writer can
+// verify a space is native before journaling it — design.md §12's "enforced rather
+// than assumed" follow-up; see LocalInstanceDbContextOptionsExtension.
+builder.AddSqlServerDbContext<RocketWikiDbContext>("rocketwiki",
+    configureDbContextOptions: options => options.UseLocalInstanceId(localInstanceId));
 
 // --- File storage (design.md §10) ---
 builder.Services.AddFileStorage(builder.Configuration);
+
+// The one declared attachment size limit (Attachments:MaxSizeBytes, default 100 MiB
+// to match the nginx cap in front of the API) — enforced by the upload route before
+// any blob or row is written; see AttachmentOptions/AttachmentEndpoints. Kestrel's
+// global 30 MB request-body default stays for every other route (GraphQL bodies are
+// small); the upload route alone re-derives its per-request cap from this value.
+builder.Services.Configure<AttachmentOptions>(
+    builder.Configuration.GetSection(AttachmentOptions.SectionName));
 
 // --- Authentication: JWT bearer against Keycloak (design.md §11) ---
 // Authority is derived from the Keycloak connection string the AppHost injects
@@ -95,12 +112,11 @@ builder.Services.AddScoped<ICurrentPrincipalAccessor, CurrentPrincipalAccessor>(
 builder.Services.AddScoped<IInstanceRoleAccessor, InstanceRoleAccessor>();
 
 // --- Page services (design.md §6.7/§8) ---
-// PageService needs the local InstanceId to tell native spaces from replicas
-// (design.md §12); Instance:Id is a plain config value, not yet wired to anything
-// sync-related since low/high sync itself is a later milestone.
-var localInstanceId = builder.Configuration["Instance:Id"] ?? "standalone";
-// Same value as a DI-visible singleton, for resolvers that need to distinguish native
-// from replica or report it (Query.SyncStatus) rather than construct services with it.
+// PageService needs the local InstanceId (read at the top of this file, where the
+// DbContext options also consume it) to tell native spaces from replicas (design.md
+// §12). Same value as a DI-visible singleton, for resolvers that need to distinguish
+// native from replica or report it (Query.SyncStatus) rather than construct services
+// with it.
 builder.Services.AddSingleton(new InstanceIdentity(localInstanceId));
 builder.Services.AddScoped<IPageReadService, PageReadService>();
 builder.Services.AddScoped<IPageService>(sp => new PageService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));

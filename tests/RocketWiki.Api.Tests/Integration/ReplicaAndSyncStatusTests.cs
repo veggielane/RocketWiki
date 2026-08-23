@@ -176,7 +176,11 @@ public sealed class ReplicaAndSyncStatusTests(RocketWikiApiFactory factory) : IC
         lowConnection.Open();
         try
         {
-            var lowOptions = new DbContextOptionsBuilder<RocketWikiDbContext>().UseSqlite(lowConnection).Options;
+            // This scratch database IS the low instance, so its context declares
+            // LowOrigin — the outbox writer only journals exported spaces whose
+            // OriginInstanceId matches the context's own id (design.md §12).
+            var lowOptions = new DbContextOptionsBuilder<RocketWikiDbContext>()
+                .UseSqlite(lowConnection).UseLocalInstanceId(LowOrigin).Options;
             string spaceKey;
             Guid spaceId;
             using (var low = new RocketWikiDbContext(lowOptions))

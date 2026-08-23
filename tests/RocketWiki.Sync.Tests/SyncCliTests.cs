@@ -76,14 +76,20 @@ public sealed class SyncCliTests : IDisposable
     /// <summary>The CLI's --connection-string argument selects which database a run targets: "low" or "high".</summary>
     private RocketWikiDbContext CreateContext(string connectionString)
     {
-        var connection = connectionString switch
+        var (connection, localInstanceId) = connectionString switch
         {
-            "low" => _lowConnection,
-            "high" => _highConnection,
+            // Each scratch database belongs to its own instance (design.md §12);
+            // declaring it on the context lets the outbox writer verify ownership
+            // when a test seeds outbox rows through the real services. The high
+            // side never journals (imports raise no sync-relevant events), but its
+            // identity is declared anyway - honesty over minimality.
+            "low" => (_lowConnection, LowInstanceId),
+            "high" => (_highConnection, "high-instance"),
             _ => throw new InvalidOperationException($"Test factory got unexpected connection string '{connectionString}'."),
         };
 
-        var options = new DbContextOptionsBuilder<RocketWikiDbContext>().UseSqlite(connection).Options;
+        var options = new DbContextOptionsBuilder<RocketWikiDbContext>()
+            .UseSqlite(connection).UseLocalInstanceId(localInstanceId).Options;
         return new RocketWikiDbContext(options);
     }
 

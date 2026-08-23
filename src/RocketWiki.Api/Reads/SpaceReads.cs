@@ -23,7 +23,14 @@ namespace RocketWiki.Api.Reads;
 /// </summary>
 internal static class SpaceReads
 {
-    /// <summary>design.md §8 schema sketch: "only spaces the caller can view".</summary>
+    /// <summary>
+    /// design.md §8 schema sketch: "only spaces the caller can view". A list-shaped
+    /// read stays a plain filtered list on purpose — per ReadDenialAudit's doc (and
+    /// the tree-pruning contract in IPageReadService), a listing the caller was
+    /// allowed to make is not a denial of each absent item, so nothing here reports
+    /// (or audits) per-space visibility failures. Only the specific-space lookup
+    /// below distinguishes a denial.
+    /// </summary>
     public static async Task<IReadOnlyList<Space>> GetViewableSpacesAsync(
         RocketWikiDbContext db, Principal principal, CancellationToken cancellationToken)
     {
@@ -38,21 +45,58 @@ internal static class SpaceReads
             .ToList();
     }
 
-    /// <summary>Same "absent, not forbidden" convention as Page (design.md §6.7): null
-    /// for a space that doesn't exist, is archived, or the caller holds no role in —
-    /// the three are not distinguished from one another.</summary>
-    public static async Task<Space?> GetViewableSpaceByKeyAsync(
+    /// <summary>
+    /// The specific-space lookup, returning the same internal not-found-vs-denied
+    /// split the Page read services return (design.md §6.7 / <c>ReadResult</c>'s doc):
+    /// a directly requested subject that exists but fails visibility is a denial the
+    /// audit log must record (§7), which a bare null could never carry. Both callers
+    /// (Query.Space, WikiMcpTools.get_page_tree) audit the Denied case via
+    /// ReadDenialAudit and then collapse it to the exact response NotFound gets —
+    /// the distinction dies at the response edge, never on the wire. NotFound also
+    /// covers an archived space (the EF query filter removes it before this method
+    /// can tell), which per §7's outcome vocabulary audits nothing: no access
+    /// decision exists for a subject that isn't there.
+    /// </summary>
+    public static async Task<SpaceReadResult> GetViewableSpaceByKeyAsync(
         RocketWikiDbContext db, Principal principal, string key, CancellationToken cancellationToken)
     {
         var space = await db.Spaces.FirstOrDefaultAsync(s => s.Key == key, cancellationToken);
         if (space is null)
         {
-            return null;
+            return new SpaceReadResult.NotFound();
         }
 
         var grants = await db.AccessRules
             .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
             .ToListAsync(cancellationToken);
-        return EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is null ? null : space;
+        return EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is null
+            ? new SpaceReadResult.Denied(space.Id, "no-space-role")
+            : new SpaceReadResult.Found(space);
     }
+}
+
+/// <summary>
+/// Space-flavored twin of Core's <c>ReadResult&lt;T&gt;</c>, local to the API layer
+/// because that's where SpaceReads itself lives (no Core space read service yet — see
+/// the class doc above). It exists rather than reusing <c>ReadResult&lt;Space&gt;</c>
+/// because a denial here must carry the space's id for the audit row's subject —
+/// the caller only holds a key, and handing back the entity on a denial would put a
+/// forbidden object in the caller's hands.
+/// </summary>
+internal abstract record SpaceReadResult
+{
+    private SpaceReadResult()
+    {
+    }
+
+    internal sealed record Found(Space Space) : SpaceReadResult;
+
+    /// <summary>No such (unarchived) space. No access decision was made — nothing existed to decide about.</summary>
+    internal sealed record NotFound : SpaceReadResult;
+
+    /// <summary>The space exists but the principal holds no role in it.
+    /// <paramref name="Reason"/> is always <c>no-space-role</c> today; kept explicit
+    /// so the audit row records what the rule engine computed, not what a caller
+    /// assumed (design.md §7).</summary>
+    internal sealed record Denied(Guid SpaceId, string Reason) : SpaceReadResult;
 }

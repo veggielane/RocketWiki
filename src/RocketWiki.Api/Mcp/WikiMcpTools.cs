@@ -163,8 +163,18 @@ public sealed class WikiMcpTools
     {
         var principal = RequirePrincipal(principalAccessor);
 
-        var space = await SpaceReads.GetViewableSpaceByKeyAsync(db, principal, spaceKey, cancellationToken);
-        if (space is null)
+        // Same audit split as GraphQL's Query.Space over the same SpaceReads seam
+        // (design.md §7/§8): a specific-space lookup that fails visibility is a
+        // refused browse, recorded as Denied with the no-space-role reason - then the
+        // constant error restores wire-level indistinguishability from a missing key.
+        var spaceResult = await SpaceReads.GetViewableSpaceByKeyAsync(db, principal, spaceKey, cancellationToken);
+        if (spaceResult is SpaceReadResult.Denied spaceDenied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "space.browse", AuditSubjectType.Space, spaceDenied.SpaceId, spaceDenied.Reason, cancellationToken);
+        }
+
+        if (spaceResult is not SpaceReadResult.Found { Space: var space })
         {
             throw new McpException(SpaceNotFoundMessage);
         }

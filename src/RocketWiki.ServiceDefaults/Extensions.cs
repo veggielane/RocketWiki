@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
@@ -182,8 +183,23 @@ public static class Extensions
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
         // Adding health checks endpoints to applications in non-development environments has security implications.
-        // See https://aka.ms/aspire/healthchecks for details before enabling these endpoints in non-development environments.
-        if (app.Environment.IsDevelopment())
+        // See https://aka.ms/aspire/healthchecks for details before enabling these endpoints in non-development environments:
+        // they are unauthenticated (a kubelet probe cannot present a token), and /health
+        // aggregates dependency state — reachable from the open network, that is free
+        // reconnaissance ("their database is down") and a cheap availability probe.
+        //
+        // So outside Development they stay OFF unless explicitly opted into via
+        // HealthEndpoints:Enabled (default false — fail closed, same posture as every
+        // other guard in this codebase). The opt-in exists for orchestrated
+        // deployments where the endpoints never reach the open network anyway: on k3s,
+        // liveness/readiness probes come from the kubelet over the pod network, and
+        // keeping /health and /alive unrouted at the ingress is the Helm chart's job
+        // (deploy/helm/rocketwiki — the chart both sets HealthEndpoints__Enabled for
+        // its HTTP probe mode and deliberately routes neither path at Traefik). This
+        // method's job is only to refuse to expose them by accident.
+        var enabled = app.Environment.IsDevelopment()
+            || app.Configuration.GetValue("HealthEndpoints:Enabled", defaultValue: false);
+        if (enabled)
         {
             // All health checks must pass for app to be considered ready to accept traffic after starting
             app.MapHealthChecks(HealthEndpointPath);

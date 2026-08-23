@@ -23,7 +23,7 @@
           "properties": {
             "mode": {
               "enum": ["tcp", "http"],
-              "description": "\"http\" requires the ServiceDefaults follow-up (health endpoints are Development-only today) - see values.yaml."
+              "description": "\"http\" (default) wires /alive to liveness and /health to readiness and sets HealthEndpoints__Enabled on the api container (the app-side opt-in; the endpoints stay unrouted at the ingress). \"tcp\" is the dependency-free fallback - see values.yaml."
             }
           }
         },

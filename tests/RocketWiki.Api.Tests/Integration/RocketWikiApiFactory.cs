@@ -53,10 +53,12 @@ public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        // Not a dedicated "Testing" environment: ServiceDefaults only maps
-        // /health and /alive under IsDevelopment() (see RocketWiki.ServiceDefaults
-        // Extensions.cs — non-dev health endpoints have security implications),
-        // and this fixture exists partly to exercise those endpoints.
+        // Not a dedicated "Testing" environment: ServiceDefaults maps /health and
+        // /alive under IsDevelopment() (or the explicit HealthEndpoints:Enabled
+        // opt-in — see RocketWiki.ServiceDefaults Extensions.cs; non-dev health
+        // endpoints have security implications), and this fixture exists partly to
+        // exercise those endpoints. HealthEndpointGateTests covers the non-dev gate
+        // by layering UseEnvironment("Production") on top of this fixture.
         builder.UseEnvironment("Development");
 
         builder.ConfigureAppConfiguration((_, config) =>
@@ -94,7 +96,14 @@ public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
 
             services.RemoveAll<RocketWikiDbContext>();
 
-            services.AddDbContext<RocketWikiDbContext>(options => options.UseSqlite(ConnectionString));
+            // UseLocalInstanceId mirrors Program.cs's own wiring (which this
+            // registration replaces wholesale): "standalone" is Program's Instance:Id
+            // default, and every fixture that seeds a native space uses
+            // OriginInstanceId = "standalone" to match. Without it, mutations on
+            // exported spaces would throw - the sync outbox writer refuses to journal
+            // when it cannot verify ownership (design.md §12).
+            services.AddDbContext<RocketWikiDbContext>(options =>
+                options.UseSqlite(ConnectionString).UseLocalInstanceId("standalone"));
 
             // Replaces "Bearer" (real Keycloak JWT validation) with the fake
             // handler as the default scheme, so tests never need a real token.

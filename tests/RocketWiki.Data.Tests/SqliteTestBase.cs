@@ -50,12 +50,30 @@ public abstract class SqliteTestBase : IDisposable
         context.Database.EnsureCreated();
     }
 
-    protected RocketWikiDbContext CreateContext()
+    /// <summary>
+    /// The instance id stamped into every context <see cref="CreateContext()"/> hands
+    /// out (design.md §12; the sync outbox writer refuses to journal an exported
+    /// space when the context has none). Matches TestData.NewSpace()'s
+    /// OriginInstanceId so a seeded space is native by default; fixtures that model a
+    /// different instance (BundleExportImportTests' "low side") override this.
+    /// </summary>
+    protected virtual string DefaultLocalInstanceId => "local-instance";
+
+    protected RocketWikiDbContext CreateContext() => CreateContext(DefaultLocalInstanceId);
+
+    /// <summary>Pass null to build a context with NO local instance id configured —
+    /// only for tests proving the outbox writer's fail-closed reaction to exactly
+    /// that misconfiguration.</summary>
+    protected RocketWikiDbContext CreateContext(string? localInstanceId)
     {
-        var options = new DbContextOptionsBuilder<RocketWikiDbContext>()
-            .UseSqlite(_connection)
-            .Options;
-        return new RocketWikiDbContext(options);
+        var optionsBuilder = new DbContextOptionsBuilder<RocketWikiDbContext>()
+            .UseSqlite(_connection);
+        if (localInstanceId is not null)
+        {
+            optionsBuilder.UseLocalInstanceId(localInstanceId);
+        }
+
+        return new RocketWikiDbContext(optionsBuilder.Options);
     }
 
     public void Dispose() => _connection.Dispose();

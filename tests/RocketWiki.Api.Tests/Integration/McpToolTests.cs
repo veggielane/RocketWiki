@@ -502,4 +502,62 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         Assert.Equal(serialize(nonexistentResult), serialize(ungrantedResult));
         Assert.Contains(WikiMcpTools.SpaceNotFoundMessage, SingleText(ungrantedResult));
     }
+
+    [Fact]
+    public async Task GetPageTree_UngrantedSpace_AuditsDeniedSpaceBrowse_OnTheMcpChannel()
+    {
+        // The audit half of the byte-identical test above (design.md §6.7:
+        // "indistinguishable to the caller, not to the audit log"), via the same
+        // SpaceReads seam Query.Space uses on GraphQL (DeniedReadAuditTests has that
+        // channel): a specific-space lookup the caller holds no role in is a refused
+        // browse, so exactly one Denied space.browse row lands - with the rule
+        // engine's no-space-role reason, on AuditChannel.Mcp - and never a Success
+        // row, since the tool errored before McpServerConfiguration's filter would
+        // write one. A nonexistent key stays unaudited (§7: no access decision exists
+        // for a subject that isn't there).
+        await SeedAsync();
+        Guid ungrantedSpaceId;
+        string ungrantedKey;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+            var creator = await db.Users.FirstAsync();
+            var ungranted = new Space
+            {
+                Key = $"UGA{Guid.NewGuid():N}"[..8],
+                Name = "Ungranted Audited",
+                OriginInstanceId = "standalone",
+                CreatedAtUtc = DateTime.UtcNow,
+                CreatedByUserId = creator.Id,
+            };
+            db.Spaces.Add(ungranted); // no grants at all - no role for anyone
+            await db.SaveChangesAsync();
+            ungrantedSpaceId = ungranted.Id;
+            ungrantedKey = ungranted.Key;
+        }
+
+        var sub = $"mcp-roleless-{Guid.NewGuid()}";
+        await using var client = await CreateMcpClientAsync(sub);
+
+        var deniedResult = await client.CallToolAsync("get_page_tree",
+            new Dictionary<string, object?> { ["spaceKey"] = ungrantedKey });
+        Assert.Equal(true, deniedResult.IsError);
+
+        var rows = await McpAuditRowsForUserAsync(sub);
+        var denial = Assert.Single(rows);
+        Assert.Equal("space.browse", denial.Action);
+        Assert.Equal(AuditOutcome.Denied, denial.Outcome);
+        Assert.Equal(AuditSubjectType.Space, denial.SubjectType);
+        Assert.Equal(ungrantedSpaceId, denial.SubjectId);
+        Assert.Equal(AuditChannel.Mcp, denial.Channel);
+        Assert.NotNull(denial.DetailsJson);
+        Assert.Equal("no-space-role", JsonDocument.Parse(denial.DetailsJson).RootElement.GetProperty("reason").GetString());
+
+        // Nonexistent-key control: same error to the caller, nothing in the log.
+        var rowsBefore = await McpAuditRowCountAsync();
+        var missingResult = await client.CallToolAsync("get_page_tree",
+            new Dictionary<string, object?> { ["spaceKey"] = "NO-SUCH-SPACE" });
+        Assert.Equal(true, missingResult.IsError);
+        Assert.Equal(rowsBefore, await McpAuditRowCountAsync());
+    }
 }
