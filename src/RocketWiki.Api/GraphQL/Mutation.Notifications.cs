@@ -30,7 +30,7 @@ public partial class Mutation
         if (!long.TryParse(input.NotificationId, out var notificationId))
         {
             return new MarkNotificationReadPayload(null, new PageMutationErrorView(
-                "Validation", "notificationId must be a notification row id.", null, null, null, null, null, null, null));
+                "Validation", "notificationId must be a notification row id.", null, null, null, null, null, null, null, null));
         }
 
         var result = await notificationService.MarkNotificationReadAsync(notificationId, actingUserId!.Value, auditContext!, cancellationToken);

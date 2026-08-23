@@ -26,9 +26,13 @@ type Query {
   page(id: UUID!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
   me: CurrentUser!
+  labels(spaceKey: String): [String!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
+  search(query: String!, spaceKey: String, labels: [String!], after: String): SearchConnection!
+    @cost(weight: "10")
   spaces: [Space!]! @cost(weight: "10")
   space(key: String!): Space @cost(weight: "10")
+  syncStatus: SyncStatusView! @cost(weight: "10")
 }
 
 type Mutation {
@@ -232,6 +236,14 @@ type EditCommentPayload {
   error: PageMutationErrorView
 }
 
+type ExportedSpaceSyncStatusView {
+  spaceId: UUID!
+  spaceKey: String!
+  lastOutboxSequence: Long!
+  pendingEventCount: Int!
+  lastExportedBundle: Int
+}
+
 type Label {
   id: UUID!
   spaceId: UUID!
@@ -269,6 +281,7 @@ type Page {
   comments: [Comment!]! @cost(weight: "10")
   attachments: [Attachment!]! @cost(weight: "10")
   labels: [String!]! @cost(weight: "10")
+  spaceKey: String! @cost(weight: "10")
   id: UUID!
   spaceId: UUID!
   parentPageId: UUID
@@ -318,6 +331,7 @@ type PageMutationErrorView {
   latestTitle: String
   latestContent: String
   spaceId: UUID
+  originInstanceId: String
   blockedPageCount: Int
   notFoundId: UUID
 }
@@ -366,6 +380,29 @@ type RestoreSpacePayload {
   error: PageMutationErrorView
 }
 
+type SearchConnection {
+  totalCount: Int!
+  edges: [SearchEdge!]!
+  pageInfo: SearchPageInfo!
+}
+
+type SearchEdge {
+  cursor: String!
+  node: SearchHit!
+}
+
+type SearchHit {
+  page: Page! @cost(weight: "10")
+  snippet: String!
+  headingPath: [String!]!
+  anchorId: String!
+}
+
+type SearchPageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
 type Space {
   grants: [AccessRule!]! @cost(weight: "10")
   trashedPages: [Page!]! @cost(weight: "10")
@@ -383,6 +420,26 @@ type Space {
   deletedByUserId: UUID
   createdAtUtc: DateTime!
   createdByUserId: UUID!
+}
+
+type SyncOriginSpaceStatusView {
+  spaceId: UUID!
+  spaceKey: String!
+  appliedSequence: Long!
+}
+
+type SyncOriginStatusView {
+  originInstanceId: String!
+  lastBundleNumber: Int!
+  lastManifestHash: String!
+  lastImportAtUtc: DateTime!
+  spaces: [SyncOriginSpaceStatusView!]!
+}
+
+type SyncStatusView {
+  localInstanceId: String!
+  exportedSpaces: [ExportedSpaceSyncStatusView!]!
+  origins: [SyncOriginStatusView!]!
 }
 
 type UnwatchPagePayload {
