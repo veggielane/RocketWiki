@@ -479,3 +479,47 @@
   --rw-link: #6b9bf7;
   --rw-mention-bg: rgba(107, 155, 247, 0.22);
 }
+
+/* Collaboration carets (design.md §8 co-editing) — the DOM produced by
+   coedit/caretRender.ts (a caret span with a floating name label) and the
+   selection decoration from CollaborationCaret's selectionRender. Colours
+   come inline from the sender's presence colour; only the shape lives
+   here. */
+.collaboration-carets__caret {
+  border-left: 1px solid;
+  border-right: 1px solid;
+  margin-left: -1px;
+  margin-right: -1px;
+  pointer-events: none;
+  position: relative;
+  word-break: normal;
+}
+
+.collaboration-carets__label {
+  border-radius: 3px 3px 3px 0;
+  color: #fff;
+  font-size: 0.7rem;
+  font-style: normal;
+  font-weight: 600;
+  left: -1px;
+  line-height: normal;
+  padding: 0.1rem 0.3rem;
+  position: absolute;
+  top: -1.4em;
+  user-select: none;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.collaboration-carets__avatar {
+  border-radius: 50%;
+  height: 0.9rem;
+  width: 0.9rem;
+  object-fit: cover;
+}
+
+.collaboration-carets__selection {
+  pointer-events: none;
+}

@@ -73,3 +73,34 @@ mutation UpdatePageContent($input: UpdatePageContentRequestInput!) {
     }
   }
 }
+
+# The same mutation, selected for a collaborative-session save (design.md
+# §8): revisions come back with `contributors` — the server-resolved
+# PageRevisionContributor rows the session credited (never client-supplied)
+# — so the post-save toast can name everyone whose live edits the saved
+# revision carries. A separate document from UpdatePageContent on purpose:
+# solo saves shouldn't pay for the revision-list selection, and the cost is
+# honest to note — `revisions` has no pagination, so this reselects every
+# revision's number + contributors on each session save.
+mutation UpdatePageContentInSession($input: UpdatePageContentRequestInput!) {
+  updatePageContent(input: $input) {
+    page {
+      id
+      title
+      content
+      currentRevisionNumber
+      revisions {
+        id
+        revisionNumber
+        contributors {
+          id
+          displayName
+          hasAvatar
+        }
+      }
+    }
+    error {
+      ...MutationError
+    }
+  }
+}

@@ -73,6 +73,61 @@ export interface PointerPosition {
   y: number
 }
 
+/**
+ * What `JoinEditSession` returns to an authorized member (design.md §8
+ * "CRDT co-editing"; NotificationsHub.EditSessions.cs adopted this shape).
+ * `role: 'seeder'` means: build the Y.Doc from the page's saved content at
+ * `baseRevisionNumber` and push the encoded full state as your first
+ * update. `role: 'joiner'` means: start from an empty Y.Doc and apply
+ * `updateLog` in order — an empty log means the seed arrives as a live
+ * `UpdateReceived`. `baseRevisionNumber` is the `expectedRevisionNumber`
+ * for the session's next `updatePageContent` save.
+ */
+export interface EditSessionJoin {
+  role: 'seeder' | 'joiner'
+  baseRevisionNumber: number
+  updateLog: Uint8Array[]
+}
+
+export type ReseedReason = 'log_cap' | 'seeder_lost'
+
+/**
+ * The Yjs relay half of the hub (design.md §8): opaque binary updates and
+ * awareness (caret/selection) payloads between edit-session members, on the
+ * SAME connection as presence — the hub is one connection per client, and
+ * co-editing must never open a second one. Implemented by
+ * SignalRPresenceTransport (which therefore serves both interfaces) and by
+ * FakePresenceTransport for tests/`VITE_FAKE_REALTIME`.
+ *
+ * Refusals are silent by design: `joinEditSession` resolves `null` for
+ * "no such page", "no canView", "no canEdit" and "replica" alike — the
+ * caller renders the solo editing path, never an error state, because a
+ * refusal is indistinguishable from nonexistence (design.md §6.7).
+ */
+export interface CoEditTransport {
+  /** Resolves null when refused (or when this transport doesn't do co-editing at all — the fake). */
+  joinEditSession(pageId: string): Promise<EditSessionJoin | null>
+  /** Like `leavePage`: must never throw from a teardown path. */
+  leaveEditSession(pageId: string): Promise<void>
+  /**
+   * One Yjs update out. Callers batch before calling (the provider merges
+   * keystroke-level updates on a short debounce) — the server caps a
+   * single update at 512 KiB and silently drops larger ones.
+   */
+  pushUpdate(pageId: string, update: Uint8Array): Promise<void>
+  /** Yjs awareness protocol bytes out — ephemeral, throttled by the caller (~10–15/s), capped at 16 KiB. */
+  pushAwareness(pageId: string, awarenessUpdate: Uint8Array): void
+  /** The log-cap handback: the full encoded Y.Doc state that replaces the server's update log (≤ 4 MiB). */
+  reseedEditSession(pageId: string, fullState: Uint8Array): Promise<void>
+  onUpdateReceived(handler: (pageId: string, update: Uint8Array) => void): () => void
+  onAwarenessReceived(handler: (pageId: string, awarenessUpdate: Uint8Array) => void): () => void
+  onReseedRequired(handler: (pageId: string, baseRevisionNumber: number, reason: ReseedReason) => void): () => void
+  /** canEdit was revoked mid-session: tear down, drop to read-only, do NOT retry-join. */
+  onEvictedFromEditSession(handler: (pageId: string) => void): () => void
+  /** Fires after the underlying connection auto-reconnects — the provider rejoins and replays. */
+  onReconnected(handler: () => void): () => void
+}
+
 export interface PresenceTransport {
   /**
    * Presence uses page-scoped hub groups, not per-user fan-out (design.md

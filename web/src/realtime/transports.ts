@@ -2,7 +2,7 @@ import { FakeNotificationsTransport } from './FakeNotificationsTransport'
 import { FakePresenceTransport } from './FakePresenceTransport'
 import { SignalRNotificationsTransport } from './SignalRNotificationsTransport'
 import { SignalRPresenceTransport } from './SignalRPresenceTransport'
-import type { NotificationsTransport, PresenceTransport } from './types'
+import type { CoEditTransport, NotificationsTransport, PresenceTransport } from './types'
 
 /**
  * The one seam that decides which realtime implementation the app gets.
@@ -62,4 +62,17 @@ export function getDefaultNotificationsTransport(): NotificationsTransport {
 export function getDefaultPresenceTransport(): PresenceTransport {
   defaultPresenceTransport ??= createPresenceTransport()
   return defaultPresenceTransport
+}
+
+/**
+ * Co-editing (design.md §8) rides the presence connection — both fakes and
+ * the real transport implement `CoEditTransport` on the same object, so
+ * this returns the SAME singleton as `getDefaultPresenceTransport`. One
+ * client, one hub connection: the co-edit brief's "do not open a second
+ * connection" is enforced here structurally, not by convention. In fake
+ * mode `joinEditSession` resolves null, which the editor renders as the
+ * solo path — `VITE_FAKE_REALTIME` dev mode is solo editing by design.
+ */
+export function getDefaultCoEditTransport(): CoEditTransport {
+  return getDefaultPresenceTransport() as PresenceTransport & CoEditTransport
 }
