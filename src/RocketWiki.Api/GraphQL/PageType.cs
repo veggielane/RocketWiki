@@ -1,5 +1,6 @@
 using HotChocolate.Types;
 using RocketWiki.Core.Entities;
+using RocketWiki.Core.Services;
 
 namespace RocketWiki.Api.GraphQL;
 
@@ -23,7 +24,6 @@ public sealed class PageType : ObjectType<Page>
         descriptor.Ignore(p => p.ParentPage);
         descriptor.Ignore(p => p.ChildPages);
         descriptor.Ignore(p => p.PageLabels);
-        descriptor.Ignore(p => p.Restrictions);
         // Not a leak (ancestor ids of an already-viewable page aren't sensitive) - just
         // an unintended inference from the public GetAncestorIds() method that's tidier
         // left off an intentionally hand-curated schema.
@@ -91,5 +91,29 @@ public sealed class PageType : ObjectType<Page>
         descriptor.Field("spaceKey")
             .Type<NonNullType<StringType>>()
             .ResolveWith<PageFieldResolvers>(r => r.GetSpaceKeyAsync(default!, default!, default));
+
+        // --- Viewer-permission fields (design.md §6.6/§8 "known deltas") ---
+        // Facts about the CURRENT caller, batched through PagePermissionFactsDataLoader
+        // so lists cost a constant number of queries; audit stance and leak analysis
+        // live on PagePermissionFieldResolvers. `restrictions` rebinds the raw
+        // Restrictions navigation the same way Revisions/Comments/Attachments are
+        // rebound above (its camelCase name is exactly this field's name, and Ignore()
+        // would win permanently over a later Field() of the same name) — the raw
+        // ICollection<AccessRule> is never exposed.
+        descriptor.Field("canEdit")
+            .Type<NonNullType<BooleanType>>()
+            .ResolveWith<PagePermissionFieldResolvers>(r => r.GetCanEditAsync(default!, default!, default));
+
+        descriptor.Field("canComment")
+            .Type<NonNullType<BooleanType>>()
+            .ResolveWith<PagePermissionFieldResolvers>(r => r.GetCanCommentAsync(default!, default!, default));
+
+        descriptor.Field("canManageAccess")
+            .Type<NonNullType<BooleanType>>()
+            .ResolveWith<PagePermissionFieldResolvers>(r => r.GetCanManageAccessAsync(default!, default!, default!, default));
+
+        descriptor.Field(p => p.Restrictions)
+            .Type<NonNullType<ListType<NonNullType<ObjectType<PageRestrictionDetail>>>>>()
+            .ResolveWith<PagePermissionFieldResolvers>(r => r.GetRestrictionsAsync(default!, default!, default!, default!, default));
     }
 }

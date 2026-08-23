@@ -91,9 +91,23 @@ public partial class Query
     /// validated token claims — never from a local user mirror (design.md §6.1,
     /// §11). This is a read of "who am I", not a domain read, so it intentionally
     /// carries no audit event; every real root field will (design.md §7/§8).
+    ///
+    /// Two server-resolved additions ride along, still about nobody but the caller:
+    /// <c>isInstanceAdmin</c> is the server's own reading of the token's realm roles
+    /// (IInstanceRoleAccessor — the same accessor every admin gate uses), so the SPA
+    /// renders admin affordances from the interpretation that will actually be
+    /// enforced instead of re-deriving it from the raw claim; and <c>localUserId</c>
+    /// is the JIT-provisioned local User row id (IActingUserAccessor, already
+    /// resolved by middleware this request — no extra query), which is what
+    /// Comment.authorUserId and friends store, letting the SPA recognize "my"
+    /// comments; `me.id` is the token subject and can never match those. Display/
+    /// affordance data only — authorization stays server-side on the token (§6.1).
     /// </summary>
-    [NoAudit("Echoes claims already on the caller's own validated token; not a read of wiki content (design.md §7).")]
-    public CurrentUser Me(ClaimsPrincipal claimsPrincipal)
+    [NoAudit("Echoes claims already on the caller's own validated token (plus the caller's own JIT row id); not a read of wiki content (design.md §7).")]
+    public CurrentUser Me(
+        ClaimsPrincipal claimsPrincipal,
+        [Service] IInstanceRoleAccessor instanceRoleAccessor,
+        [Service] IActingUserAccessor actingUserAccessor)
     {
         if (claimsPrincipal.Identity?.IsAuthenticated != true)
         {
@@ -112,7 +126,9 @@ public partial class Query
         // (groups + registered attributes) is built by the rule engine, not here.
         var groups = claimsPrincipal.FindAll("groups").Select(c => c.Value).ToArray();
 
-        return new CurrentUser(userId, email, name, groups, IsAuthenticated: true);
+        return new CurrentUser(
+            userId, email, name, groups, IsAuthenticated: true,
+            instanceRoleAccessor.IsInstanceAdmin, actingUserAccessor.ActingUserId);
     }
 }
 
@@ -120,13 +136,17 @@ public partial class Query
 /// Claims-derived view of the caller. Not the domain `User` entity (design.md
 /// §5) — that is JIT-provisioned from these same claims elsewhere (§11.3) and
 /// belongs to RocketWiki.Core/RocketWiki.Data, not the API layer.
+/// <see cref="LocalUserId"/> is the one bridge to that JIT row — the caller's OWN
+/// mirror id, exposed so the SPA can match author ids; see Me's doc.
 /// </summary>
 public sealed record CurrentUser(
     string? Id,
     string? Email,
     string? Name,
     IReadOnlyList<string> Groups,
-    bool IsAuthenticated)
+    bool IsAuthenticated,
+    bool IsInstanceAdmin,
+    Guid? LocalUserId)
 {
-    public static readonly CurrentUser Anonymous = new(null, null, null, [], false);
+    public static readonly CurrentUser Anonymous = new(null, null, null, [], false, false, null);
 }

@@ -27,6 +27,8 @@ type Query {
   page(id: UUID!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
   me: CurrentUser!
+  effectivePermission(pageId: UUID!, subject: InspectedPrincipalInput): EffectivePermissionDetail
+    @cost(weight: "10")
   labels(spaceKey: String): [String!]! @cost(weight: "10")
   labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
@@ -225,6 +227,8 @@ type CurrentUser {
   name: String
   groups: [String!]!
   isAuthenticated: Boolean!
+  isInstanceAdmin: Boolean!
+  localUserId: UUID
 }
 
 type DeleteAccessRulePayload {
@@ -255,6 +259,19 @@ type DetachLabelPayload {
 type EditCommentPayload {
   comment: Comment
   error: PageMutationErrorView
+}
+
+type EffectivePermissionDetail {
+  userId: String!
+  userDisplayName: String!
+  spaceRole: SpaceRole
+  isReplicaSpace: Boolean!
+  canView: Boolean!
+  canEdit: Boolean!
+  viewDenialReason: String
+  editDenialReason: String
+  viewRestrictions: [RestrictionCheckView!]!
+  editRestrictions: [RestrictionCheckView!]!
 }
 
 type ExportedSpaceSyncStatusView {
@@ -312,6 +329,10 @@ type Page {
   viewerIsWatching: Boolean! @cost(weight: "10")
   deletedBy: UserRef @cost(weight: "10")
   spaceKey: String! @cost(weight: "10")
+  canEdit: Boolean! @cost(weight: "10")
+  canComment: Boolean! @cost(weight: "10")
+  canManageAccess: Boolean! @cost(weight: "10")
+  restrictions: [PageRestrictionDetail!]! @cost(weight: "10")
   id: UUID!
   spaceId: UUID!
   parentPageId: UUID
@@ -371,6 +392,18 @@ type PageRestoreSummary {
   restoredPageCount: Int!
 }
 
+type PageRestrictionDetail {
+  ruleId: UUID!
+  pageId: UUID!
+  pageTitle: String!
+  inherited: Boolean!
+  action: PageAction!
+  expressionJson: String!
+  createdAtUtc: DateTime!
+  updatedAtUtc: DateTime!
+  updatedByDisplayName: String
+}
+
 type PageRevision {
   id: UUID!
   pageId: UUID!
@@ -387,8 +420,15 @@ type PageTreeNode {
   title: String!
   slug: String!
   sortOrder: Int!
+  hasRestrictions: Boolean!
+  ownViewRestrictions: [PageTreeRestriction!]!
   children: [PageTreeNode!]!
   labels: [String!]! @cost(weight: "10")
+}
+
+type PageTreeRestriction {
+  ruleId: UUID!
+  expressionJson: String!
 }
 
 type RenameSpacePayload {
@@ -409,6 +449,15 @@ type RestoreRevisionPayload {
 type RestoreSpacePayload {
   space: Space
   error: PageMutationErrorView
+}
+
+type RestrictionCheckView {
+  ruleId: UUID!
+  pageId: UUID!
+  pageTitle: String!
+  action: PageAction!
+  expressionJson: String!
+  passed: Boolean!
 }
 
 type SearchConnection {
@@ -598,6 +647,17 @@ input EditCommentRequestInput {
 input InitialSpaceGrantInput {
   role: SpaceRole!
   expressionJson: String!
+}
+
+input InspectedAttributeInput {
+  key: String!
+  values: [String!]
+}
+
+input InspectedPrincipalInput {
+  userId: String!
+  groups: [String!]
+  attributes: [InspectedAttributeInput!]
 }
 
 input MarkNotificationReadInput {

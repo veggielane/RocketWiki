@@ -99,6 +99,106 @@ public static class EffectivePermissionCalculator
         return permission;
     }
 
+    /// <summary>
+    /// design.md §6.6's inspector path: the non-short-circuiting sibling of
+    /// <see cref="Compute"/>. The enforcement gate stops at the first failing
+    /// restriction (correct and cheap); an inspector that stopped there could only
+    /// ever show one reason, so this evaluates <b>every</b> restriction for both
+    /// actions and reports each pass/fail — "a separate method, never a relaxation
+    /// of the gate" (§6.6). The verdict it returns is derived from those same
+    /// evaluations with exactly <see cref="ComputeCore"/>'s precedence, so the
+    /// explanation can never disagree with the gate (pinned by test); a malformed
+    /// rule reads as failed, exactly as the gate fails closed on it (§6.3).
+    ///
+    /// Callers must pass <paramref name="pageAndAncestorRestrictions"/> in a
+    /// deterministic order (root-most ancestor first) so "the first failing
+    /// restriction" — the reason string audit rows and this explanation both carry —
+    /// is stable rather than database-enumeration-order luck.
+    ///
+    /// Telemetry: per-rule evaluations are counted exactly like the gate's (bounded
+    /// kind/outcome tags only), but this method deliberately does NOT feed
+    /// <c>RecordPermissionCheck</c> — that histogram answers "are enforcement checks
+    /// slow / are denials spiking", and inspector traffic (an admin deliberately
+    /// examining a denied principal) would pollute the denial-rate signal it exists
+    /// to provide (design.md §15). No reason string or expression content reaches
+    /// telemetry from here, same as everywhere else.
+    /// </summary>
+    public static EffectivePermissionExplanation Explain(
+        IEnumerable<AccessRule> spaceGrants,
+        IEnumerable<AccessRule> pageAndAncestorRestrictions,
+        bool isReplicaSpace,
+        Principal principal)
+    {
+        var role = ComputeSpaceRole(spaceGrants, principal);
+        var restrictions = pageAndAncestorRestrictions as IReadOnlyCollection<AccessRule>
+            ?? pageAndAncestorRestrictions.ToList();
+
+        var viewChecks = EvaluateAll(restrictions, PageAction.View, principal);
+        var editChecks = EvaluateAll(restrictions, PageAction.Edit, principal);
+
+        var permission = DeriveVerdict(role, isReplicaSpace, viewChecks, editChecks);
+        return new EffectivePermissionExplanation(role, isReplicaSpace, permission, viewChecks, editChecks);
+    }
+
+    private static IReadOnlyList<RestrictionCheckDetail> EvaluateAll(
+        IReadOnlyCollection<AccessRule> restrictions, PageAction action, Principal principal)
+    {
+        var checks = new List<RestrictionCheckDetail>();
+        foreach (var rule in restrictions)
+        {
+            if (rule.Kind != AccessRuleKind.PageRestriction || rule.Action != action || rule.PageId is null)
+            {
+                continue;
+            }
+
+            var result = AccessRuleExpression.Evaluate(rule.ExpressionJson, principal);
+            CoreTelemetry.RecordRuleEvaluation(AccessRuleKind.PageRestriction, result);
+            checks.Add(new RestrictionCheckDetail(rule.Id, rule.PageId.Value, action, rule.ExpressionJson, result.IsMatch));
+        }
+
+        return checks;
+    }
+
+    /// <summary>Mirrors <see cref="ComputeCore"/>'s precedence exactly, over
+    /// already-evaluated checks. Kept adjacent to ComputeCore on purpose; the
+    /// Explain-agrees-with-Compute test fails if these two ever diverge.</summary>
+    private static EffectivePermission DeriveVerdict(
+        SpaceRole? role,
+        bool isReplicaSpace,
+        IReadOnlyList<RestrictionCheckDetail> viewChecks,
+        IReadOnlyList<RestrictionCheckDetail> editChecks)
+    {
+        if (role is null)
+        {
+            return new EffectivePermission(false, false, "no-space-role", "no-space-role");
+        }
+
+        var failedView = viewChecks.FirstOrDefault(c => !c.Passed);
+        if (failedView is not null)
+        {
+            var reason = $"restriction:{failedView.PageId}:{failedView.RuleId}";
+            return new EffectivePermission(false, false, reason, reason);
+        }
+
+        if (isReplicaSpace)
+        {
+            return new EffectivePermission(true, false, null, "replica-read-only");
+        }
+
+        if (role.Value < SpaceRole.Editor)
+        {
+            return new EffectivePermission(true, false, null, "insufficient-space-role");
+        }
+
+        var failedEdit = editChecks.FirstOrDefault(c => !c.Passed);
+        if (failedEdit is not null)
+        {
+            return new EffectivePermission(true, false, null, $"restriction:{failedEdit.PageId}:{failedEdit.RuleId}");
+        }
+
+        return new EffectivePermission(true, true, null, null);
+    }
+
     private static EffectivePermission ComputeCore(
         IEnumerable<AccessRule> spaceGrants,
         IEnumerable<AccessRule> pageAndAncestorRestrictions,

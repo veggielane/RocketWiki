@@ -40,7 +40,7 @@ public class AccessRuleService : IAccessRuleService
             return PageMutationResult<AccessRule>.Failure(new NotFoundError(request.PageId ?? request.SpaceId ?? Guid.Empty));
         }
 
-        if (!isInstanceAdmin && !await IsSpaceAdminAsync(spaceLookup.Id, principal, cancellationToken))
+        if (!await CanManageRulesAsync(spaceLookup.Id, principal, isInstanceAdmin, cancellationToken))
         {
             return PageMutationResult<AccessRule>.Failure(new ForbiddenError("instance-admin or space-admin required"));
         }
@@ -98,7 +98,7 @@ public class AccessRuleService : IAccessRuleService
             return PageMutationResult<AccessRule>.Failure(new NotFoundError(request.AccessRuleId));
         }
 
-        if (!isInstanceAdmin && !await IsSpaceAdminAsync(spaceLookup.Id, principal, cancellationToken))
+        if (!await CanManageRulesAsync(spaceLookup.Id, principal, isInstanceAdmin, cancellationToken))
         {
             return PageMutationResult<AccessRule>.Failure(new ForbiddenError("instance-admin or space-admin required"));
         }
@@ -135,7 +135,7 @@ public class AccessRuleService : IAccessRuleService
             return PageMutationResult<Guid>.Failure(new NotFoundError(request.AccessRuleId));
         }
 
-        if (!isInstanceAdmin && !await IsSpaceAdminAsync(spaceLookup.Id, principal, cancellationToken))
+        if (!await CanManageRulesAsync(spaceLookup.Id, principal, isInstanceAdmin, cancellationToken))
         {
             return PageMutationResult<Guid>.Failure(new ForbiddenError("instance-admin or space-admin required"));
         }
@@ -194,12 +194,16 @@ public class AccessRuleService : IAccessRuleService
         return page is null ? null : await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
     }
 
-    private async Task<bool> IsSpaceAdminAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken)
+    /// <summary>design.md §6.5.2's gate via <see cref="RuleManagementGate"/> — the one
+    /// shared definition this service's mutations and the API's restriction/grant
+    /// read paths all call, so the write gate and the read gate cannot drift.</summary>
+    private async Task<bool> CanManageRulesAsync(Guid spaceId, Principal principal, bool isInstanceAdmin, CancellationToken cancellationToken)
     {
         var grants = await _db.AccessRules
             .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
             .ToListAsync(cancellationToken);
 
-        return EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) == SpaceRole.SpaceAdmin;
+        return RuleManagementGate.CanManageRules(
+            EffectivePermissionCalculator.ComputeSpaceRole(grants, principal), isInstanceAdmin);
     }
 }
