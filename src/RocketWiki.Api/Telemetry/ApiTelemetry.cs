@@ -134,6 +134,29 @@ public static class ApiTelemetry
         _ => "none",
     };
 
+    /// <summary>
+    /// The anonymous Gravatar-protocol endpoint's one instrument (design: profile
+    /// pictures): request count by outcome, a three-value bounded vocabulary
+    /// (hit/miss/disabled). Never the hash, never an email, never a user id — the
+    /// request is anonymous, so there is no audit row either, and this counter must
+    /// not become the who-fetched-what record §7 deliberately doesn't keep for this
+    /// route. The companion structural guarantee: ServiceDefaults excludes
+    /// <c>/avatar</c> from ASP.NET Core tracing entirely, because the built-in server
+    /// span's <c>url.path</c> would carry the email hash.
+    /// </summary>
+    public static readonly Counter<long> GravatarRequests =
+        Meter.CreateCounter<long>("rocketwiki.avatars.gravatar_requests", "{request}",
+            "Anonymous Gravatar-protocol avatar requests, by outcome.");
+
+    public const string GravatarOutcomeTag = "rocketwiki.avatars.outcome";
+
+    public const string GravatarOutcomeHit = "hit";
+    public const string GravatarOutcomeMiss = "miss";
+    public const string GravatarOutcomeDisabled = "disabled";
+
+    public static void RecordGravatarRequest(string outcome) =>
+        GravatarRequests.Add(1, new KeyValuePair<string, object?>(GravatarOutcomeTag, outcome));
+
     public const string JitResultTag = "rocketwiki.identity.result";
     public const string PresenceOutcomeTag = "rocketwiki.presence.outcome";
     public const string PresenceReasonTag = "rocketwiki.presence.reason";

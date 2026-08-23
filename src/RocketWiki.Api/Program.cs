@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Attachments;
 using RocketWiki.Api.Audit;
+using RocketWiki.Api.Avatars;
 using RocketWiki.Api.Embeddings;
 using RocketWiki.Api.GitLab;
 using RocketWiki.Api.GraphQL;
@@ -46,6 +47,16 @@ builder.Services.AddFileStorage(builder.Configuration);
 // small); the upload route alone re-derives its per-request cap from this value.
 builder.Services.Configure<AttachmentOptions>(
     builder.Configuration.GetSection(AttachmentOptions.SectionName));
+
+// Profile pictures: Avatars:MaxSizeBytes (512 KiB default) and the fail-closed
+// Avatars:GravatarEndpointEnabled flag (default false — see AvatarOptions for why
+// an unauthenticated endpoint must be an operator's explicit opt-in).
+builder.Services.Configure<AvatarOptions>(
+    builder.Configuration.GetSection(AvatarOptions.SectionName));
+// Singleton: stateless, and it owns the process-wide capped MemoryAllocator that
+// bounds what decoding untrusted uploads can cost (ImageSharpAvatarProcessor).
+builder.Services.AddSingleton<IAvatarImageProcessor, ImageSharpAvatarProcessor>();
+builder.Services.AddScoped<IUserAvatarService, UserAvatarService>();
 
 // --- Authentication: JWT bearer against Keycloak (design.md §11) ---
 // Authority is derived from the Keycloak connection string the AppHost injects
@@ -295,6 +306,11 @@ app.MapGraphQL();
 // design.md §8/§10: attachment binary over plain HTTP, same identity/authorization/
 // audit pipeline as GraphQL (see AttachmentEndpoints's own doc). No presigned URLs.
 app.MapAttachmentEndpoints();
+
+// Profile pictures over the same binary-HTTP surface — self-only set/clear, the
+// authenticated per-user GET, and the anonymous (flag-gated, default off)
+// Gravatar-protocol GET /avatar/{hash}. See AvatarEndpoints for the trust tiers.
+app.MapAvatarEndpoints();
 
 // design.md §8: MCP at /mcp — anonymous requests are rejected by the endpoint's
 // authorization policy before any tool code runs (McpServerConfiguration).

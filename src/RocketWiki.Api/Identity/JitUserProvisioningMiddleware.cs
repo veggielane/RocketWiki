@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Telemetry;
+using RocketWiki.Core.Content;
 using RocketWiki.Core.Entities;
 using RocketWiki.Data;
 
@@ -68,10 +69,30 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
         }
         else
         {
+            // Email drift (design.md §11 step 3 refreshes the mirror per login): the
+            // stored avatar email hashes are derived from this exact column, and a
+            // stale hash makes the Gravatar endpoint serve the OLD address's avatar
+            // for whoever holds that address next - a correctness bug, not cosmetics.
+            // Recomputed here, in the same upsert that changes the email, because this
+            // is the only writer of User.Email for real (non-shadow) users; the
+            // avatar-row query runs only when the email actually changed, so the
+            // steady-state request cost is zero. Like the upsert itself, this is
+            // mirror bookkeeping, not a user action - no domain event, no audit row.
+            var emailChanged = !string.Equals(user.Email, email, StringComparison.Ordinal);
+
             user.Email = email;
             user.DisplayName = displayName;
             user.AttributesJson = attributesJson;
             user.LastSeenAtUtc = now;
+
+            if (emailChanged)
+            {
+                var avatar = await db.UserAvatars.FirstOrDefaultAsync(a => a.UserId == user.Id, ct);
+                if (avatar is not null)
+                {
+                    (avatar.EmailHashMd5, avatar.EmailHashSha256) = AvatarEmailHasher.Compute(email);
+                }
+            }
         }
 
         // JIT provisioning is infrastructure bookkeeping, not a user-facing mutation — it

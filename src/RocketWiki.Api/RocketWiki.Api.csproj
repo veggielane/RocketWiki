@@ -37,6 +37,18 @@
          OpenTelemetry for free (design.md §15) — the idiomatic Aspire path
          rather than hand-rolled AddDbContext/UseSqlServer. -->
     <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.1" />
+    <!-- Profile pictures: decode-with-limits, center-crop/resize to the canonical
+         512×512, re-encode to PNG (ImageSharpAvatarProcessor). License note for
+         operators: ImageSharp is Six Labors Split License (Apache-2.0 terms for
+         open-source / small-org use; a commercial license otherwise) — a deployment
+         consideration recorded in the design/README paragraphs for this feature.
+         Pinned to 3.1.12 (newest 3.x stable, nuget.org, verified 2026-08-23) rather
+         than 4.1.1 (current stable) deliberately: 4.x adds a build-time license
+         validation task that hard-fails Release builds — CI's configuration — until
+         a SixLaborsLicenseKey is provisioned. Upgrading is this one line plus that
+         key once the license question is settled; the terms apply either way, 4.x
+         merely enforces them at build time. -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
   </ItemGroup>
 
   <ItemGroup>

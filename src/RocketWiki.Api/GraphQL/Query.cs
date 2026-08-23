@@ -103,11 +103,13 @@ public partial class Query
     /// comments; `me.id` is the token subject and can never match those. Display/
     /// affordance data only — authorization stays server-side on the token (§6.1).
     /// </summary>
-    [NoAudit("Echoes claims already on the caller's own validated token (plus the caller's own JIT row id); not a read of wiki content (design.md §7).")]
-    public CurrentUser Me(
+    [NoAudit("Echoes claims already on the caller's own validated token (plus the caller's own JIT row id and avatar flag); not a read of wiki content (design.md §7).")]
+    public async Task<CurrentUser> Me(
         ClaimsPrincipal claimsPrincipal,
         [Service] IInstanceRoleAccessor instanceRoleAccessor,
-        [Service] IActingUserAccessor actingUserAccessor)
+        [Service] IActingUserAccessor actingUserAccessor,
+        [Service] IUserAvatarService avatarService,
+        CancellationToken cancellationToken)
     {
         if (claimsPrincipal.Identity?.IsAuthenticated != true)
         {
@@ -126,9 +128,17 @@ public partial class Query
         // (groups + registered attributes) is built by the rule engine, not here.
         var groups = claimsPrincipal.FindAll("groups").Select(c => c.Value).ToArray();
 
+        // The caller's own avatar state (profile pictures): lets the settings page
+        // render "you have / don't have an avatar" without a probing GET. One AnyAsync
+        // per me query - me runs once per SPA boot, not per view. Like localUserId
+        // this is display/affordance data about nobody but the caller.
+        var localUserId = actingUserAccessor.ActingUserId;
+        var hasAvatar = localUserId is not null
+            && await avatarService.HasAvatarAsync(localUserId.Value, cancellationToken);
+
         return new CurrentUser(
             userId, email, name, groups, IsAuthenticated: true,
-            instanceRoleAccessor.IsInstanceAdmin, actingUserAccessor.ActingUserId);
+            instanceRoleAccessor.IsInstanceAdmin, localUserId, hasAvatar);
     }
 }
 
@@ -146,7 +156,8 @@ public sealed record CurrentUser(
     IReadOnlyList<string> Groups,
     bool IsAuthenticated,
     bool IsInstanceAdmin,
-    Guid? LocalUserId)
+    Guid? LocalUserId,
+    bool HasAvatar)
 {
-    public static readonly CurrentUser Anonymous = new(null, null, null, [], false, false, null);
+    public static readonly CurrentUser Anonymous = new(null, null, null, [], false, false, null, false);
 }

@@ -20,6 +20,22 @@ public static class Extensions
     private const string AlivenessEndpointPath = "/alive";
 
     /// <summary>
+    /// The anonymous Gravatar-protocol route (RocketWiki.Api, <c>GET /avatar/{hash}</c>).
+    /// Excluded from ASP.NET Core tracing wholesale, like the health endpoints,
+    /// because the server span's <c>url.path</c> tag would carry the request's email
+    /// hash — an identity-derived value design.md §15 keeps out of telemetry (the
+    /// same reasoning that strips query strings at the browser exporter and removes
+    /// the GitLab client's built-in span). Filtering beats redaction here: the tag is
+    /// set by hosting itself whenever a listener asks for all data, so no enrich
+    /// callback can be trusted to win. Note the segment match: this is "/avatar"
+    /// only — "/avatars" and "/users/{id}/avatar" carry no hash and stay traced.
+    /// The route's operational signal is the bounded
+    /// <c>rocketwiki.avatars.gravatar_requests</c> counter, plus the ASP.NET Core
+    /// http.server metrics, whose route tag is the template, never the path.
+    /// </summary>
+    private const string GravatarEndpointPath = "/avatar";
+
+    /// <summary>
     /// design.md §15: every RocketWiki project declares its <c>ActivitySource</c> and
     /// <c>Meter</c> under its own assembly name (<c>RocketWiki.Core</c>,
     /// <c>RocketWiki.Data</c>, ...), so one wildcard subscribes to all of them and to
@@ -137,10 +153,13 @@ public static class Extensions
                     .AddSource(RocketWikiMeterAndSourceWildcard)
                     .AddSource(ThirdPartySources)
                     .AddAspNetCoreInstrumentation(tracing =>
-                        // Exclude health check requests from tracing
+                        // Exclude health check requests from tracing, and the
+                        // Gravatar route whose url.path would carry an email hash
+                        // (see GravatarEndpointPath's doc).
                         tracing.Filter = context =>
                             !context.Request.Path.StartsWithSegments(HealthEndpointPath)
                             && !context.Request.Path.StartsWithSegments(AlivenessEndpointPath)
+                            && !context.Request.Path.StartsWithSegments(GravatarEndpointPath)
                     )
                     // Uncomment the following line to enable gRPC instrumentation (requires the OpenTelemetry.Instrumentation.GrpcNetClient package)
                     //.AddGrpcClientInstrumentation()

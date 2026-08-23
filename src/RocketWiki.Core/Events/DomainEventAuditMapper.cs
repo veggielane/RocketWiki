@@ -118,6 +118,15 @@ public static class DomainEventAuditMapper
 
         GitLabTokenClearedEvent => ("settings.gitlab_token.cleared", null, null, null, null),
 
+        // Profile pictures: same shape as the GitLab settings events — subject null
+        // (a per-user setting fits no wiki-content SubjectType; the UserId column
+        // already names whose avatar), and deliberately no DetailsJson: nothing about
+        // the image belongs in a row (design.md §7 records that it changed, not what
+        // it looks like), and the events carry nothing but the actor anyway.
+        AvatarSetEvent => ("settings.avatar.set", null, null, null, null),
+
+        AvatarClearedEvent => ("settings.avatar.cleared", null, null, null, null),
+
         SpaceCreatedEvent e => ("space.create", AuditSubjectType.Space, e.SpaceId, e.Key, null),
 
         SpaceRenamedEvent e => ("space.rename", AuditSubjectType.Space, e.SpaceId, e.Key,

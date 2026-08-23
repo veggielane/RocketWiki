@@ -35,7 +35,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260821205534_InitialCreate", applied);
         Assert.Contains("20260823084715_AddPageEmbeddingState", applied);
         Assert.Contains("20260823103019_AddGitLabCredentials", applied);
-        Assert.Equal(3, applied.Count);
+        Assert.Contains("20260823133434_AddUserAvatars", applied);
+        Assert.Equal(4, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -91,6 +92,14 @@ public sealed class MigrationTests : SqlServerTestBase
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Notifications_Recipient_Unread' AND has_filter = 1"));
         Assert.Equal(1, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_SyncOutboxEvents_SpaceId_SequenceNumber' AND is_unique = 1"));
+
+        // AddUserAvatars: the two email-hash lookup indexes must land filtered
+        // (NOT NULL) and deliberately non-unique - User.Email itself is not unique,
+        // so the gravatar lookup resolves ties instead of the schema forbidding them.
+        Assert.Equal(1, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_UserAvatars_EmailHashMd5' AND has_filter = 1 AND is_unique = 0"));
+        Assert.Equal(1, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_UserAvatars_EmailHashSha256' AND has_filter = 1 AND is_unique = 0"));
 
         // data-model.md: AuditEvents clustered PK (TimestampUtc, Id) with Id remaining
         // a native bigint IDENTITY despite being only part of the key.

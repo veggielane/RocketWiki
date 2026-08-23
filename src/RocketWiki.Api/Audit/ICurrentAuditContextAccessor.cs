@@ -93,6 +93,20 @@ public sealed class CurrentAuditContextAccessor(IHttpContextAccessor httpContext
             return AuditChannel.Attachment;
         }
 
+        // Avatar set/clear (design: profile pictures) rides the same binary-HTTP
+        // surface as attachments, and deliberately reuses that channel rather than
+        // minting a new enum value — the channel column names the transport surface,
+        // and the settings.avatar.* action names carry the distinction. Note the
+        // segment match: this is "/avatars" (the authenticated write routes) and
+        // NOT "/avatar" (the anonymous Gravatar route, which never audits — no
+        // acting user exists there to attribute a row to) nor "/users/{id}/avatar"
+        // (the in-wiki read, which deliberately emits no audit rows — see
+        // AvatarEndpoints for the reasoning).
+        if (path.StartsWithSegments("/avatars", StringComparison.OrdinalIgnoreCase))
+        {
+            return AuditChannel.Attachment;
+        }
+
         return null;
     }
 }
