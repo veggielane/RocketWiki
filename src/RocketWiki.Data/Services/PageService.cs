@@ -39,7 +39,7 @@ public class PageService : IPageService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         Page? parent = null;
@@ -122,7 +122,7 @@ public class PageService : IPageService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
@@ -196,7 +196,7 @@ public class PageService : IPageService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         Page? newParent = null;
@@ -307,7 +307,7 @@ public class PageService : IPageService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<PageDeleteSummary>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<PageDeleteSummary>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         // design.md §6.4.1: cascades to the whole LIVE subtree. Pages already
@@ -379,7 +379,7 @@ public class PageService : IPageService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<PageRestoreSummary>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<PageRestoreSummary>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         // Restore exactly the set deleted together with this page (matched by
@@ -487,7 +487,7 @@ public class PageService : IPageService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();

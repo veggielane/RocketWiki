@@ -282,4 +282,59 @@ public class LabelServiceTests : SqliteTestBase
 
         Assert.Empty(result);
     }
+
+    // --- Replica read-only (design.md §6.4/§12): labels are page metadata, and every
+    // label mutation is a content mutation, so all three sit beneath the invariant.
+
+    [Fact]
+    public async Task CreateLabel_OnReplicaSpace_ReturnsReadOnlyReplicaError()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        space.OriginInstanceId = "some-other-instance";
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(EditorGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new LabelService(context, LocalInstanceId);
+        var result = await service.CreateLabelAsync(new CreateLabelRequest(space.Id, "new-label"), EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        var error = Assert.IsType<ReadOnlyReplicaError>(result.Error);
+        Assert.Equal("some-other-instance", error.OriginInstanceId);
+    }
+
+    [Fact]
+    public async Task AttachAndDetachLabel_OnReplicaSpace_ReturnReadOnlyReplicaError()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        space.OriginInstanceId = "some-other-instance";
+        var page = TestData.NewPage(space);
+        var label = new Label { SpaceId = space.Id, Name = "mirrored-label" };
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.Labels.Add(label);
+        // Already attached (as a sync import would leave it), so the detach path gets
+        // past its own not-attached check and the replica invariant is what refuses it.
+        context.PageLabels.Add(new PageLabel { PageId = page.Id, LabelId = label.Id });
+        context.AccessRules.Add(EditorGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new LabelService(context, LocalInstanceId);
+
+        var attach = await service.AttachLabelAsync(new AttachLabelRequest(page.Id, label.Id), EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.False(attach.IsSuccess);
+        Assert.IsType<ReadOnlyReplicaError>(attach.Error);
+
+        var detach = await service.DetachLabelAsync(new DetachLabelRequest(page.Id, label.Id), EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.False(detach.IsSuccess);
+        Assert.IsType<ReadOnlyReplicaError>(detach.Error);
+    }
 }

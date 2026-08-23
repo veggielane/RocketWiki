@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>RocketWiki.Sync</RootNamespace>
+    <!-- design.md §12 Operations / §15 layout: "RocketWiki.Sync/ low→high bundle
+         export/import CLI" - a standalone console tool with two verbs (export, import),
+         runnable manually or as a scheduled job, exactly like RocketWiki.Importer is
+         for Confluence migration. Also a normal referenceable library so
+         RocketWiki.Sync.Tests can drive the full CLI path against SQLite through the
+         injectable DbContext seam in SyncCli. -->
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same dependency discipline as RocketWiki.Importer: consume RocketWiki.Data's
+         public service surface (BundleExportService/BundleImportService) and
+         RocketWiki.Storage's IFileStorage - never a hand-rolled EF or zip path of this
+         project's own. The bundle format lives in those services; this project is only
+         the operator-facing shell around them. -->
+    <ProjectReference Include="..\RocketWiki.Core\RocketWiki.Core.csproj" />
+    <ProjectReference Include="..\RocketWiki.Data\RocketWiki.Data.csproj" />
+    <ProjectReference Include="..\RocketWiki.Storage\RocketWiki.Storage.csproj" />
+  </ItemGroup>
+
+</Project>

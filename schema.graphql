@@ -28,6 +28,7 @@ type Query {
   me: CurrentUser!
   spaces: [Space!]! @cost(weight: "10")
   space(key: String!): Space @cost(weight: "10")
+  syncStatus: SyncStatusView! @cost(weight: "10")
 }
 
 type Mutation {
@@ -221,6 +222,14 @@ type EditCommentPayload {
   error: PageMutationErrorView
 }
 
+type ExportedSpaceSyncStatusView {
+  spaceId: UUID!
+  spaceKey: String!
+  lastOutboxSequence: Long!
+  pendingEventCount: Int!
+  lastExportedBundle: Int
+}
+
 type Label {
   id: UUID!
   spaceId: UUID!
@@ -291,6 +300,7 @@ type PageMutationErrorView {
   latestTitle: String
   latestContent: String
   spaceId: UUID
+  originInstanceId: String
   blockedPageCount: Int
   notFoundId: UUID
 }
@@ -356,6 +366,26 @@ type Space {
   deletedByUserId: UUID
   createdAtUtc: DateTime!
   createdByUserId: UUID!
+}
+
+type SyncOriginSpaceStatusView {
+  spaceId: UUID!
+  spaceKey: String!
+  appliedSequence: Long!
+}
+
+type SyncOriginStatusView {
+  originInstanceId: String!
+  lastBundleNumber: Int!
+  lastManifestHash: String!
+  lastImportAtUtc: DateTime!
+  spaces: [SyncOriginSpaceStatusView!]!
+}
+
+type SyncStatusView {
+  localInstanceId: String!
+  exportedSpaces: [ExportedSpaceSyncStatusView!]!
+  origins: [SyncOriginStatusView!]!
 }
 
 type UpdateAccessRulePayload {

@@ -366,4 +366,52 @@ public class AttachmentServiceTests : SqliteTestBase
             }
         }
     }
+
+    // --- Replica read-only (design.md §6.4/§12): Upload refusal is covered above;
+    // deleting a synced attachment is equally a replica content mutation.
+
+    [Fact]
+    public async Task Delete_OnReplicaSpace_ReturnsReadOnlyReplicaError()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        space.OriginInstanceId = "some-other-instance";
+        var page = TestData.NewPage(space);
+        var attachment = new Attachment
+        {
+            PageId = page.Id,
+            FileName = "mirrored.txt",
+            ContentType = "text/plain",
+            SizeBytes = 4,
+            ContentHash = new byte[32],
+            StorageKey = "attachments/mirrored",
+            UploadedByUserId = actor.Id,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        var storage = CreateFileStorage(out var tempDir);
+        try
+        {
+            using var context = CreateContext();
+            context.Users.Add(actor);
+            context.Spaces.Add(space);
+            context.Pages.Add(page);
+            context.Attachments.Add(attachment);
+            context.AccessRules.Add(EditorGrant(space.Id));
+            context.SaveChanges();
+
+            var service = new AttachmentService(context, storage, LocalInstanceId);
+            var result = await service.DeleteAsync(new DeleteAttachmentRequest(attachment.Id), EditorPrincipal(), actor.Id, AuditCtx);
+
+            Assert.False(result.IsSuccess);
+            var error = Assert.IsType<ReadOnlyReplicaError>(result.Error);
+            Assert.Equal("some-other-instance", error.OriginInstanceId);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
 }
