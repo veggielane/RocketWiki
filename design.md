@@ -470,7 +470,14 @@ Append-only `AuditEvent` table:
 - Reads are audited synchronously too: if the audit insert fails, the request
   fails. Fail-closed applies to observability, not just access.
 - Denied requests are recorded along with which restriction failed — this
-  feeds the permission inspector and makes probing visible.
+  feeds the permission inspector and makes probing visible. For reads, the
+  failing restriction travels from the rule engine to the audit row inside
+  the read service's internal result (§6.7) and is written as
+  `{"reason":"restriction:{pageId}:{ruleId}"}` — the same details shape
+  mutation denials use — while the response stays identical to a not-found.
+  A not-found read is not audited: `success`/`denied` is the complete
+  outcome vocabulary, and no access decision exists to record for a subject
+  that isn't there.
 - Append-only is enforced at the database: the app's SQL login has
   INSERT/SELECT only on this table, no UPDATE or DELETE grants.
 - Sign-in/out events live in Keycloak's own event log; RocketWiki audits

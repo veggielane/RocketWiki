@@ -191,16 +191,22 @@ Being explicit about what has and hasn't been checked, rather than letting
   restriction and a principal who does satisfy the restriction both resolve
   correctly (so the negatives are a real restriction working, not the
   resolver being broken).
-  **Known gap, stated plainly**: denied *reads* aren't audited with a reason
-  — `IPageReadService` deliberately returns the same `null` for "doesn't
-  exist" and "not permitted" (design.md §6.7), so there is nothing here to
-  distinguish which happened. Only `IAuditSink`'s capacity to record a denial
-  is proven (directly, in `AuditPipelineTests`); nothing today calls it for a
-  read. Mutation denials *are* fully audited, since `PageMutationError`
-  carries a reason. (The design call has since been made — §6.7 now specifies
-  read services return an internal not-found-vs-denied result that collapses
-  to `null` only at the response boundary — but the Core-side change hasn't
-  landed yet; the resolver side is wired once it does.)
+  **Gap closed this round**: denied *reads* are now audited with their
+  reason. `IPageReadService` and `IAttachmentReadService` return the internal
+  not-found-vs-denied result §6.7 specifies (`ReadResult<T>` /
+  `AttachmentDownloadResult.Denied`), carrying the failing restriction the
+  rule engine already computed (`restriction:{pageId}:{ruleId}`, or
+  `no-space-role`); resolvers and the attachment route record it through
+  `IAuditSink` (`ReadDenialAudit`) and then collapse it to the byte-identical
+  null/empty/404 a genuine not-found gets — proven equal at the HTTP level,
+  not just by parsed shape (`DeniedReadAuditTests`). A genuinely-missing page
+  still audits nothing (no access decision was made; recording it as Denied
+  would flood the probing signal with 404 noise), anonymous requests are
+  unchanged, and tree *pruning* is deliberately not a denial — only a refused
+  browse is. One sink-level rule made this safe: `DbAuditSink` suppresses a
+  Success for a subject already recorded Denied in the same request, so a
+  denied browse collapsed to an empty list never also claims success —
+  confirmed to be load-bearing by disabling it and watching the test fail.
 - **Comments, labels, and attachments are wired end to end** — GraphQL
   mutations (`addComment`/`editComment`/`deleteComment`,
   `createLabel`/`attachLabel`/`detachLabel`, `deleteAttachment`) and reads
@@ -346,19 +352,6 @@ Being explicit about what has and hasn't been checked, rather than letting
 - **`RocketWiki.Storage`'s S3 provider** against a real S3-compatible
   endpoint. Only its DI/config wiring is tested; `PutObjectAsync`,
   `GetObjectAsync`, etc. have never run against MinIO or anything else.
-- **Denied-read auditing.** `AuditFieldMiddleware` now wires `[AuditAction]`
-  fields (`page(id)`, `pageTree`, `Page.content`, `Page.revisions`) to
-  `IAuditSink` automatically, deduplicated per request, and this is
-  end-to-end tested via real HTTP requests (`PageAdversarialLeakTests`).
-  What's still missing is auditing a *denied* read with its reason:
-  `IPageReadService` deliberately returns the same `null` for "doesn't
-  exist" and "not viewable" (design.md §6.7), so nothing at the API layer
-  can tell which happened, or attach a failing-restriction reason, for a
-  read specifically. `IAuditSink`'s capacity to record `Outcome.Denied` is
-  proven directly (`AuditPipelineTests`); nothing calls it for a read today.
-  Closing this would need either a richer `IPageReadService` return type or
-  the service auditing its own denials internally, where the reason is
-  already computed — a Core-side change, not mine to make unilaterally.
 - **That any of the OpenTelemetry above has ever left the process.** No OTLP
   endpoint and no Aspire dashboard has ever received a single span or metric
   from RocketWiki — the exporter only activates when
