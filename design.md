@@ -988,6 +988,22 @@ or as a scheduled job. An admin **sync status** page shows the last bundle
 applied, per-space sequence positions, and loud warnings on gaps or chain
 breaks.
 
+The CLI is `RocketWiki.Sync export --connection-string … --output <dir>
+--instance-id <id> --attachments-root <dir> [--baseline <space-key>]` and
+`RocketWiki.Sync import --connection-string … --bundle <file-or-dir>
+--origin-instance-id <id> --attachments-root <dir>`. `--baseline` runs
+exactly once per newly exported space and is refused for a space that isn't
+flagged exported or that this instance doesn't own. Import in directory mode
+applies every `bundle-*.zip` in bundle-number order; exit code 2 (vs. 1 for
+usage errors) marks integrity refusals so a scheduled job can page on them.
+The admin status data is served by the admin-only `syncStatus` GraphQL query
+(audited as `sync.status`): per exported space the outbox position, pending
+event count and last drained bundle; per origin instance the last bundle
+applied, its manifest hash (the link the next bundle must chain from), the
+import time, and per-space applied sequences. `ReadOnlyReplicaError` carries
+the space id and its `OriginInstanceId`, so the client can render "mirrored
+from LOW — read-only" rather than a bare refusal.
+
 ---
 
 ## 13. Confluence migration
