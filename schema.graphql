@@ -4,12 +4,39 @@ schema {
 }
 
 type Query {
+  auditEvents(
+    filter: AuditFilterInput!
+    "Returns the first _n_ elements from the list."
+    first: Int
+    "Returns the elements in the list that come after the specified cursor."
+    after: String
+    "Returns the last _n_ elements from the list."
+    last: Int
+    "Returns the elements in the list that come before the specified cursor."
+    before: String
+  ): AuditEventsConnection
+    @listSize(
+      assumedSize: 50
+      slicingArguments: ["first", "last"]
+      slicingArgumentDefaultValue: 10
+      sizedFields: ["edges", "nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
   page(id: UUID!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
   me: CurrentUser!
+  spaces: [Space!]! @cost(weight: "10")
+  space(key: String!): Space @cost(weight: "10")
 }
 
 type Mutation {
+  createAccessRule(input: CreateAccessRuleRequestInput!): CreateAccessRulePayload!
+    @cost(weight: "10")
+  updateAccessRule(input: UpdateAccessRuleRequestInput!): UpdateAccessRulePayload!
+    @cost(weight: "10")
+  deleteAccessRule(input: DeleteAccessRuleRequestInput!): DeleteAccessRulePayload!
+    @cost(weight: "10")
   deleteAttachment(input: DeleteAttachmentRequestInput!): DeleteAttachmentPayload!
     @cost(weight: "10")
   addComment(input: AddCommentRequestInput!): AddCommentPayload!
@@ -35,15 +62,23 @@ type Mutation {
     @cost(weight: "10")
   detachLabel(input: DetachLabelRequestInput!): DetachLabelPayload!
     @cost(weight: "10")
+  createSpace(
+    input: CreateSpaceRequestInput!
+    initialGrant: InitialSpaceGrantInput!
+  ): CreateSpacePayload! @cost(weight: "10")
+  renameSpace(input: RenameSpaceRequestInput!): RenameSpacePayload!
+    @cost(weight: "10")
+  archiveSpace(input: ArchiveSpaceRequestInput!): ArchiveSpacePayload!
+    @cost(weight: "10")
+  restoreSpace(input: RestoreSpaceRequestInput!): RestoreSpacePayload!
+    @cost(weight: "10")
 }
 
 type AccessRule {
   id: UUID!
   kind: AccessRuleKind!
   spaceId: UUID
-  space: Space
   pageId: UUID
-  page: Page
   role: SpaceRole
   action: PageAction
   expressionJson: String!
@@ -55,6 +90,11 @@ type AccessRule {
 
 type AddCommentPayload {
   comment: Comment
+  error: PageMutationErrorView
+}
+
+type ArchiveSpacePayload {
+  space: Space
   error: PageMutationErrorView
 }
 
@@ -77,6 +117,41 @@ type Attachment {
   createdAtUtc: DateTime!
 }
 
+type AuditEvent {
+  userDisplayName: String @cost(weight: "10")
+  id: Long!
+  timestampUtc: DateTime!
+  userId: UUID
+  action: String!
+  subjectType: AuditSubjectType
+  subjectId: UUID
+  spaceKey: String
+  outcome: AuditOutcome!
+  channel: AuditChannel!
+  requestId: String!
+  clientIp: String!
+  mcpClient: String
+  detailsJson: String
+}
+
+"A connection to a list of items."
+type AuditEventsConnection {
+  "Information to aid in pagination."
+  pageInfo: PageInfo!
+  "A list of edges."
+  edges: [AuditEventsEdge!]
+  "A flattened list of the nodes."
+  nodes: [AuditEvent!]
+}
+
+"An edge in a connection."
+type AuditEventsEdge {
+  "A cursor for use in pagination."
+  cursor: String!
+  "The item at the end of the edge."
+  node: AuditEvent!
+}
+
 type Comment {
   id: UUID!
   pageId: UUID!
@@ -86,6 +161,11 @@ type Comment {
   createdAtUtc: DateTime!
   editedAtUtc: DateTime
   isDeleted: Boolean!
+}
+
+type CreateAccessRulePayload {
+  rule: AccessRule
+  error: PageMutationErrorView
 }
 
 type CreateLabelPayload {
@@ -98,12 +178,22 @@ type CreatePagePayload {
   error: PageMutationErrorView
 }
 
+type CreateSpacePayload {
+  space: Space
+  error: PageMutationErrorView
+}
+
 type CurrentUser {
   id: String
   email: String
   name: String
   groups: [String!]!
   isAuthenticated: Boolean!
+}
+
+type DeleteAccessRulePayload {
+  deletedRuleId: UUID
+  error: PageMutationErrorView
 }
 
 type DeleteAttachmentPayload {
@@ -174,6 +264,18 @@ type PageDeleteSummary {
   deletedAtUtc: DateTime!
 }
 
+"Information about pagination in a connection."
+type PageInfo {
+  "Indicates whether more edges exist following the set defined by the clients arguments."
+  hasNextPage: Boolean!
+  "Indicates whether more edges exist prior the set defined by the clients arguments."
+  hasPreviousPage: Boolean!
+  "When paginating backwards, the cursor to continue."
+  startCursor: String
+  "When paginating forwards, the cursor to continue."
+  endCursor: String
+}
+
 type PageLabel {
   pageId: UUID!
   page: Page
@@ -217,6 +319,11 @@ type PageTreeNode {
   children: [PageTreeNode!]!
 }
 
+type RenameSpacePayload {
+  space: Space
+  error: PageMutationErrorView
+}
+
 type RestorePagePayload {
   summary: PageRestoreSummary
   error: PageMutationErrorView
@@ -227,14 +334,20 @@ type RestoreRevisionPayload {
   error: PageMutationErrorView
 }
 
+type RestoreSpacePayload {
+  space: Space
+  error: PageMutationErrorView
+}
+
 type Space {
+  grants: [AccessRule!]! @cost(weight: "10")
+  trashedPages: [Page!]! @cost(weight: "10")
   isReplicaOf(localInstanceId: String!): Boolean!
   id: UUID!
   key: String!
   name: String!
   description: String
   homepageId: UUID
-  homepage: Page
   originInstanceId: String!
   isExported: Boolean!
   lastOutboxSequence: Long!
@@ -243,9 +356,11 @@ type Space {
   deletedByUserId: UUID
   createdAtUtc: DateTime!
   createdByUserId: UUID!
-  pages: [Page!]!
-  accessRules: [AccessRule!]!
-  labels: [Label!]!
+}
+
+type UpdateAccessRulePayload {
+  rule: AccessRule
+  error: PageMutationErrorView
 }
 
 type UpdatePageContentPayload {
@@ -259,9 +374,32 @@ input AddCommentRequestInput {
   body: String!
 }
 
+input ArchiveSpaceRequestInput {
+  spaceId: UUID!
+}
+
 input AttachLabelRequestInput {
   pageId: UUID!
   labelId: UUID!
+}
+
+input AuditFilterInput {
+  userId: UUID
+  action: String
+  subjectType: AuditSubjectType
+  subjectId: UUID
+  outcome: AuditOutcome
+  fromUtc: DateTime
+  toUtc: DateTime
+}
+
+input CreateAccessRuleRequestInput {
+  kind: AccessRuleKind!
+  spaceId: UUID
+  pageId: UUID
+  role: SpaceRole
+  action: PageAction
+  expressionJson: String!
 }
 
 input CreateLabelRequestInput {
@@ -275,6 +413,16 @@ input CreatePageRequestInput {
   slug: String!
   title: String!
   content: String!
+}
+
+input CreateSpaceRequestInput {
+  key: String!
+  name: String!
+  description: String
+}
+
+input DeleteAccessRuleRequestInput {
+  accessRuleId: UUID!
 }
 
 input DeleteAttachmentRequestInput {
@@ -299,10 +447,21 @@ input EditCommentRequestInput {
   body: String!
 }
 
+input InitialSpaceGrantInput {
+  role: SpaceRole!
+  expressionJson: String!
+}
+
 input MovePageRequestInput {
   pageId: UUID!
   newParentPageId: UUID
   newSortOrder: Int!
+}
+
+input RenameSpaceRequestInput {
+  spaceId: UUID!
+  name: String!
+  description: String
 }
 
 input RestorePageRequestInput {
@@ -313,6 +472,17 @@ input RestoreRevisionRequestInput {
   pageId: UUID!
   revisionNumberToRestore: Int!
   expectedCurrentRevisionNumber: Int!
+}
+
+input RestoreSpaceRequestInput {
+  spaceId: UUID!
+}
+
+input UpdateAccessRuleRequestInput {
+  accessRuleId: UUID!
+  expressionJson: String!
+  role: SpaceRole
+  action: PageAction
 }
 
 input UpdatePageContentRequestInput {
@@ -326,6 +496,27 @@ input UpdatePageContentRequestInput {
 enum AccessRuleKind {
   SPACE_GRANT
   PAGE_RESTRICTION
+}
+
+enum AuditChannel {
+  GRAPH_QL
+  MCP
+  ATTACHMENT
+  SYNC
+  SYSTEM
+}
+
+enum AuditOutcome {
+  SUCCESS
+  DENIED
+}
+
+enum AuditSubjectType {
+  PAGE
+  SPACE
+  ATTACHMENT
+  COMMENT
+  RULE
 }
 
 enum PageAction {
@@ -368,3 +559,17 @@ directive @cost(
   | ARGUMENT_DEFINITION
   | ENUM
   | INPUT_FIELD_DEFINITION
+
+"The purpose of the `@listSize` directive is to either inform the static analysis about the size of returned lists (if that information is statically available), or to point the analysis to where to find that information."
+directive @listSize(
+  "The `assumedSize` argument can be used to statically define the maximum length of a list returned by a field."
+  assumedSize: Int
+  "The `slicingArguments` argument can be used to define which of the field's arguments with numeric type are slicing arguments, so that their value determines the size of the list returned by that field. It may specify a list of multiple slicing arguments."
+  slicingArguments: [String!]
+  "The `slicingArgumentDefaultValue` argument can be used to define a default value for a slicing argument, which is used if the argument is not present in a query."
+  slicingArgumentDefaultValue: Int
+  "The `sizedFields` argument can be used to define that the value of the `assumedSize` argument or of a slicing argument does not affect the size of a list returned by a field itself, but that of a list returned by one of its sub-fields."
+  sizedFields: [String!]
+  "The `requireOneSlicingArgument` argument can be used to inform the static analysis that it should expect that exactly one of the defined slicing arguments is present in a query. If that is not the case (i.e., if none or multiple slicing arguments are present), the static analysis may throw an error."
+  requireOneSlicingArgument: Boolean = true
+) on FIELD_DEFINITION

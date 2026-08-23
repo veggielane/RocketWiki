@@ -13,10 +13,10 @@ namespace RocketWiki.Api.Tests.Integration;
 
 /// <summary>
 /// design.md §14's integration tier: the real API — real GraphQL schema, real
-/// ASP.NET Core pipeline — running against EF Core on SQLite (in-memory,
-/// fresh schema per factory instance, mirroring RocketWiki.Data.Tests'
-/// SqliteTestBase convention) and <c>FileSystemFileStorage</c> in a temp
-/// directory. No containers, no real Keycloak, no real SQL Server.
+/// ASP.NET Core pipeline — running against EF Core on SQLite (a temp file,
+/// fresh schema per factory instance, deleted on dispose) and
+/// <c>FileSystemFileStorage</c> in a temp directory. No containers, no real
+/// Keycloak, no real SQL Server.
 ///
 /// A green run here forces the EF model and any future LINQ to stay
 /// provider-agnostic — treat a SQLite-only failure as a real finding about
@@ -31,25 +31,25 @@ namespace RocketWiki.Api.Tests.Integration;
 /// </summary>
 public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
 {
-    private readonly SqliteConnection _connection = new("DataSource=:memory:");
+    // A temp *file* rather than a shared :memory: connection: once
+    // NotificationsHubTests joined this fixture, a SignalR LongPolling connection
+    // holds a "poll" GET open concurrently with a "send" POST invoking a hub
+    // method, so two request scopes genuinely overlap — and a single
+    // SqliteConnection instance is not thread-safe under that overlap (symptom:
+    // "database is locked" and garbled "not an error" SqliteExceptions thrown from
+    // EF's own connection initialization; PRAGMA busy_timeout cannot help, because
+    // the problem is two threads on one native handle, not lock contention). With
+    // a file, every DbContext opens its own pooled connection and
+    // Microsoft.Data.Sqlite's built-in busy retry serializes the writes.
+    private readonly string _databasePath =
+        Path.Combine(Path.GetTempPath(), "rocketwiki-api-tests-" + Guid.NewGuid() + ".db");
     private readonly string _attachmentsRoot =
         Path.Combine(Path.GetTempPath(), "rocketwiki-api-tests-" + Guid.NewGuid());
 
-    public RocketWikiApiFactory()
-    {
-        _connection.Open();
-        using var pragma = _connection.CreateCommand();
-        // busy_timeout matters once NotificationsHubTests joined this fixture: a
-        // SignalR LongPolling connection holds a "poll" GET open concurrently with a
-        // "send" POST invoking a hub method, and both can touch this factory's single
-        // shared :memory: connection at genuinely the same time (unlike a normal
-        // request/response HTTP test, which never overlaps two calls against it).
-        // Without this, SQLite fails immediately with "database is locked" instead of
-        // briefly waiting for the other side's short-lived transaction to finish -
-        // purely additive, doesn't change behaviour for any test that never contends.
-        pragma.CommandText = "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;";
-        pragma.ExecuteNonQuery();
-    }
+    // Foreign Keys=True replaces the PRAGMA the old single shared connection set
+    // once at construction — as a connection-string keyword it applies to every
+    // pooled connection this factory's contexts open.
+    private string ConnectionString => $"Data Source={_databasePath};Foreign Keys=True";
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -94,7 +94,7 @@ public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
 
             services.RemoveAll<RocketWikiDbContext>();
 
-            services.AddDbContext<RocketWikiDbContext>(options => options.UseSqlite(_connection));
+            services.AddDbContext<RocketWikiDbContext>(options => options.UseSqlite(ConnectionString));
 
             // Replaces "Bearer" (real Keycloak JWT validation) with the fake
             // handler as the default scheme, so tests never need a real token.
@@ -119,7 +119,14 @@ public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
 
         if (disposing)
         {
-            _connection.Dispose();
+            // Pooled connections keep the file handle open, which on Windows makes
+            // the delete below fail — drain this database's pool first.
+            SqliteConnection.ClearPool(new SqliteConnection(ConnectionString));
+
+            if (File.Exists(_databasePath))
+            {
+                File.Delete(_databasePath);
+            }
 
             if (Directory.Exists(_attachmentsRoot))
             {

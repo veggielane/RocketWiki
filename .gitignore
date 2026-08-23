@@ -32,3 +32,6 @@ launchSettings.json
 .claude/worktrees/
 scratch/
 *.stackdump
+
+# Incidental artifact of `dotnet run schema export` (only schema.graphql is the checked-in contract)
+schema-settings.json

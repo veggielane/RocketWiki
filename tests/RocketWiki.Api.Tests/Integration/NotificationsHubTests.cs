@@ -173,7 +173,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
             mutation {
               createAccessRule(input: {
                 kind: PAGE_RESTRICTION, spaceId: null, pageId: "{{page.Id}}", role: null, action: VIEW,
-                expressionJson: "{\"type\":\"attr\",\"attribute\":\"nationality\",\"in\":[\"US\"]}"
+                expressionJson: {{System.Text.Json.JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new AttrCondition("nationality", ["US"])))}}
               }) { rule { id } error { kind } }
             }
             """);
