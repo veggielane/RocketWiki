@@ -37,7 +37,7 @@ public static class MutationAuthHelper
         if (principal is null || actingUserId is null || auditContext is null)
         {
             return (null, null, null, new PageMutationErrorView(
-                "Forbidden", "Authentication required.", null, null, null, null, null, null, null));
+                "Forbidden", "Authentication required.", null, null, null, null, null, null, null, null));
         }
 
         return (principal, actingUserId, auditContext, null);
@@ -55,7 +55,7 @@ public static class MutationAuthHelper
         var detailsJson = error switch
         {
             ForbiddenError e => JsonSerializer.Serialize(new { reason = e.Reason }),
-            ReadOnlyReplicaError e => JsonSerializer.Serialize(new { spaceId = e.SpaceId }),
+            ReadOnlyReplicaError e => JsonSerializer.Serialize(new { spaceId = e.SpaceId, originInstanceId = e.OriginInstanceId }),
             SubtreeOperationForbiddenError e => JsonSerializer.Serialize(new { blockedPageCount = e.BlockedPageCount }),
             _ => null,
         };

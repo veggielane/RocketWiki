@@ -11,8 +11,13 @@ public abstract record PageMutationError;
 /// <summary>design.md §5/§8: the editor's revision number is behind the current one - a conflict, not a transport error.</summary>
 public sealed record StaleRevisionError(int ExpectedRevisionNumber, int ActualRevisionNumber, string LatestTitle, string LatestContent) : PageMutationError;
 
-/// <summary>design.md §6.4/§12: canEdit is unconditionally false on a replica space, beneath every grant.</summary>
-public sealed record ReadOnlyReplicaError(Guid SpaceId) : PageMutationError;
+/// <summary>
+/// design.md §6.4/§12: canEdit is unconditionally false on a replica space, beneath
+/// every grant. Carries the space's OriginInstanceId so clients can say "mirrored from
+/// LOW — read-only" (design.md §12's banner; the web's ReadOnlyReplicaDialog renders
+/// exactly this fact) instead of a bare refusal.
+/// </summary>
+public sealed record ReadOnlyReplicaError(Guid SpaceId, string OriginInstanceId) : PageMutationError;
 
 /// <summary>canView/canEdit denied - Reason mirrors EffectivePermissionCalculator's denial reason for the permission inspector (design.md §6.6).</summary>
 public sealed record ForbiddenError(string Reason) : PageMutationError;

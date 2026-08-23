@@ -297,4 +297,36 @@ public class CommentServiceTests : SqliteTestBase
         Assert.False(result.IsSuccess);
         Assert.IsType<ForbiddenError>(result.Error);
     }
+
+    // --- Replica read-only (design.md §6.4/§12): AddComment refusal is covered above;
+    // editing or tombstoning an already-synced comment is equally a replica mutation.
+
+    [Fact]
+    public async Task EditAndDeleteComment_OnReplicaSpace_ReturnReadOnlyReplicaError()
+    {
+        var author = TestData.NewUser();
+        var space = TestData.NewSpace();
+        space.OriginInstanceId = "some-other-instance";
+        var page = TestData.NewPage(space);
+        var comment = new Comment { PageId = page.Id, Body = "Synced from low", AuthorUserId = author.Id, CreatedAtUtc = DateTime.UtcNow };
+
+        using var context = CreateContext();
+        context.Users.Add(author);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.Comments.Add(comment);
+        context.AccessRules.Add(EditorGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new CommentService(context, LocalInstanceId);
+
+        var edit = await service.EditCommentAsync(new EditCommentRequest(comment.Id, "Changed"), ViewerPrincipal(), author.Id, AuditCtx);
+        Assert.False(edit.IsSuccess);
+        var error = Assert.IsType<ReadOnlyReplicaError>(edit.Error);
+        Assert.Equal("some-other-instance", error.OriginInstanceId);
+
+        var delete = await service.DeleteCommentAsync(new DeleteCommentRequest(comment.Id), ViewerPrincipal(), author.Id, AuditCtx);
+        Assert.False(delete.IsSuccess);
+        Assert.IsType<ReadOnlyReplicaError>(delete.Error);
+    }
 }

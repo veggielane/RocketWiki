@@ -790,4 +790,92 @@ public class PageServiceTests : SqliteTestBase
         Assert.False(result.IsSuccess);
         Assert.IsType<StaleRevisionError>(result.Error);
     }
+
+    // --- Replica read-only, remaining page-mutation paths (design.md §6.4/§12) --------
+    // Create/Move/Delete replica refusals are covered above; these close out the other
+    // three IPageService mutations so every path is proven to sit beneath the replica
+    // invariant, and pin that the error carries the origin instance id the web's
+    // ReadOnlyReplicaDialog renders.
+
+    [Fact]
+    public async Task UpdatePageContent_OnReplicaSpace_ReturnsReadOnlyReplicaError_WithOriginInstanceId()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        space.OriginInstanceId = "some-other-instance";
+        var page = TestData.NewPage(space);
+        page.CurrentRevisionNumber = 1;
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        await GrantSpaceRoleAsync(context, space.Id, SpaceRole.Editor, actor.Id);
+        context.SaveChanges();
+
+        var service = new PageService(context, LocalInstanceId);
+        var result = await service.UpdatePageContentAsync(
+            new UpdatePageContentRequest(page.Id, ExpectedRevisionNumber: 1, "New Title", "# New", null),
+            EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        var error = Assert.IsType<ReadOnlyReplicaError>(result.Error);
+        Assert.Equal(space.Id, error.SpaceId);
+        Assert.Equal("some-other-instance", error.OriginInstanceId);
+    }
+
+    [Fact]
+    public async Task RestorePage_OnReplicaSpace_ReturnsReadOnlyReplicaError()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        space.OriginInstanceId = "some-other-instance";
+        var page = TestData.NewPage(space);
+        page.IsDeleted = true;
+        page.DeletedAtUtc = DateTime.UtcNow;
+        page.DeleteBatchId = Guid.NewGuid();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        await GrantSpaceRoleAsync(context, space.Id, SpaceRole.Editor, actor.Id);
+        context.SaveChanges();
+
+        var service = new PageService(context, LocalInstanceId);
+        var result = await service.RestorePageAsync(new RestorePageRequest(page.Id), EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ReadOnlyReplicaError>(result.Error);
+    }
+
+    [Fact]
+    public async Task RestoreRevision_OnReplicaSpace_ReturnsReadOnlyReplicaError()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        space.OriginInstanceId = "some-other-instance";
+        var page = TestData.NewPage(space);
+        page.CurrentRevisionNumber = 2;
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.PageRevisions.Add(new PageRevision
+        {
+            PageId = page.Id, RevisionNumber = 1, Title = "Old", Content = "# Old",
+            AuthorUserId = actor.Id, CreatedAtUtc = DateTime.UtcNow,
+        });
+        await GrantSpaceRoleAsync(context, space.Id, SpaceRole.Editor, actor.Id);
+        context.SaveChanges();
+
+        var service = new PageService(context, LocalInstanceId);
+        var result = await service.RestoreRevisionAsync(
+            new RestoreRevisionRequest(page.Id, RevisionNumberToRestore: 1, ExpectedCurrentRevisionNumber: 2),
+            EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ReadOnlyReplicaError>(result.Error);
+    }
 }

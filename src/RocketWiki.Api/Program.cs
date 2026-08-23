@@ -98,6 +98,9 @@ builder.Services.AddScoped<IInstanceRoleAccessor, InstanceRoleAccessor>();
 // (design.md §12); Instance:Id is a plain config value, not yet wired to anything
 // sync-related since low/high sync itself is a later milestone.
 var localInstanceId = builder.Configuration["Instance:Id"] ?? "standalone";
+// Same value as a DI-visible singleton, for resolvers that need to distinguish native
+// from replica or report it (Query.SyncStatus) rather than construct services with it.
+builder.Services.AddSingleton(new InstanceIdentity(localInstanceId));
 builder.Services.AddScoped<IPageReadService, PageReadService>();
 builder.Services.AddScoped<IPageService>(sp => new PageService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<ICommentService>(sp => new CommentService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));

@@ -44,7 +44,7 @@ public class AttachmentService : IAttachmentService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Attachment>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Attachment>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         var canEdit = await ComputeCanEditAsync(space, page, principal, cancellationToken);
@@ -110,7 +110,7 @@ public class AttachmentService : IAttachmentService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Attachment>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Attachment>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         var canEdit = await ComputeCanEditAsync(space, page, principal, cancellationToken);

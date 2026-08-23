@@ -39,7 +39,7 @@ public class CommentService : ICommentService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Comment>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Comment>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         // design.md §6.4: "comment = requires canView" - not canEdit. A viewer may comment.
@@ -98,7 +98,7 @@ public class CommentService : ICommentService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Comment>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Comment>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         // Judgement call: only the original author may edit their own comment - no
@@ -141,7 +141,7 @@ public class CommentService : ICommentService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Comment>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Comment>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         // Judgement call: the author can always delete their own comment; someone with

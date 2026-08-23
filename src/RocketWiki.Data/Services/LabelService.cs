@@ -33,7 +33,7 @@ public class LabelService : ILabelService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Label>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Label>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         var spaceGrants = await _db.AccessRules
@@ -89,7 +89,7 @@ public class LabelService : ILabelService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<PageLabel>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<PageLabel>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         var canEdit = await ComputeCanEditAsync(space, page, principal, cancellationToken);
@@ -138,7 +138,7 @@ public class LabelService : ILabelService
 
         if (space.IsReplicaOf(_localInstanceId))
         {
-            return PageMutationResult<Guid>.Failure(new ReadOnlyReplicaError(space.Id));
+            return PageMutationResult<Guid>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         var canEdit = await ComputeCanEditAsync(space, page, principal, cancellationToken);
