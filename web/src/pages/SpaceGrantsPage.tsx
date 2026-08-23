@@ -16,6 +16,7 @@ import AddIcon from '@mui/icons-material/Add'
 import {
   useCreateAccessRuleMutation,
   useDeleteAccessRuleMutation,
+  useRuleVocabularyQuery,
   useSpaceGrantsQuery,
   useUpdateAccessRuleMutation,
   type SpaceRole,
@@ -24,6 +25,7 @@ import { describeMutationError } from '../graphql/mutationError'
 import { AccessGate } from '../auth/AccessGate'
 import { RuleBuilder } from '../access/RuleBuilder'
 import { parseRuleNode, serializeRuleNode } from '../access/ruleSerializer'
+import type { AttributeOption } from '../access/attributeOption'
 import type { ValidationResult } from '../access/builderState'
 import type { RuleNode } from '../access/ruleTypes'
 
@@ -41,6 +43,8 @@ interface GrantRow {
 interface SpaceGrantsEditorProps {
   spaceId: string
   initialGrants: { id: string; role: SpaceRole | null; expressionJson: string }[]
+  groups: string[]
+  attributes: AttributeOption[]
   onSaved: () => void
 }
 
@@ -55,13 +59,12 @@ interface SpaceGrantsEditorProps {
  * set replacement), so Save diffs the rows against what was loaded: added
  * rows are created, edited rows updated, removed rows deleted.
  *
- * NOTE (schema reconciliation): the placeholder's `groups`/
- * `attributeRegistry` pickers have no backend queries (reported contract
- * gap) — the group condition falls back to free text (the picker is
- * freeSolo), and attribute conditions can't be authored until the registry
- * is exposed.
+ * Picker vocabulary (known groups + the attribute registry) comes from the
+ * manage-gated `RuleVocabulary` query — suggestions, never authority: the
+ * group picker stays freeSolo, so an empty or failed vocabulary query just
+ * means typing by hand (design.md §6.6).
  */
-function SpaceGrantsEditor({ spaceId, initialGrants, onSaved }: SpaceGrantsEditorProps) {
+function SpaceGrantsEditor({ spaceId, initialGrants, groups, attributes, onSaved }: SpaceGrantsEditorProps) {
   const [, createAccessRule] = useCreateAccessRuleMutation()
   const [, updateAccessRule] = useUpdateAccessRuleMutation()
   const [, deleteAccessRule] = useDeleteAccessRuleMutation()
@@ -195,8 +198,8 @@ function SpaceGrantsEditor({ spaceId, initialGrants, onSaved }: SpaceGrantsEdito
             <RuleBuilder
               initialValue={row.initialExpression}
               onChange={(result) => setValidation((prev) => ({ ...prev, [row.clientId]: result }))}
-              groups={[]}
-              attributes={[]}
+              groups={groups}
+              attributes={attributes}
             />
           </Paper>
         ))}
@@ -228,8 +231,16 @@ export function SpaceGrantsPage() {
     variables: { key: spaceKey ?? '' },
     pause: !spaceKey,
   })
+  const [{ data: vocabulary }] = useRuleVocabularyQuery()
 
   if (!spaceKey) return null
+
+  const groups = vocabulary?.groups ?? []
+  const attributes: AttributeOption[] = (vocabulary?.attributeRegistry ?? []).map((definition) => ({
+    key: definition.key,
+    displayName: definition.displayName ?? undefined,
+    allowedValues: definition.allowedValues,
+  }))
 
   const space = data?.space
   // `grants` is the server-computed admin signal: rows come back only to
@@ -252,6 +263,8 @@ export function SpaceGrantsPage() {
             key={space.grants.map((g) => g.id).join(',')}
             spaceId={space.id}
             initialGrants={space.grants}
+            groups={groups}
+            attributes={attributes}
             onSaved={() => refetch({ requestPolicy: 'network-only' })}
           />
         )}

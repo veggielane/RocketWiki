@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { filterTreeByLabel, type LabeledTreeNode } from '../filterTreeByLabel'
+import type { SpacePageTreeQuery } from '../../graphql/generated/graphql'
 
 describe('filterTreeByLabel', () => {
   it('returns nothing for an empty tree', () => {
@@ -61,5 +62,21 @@ describe('filterTreeByLabel', () => {
       { id: 'b', title: 'B', labels: [], children: [{ id: 'b1', title: 'B1', labels: ['x'] }] },
     ]
     expect(filterTreeByLabel(tree, 'x').map((m) => m.id)).toEqual(['a1', 'b1'])
+  })
+
+  it('accepts the generated SpacePageTree node shape without adaptation', () => {
+    // Compile-time round-trip against the REAL generated type
+    // (`PageTreeNode.labels` landed in the schema): if the operation's
+    // shape drifts from LabeledTreeNode, this stops compiling.
+    const apiNode: SpacePageTreeQuery['pageTree'][number] = {
+      id: 'api-a',
+      title: 'From API',
+      slug: 'from-api',
+      sortOrder: 0,
+      hasRestrictions: false,
+      labels: ['onboarding'],
+      children: [],
+    }
+    expect(filterTreeByLabel([apiNode], 'onboarding').map((m) => m.id)).toEqual(['api-a'])
   })
 })

@@ -1,20 +1,21 @@
-# NOTE (schema reconciliation): the real Space exposes `isReplicaOf(
-# localInstanceId: String!)` — an argument the browser has no way to supply
-# (the local instance id is only served by the admin-only syncStatus query),
-# so the client cannot mark replica spaces proactively; reported as a
-# contract gap (design.md §12 wants a "mirrored from LOW — read-only"
-# banner). Replica-ness still surfaces reactively via every write's typed
-# ReadOnlyReplica error. There is also no per-space viewer-role field;
-# `grants` is the server-computed admin signal — it returns rows only to
-# instance/space admins ("absent, not forbidden") and a space always has at
-# least one grant by construction (creation is atomic with its first
-# grant), so a non-empty list means "this caller may manage the space".
+# `Space.isReplica` + `originInstanceId` drive the proactive "mirrored
+# from {origin} — read-only" marking (design.md §12) on the space list,
+# nav, space browser, and page view; replica-ness still also surfaces
+# reactively on any write via the typed ReadOnlyReplica error.
+# `viewerIsWatching` is the server truth behind the watch toggle. There is
+# no per-space viewer-role field; `grants` is the server-computed admin
+# signal — it returns rows only to instance/space admins ("absent, not
+# forbidden") and a space always has at least one grant by construction
+# (creation is atomic with its first grant), so a non-empty list means
+# "this caller may manage the space".
 query SpaceList {
   spaces {
     id
     key
     name
     description
+    isReplica
+    originInstanceId
   }
 }
 
@@ -25,9 +26,23 @@ query SpaceTree($key: String!) {
     name
     description
     homepageId
+    isReplica
+    originInstanceId
+    viewerIsWatching
     grants {
       id
     }
+  }
+}
+
+# The page view's replica banner: the page read carries only spaceKey, so
+# the space's replica flag is a second small lookup by key.
+query SpaceReplicaBanner($key: String!) {
+  space(key: $key) {
+    id
+    key
+    isReplica
+    originInstanceId
   }
 }
 
@@ -46,9 +61,14 @@ query SpacePageTree($spaceId: UUID!) {
   }
 }
 
+# `hasRestrictions` feeds the tree's lock badge (design.md §6.6);
+# `labels` feeds the space browser's label-filter facet. Both are
+# permission-filtered server-side like the tree itself.
 fragment TreeNode on PageTreeNode {
   id
   title
   slug
   sortOrder
+  hasRestrictions
+  labels
 }

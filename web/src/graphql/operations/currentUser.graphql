@@ -1,8 +1,9 @@
-# The real schema's CurrentUser is claims-shaped: `id` is the token subject
-# (NOT the local User row id that Comment.authorUserId etc. carry), `name`
-# and `email` are nullable, and there is no `isInstanceAdmin` flag — the
-# instance-admin gate reads the `roles` claim from the ID token instead
-# (auth/useIsInstanceAdmin.ts), mirroring the server's InstanceRoleAccessor.
+# `me` is claims-shaped (`id` is the token subject; `name`/`email` are
+# nullable) plus two server-computed fields: `isInstanceAdmin` — the
+# server's own InstanceRoleAccessor verdict, so the SPA no longer decodes
+# the roles claim itself (auth/useIsInstanceAdmin.ts) — and `localUserId`,
+# the local User row id that Comment.authorUserId etc. carry, for
+# "is this row mine?" checks.
 query CurrentUser {
   me {
     id
@@ -10,5 +11,7 @@ query CurrentUser {
     name
     groups
     isAuthenticated
+    isInstanceAdmin
+    localUserId
   }
 }

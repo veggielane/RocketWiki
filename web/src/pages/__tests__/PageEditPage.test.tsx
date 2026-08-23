@@ -15,7 +15,12 @@ const page = {
   slug: 'runbook',
   content: 'Hello world.\n',
   currentRevisionNumber: 3,
+  canEdit: true,
+  canComment: true,
+  canManageAccess: false,
+  viewerIsWatching: false,
   labels: [],
+  labelDetails: [],
   parent: null,
   children: [],
   comments: [],
@@ -38,9 +43,9 @@ function mutationError(overrides: Partial<MutationErrorFragment>): MutationError
   }
 }
 
-function renderEditPage(updateError: MutationErrorFragment | null) {
+function renderEditPage(updateError: MutationErrorFragment | null, pageOverrides: Partial<typeof page> = {}) {
   const mock = createMockUrqlClient((name) => {
-    if (name === 'PageById') return { page }
+    if (name === 'PageById') return { page: { ...page, ...pageOverrides } }
     if (name === 'UpdatePageContent') return { updatePageContent: { page: updateError ? null : page, error: updateError } }
     return undefined
   })
@@ -172,5 +177,15 @@ describe('PageEditPage typed mutation errors', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
 
     expect(await screen.findByText('view route')).toBeInTheDocument()
+  })
+})
+
+describe('PageEditPage permission gating', () => {
+  it('refuses to mount an editor when the server says canEdit is false — no Save to be refused later', async () => {
+    renderEditPage(null, { canEdit: false })
+
+    expect(await screen.findByText(/don't have permission to edit/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Back to page' })).toBeInTheDocument()
   })
 })

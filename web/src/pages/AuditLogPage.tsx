@@ -30,8 +30,9 @@ type AuditRow = NonNullable<NonNullable<AuditEventsQuery['auditEvents']>['nodes'
  * successes, never hidden or defaulted-out — probing restricted content is
  * a signal worth seeing, not noise to filter away by default. Viewing this
  * page is itself audited as `audit.view` server-side; the query executing
- * *is* the audited action. The real connection is cursor-paged with no
- * totalCount; "Load more" appends the next page.
+ * *is* the audited action. The connection is cursor-paged with a server
+ * `totalCount` for the matching-event total; "Load more" appends the next
+ * page.
  */
 export function AuditLogPage() {
   const [userId, setUserId] = useState('')
@@ -76,6 +77,7 @@ export function AuditLogPage() {
   }, [data, loadedRows])
 
   const pageInfo = data?.auditEvents?.pageInfo
+  const totalCount = data?.auditEvents?.totalCount
 
   const columns: GridColDef[] = [
     { field: 'timestampUtc', headerName: 'Timestamp (UTC)', width: 200 },
@@ -173,6 +175,13 @@ export function AuditLogPage() {
       </Stack>
 
       {error && <Alert severity="info">Couldn't load audit events.</Alert>}
+
+      {totalCount !== undefined && (
+        <Typography variant="body2" color="text.secondary">
+          {totalCount.toLocaleString()} matching event{totalCount === 1 ? '' : 's'}
+          {rows.length < totalCount ? ` — showing ${rows.length.toLocaleString()}` : ''}
+        </Typography>
+      )}
 
       <Box sx={{ flexGrow: 1, minHeight: 400 }}>
         <DataGrid

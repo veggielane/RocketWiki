@@ -5,13 +5,9 @@ import { useSpaceListQuery } from '../graphql/generated/graphql'
 
 /**
  * Space list in the nav drawer — server-filtered to spaces the caller can
- * view (design.md §6.7).
- *
- * NOTE (schema reconciliation): the placeholder's `isReplica` flag is gone —
- * the real Space only offers `isReplicaOf(localInstanceId!)`, an argument
- * the browser can't supply (reported contract gap), so replica spaces are
- * not marked here; replica-ness still surfaces on any write via the typed
- * ReadOnlyReplica error (design.md §12).
+ * view (design.md §6.7). Replica spaces are marked proactively via
+ * `Space.isReplica` (design.md §12), not just reactively on a refused
+ * write.
  */
 export function SpaceTreeNav() {
   const [{ data, fetching, error }] = useSpaceListQuery()
@@ -43,7 +39,10 @@ export function SpaceTreeNav() {
           <ListItemIcon>
             <FolderOutlinedIcon fontSize="small" />
           </ListItemIcon>
-          <ListItemText primary={space.name} />
+          <ListItemText
+            primary={space.name}
+            secondary={space.isReplica ? `Mirrored from ${space.originInstanceId} — read-only` : undefined}
+          />
         </ListItemButton>
       ))}
     </List>

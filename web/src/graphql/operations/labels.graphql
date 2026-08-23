@@ -1,0 +1,47 @@
+# design.md §6.4.2: labels. Names stay the rendering/filter currency, but
+# create/attach/detach take label *ids*, which `labelDetails` (Query +
+# Page) exposes. Creating a label requires editor in the space;
+# attach/detach require canEdit on the page — the label editor is only
+# mounted when `Page.canEdit` is true. Listings are permission-filtered
+# per page server-side.
+query SpaceLabelDetails($spaceKey: String) {
+  labelDetails(spaceKey: $spaceKey) {
+    id
+    spaceId
+    name
+  }
+}
+
+mutation CreateLabel($input: CreateLabelRequestInput!) {
+  createLabel(input: $input) {
+    label {
+      id
+      spaceId
+      name
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
+mutation AttachLabel($input: AttachLabelRequestInput!) {
+  attachLabel(input: $input) {
+    pageLabel {
+      pageId
+      labelId
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
+mutation DetachLabel($input: DetachLabelRequestInput!) {
+  detachLabel(input: $input) {
+    detachedLabelId
+    error {
+      ...MutationError
+    }
+  }
+}

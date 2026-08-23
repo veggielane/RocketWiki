@@ -1,6 +1,6 @@
-# The real Comment type carries `authorUserId` (local User row id) only —
-# no authorDisplayName resolver yet (contract gap, reported): the thread UI
-# falls back to a shortened id.
+# Comment rows carry `authorUserId` (local User row id — matched against
+# `CurrentUser.localUserId` for the delete-own affordance) and the
+# display-name-resolving `author: UserRef`.
 mutation AddComment($input: AddCommentRequestInput!) {
   addComment(input: $input) {
     comment {
@@ -9,6 +9,10 @@ mutation AddComment($input: AddCommentRequestInput!) {
       body
       isDeleted
       authorUserId
+      author {
+        id
+        displayName
+      }
       createdAtUtc
       editedAtUtc
     }

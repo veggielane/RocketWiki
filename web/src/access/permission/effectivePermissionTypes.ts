@@ -1,26 +1,22 @@
 import type { RuleNode } from '../ruleTypes'
 
-/** Mirrors `RocketWiki.Core.Enums.SpaceRole`. */
+/** Web-side casing of the GraphQL `SpaceRole` enum (`VIEWER|EDITOR|SPACE_ADMIN`) — mapped in mapEffectivePermission.ts. */
 export type SpaceRole = 'viewer' | 'editor' | 'spaceAdmin'
 
-/** Mirrors `RocketWiki.Core.Enums.PageAction`. */
+/** Web-side casing of the GraphQL `PageAction` enum (`VIEW|EDIT`). */
 export type PageAction = 'view' | 'edit'
 
 /**
  * One restriction evaluated against the inspected user, for one action, on
  * one page in the page-plus-ancestors chain (design.md §6.4: restrictions
- * accumulate down the tree).
+ * accumulate down the tree). Mirrors the API's `RestrictionCheckView`,
+ * with `expressionJson` parsed client-side into a `RuleNode` — the wire
+ * carries JSON, the same contract the rule builder writes.
  *
- * This is *richer* than what `PermissionCheckResult` (see
- * `RocketWiki.Core/Access/PermissionCheckResult.cs`) currently returns.
- * `EffectivePermissionCalculator.CheckRestrictions` evaluates restrictions
- * in order and returns on the *first* failure — correct and cheap for the
- * real canView/canEdit gate, but useless for an inspector that needs to
- * show every restriction's pass/fail. A real `effectivePermissionDetail`
- * resolver would need a non-short-circuiting sibling to that method (same
- * `RuleEvaluator` call per rule, just not returning early) purely for this
- * diagnostic view. Flagging that here rather than have the frontend type
- * silently imply a backend capability that doesn't exist yet.
+ * The full per-restriction pass/fail breakdown exists because the server
+ * has a non-short-circuiting explain path
+ * (`EffectivePermissionCalculator.Explain`, §6.6) — the enforcement gate
+ * still stops at the first failure; the inspector deliberately doesn't.
  */
 export interface RestrictionCheck {
   ruleId: string
@@ -28,15 +24,16 @@ export interface RestrictionCheck {
   pageId: string
   pageTitle: string
   action: PageAction
-  expression: RuleNode
+  /** Null when the stored expression couldn't be parsed — the rule still denies (fails closed, §6.3) and must still be shown. */
+  expression: RuleNode | null
   passed: boolean
 }
 
 /**
- * Extends `EffectivePermission` (`RocketWiki.Core/Access/EffectivePermission.cs`)
- * with the space-role value and the full restriction breakdown design.md
- * §6.6 asks the inspector to show — `EffectivePermission` itself only
- * carries a single collapsed denial reason string per action.
+ * The inspector's view model — the API's `EffectivePermissionDetail` with
+ * enums re-cased and expressions parsed (mapEffectivePermission.ts).
+ * design.md §6.6: the space-role computation plus every restriction with
+ * pass/fail, not just the first failing one.
  */
 export interface EffectivePermissionDetail {
   userId: string

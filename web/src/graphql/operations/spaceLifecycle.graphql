@@ -43,11 +43,20 @@ mutation ArchiveSpace($input: ArchiveSpaceRequestInput!) {
   }
 }
 
-# NOTE (schema reconciliation): restoreSpace exists, but no query lists
-# archived spaces (SpaceReads excludes them via the EF query filter), so
-# there is no way to obtain an archived space's id to restore it from the
-# SPA. The mutation is kept wired for the day a listing exists; the
-# Archived spaces page explains the gap (see ArchivedSpacesPage.tsx).
+# design.md §6.5.1: `archivedSpaces` is scoped server-side to exactly who
+# `restoreSpace` accepts (instance admin, or that space's own
+# space-admin), so every row it returns is restorable by the caller — an
+# empty list means "nothing archived that you could restore", not
+# "nothing archived".
+query ArchivedSpaces {
+  archivedSpaces {
+    id
+    key
+    name
+    archivedAtUtc
+  }
+}
+
 mutation RestoreSpace($input: RestoreSpaceRequestInput!) {
   restoreSpace(input: $input) {
     space {

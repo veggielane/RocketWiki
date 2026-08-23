@@ -1,25 +1,79 @@
-import { Alert, Stack, Typography } from '@mui/material'
+import { useState } from 'react'
+import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
+import { useArchivedSpacesQuery, useRestoreSpaceMutation } from '../graphql/generated/graphql'
+import { describeMutationError } from '../graphql/mutationError'
 
 /**
- * NOTE (schema reconciliation): deliberately inert. The real schema has a
- * `restoreSpace` mutation but NO query that lists archived spaces —
- * SpaceReads excludes them via the EF query filter (whether previous
- * viewers should still see archived spaces is design.md §6.5.1's stated
- * open question, and exclusion is the backend's conservative default) — so
- * there is no way to obtain an archived space's id to restore it from
- * here. Reported as a contract gap; this page states the situation rather
- * than pretending an empty list means "nothing archived".
+ * design.md §6.5.1: archive is reversible and touches no pages. The
+ * `archivedSpaces` listing is scoped server-side to exactly who
+ * `restoreSpace` accepts (instance admin, or that space's own
+ * space-admin), so every row shown here is restorable by the caller — and
+ * an empty list means "nothing archived that *you* could restore", which
+ * is what the empty state says.
  */
 export function ArchivedSpacesPage() {
+  const [{ data, fetching, error }, refetch] = useArchivedSpacesQuery()
+  const [, restoreSpace] = useRestoreSpaceMutation()
+  const [restoringId, setRestoringId] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ severity: 'success' | 'warning'; text: string } | null>(null)
+
+  const handleRestore = async (spaceId: string, name: string) => {
+    setRestoringId(spaceId)
+    setMessage(null)
+    const result = await restoreSpace({ input: { spaceId } })
+    setRestoringId(null)
+    const payload = result.data?.restoreSpace
+    const errorText = describeMutationError(payload?.error)
+    if (errorText) {
+      setMessage({ severity: 'warning', text: errorText })
+      return
+    }
+    if (payload?.space) {
+      setMessage({ severity: 'success', text: `Restored "${name}".` })
+      refetch({ requestPolicy: 'network-only' })
+    }
+  }
+
   return (
     <Stack spacing={2}>
       <Typography variant="h4" component="h1">
         Archived spaces
       </Typography>
-      <Alert severity="info">
-        The API doesn't list archived spaces yet, so they can't be shown or restored from here. Restoring is
-        possible server-side (design.md §6.5.1) — ask an operator, or wait for the archived-spaces listing to land.
-      </Alert>
+
+      {message && <Alert severity={message.severity}>{message.text}</Alert>}
+
+      {fetching && <Skeleton variant="rectangular" height={200} />}
+
+      {!fetching && error && <Alert severity="info">Couldn't load archived spaces.</Alert>}
+
+      {!fetching && !error && (data?.archivedSpaces.length ?? 0) === 0 && (
+        <Typography color="text.secondary">No archived spaces you can restore.</Typography>
+      )}
+
+      {!fetching && !error && (data?.archivedSpaces.length ?? 0) > 0 && (
+        <List>
+          {data?.archivedSpaces.map((space) => (
+            <ListItem
+              key={space.id}
+              divider
+              secondaryAction={
+                <Button
+                  size="small"
+                  disabled={restoringId === space.id}
+                  onClick={() => void handleRestore(space.id, space.name)}
+                >
+                  Restore
+                </Button>
+              }
+            >
+              <ListItemText
+                primary={`${space.name} (${space.key})`}
+                secondary={`Archived ${new Date(space.archivedAtUtc).toLocaleString()}`}
+              />
+            </ListItem>
+          ))}
+        </List>
+      )}
     </Stack>
   )
 }

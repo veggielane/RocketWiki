@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Dialog,
@@ -15,6 +16,7 @@ import {
   Skeleton,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
@@ -22,6 +24,7 @@ import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined'
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined'
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import {
@@ -33,6 +36,7 @@ import {
   useUnwatchSpaceMutation,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
+import { filterTreeByLabel } from '../labels/filterTreeByLabel'
 import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
 
 /**
@@ -45,6 +49,9 @@ import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
 interface PageTreeNode {
   id: string
   title: string
+  /** `PageTreeNode.hasRestrictions` — drives the lock badge (design.md §6.6). */
+  hasRestrictions: boolean
+  labels: string[]
   children?: PageTreeNode[]
 }
 
@@ -55,6 +62,11 @@ function PageTreeList({ nodes, depth = 0 }: { nodes: PageTreeNode[]; depth?: num
         <li key={node.id}>
           <ListItemButton component={RouterLink} to={`/pages/${node.id}`} sx={{ pl: 2 + depth * 2 }}>
             <ListItemText primary={node.title} />
+            {node.hasRestrictions && (
+              <Tooltip title="This page has access restrictions">
+                <LockOutlinedIcon fontSize="small" color="action" aria-label="Has access restrictions" />
+              </Tooltip>
+            )}
           </ListItemButton>
           {node.children && node.children.length > 0 && (
             <PageTreeList nodes={node.children} depth={depth + 1} />
@@ -65,16 +77,28 @@ function PageTreeList({ nodes, depth = 0 }: { nodes: PageTreeNode[]; depth?: num
   )
 }
 
+function distinctLabels(nodes: PageTreeNode[]): string[] {
+  const labels = new Set<string>()
+  function walk(list: PageTreeNode[]): void {
+    for (const node of list) {
+      for (const label of node.labels) labels.add(label)
+      if (node.children) walk(node.children)
+    }
+  }
+  walk(nodes)
+  return [...labels].sort((a, b) => a.localeCompare(b))
+}
+
 /**
- * NOTE (schema reconciliation): three placeholder-era affordances are gone
- * because the real schema carries no data for them (each reported as a
- * contract gap): the replica banner (no client-usable isReplica), the
- * label filter facet (PageTreeNode has no labels), and the import-report
- * link (no importReports query — the importer is milestone 5, not
- * started). Space management is gated on `grants` being non-empty: the
- * server returns grant rows only to instance/space admins ("absent, not
- * forbidden"), and a space always has at least one grant by construction,
- * so an empty list means "not yours to manage".
+ * Space browser: page tree with restriction lock badges
+ * (`PageTreeNode.hasRestrictions`, design.md §6.6), a label-filter facet
+ * (`PageTreeNode.labels` + labels/filterTreeByLabel.ts), and a proactive
+ * replica banner (`Space.isReplica`, design.md §12). Space management is
+ * gated on `grants` being non-empty: the server returns grant rows only to
+ * instance/space admins ("absent, not forbidden"), and a space always has
+ * at least one grant by construction, so an empty list means "not yours to
+ * manage". The import-report link is deliberately absent until the
+ * importer (milestone 5) exists to produce reports.
  */
 export function SpaceBrowserPage() {
   const { spaceKey } = useParams<{ spaceKey: string }>()
@@ -91,9 +115,22 @@ export function SpaceBrowserPage() {
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
-  // No read path for "am I watching?" (reported contract gap) — the toggle
-  // reflects only what this visit did, same as the page-level watch button.
-  const [watching, setWatching] = useState<boolean | null>(null)
+  const [labelFilter, setLabelFilter] = useState<string | null>(null)
+  // Server truth (`viewerIsWatching`) with an optimistic override on click,
+  // reverted if the mutation is refused; reset when switching spaces.
+  const [watchOverride, setWatchOverride] = useState<boolean | null>(null)
+  // Switching spaces must not carry per-space UI state across — same
+  // render-time reset idiom as AuditLogPage's filter-key comparison.
+  const [stateSpaceKey, setStateSpaceKey] = useState(spaceKey)
+  if (stateSpaceKey !== spaceKey) {
+    setStateSpaceKey(spaceKey)
+    setWatchOverride(null)
+    setLabelFilter(null)
+  }
+
+  const tree: PageTreeNode[] = useMemo(() => treeData?.pageTree ?? [], [treeData])
+  const availableLabels = useMemo(() => distinctLabels(tree), [tree])
+  const labelMatches = useMemo(() => (labelFilter ? filterTreeByLabel(tree, labelFilter) : []), [tree, labelFilter])
 
   if (fetching) {
     return <Skeleton variant="rectangular" height={300} />
@@ -105,6 +142,7 @@ export function SpaceBrowserPage() {
 
   const space = data.space
   const canManage = space.grants.length > 0
+  const watching = watchOverride ?? space.viewerIsWatching
 
   const surfaceError = (mutationError: Parameters<typeof asReadOnlyReplica>[0]): boolean => {
     const replica = asReadOnlyReplica(mutationError)
@@ -122,16 +160,18 @@ export function SpaceBrowserPage() {
 
   const handleToggleWatch = async () => {
     setActionError(null)
-    if (watching === true) {
+    const next = !watching
+    setWatchOverride(next) // optimistic — reverted below if refused
+    if (!next) {
       const result = await unwatchSpace({ input: { spaceId: space.id } })
-      if (!surfaceError(result.data?.unwatchSpace.error)) setWatching(false)
+      if (result.error !== undefined || surfaceError(result.data?.unwatchSpace.error)) setWatchOverride(!next)
       return
     }
     // design.md §8: watching a space is how a user hears that a sync
     // bundle changed it — deliberately allowed on replica spaces too (a
     // Watch row is instance-local user metadata, not a replica write).
     const result = await watchSpace({ input: { spaceId: space.id } })
-    if (!surfaceError(result.data?.watchSpace.error)) setWatching(true)
+    if (result.error !== undefined || surfaceError(result.data?.watchSpace.error)) setWatchOverride(!next)
   }
 
   return (
@@ -142,13 +182,13 @@ export function SpaceBrowserPage() {
         </Typography>
         <Stack direction="row" spacing={1}>
           <Button
-            startIcon={watching === true ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
+            startIcon={watching ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
             variant="outlined"
             size="small"
             onClick={() => void handleToggleWatch()}
-            aria-pressed={watching === true}
+            aria-pressed={watching}
           >
-            {watching === true ? 'Watching' : 'Watch'}
+            {watching ? 'Watching' : 'Watch'}
           </Button>
           {/* No client-side gate here — the trash query itself is
               permission-filtered server-side, same "let the server decide
@@ -198,15 +238,54 @@ export function SpaceBrowserPage() {
         </Stack>
       </Stack>
 
+      {/* design.md §12: proactive replica banner — not just the reactive
+          dialog after a refused write. */}
+      {space.isReplica && (
+        <Alert severity="info">
+          Mirrored from {space.originInstanceId} — read-only. Content arrives via one-way sync; editing happens on
+          the origin instance (design.md §12).
+        </Alert>
+      )}
+
       {actionError && (
         <Alert severity="warning" onClose={() => setActionError(null)}>
           {actionError}
         </Alert>
       )}
 
-      <Box role="region" aria-label="Page tree">
-        <PageTreeList nodes={treeData?.pageTree ?? []} />
-      </Box>
+      {availableLabels.length > 0 && (
+        <Autocomplete
+          options={availableLabels}
+          value={labelFilter}
+          onChange={(_e, value) => setLabelFilter(value)}
+          size="small"
+          sx={{ maxWidth: 320 }}
+          renderInput={(params) => <TextField {...params} label="Filter by label" />}
+        />
+      )}
+
+      {labelFilter ? (
+        <Box role="region" aria-label={`Pages labelled ${labelFilter}`}>
+          {labelMatches.length === 0 ? (
+            <Typography color="text.secondary">No pages carry this label.</Typography>
+          ) : (
+            <List dense disablePadding>
+              {labelMatches.map((match) => (
+                <ListItemButton key={match.id} component={RouterLink} to={`/pages/${match.id}`}>
+                  <ListItemText
+                    primary={match.title}
+                    secondary={match.path.length > 0 ? match.path.join(' / ') : undefined}
+                  />
+                </ListItemButton>
+              ))}
+            </List>
+          )}
+        </Box>
+      ) : (
+        <Box role="region" aria-label="Page tree">
+          <PageTreeList nodes={tree} />
+        </Box>
+      )}
 
       <Dialog open={renameOpen} onClose={() => setRenameOpen(false)}>
         <DialogTitle>Rename "{space.name}"</DialogTitle>

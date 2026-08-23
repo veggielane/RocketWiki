@@ -2,13 +2,11 @@
 # possible in GraphQL, so this goes a few levels deeper than casual nav
 # needs; fine for typical wiki nesting depth.
 #
-# NOTE (schema reconciliation): the real PageTreeNode carries NO restriction
-# information (the placeholder's ownViewRestriction is gone, with no
-# replacement), so the move dialog can no longer compute whether a move
-# changes who can see the page — it shows an honest "can't verify" caution
-# instead of a false "no change" reassurance (see MovePageDialog.tsx).
-# Reported as a contract gap against design.md §6.4's "the move UI warns
-# when a move would change who can see a page".
+# `ownViewRestrictions` is a LIST of {ruleId, expressionJson} — a page can
+# carry several view restrictions. flattenMoveTargets accumulates them
+# down the tree (restrictions are positional and accumulate, design.md
+# §6.4) so the dialog can warn when a move would change who can see the
+# page.
 query SpaceTreeForMove($spaceId: UUID!) {
   pageTree(spaceId: $spaceId) {
     ...MoveTreeNode
@@ -28,4 +26,8 @@ fragment MoveTreeNode on PageTreeNode {
   id
   title
   sortOrder
+  ownViewRestrictions {
+    ruleId
+    expressionJson
+  }
 }

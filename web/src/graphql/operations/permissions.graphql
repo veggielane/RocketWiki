@@ -1,0 +1,77 @@
+# design.md §6.6: the restrictions listing and the shipped permission
+# inspector.
+#
+# `Page.restrictions` is manage-gated server-side and lists own + inherited
+# rules, flagged, with the source page's title — so an admin editing this
+# page's rules can see the whole accumulated chain (§6.4) and never stacks
+# a second restriction believing they were replacing an inherited one.
+#
+# `effectivePermission` is a ROOT query, not a Page field — a deliberate
+# divergence from §8's sketch so the non-admin refusal of a foreign
+# `subject` happens before any page lookup. Self-inspection (no subject)
+# works for anyone who can view the page; a principal-shaped `subject` is
+# the instance-admin-only foreign/what-if mode. Restriction checks carry
+# `expressionJson`, parsed client-side with the same ruleSerializer the
+# builder uses.
+query PagePermissions($id: UUID!) {
+  page(id: $id) {
+    id
+    title
+    spaceKey
+    canManageAccess
+    restrictions {
+      ruleId
+      pageId
+      pageTitle
+      inherited
+      action
+      expressionJson
+      createdAtUtc
+      updatedAtUtc
+      updatedByDisplayName
+    }
+  }
+}
+
+query EffectivePermission($pageId: UUID!, $subject: InspectedPrincipalInput) {
+  effectivePermission(pageId: $pageId, subject: $subject) {
+    userId
+    userDisplayName
+    spaceRole
+    isReplicaSpace
+    canView
+    canEdit
+    viewDenialReason
+    editDenialReason
+    viewRestrictions {
+      ruleId
+      pageId
+      pageTitle
+      action
+      expressionJson
+      passed
+    }
+    editRestrictions {
+      ruleId
+      pageId
+      pageTitle
+      action
+      expressionJson
+      passed
+    }
+  }
+}
+
+# design.md §6.6: picker vocabulary for the rule builder — known groups
+# accumulated from observed logins, plus the attribute registry (§6.2).
+# Gated to rule managers server-side and enumerated honestly from local
+# data; suggestion vocabulary, never authority (the group picker stays
+# freeSolo), so a query error or empty result just means typing by hand.
+query RuleVocabulary {
+  groups
+  attributeRegistry {
+    key
+    displayName
+    allowedValues
+  }
+}

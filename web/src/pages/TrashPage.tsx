@@ -25,7 +25,16 @@ export function TrashPage() {
   const [restoringId, setRestoringId] = useState<string | null>(null)
   const [message, setMessage] = useState<{ severity: 'success' | 'warning'; text: string } | null>(null)
 
-  const batches = useMemo(() => groupTrashBatches(data?.space?.trashedPages ?? []), [data])
+  const batches = useMemo(
+    () =>
+      groupTrashBatches(
+        (data?.space?.trashedPages ?? []).map((page) => ({
+          ...page,
+          deletedByDisplayName: page.deletedBy?.displayName ?? null,
+        })),
+      ),
+    [data],
+  )
 
   if (!spaceKey) return null
 
@@ -95,7 +104,12 @@ export function TrashPage() {
                     ? `${batch.rootPageTitle} + ${batch.pageCount - 1} more page${batch.pageCount - 1 === 1 ? '' : 's'}`
                     : batch.rootPageTitle
                 }
-                secondary={batch.expiresAtUtc ? describeExpiry(batch.expiresAtUtc) : undefined}
+                secondary={[
+                  batch.deletedByDisplayName ? `Deleted by ${batch.deletedByDisplayName}` : null,
+                  batch.expiresAtUtc ? describeExpiry(batch.expiresAtUtc) : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || undefined}
               />
             </ListItem>
           ))}

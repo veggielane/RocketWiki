@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Alert, Button, MenuItem, Paper, Select, Stack, TextField, Typography } from '@mui/material'
-import { useCreateSpaceMutation, type SpaceRole } from '../graphql/generated/graphql'
+import { useCreateSpaceMutation, useRuleVocabularyQuery, type SpaceRole } from '../graphql/generated/graphql'
 import { describeMutationError } from '../graphql/mutationError'
 import { RuleBuilder } from '../access/RuleBuilder'
 import { serializeRuleNode } from '../access/ruleSerializer'
+import type { AttributeOption } from '../access/attributeOption'
 import type { ValidationResult } from '../access/builderState'
 
 const ROLE_LABELS: Record<SpaceRole, string> = { VIEWER: 'Viewer', EDITOR: 'Editor', SPACE_ADMIN: 'Space admin' }
@@ -34,6 +35,17 @@ export function CreateSpacePage() {
   const [creating, setCreating] = useState(false)
 
   const [, createSpace] = useCreateSpaceMutation()
+  // Suggestion vocabulary for the builder's pickers (design.md §6.6) —
+  // instance admins (the only ones who reach this page) are always rule
+  // managers, so the manage-gated query answers; suggestions, never
+  // authority (the group picker stays freeSolo).
+  const [{ data: vocabulary }] = useRuleVocabularyQuery()
+  const vocabularyGroups = vocabulary?.groups ?? []
+  const vocabularyAttributes: AttributeOption[] = (vocabulary?.attributeRegistry ?? []).map((definition) => ({
+    key: definition.key,
+    displayName: definition.displayName ?? undefined,
+    allowedValues: definition.allowedValues,
+  }))
 
   const canSubmit = key.trim().length > 0 && name.trim().length > 0 && role !== '' && grantValidation?.valid === true
 
@@ -116,14 +128,11 @@ export function CreateSpacePage() {
             ))}
           </Select>
 
-          {/* groups/attributes empty: no registry queries in the real
-              schema yet (reported contract gap) — the group picker is
-              freeSolo, so rules can still be authored by typing. */}
           <RuleBuilder
             initialValue={{ kind: 'group', group: '' }}
             onChange={setGrantValidation}
-            groups={[]}
-            attributes={[]}
+            groups={vocabularyGroups}
+            attributes={vocabularyAttributes}
           />
         </Stack>
       </Paper>

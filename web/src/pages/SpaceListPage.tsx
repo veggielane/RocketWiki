@@ -1,12 +1,13 @@
-import { Alert, Button, Card, CardActionArea, CardContent, Skeleton, Stack, Typography } from '@mui/material'
+import { Alert, Button, Card, CardActionArea, CardContent, Chip, Skeleton, Stack, Typography } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
 import AddIcon from '@mui/icons-material/Add'
+import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined'
 import { useSpaceListQuery } from '../graphql/generated/graphql'
 import { useIsInstanceAdmin } from '../auth/useIsInstanceAdmin'
 
 /**
- * NOTE (schema reconciliation): the replica chip is gone — see
- * SpaceTreeNav.tsx (the real Space exposes no client-usable isReplica).
+ * Space directory. Replica spaces (design.md §12) carry a proactive
+ * "mirrored from {origin}" chip via `Space.isReplica`/`originInstanceId`.
  */
 export function SpaceListPage() {
   const [{ data, fetching, error }] = useSpaceListQuery()
@@ -41,7 +42,16 @@ export function SpaceListPage() {
         <Card key={space.key} variant="outlined">
           <CardActionArea component={RouterLink} to={`/spaces/${space.key}`}>
             <CardContent>
-              <Typography variant="h6">{space.name}</Typography>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Typography variant="h6">{space.name}</Typography>
+                {space.isReplica && (
+                  <Chip
+                    size="small"
+                    icon={<CloudSyncOutlinedIcon />}
+                    label={`Mirrored from ${space.originInstanceId} — read-only`}
+                  />
+                )}
+              </Stack>
               {space.description && (
                 <Typography variant="body2" color="text.secondary">
                   {space.description}

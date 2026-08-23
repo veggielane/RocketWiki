@@ -28,7 +28,10 @@ query SpaceTrash($key: String!) {
       ancestorPath
       deleteBatchId
       deletedAtUtc
-      deletedByUserId
+      deletedBy {
+        id
+        displayName
+      }
     }
   }
 }

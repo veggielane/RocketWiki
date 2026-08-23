@@ -92,4 +92,20 @@ describe('PermissionInspector', () => {
     render(<PermissionInspector detail={baseDetail()} />)
     expect(screen.getAllByText('None on this page or its ancestors.')).toHaveLength(2)
   })
+
+  it('renders a restriction whose stored expression could not be parsed as explicitly unreadable, never dropped', () => {
+    render(
+      <PermissionInspector
+        detail={baseDetail({
+          canView: false,
+          viewDenialReason: 'restriction:page-1:rule-1',
+          viewRestrictions: [
+            { ruleId: 'rule-1', pageId: 'page-1', pageTitle: 'Broken Rule Page', action: 'view', expression: null, passed: false },
+          ],
+        })}
+      />,
+    )
+    expect(screen.getByText('Broken Rule Page')).toBeInTheDocument()
+    expect(screen.getByText(/couldn't be read/i)).toBeInTheDocument()
+  })
 })

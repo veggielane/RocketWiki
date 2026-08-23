@@ -1,14 +1,34 @@
 import { useMemo, useState } from 'react'
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom'
-import { Alert, Box, Button, Chip, Divider, Skeleton, Stack, Typography } from '@mui/material'
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  IconButton,
+  Skeleton,
+  Stack,
+  Tooltip,
+  Typography,
+} from '@mui/material'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined'
 import LocalOfferOutlinedIcon from '@mui/icons-material/LocalOfferOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined'
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
+import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined'
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import {
   usePageByIdQuery,
+  useCurrentUserQuery,
+  useSpaceReplicaBannerQuery,
+  useSpaceLabelDetailsQuery,
   useSpaceTreeForMoveQuery,
   useMovePageMutation,
   useAddCommentMutation,
@@ -16,16 +36,22 @@ import {
   useDeletePageMutation,
   useWatchPageMutation,
   useUnwatchPageMutation,
+  useCreateLabelMutation,
+  useAttachLabelMutation,
+  useDetachLabelMutation,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, blockedPageCount, describeMutationError } from '../graphql/mutationError'
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from './MovePageDialog'
 import { DeletePageDialog } from './DeletePageDialog'
 import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
-import { flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
+import { ancestorRestrictionsOf, flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
+import { PermissionInspectorPanel } from '../access/permission/PermissionInspectorPanel'
 import { AttachmentList } from '../attachments/AttachmentList'
 import { AttachmentUploadButton } from '../attachments/AttachmentUploadButton'
 import { Comments } from '../comments/Comments'
+import { LabelEditor } from '../labels/LabelEditor'
+import { computeLabelOps } from '../labels/labelOps'
 import { useScrollToHash } from './useScrollToHash'
 import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
@@ -38,30 +64,40 @@ import { getDefaultPresenceTransport } from '../realtime/transports'
  * renderer" rule: there must never be a second Markdown-to-view pipeline
  * that can drift from what the editor round-trips.
  *
- * NOTE (schema reconciliation): the real Page type exposes no
- * viewer-permission fields (canEdit/canComment/canManageAccess) and no
- * restriction summary — reported as a contract gap. Until the API grows
- * them, edit affordances are offered to everyone who can *view* the page
- * and the server's typed refusals (Forbidden / ReadOnlyReplica) render as
- * designed UX rather than raw errors. The restriction lock-badge and the
- * per-user hiding this page used to do cannot be honored client-side
- * without that data. Label editing is likewise disabled: the schema
- * exposes label *names* only, and attach/detach need label ids there is
- * no read path for.
+ * Permissions shape the UI (design.md §6): the server-computed, replica-
+ * aware `canEdit`/`canComment`/`canManageAccess` fields gate the
+ * edit/move/delete, comment, and permissions affordances — hidden when the
+ * server would refuse, never offered-and-refused. The server remains the
+ * enforcement point; the typed refusals (Forbidden / ReadOnlyReplica /
+ * StaleRevision) still render as designed UX if they ever arrive.
  */
 export function PageViewPage() {
   const { pageId } = useParams<{ pageId: string }>()
   const navigate = useNavigate()
   const [{ data, fetching, error }, refetchPage] = usePageByIdQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
+  const [{ data: meData }] = useCurrentUserQuery()
   const [moveOpen, setMoveOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [blockedCount, setBlockedCount] = useState<number | null>(null)
   const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  // No read path for "am I watching this page?" (reported contract gap) —
-  // null means unknown; the toggle reflects only what this visit did.
-  const [watching, setWatching] = useState<boolean | null>(null)
+  const [editingLabels, setEditingLabels] = useState(false)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  // Server truth (`viewerIsWatching`) with an optimistic local override:
+  // the override is set on click, reverted if the mutation is refused, and
+  // cleared when navigating to a different page.
+  const [watchOverride, setWatchOverride] = useState<boolean | null>(null)
+  // Route reuse (same component, different pageId) must not carry per-page
+  // UI state across — same render-time reset idiom as AuditLogPage's
+  // filter-key comparison.
+  const [statePageId, setStatePageId] = useState(pageId)
+  if (statePageId !== pageId) {
+    setStatePageId(pageId)
+    setWatchOverride(null)
+    setEditingLabels(false)
+    setInspectorOpen(false)
+  }
   // Search results (design.md §9) link to `#anchorId` — the heading isn't
   // in the DOM yet at the moment of navigation (content loads and the
   // editor mounts asynchronously), so this watches for it to appear rather
@@ -69,13 +105,30 @@ export function PageViewPage() {
   useScrollToHash(data?.page?.content)
 
   const spaceId = data?.page?.spaceId
-  const [{ data: treeData }] = useSpaceTreeForMoveQuery({ variables: { spaceId: spaceId ?? '' }, pause: !spaceId })
+  const spaceKey = data?.page?.spaceKey
+  const canEdit = data?.page?.canEdit === true
+  // The move dialog needs the tree (with restriction markers) only when
+  // this user can actually move the page.
+  const [{ data: treeData }] = useSpaceTreeForMoveQuery({
+    variables: { spaceId: spaceId ?? '' },
+    pause: !spaceId || !canEdit,
+  })
+  // design.md §12: proactive "mirrored from {origin} — read-only" banner.
+  const [{ data: spaceMeta }] = useSpaceReplicaBannerQuery({ variables: { key: spaceKey ?? '' }, pause: !spaceKey })
+  // Label-id vocabulary for the editor — only fetched while editing.
+  const [{ data: labelData }] = useSpaceLabelDetailsQuery({
+    variables: { spaceKey: spaceKey ?? '' },
+    pause: !spaceKey || !editingLabels,
+  })
   const [, movePage] = useMovePageMutation()
   const [, addComment] = useAddCommentMutation()
   const [, deleteComment] = useDeleteCommentMutation()
   const [, deletePage] = useDeletePageMutation()
   const [, watchPage] = useWatchPageMutation()
   const [, unwatchPage] = useUnwatchPageMutation()
+  const [, createLabel] = useCreateLabelMutation()
+  const [, attachLabel] = useAttachLabelMutation()
+  const [, detachLabel] = useDetachLabelMutation()
   // Depends on pageId, not just mount — see usePresence.ts's comment on
   // why route reuse (same component, different pageId) needs this. The
   // transport is the app-lifetime singleton from realtime/transports.ts.
@@ -84,6 +137,13 @@ export function PageViewPage() {
   const targetOptions = useMemo(() => {
     if (!treeData?.pageTree || !pageId) return []
     return flattenMoveTargets(treeData.pageTree, pageId)
+  }, [treeData, pageId])
+
+  // The "before" side of the move dialog's visibility warning (design.md
+  // §6.4): what this page currently inherits from its ancestor chain.
+  const currentAncestorRestrictions = useMemo(() => {
+    if (!treeData?.pageTree || !pageId) return []
+    return ancestorRestrictionsOf(treeData.pageTree, pageId)
   }, [treeData, pageId])
 
   const sortOrders = useMemo(() => nextSortOrderByTarget(treeData?.pageTree ?? []), [treeData])
@@ -103,18 +163,22 @@ export function PageViewPage() {
     return false
   }
 
+  const watching = watchOverride ?? data?.page?.viewerIsWatching ?? false
+
   const handleToggleWatch = async () => {
     if (!pageId) return
     setActionError(null)
-    if (watching === true) {
-      const result = await unwatchPage({ input: { pageId } })
-      // design.md §8: unwatching is deliberately ungated — treat any
-      // response as unwatched unless a typed error says otherwise.
-      if (!surfaceError(result.data?.unwatchPage.error)) setWatching(false)
+    const next = !watching
+    setWatchOverride(next) // optimistic — reverted below if refused
+    if (next) {
+      const result = await watchPage({ input: { pageId } })
+      if (result.error !== undefined || surfaceError(result.data?.watchPage.error)) setWatchOverride(!next)
       return
     }
-    const result = await watchPage({ input: { pageId } })
-    if (!surfaceError(result.data?.watchPage.error)) setWatching(true)
+    // design.md §8: unwatching is deliberately ungated — treat any
+    // response as unwatched unless a typed error says otherwise.
+    const result = await unwatchPage({ input: { pageId } })
+    if (result.error !== undefined || surfaceError(result.data?.unwatchPage.error)) setWatchOverride(!next)
   }
 
   if (fetching) {
@@ -133,20 +197,53 @@ export function PageViewPage() {
   }
 
   const page = data.page
+  const replicaSpace = spaceMeta?.space?.isReplica === true ? spaceMeta.space : null
 
-  // Real Comment rows carry the author's user id only (no display-name
-  // resolver yet — reported contract gap); the thread shows a stable,
-  // non-sensitive stand-in derived from the id rather than nothing.
   const comments = page.comments.map((c) => ({
     id: c.id,
     parentCommentId: c.parentCommentId,
     body: c.body,
     isDeleted: c.isDeleted,
     authorUserId: c.authorUserId,
-    authorDisplayName: `User ${c.authorUserId.slice(0, 8)}`,
+    authorDisplayName: c.author.displayName,
     createdAtUtc: c.createdAtUtc,
     editedAtUtc: c.editedAtUtc,
   }))
+
+  const attachments = page.attachments.map((a) => ({
+    id: a.id,
+    fileName: a.fileName,
+    contentType: a.contentType,
+    sizeBytes: a.sizeBytes,
+    uploadedByDisplayName: a.uploadedBy.displayName,
+  }))
+
+  const saveLabels = async (names: string[]) => {
+    setActionError(null)
+    const ops = computeLabelOps(
+      page.labelDetails.map((label) => ({ id: label.id, name: label.name })),
+      names,
+      (labelData?.labelDetails ?? []).map((label) => ({ id: label.id, name: label.name })),
+    )
+    for (const name of ops.create) {
+      const created = await createLabel({ input: { spaceId: page.spaceId, name } })
+      if (surfaceError(created.data?.createLabel.error)) return
+      const label = created.data?.createLabel.label
+      if (!label) return
+      const attached = await attachLabel({ input: { pageId: page.id, labelId: label.id } })
+      if (surfaceError(attached.data?.attachLabel.error)) return
+    }
+    for (const label of ops.attach) {
+      const attached = await attachLabel({ input: { pageId: page.id, labelId: label.id } })
+      if (surfaceError(attached.data?.attachLabel.error)) return
+    }
+    for (const label of ops.detach) {
+      const detached = await detachLabel({ input: { pageId: page.id, labelId: label.id } })
+      if (surfaceError(detached.data?.detachLabel.error)) return
+    }
+    setEditingLabels(false)
+    refetchPage({ requestPolicy: 'network-only' })
+  }
 
   return (
     <Box>
@@ -156,43 +253,79 @@ export function PageViewPage() {
         </Typography>
         <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
           <PresenceAvatars viewers={viewers} />
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Tooltip title="Why can I see this page?">
+              <IconButton size="small" aria-label="Why can I see this page?" onClick={() => setInspectorOpen(true)}>
+                <PolicyOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Button
-              startIcon={watching === true ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
+              startIcon={watching ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
               variant="outlined"
               size="small"
               onClick={() => void handleToggleWatch()}
-              aria-pressed={watching === true}
+              aria-pressed={watching}
             >
-              {watching === true ? 'Watching' : 'Watch'}
+              {watching ? 'Watching' : 'Watch'}
             </Button>
-            <Button startIcon={<DriveFileMoveOutlinedIcon />} variant="outlined" size="small" onClick={() => setMoveOpen(true)}>
-              Move
-            </Button>
-            <Button
-              component={RouterLink}
-              to={`/pages/${page.id}/edit`}
-              startIcon={<EditOutlinedIcon />}
-              variant="outlined"
-              size="small"
-            >
-              Edit
-            </Button>
-            <Button
-              startIcon={<DeleteOutlinedIcon />}
-              variant="outlined"
-              color="error"
-              size="small"
-              onClick={() => {
-                setBlockedCount(null)
-                setDeleteOpen(true)
-              }}
-            >
-              Delete
-            </Button>
+            {/* design.md §6.4.1: move requires canEdit at the source (and
+                the server re-checks the destination). */}
+            {page.canEdit && (
+              <Button
+                startIcon={<DriveFileMoveOutlinedIcon />}
+                variant="outlined"
+                size="small"
+                onClick={() => setMoveOpen(true)}
+              >
+                Move
+              </Button>
+            )}
+            {page.canEdit && (
+              <Button
+                component={RouterLink}
+                to={`/pages/${page.id}/edit`}
+                startIcon={<EditOutlinedIcon />}
+                variant="outlined"
+                size="small"
+              >
+                Edit
+              </Button>
+            )}
+            {page.canManageAccess && (
+              <Button
+                component={RouterLink}
+                to={`/pages/${page.id}/permissions`}
+                startIcon={<ShieldOutlinedIcon />}
+                variant="outlined"
+                size="small"
+              >
+                Permissions
+              </Button>
+            )}
+            {page.canEdit && (
+              <Button
+                startIcon={<DeleteOutlinedIcon />}
+                variant="outlined"
+                color="error"
+                size="small"
+                onClick={() => {
+                  setBlockedCount(null)
+                  setDeleteOpen(true)
+                }}
+              >
+                Delete
+              </Button>
+            )}
           </Stack>
         </Stack>
       </Stack>
+
+      {replicaSpace && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Mirrored from {replicaSpace.originInstanceId} — read-only. Content arrives via one-way sync; editing
+          happens on the origin instance (design.md §12).
+        </Alert>
+      )}
 
       {actionError && (
         <Alert severity="warning" sx={{ mb: 2 }} onClose={() => setActionError(null)}>
@@ -200,13 +333,28 @@ export function PageViewPage() {
         </Alert>
       )}
 
-      {page.labels.length > 0 && (
+      {(page.labels.length > 0 || page.canEdit) && (
         <Box sx={{ mb: 2 }}>
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-            {page.labels.map((label) => (
-              <Chip key={label} size="small" label={label} icon={<LocalOfferOutlinedIcon />} />
-            ))}
-          </Stack>
+          {editingLabels ? (
+            <LabelEditor
+              labels={page.labelDetails.map((label) => label.name)}
+              knownLabels={(labelData?.labelDetails ?? []).map((label) => label.name)}
+              onSave={saveLabels}
+              onCancel={() => setEditingLabels(false)}
+            />
+          ) : (
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
+              {page.labels.map((label) => (
+                <Chip key={label} size="small" label={label} icon={<LocalOfferOutlinedIcon />} />
+              ))}
+              {/* design.md §6.4.2: attaching/detaching labels requires canEdit on this page. */}
+              {page.canEdit && (
+                <Button size="small" startIcon={<LocalOfferOutlinedIcon />} onClick={() => setEditingLabels(true)}>
+                  {page.labels.length > 0 ? 'Edit labels' : 'Add labels'}
+                </Button>
+              )}
+            </Stack>
+          )}
         </Box>
       )}
 
@@ -222,11 +370,13 @@ export function PageViewPage() {
         <PresencePointers pointers={pointers} />
       </Box>
 
-      <Box sx={{ mt: 2 }}>
-        <AttachmentUploadButton pageId={page.id} onUploaded={() => refetchPage({ requestPolicy: 'network-only' })} />
-      </Box>
+      {page.canEdit && (
+        <Box sx={{ mt: 2 }}>
+          <AttachmentUploadButton pageId={page.id} onUploaded={() => refetchPage({ requestPolicy: 'network-only' })} />
+        </Box>
+      )}
       <Box sx={{ mt: 1 }}>
-        <AttachmentList attachments={page.attachments} />
+        <AttachmentList attachments={attachments} />
       </Box>
 
       <Divider sx={{ my: 4 }} />
@@ -234,12 +384,12 @@ export function PageViewPage() {
       <Comments
         pageId={page.id}
         comments={comments}
-        canComment
-        // No local-user-id read path and no canManageAccess field (reported
-        // contract gaps): "may I delete this comment?" is unknowable, so the
-        // affordance is hidden rather than offered-and-refused.
-        currentUserId={undefined}
-        canManageAccess={false}
+        canComment={page.canComment}
+        // Delete-own matches Comment.authorUserId against the local User
+        // row id (CurrentUser.localUserId); moderation deletes ride on
+        // canManageAccess (design.md §6.4.2).
+        currentUserId={meData?.me.localUserId ?? undefined}
+        canManageAccess={page.canManageAccess}
         onAdd={async (body, parentCommentId) => {
           const result = await addComment({ input: { pageId: page.id, body, parentCommentId } })
           if (!surfaceError(result.data?.addComment.error)) {
@@ -258,9 +408,8 @@ export function PageViewPage() {
         open={moveOpen}
         onClose={() => setMoveOpen(false)}
         pageTitle={page.title}
-        currentAncestorRestrictions={[]}
+        currentAncestorRestrictions={currentAncestorRestrictions}
         targetOptions={targetOptions}
-        restrictionDataUnavailable
         onConfirm={(newParentId) => {
           setMoveOpen(false)
           void movePage({
@@ -303,6 +452,17 @@ export function PageViewPage() {
           }
         }}
       />
+
+      {/* Self-inspection for any viewer (design.md §6.6) — mounted only
+          while open, so merely viewing a page never fires the audited
+          permission.inspect query. */}
+      <Dialog open={inspectorOpen} onClose={() => setInspectorOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Why can I see this page?</DialogTitle>
+        <DialogContent>{inspectorOpen && <PermissionInspectorPanel pageId={page.id} />}</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setInspectorOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* One replica dialog for every write on this page (move, delete,
           watch, comments) — design.md §12: explain the mirror, never a raw

@@ -1,8 +1,8 @@
 # design.md §8: watching is canView-gated server-side; unwatching is
 # deliberately ungated (a user who lost access must still be able to
-# unwatch). NOTE (schema reconciliation, reported): there is no read path
-# for "am I watching this page/space?" — the watch buttons keep local
-# toggle state per visit and cannot show the true initial state.
+# unwatch). Initial watch state is read from `Page.viewerIsWatching` /
+# `Space.viewerIsWatching` (see page.graphql / spaces.graphql); the
+# buttons optimistic-update on click and revert on a typed error.
 mutation WatchPage($input: WatchPageRequestInput!) {
   watchPage(input: $input) {
     watch {

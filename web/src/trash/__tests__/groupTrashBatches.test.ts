@@ -42,6 +42,19 @@ describe('groupTrashBatches', () => {
     expect(batches.every((b) => b.pageCount === 1)).toBe(true)
   })
 
+  it('carries the batch root\'s deletedBy display name (resolved UserRef, not an id stand-in)', () => {
+    const batches = groupTrashBatches([
+      page({ id: 'root', ancestorPath: '/', deletedByDisplayName: 'Ada Lovelace' }),
+      page({ id: 'child', ancestorPath: '/root/', deletedByDisplayName: 'Ada Lovelace' }),
+    ])
+    expect(batches[0].deletedByDisplayName).toBe('Ada Lovelace')
+  })
+
+  it('reports null deletedByDisplayName when the deleter is unresolved', () => {
+    const batches = groupTrashBatches([page({ id: 'root', ancestorPath: '/' })])
+    expect(batches[0].deletedByDisplayName).toBeNull()
+  })
+
   it('computes the 30-day expiry from deletedAtUtc (data-model.md trash window)', () => {
     const batches = groupTrashBatches([page({ deletedAtUtc: '2026-08-01T00:00:00Z' })])
     expect(batches[0].expiresAtUtc).toBe('2026-08-31T00:00:00.000Z')

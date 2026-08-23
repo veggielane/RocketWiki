@@ -9,6 +9,23 @@ import type { RuleNode } from './ruleTypes'
  * rule expression, same spirit as the editor's "one renderer" rule for
  * Markdown.
  */
+/**
+ * `RuleExpressionSummary` for expressions that arrived as stored JSON and
+ * may not have parsed. A malformed rule still exists and still denies
+ * (fails closed, design.md §6.3), so it renders as explicitly unreadable —
+ * never silently dropped from a restriction listing or a move warning.
+ */
+export function RuleExpressionOrUnreadable({ node }: { node: RuleNode | null }) {
+  if (node === null) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+        This rule's stored expression couldn't be read — it still applies (malformed rules deny access).
+      </Typography>
+    )
+  }
+  return <RuleExpressionSummary node={node} />
+}
+
 export function RuleExpressionSummary({ node, depth = 0 }: { node: RuleNode; depth?: number }) {
   switch (node.kind) {
     case 'everyone':

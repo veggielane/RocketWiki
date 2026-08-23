@@ -87,6 +87,23 @@ export function PageEditPage() {
     return <Alert severity="info">Couldn't load this page.</Alert>
   }
 
+  if (!page.canEdit) {
+    // The edit route is reachable by URL even though the view page hides
+    // its Edit button — mirror the server's verdict rather than mounting
+    // an editor whose save can only be refused. This is not a leak: the
+    // caller can already view the page, and canEdit is their own
+    // permission (design.md §6.7 applies to reads, not to telling a user
+    // what they themselves may do).
+    return (
+      <Stack spacing={2}>
+        <Alert severity="info">You don't have permission to edit this page.</Alert>
+        <Button variant="outlined" onClick={() => navigate(`/pages/${page.id}`)} sx={{ alignSelf: 'flex-start' }}>
+          Back to page
+        </Button>
+      </Stack>
+    )
+  }
+
   return (
     <Box>
       <Typography variant="h4" component="h1" sx={{ mb: 2 }}>

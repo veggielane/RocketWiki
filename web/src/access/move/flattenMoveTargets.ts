@@ -1,27 +1,39 @@
-import { parseRuleNode } from '../ruleSerializer'
+import { tryParseRuleNode } from '../ruleSerializer'
 import type { MoveTargetOption, RestrictionSummary } from './visibilityChange'
+
+/** Mirrors `PageTreeRestriction` — the tree exposes each page's own view restrictions as a LIST of {ruleId, expressionJson}. */
+export interface MoveTreeRestriction {
+  ruleId: string
+  expressionJson: string
+}
 
 export interface MoveTreeNode {
   id: string
   title: string
-  /**
-   * NOTE (schema reconciliation): the real PageTreeNode carries no
-   * restriction data, so this is never populated from the API today — the
-   * accumulation logic is kept (and still tested) for the day the API
-   * exposes it again; callers must treat "no restrictions anywhere" as
-   * "restriction data unavailable", not "no restrictions exist" (see
-   * MovePageDialog's restrictionDataUnavailable prop).
-   */
-  ownViewRestriction?: { ruleId: string; expressionJson: string } | null
+  /** The node's own view restrictions (`PageTreeNode.ownViewRestrictions`) — a list; a page can carry several. */
+  ownViewRestrictions?: MoveTreeRestriction[]
   sortOrder?: number
   children?: MoveTreeNode[]
+}
+
+function ownRestrictionsOf(node: MoveTreeNode): RestrictionSummary[] {
+  return (node.ownViewRestrictions ?? []).map((restriction) => ({
+    ruleId: restriction.ruleId,
+    pageId: node.id,
+    pageTitle: node.title,
+    action: 'view',
+    // A malformed stored expression must not crash the dialog — the rule
+    // still applies (fails closed, design.md §6.3), it just renders as
+    // unreadable rather than as a summary.
+    expression: tryParseRuleNode(restriction.expressionJson).node,
+  }))
 }
 
 /**
  * Flattens a page tree into a list of candidate move targets, each carrying
  * the *accumulated* view-restriction chain a page would inherit if moved
  * there (design.md §6.4: restrictions accumulate down the tree — moving
- * under node X means inheriting X's own restriction plus everything above
+ * under node X means inheriting X's own restrictions plus everything above
  * it). The page being moved, and its entire subtree, is excluded — you
  * can't move a page into its own descendant.
  */
@@ -33,18 +45,7 @@ export function flattenMoveTargets(roots: MoveTreeNode[], excludePageId: string)
       return
     }
 
-    const ownRestriction: RestrictionSummary[] = node.ownViewRestriction
-      ? [
-          {
-            ruleId: node.ownViewRestriction.ruleId,
-            pageId: node.id,
-            pageTitle: node.title,
-            action: 'view',
-            expression: parseRuleNode(node.ownViewRestriction.expressionJson),
-          },
-        ]
-      : []
-    const chainIncludingThis = [...ancestorChainExcludingThis, ...ownRestriction]
+    const chainIncludingThis = [...ancestorChainExcludingThis, ...ownRestrictionsOf(node)]
 
     options.push({ id: node.id, title: node.title, ancestorRestrictions: chainIncludingThis })
 
@@ -58,6 +59,30 @@ export function flattenMoveTargets(roots: MoveTreeNode[], excludePageId: string)
   }
 
   return options
+}
+
+/**
+ * The view restrictions a page currently inherits from its ancestor chain —
+ * the "before" side of `computeVisibilityChange`. The page's *own*
+ * restrictions are excluded: they travel with it on a move and never change
+ * (design.md §6.4). Returns [] for a page at the space root, and for a page
+ * not found in the (depth-limited) tree.
+ */
+export function ancestorRestrictionsOf(roots: MoveTreeNode[], pageId: string): RestrictionSummary[] {
+  function walk(nodes: MoveTreeNode[], chain: RestrictionSummary[]): RestrictionSummary[] | null {
+    for (const node of nodes) {
+      if (node.id === pageId) {
+        return chain
+      }
+      const found = walk(node.children ?? [], [...chain, ...ownRestrictionsOf(node)])
+      if (found) {
+        return found
+      }
+    }
+    return null
+  }
+
+  return walk(roots, []) ?? []
 }
 
 /**

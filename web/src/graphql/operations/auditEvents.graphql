@@ -1,8 +1,10 @@
 # design.md §7: admin audit viewer. Real connection shape: cursor paging
-# via first/after, enum-typed filter, no totalCount. `userDisplayName` is
-# nullable (system events); `channel`/`outcome`/`subjectType` are enums.
+# via first/after, enum-typed filter, `totalCount` for the matching-event
+# total. `userDisplayName` is nullable (system events);
+# `channel`/`outcome`/`subjectType` are enums.
 query AuditEvents($filter: AuditFilterInput!, $first: Int, $after: String) {
   auditEvents(filter: $filter, first: $first, after: $after) {
+    totalCount
     pageInfo {
       hasNextPage
       endCursor

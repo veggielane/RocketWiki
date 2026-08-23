@@ -1,7 +1,7 @@
 import { Alert, Box, Chip, Paper, Stack, Typography } from '@mui/material'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined'
 import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined'
-import { RuleExpressionSummary } from '../RuleExpressionSummary'
+import { RuleExpressionOrUnreadable } from '../RuleExpressionSummary'
 import { describeDenialReason } from './describeDenialReason'
 import type { EffectivePermissionDetail, RestrictionCheck } from './effectivePermissionTypes'
 
@@ -117,7 +117,7 @@ function RestrictionList({ title, restrictions }: { title: string; restrictions:
                 ({r.passed ? 'passed' : 'failed'})
               </Typography>
             </Stack>
-            <RuleExpressionSummary node={r.expression} />
+            <RuleExpressionOrUnreadable node={r.expression} />
           </Paper>
         ))}
       </Stack>

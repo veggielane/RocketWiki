@@ -19,6 +19,8 @@ export interface TrashedPage {
   ancestorPath: string
   deleteBatchId: string | null
   deletedAtUtc: string | null
+  /** Resolved from `Page.deletedBy` (UserRef) — the display name, not a derived id stand-in. */
+  deletedByDisplayName?: string | null
 }
 
 export interface TrashBatch {
@@ -29,6 +31,8 @@ export interface TrashBatch {
   pageCount: number
   deletedAtUtc: string | null
   expiresAtUtc: string | null
+  /** Who deleted the batch's root page (the whole cascade is one audited operation, so one actor). */
+  deletedByDisplayName: string | null
 }
 
 const TRASH_WINDOW_DAYS = 30
@@ -62,6 +66,7 @@ export function groupTrashBatches(pages: TrashedPage[]): TrashBatch[] {
       pageCount: group.length,
       deletedAtUtc: root.deletedAtUtc,
       expiresAtUtc: expiryOf(root.deletedAtUtc),
+      deletedByDisplayName: root.deletedByDisplayName ?? null,
     })
   }
 

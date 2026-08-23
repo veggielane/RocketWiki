@@ -13,10 +13,8 @@ export interface LabelMatch {
 }
 
 /**
- * NOTE (schema reconciliation): currently unmounted — the real
- * PageTreeNode carries no `labels` field (reported contract gap), so the
- * space browser's label-filter facet lost its data source. Kept, with its
- * tests, for the day the field lands.
+ * The space browser's label-filter facet, fed by `PageTreeNode.labels`
+ * (permission-filtered per page server-side, like the tree itself).
  *
  * Flattens a space's page tree to just the pages carrying a given label,
  * each with a breadcrumb of its ancestor titles. Flattened rather than

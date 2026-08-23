@@ -1,10 +1,11 @@
-# NOTE (schema reconciliation): the real Page type exposes no
-# viewer-permission fields — no canEdit/canComment/canManageAccess, no
-# `restrictions` summary. Until the API grows them (reported as a contract
-# gap; design.md §8's sketch includes `restrictions` and an effective-
-# permission inspector), the UI cannot hide edit affordances per user — it
-# offers them and renders the server's typed refusal (`error.kind ===
-# "Forbidden"`) gracefully instead.
+# The page read shared by the view and edit routes. The viewer-permission
+# fields (canEdit/canComment/canManageAccess) are server-computed, batched,
+# and replica-aware (design.md §8 "Known deltas") — the UI hides affordances
+# the server would refuse rather than offering-and-refusing, while the
+# server stays the enforcement point (§6.7). `viewerIsWatching` is the
+# server truth behind the watch toggle; `labelDetails` carries the label
+# ids that attach/detach need; `author`/`uploadedBy` are UserRef
+# display-name resolutions.
 query PageById($id: UUID!) {
   page(id: $id) {
     id
@@ -14,7 +15,16 @@ query PageById($id: UUID!) {
     slug
     content
     currentRevisionNumber
+    canEdit
+    canComment
+    canManageAccess
+    viewerIsWatching
     labels
+    labelDetails {
+      id
+      spaceId
+      name
+    }
     parent {
       id
       title
@@ -28,6 +38,10 @@ query PageById($id: UUID!) {
       body
       isDeleted
       authorUserId
+      author {
+        id
+        displayName
+      }
       createdAtUtc
       editedAtUtc
     }
@@ -36,7 +50,10 @@ query PageById($id: UUID!) {
       fileName
       contentType
       sizeBytes
-      uploadedByUserId
+      uploadedBy {
+        id
+        displayName
+      }
     }
   }
 }

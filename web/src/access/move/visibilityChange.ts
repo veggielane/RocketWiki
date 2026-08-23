@@ -6,7 +6,13 @@ export interface RestrictionSummary {
   pageId: string
   pageTitle: string
   action: 'view' | 'edit'
-  expression: RuleNode
+  /**
+   * Null when the stored expressionJson couldn't be parsed — the rule still
+   * exists and still denies (malformed rules fail closed, design.md §6.3),
+   * it just can't be summarized; the UI must show it as unreadable, never
+   * drop it from a visibility-change warning.
+   */
+  expression: RuleNode | null
 }
 
 export interface MoveTargetOption {
