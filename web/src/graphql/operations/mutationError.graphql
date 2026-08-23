@@ -1,0 +1,19 @@
+# The one selection of the API's flattened mutation-error type
+# (PageMutationErrorView — design.md §8: "every mutation returns a payload
+# type with typed errors"). `kind` is the discriminator ("StaleRevision",
+# "ReadOnlyReplica", "Forbidden", "SubtreeOperationForbidden", "NotFound",
+# "Validation"); only the fields relevant to a kind are non-null. Every
+# mutation selects this fragment so the client-side narrowing helpers in
+# src/graphql/mutationError.ts work on every payload uniformly.
+fragment MutationError on PageMutationErrorView {
+  kind
+  message
+  expectedRevisionNumber
+  actualRevisionNumber
+  latestTitle
+  latestContent
+  spaceId
+  originInstanceId
+  blockedPageCount
+  notFoundId
+}

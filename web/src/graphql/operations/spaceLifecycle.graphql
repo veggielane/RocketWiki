@@ -1,50 +1,62 @@
-mutation CreateSpace($input: CreateSpaceInput!) {
-  createSpace(input: $input) {
+# design.md §6.5.1: space creation is atomic with its first grant — the
+# real mutation takes `initialGrant` as a separate required argument, so
+# the API cannot succeed without one and never substitutes a default.
+# A duplicate key comes back as the flattened error with kind
+# "Validation" (there is no dedicated keyAlreadyInUse error type).
+mutation CreateSpace($input: CreateSpaceRequestInput!, $initialGrant: InitialSpaceGrantInput!) {
+  createSpace(input: $input, initialGrant: $initialGrant) {
     space {
+      id
       key
       name
     }
-    malformedRuleError {
-      message
-    }
-    keyAlreadyInUseError {
-      message
+    error {
+      ...MutationError
     }
   }
 }
 
-mutation RenameSpace($input: RenameSpaceInput!) {
+mutation RenameSpace($input: RenameSpaceRequestInput!) {
   renameSpace(input: $input) {
     space {
+      id
       key
       name
+      description
+    }
+    error {
+      ...MutationError
     }
   }
 }
 
-mutation ArchiveSpace($input: ArchiveSpaceInput!) {
+mutation ArchiveSpace($input: ArchiveSpaceRequestInput!) {
   archiveSpace(input: $input) {
     space {
+      id
       key
-      isArchived
-      archivedAtUtc
+      isDeleted
+    }
+    error {
+      ...MutationError
     }
   }
 }
 
-mutation RestoreSpace($input: RestoreSpaceInput!) {
+# NOTE (schema reconciliation): restoreSpace exists, but no query lists
+# archived spaces (SpaceReads excludes them via the EF query filter), so
+# there is no way to obtain an archived space's id to restore it from the
+# SPA. The mutation is kept wired for the day a listing exists; the
+# Archived spaces page explains the gap (see ArchivedSpacesPage.tsx).
+mutation RestoreSpace($input: RestoreSpaceRequestInput!) {
   restoreSpace(input: $input) {
     space {
+      id
       key
-      isArchived
+      isDeleted
     }
-  }
-}
-
-query ArchivedSpaces {
-  archivedSpaces {
-    key
-    name
-    archivedAtUtc
+    error {
+      ...MutationError
+    }
   }
 }

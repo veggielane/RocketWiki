@@ -1,67 +1,65 @@
 import { useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import {
-  Alert,
-  Box,
-  Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  Skeleton,
-  Stack,
-  Typography,
-} from '@mui/material'
-import { usePageByIdQuery, useUpdatePageMutation } from '../graphql/generated/graphql'
+import { Alert, Box, Button, Skeleton, Stack, Typography } from '@mui/material'
+import { usePageByIdQuery, useUpdatePageContentMutation } from '../graphql/generated/graphql'
+import { asReadOnlyReplica, asStaleRevision, describeMutationError, type StaleRevision } from '../graphql/mutationError'
 import { RichTextEditor, type RichTextEditorHandle } from '../editor/RichTextEditor'
+import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
+import { StaleRevisionDialog } from './StaleRevisionDialog'
 
 /**
- * Page edit. Two of the brief's non-negotiables live here:
- *  - `ReadOnlyReplicaError` renders as an explanatory banner, not a raw
- *    error toast, and disables the save affordance entirely.
- *  - `StaleRevisionError` opens a merge dialog (view their changes /
+ * Page edit. Two of the brief's non-negotiables live here, both driven by
+ * the API's flattened typed-error payload (`error.kind`, see
+ * graphql/mutationError.ts):
+ *  - `ReadOnlyReplica` renders as an explanatory dialog carrying the
+ *    origin instance id, not a raw error toast (design.md §12).
+ *  - `StaleRevision` opens the merge flow (view their changes /
  *    overwrite / copy my text) instead of throwing — it's UX, not an
- *    exception (design.md §5, §8).
+ *    exception (design.md §5, §8). "Overwrite anyway" re-submits against
+ *    the revision number the error reported.
  */
 export function PageEditPage() {
   const { pageId } = useParams<{ pageId: string }>()
   const navigate = useNavigate()
   const editorRef = useRef<RichTextEditorHandle>(null)
   const [pageQuery] = usePageByIdQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
-  const [, updatePage] = useUpdatePageMutation()
+  const [, updatePageContent] = useUpdatePageContentMutation()
 
-  const [readOnlyReplica, setReadOnlyReplica] = useState<{ originInstanceId: string } | null>(null)
-  const [staleRevision, setStaleRevision] = useState<{ currentRevisionNumber: number; currentContent: string } | null>(
-    null,
-  )
+  const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
+  const [staleRevision, setStaleRevision] = useState<StaleRevision | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   const page = pageQuery.data?.page
 
-  const handleSave = async () => {
+  const save = async (expectedRevisionNumber: number) => {
     if (!page || !editorRef.current) return
     setSaving(true)
-    const result = await updatePage({
+    setSaveError(null)
+    const result = await updatePageContent({
       input: {
         pageId: page.id,
-        baseRevisionNumber: page.revisionNumber,
+        expectedRevisionNumber,
         title: page.title,
         content: editorRef.current.getMarkdown(),
       },
     })
     setSaving(false)
 
-    const payload = result.data?.updatePage
-    if (payload?.readOnlyReplicaError) {
-      setReadOnlyReplica({ originInstanceId: payload.readOnlyReplicaError.originInstanceId })
+    const payload = result.data?.updatePageContent
+    const replica = asReadOnlyReplica(payload?.error)
+    if (replica) {
+      setReplicaOrigin(replica.originInstanceId ?? 'its origin instance')
       return
     }
-    if (payload?.staleRevisionError) {
-      setStaleRevision({
-        currentRevisionNumber: payload.staleRevisionError.currentRevisionNumber,
-        currentContent: payload.staleRevisionError.currentContent,
-      })
+    const stale = asStaleRevision(payload?.error)
+    if (stale) {
+      setStaleRevision(stale)
+      return
+    }
+    const errorText = describeMutationError(payload?.error)
+    if (errorText) {
+      setSaveError(errorText)
       return
     }
     if (payload?.page) {
@@ -79,7 +77,7 @@ export function PageEditPage() {
   }
 
   if (pageQuery.error || !page) {
-    return <Alert severity="info">Couldn't load this page — there's no live API in this environment yet.</Alert>
+    return <Alert severity="info">Couldn't load this page.</Alert>
   }
 
   return (
@@ -90,8 +88,14 @@ export function PageEditPage() {
 
       <RichTextEditor ref={editorRef} initialMarkdown={page.content} editable pageId={page.id} />
 
+      {saveError && (
+        <Alert severity="warning" sx={{ mt: 2 }} onClose={() => setSaveError(null)}>
+          {saveError}
+        </Alert>
+      )}
+
       <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
-        <Button variant="contained" onClick={handleSave} disabled={saving}>
+        <Button variant="contained" onClick={() => void save(page.currentRevisionNumber)} disabled={saving}>
           Save
         </Button>
         <Button variant="text" onClick={() => navigate(`/pages/${page.id}`)}>
@@ -99,66 +103,32 @@ export function PageEditPage() {
         </Button>
       </Stack>
 
-      {/* ReadOnlyReplicaError: explanatory banner, never a raw error toast (design.md §12). */}
-      <Dialog open={Boolean(readOnlyReplica)} onClose={() => setReadOnlyReplica(null)}>
-        <DialogTitle>This space is read-only</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This page belongs to a space mirrored from instance{' '}
-            <strong>{readOnlyReplica?.originInstanceId}</strong>. Replicated spaces are always read-only — edit the
-            page on its origin instance instead.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button autoFocus onClick={() => setReadOnlyReplica(null)}>
-            Close
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ReadOnlyReplicaDialog
+        open={replicaOrigin !== null}
+        originInstanceId={replicaOrigin}
+        onClose={() => setReplicaOrigin(null)}
+      />
 
-      {/* StaleRevisionError: the merge flow, not an exception (design.md §5, §8). */}
-      <Dialog open={Boolean(staleRevision)} onClose={() => setStaleRevision(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Someone else saved changes first</DialogTitle>
-        <DialogContent>
-          <DialogContentText sx={{ mb: 2 }}>
-            This page has been saved as revision {staleRevision?.currentRevisionNumber} since you started editing.
-            Choose how to proceed:
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, justifyContent: 'flex-start', gap: 1 }}>
-          {/* Default focus on the non-destructive option — this dialog
-              appears mid-edit, when a stray Enter keypress is exactly the
-              kind of mistake someone stressed about losing work makes.
-              "Overwrite anyway" must never be reachable by pressing Enter
-              without an intentional Tab first. */}
-          <Button
-            autoFocus
-            variant="outlined"
-            onClick={() => {
-              setStaleRevision(null)
-              // TODO(page-edit): show a real diff view (this dialog already
-              // has staleRevision.currentContent available) once there's a
-              // proper compare UI — out of scope for the scaffold.
-            }}
-          >
-            View their changes
-          </Button>
-          <Button
-            variant="outlined"
-            color="warning"
-            onClick={() => {
-              setStaleRevision(null)
-              // TODO(page-edit): re-submit with the new baseRevisionNumber
-              // to overwrite once the mutation supports a force flag.
-            }}
-          >
-            Overwrite anyway
-          </Button>
-          <Button variant="text" onClick={() => setStaleRevision(null)}>
-            Copy my text and cancel
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <StaleRevisionDialog
+        open={staleRevision !== null}
+        currentRevisionNumber={staleRevision?.actualRevisionNumber ?? null}
+        onViewChanges={() => {
+          setStaleRevision(null)
+          // TODO(page-edit): show a real diff view (staleRevision.latestContent
+          // is already here) once there's a proper compare UI.
+        }}
+        onOverwriteAnyway={() => {
+          const theirRevision = staleRevision?.actualRevisionNumber
+          setStaleRevision(null)
+          // Re-submit against the revision the error reported as current —
+          // an explicit, informed overwrite of exactly the revision the
+          // user was just told about (a *newer* save landing in between
+          // will surface as another StaleRevision, as it should).
+          if (theirRevision != null) void save(theirRevision)
+        }}
+        onCopyAndCancel={() => setStaleRevision(null)}
+        onClose={() => setStaleRevision(null)}
+      />
     </Box>
   )
 }

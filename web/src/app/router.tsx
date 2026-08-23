@@ -146,6 +146,13 @@ export const router = createBrowserRouter([
               return { Component: AuditLogPage }
             },
           },
+          {
+            path: 'sync',
+            lazy: async () => {
+              const { SyncStatusPage } = await import('../pages/SyncStatusPage')
+              return { Component: SyncStatusPage }
+            },
+          },
         ],
       },
       // Statically imported, not `lazy`: AccessGate.tsx renders it directly

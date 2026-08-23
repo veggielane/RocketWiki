@@ -1,28 +1,57 @@
+# Space grants against the real access-rule API: individual
+# create/update/delete mutations rather than the placeholder's full-set
+# replacement — the grants editor diffs its rows against the loaded ones
+# on save (SpaceGrantsPage.tsx). `grants` returns rows only to instance
+# admins / this space's space-admin ("absent, not forbidden"), which also
+# serves as the page's access gate: a space always has at least one grant
+# by construction, so an empty list means "not yours to manage".
 query SpaceGrants($key: String!) {
   space(key: $key) {
+    id
     key
     name
-    canManageAccess
     grants {
       id
+      kind
       role
       expressionJson
     }
   }
 }
 
-mutation SetSpaceGrants($input: SetSpaceGrantsInput!) {
-  setSpaceGrants(input: $input) {
-    space {
-      key
-      grants {
-        id
-        role
-        expressionJson
-      }
+mutation CreateAccessRule($input: CreateAccessRuleRequestInput!) {
+  createAccessRule(input: $input) {
+    rule {
+      id
+      kind
+      role
+      expressionJson
     }
-    malformedRuleError {
-      message
+    error {
+      ...MutationError
+    }
+  }
+}
+
+mutation UpdateAccessRule($input: UpdateAccessRuleRequestInput!) {
+  updateAccessRule(input: $input) {
+    rule {
+      id
+      kind
+      role
+      expressionJson
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
+mutation DeleteAccessRule($input: DeleteAccessRuleRequestInput!) {
+  deleteAccessRule(input: $input) {
+    deletedRuleId
+    error {
+      ...MutationError
     }
   }
 }

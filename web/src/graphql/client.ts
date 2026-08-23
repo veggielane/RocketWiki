@@ -5,9 +5,9 @@ import { getAccessToken } from './authToken'
 const url = import.meta.env.VITE_GRAPHQL_URL ?? '/graphql'
 
 /**
- * Single urql client for the app. `schema.graphql` doesn't exist yet (the
- * API hasn't been scaffolded), so nothing here has been exercised against
- * a live server — this is the wiring, not a tested integration.
+ * Single urql client for the app, generated types from the repo-root
+ * `schema.graphql` (design.md §8). Bearer token per request from the
+ * in-memory store (authToken.ts) — never persisted.
  */
 export const urqlClient = createClient({
   url,

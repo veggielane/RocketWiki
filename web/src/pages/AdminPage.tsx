@@ -7,6 +7,11 @@ const LIVE_SECTIONS = [
     description: 'Filter by user/action/subject/outcome/date, CSV export (§7).',
     to: '/admin/audit',
   },
+  {
+    title: 'Sync status',
+    description: 'Per-space outbox positions and pending events; per-origin bundle import history (§12).',
+    to: '/admin/sync',
+  },
 ]
 
 const PLACEHOLDER_SECTIONS = [
@@ -16,7 +21,6 @@ const PLACEHOLDER_SECTIONS = [
       'Create spaces and manage exports (§12). Grants live per-space — open a space and use its "Grants" action.',
   },
   { title: 'Attribute registry', description: 'Declare which token claims are rule-usable attributes (§6.2).' },
-  { title: 'Sync status', description: 'Low → high bundle import history and gaps (§12).' },
 ]
 
 /**

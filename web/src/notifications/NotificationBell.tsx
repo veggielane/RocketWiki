@@ -14,20 +14,29 @@ import NotificationsOutlinedIcon from '@mui/icons-material/NotificationsOutlined
 import { Link as RouterLink } from 'react-router-dom'
 import { useNotifications } from './useNotifications'
 import { describeNotification } from './describeNotification'
-import { FakeNotificationsTransport } from '../realtime/FakeNotificationsTransport'
-import { usePersistedNotificationsQuery } from '../graphql/generated/graphql'
-import type { NotificationPayload } from '../realtime/types'
+import { getDefaultNotificationsTransport } from '../realtime/transports'
+import { useMarkNotificationReadMutation, usePersistedNotificationsQuery } from '../graphql/generated/graphql'
+import type { NotificationPayload, NotificationsTransport } from '../realtime/types'
 
-// One transport instance for the app's lifetime — recreating it per render
-// would connect/disconnect on every re-render. Swap for
-// `SignalRNotificationsTransport` once `/hubs/notifications` exists
-// (design.md §8, milestone 4b) — the fake is a deliberate placeholder here,
-// not a workaround.
-const transport = new FakeNotificationsTransport()
+export interface NotificationBellProps {
+  /**
+   * Injection point for tests; the app leaves it unset and gets the
+   * app-lifetime singleton from realtime/transports.ts (the seam that
+   * picks SignalR vs the fake). One instance for the app's lifetime —
+   * recreating a transport per render would connect/disconnect on every
+   * re-render.
+   */
+  transport?: NotificationsTransport
+}
 
-export function NotificationBell() {
+export function NotificationBell({ transport }: NotificationBellProps = {}) {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
   const [{ data }] = usePersistedNotificationsQuery()
+  const [, markNotificationRead] = useMarkNotificationReadMutation()
+
+  // Lazily resolved so merely importing/rendering with an injected
+  // transport (tests) never constructs a hub connection.
+  const activeTransport = useMemo(() => transport ?? getDefaultNotificationsTransport(), [transport])
 
   const persisted: NotificationPayload[] = useMemo(
     () =>
@@ -36,15 +45,15 @@ export function NotificationBell() {
         type: n.type as NotificationPayload['type'],
         pageId: n.pageId,
         spaceKey: n.spaceKey,
-        pageTitle: n.pageTitle ?? null,
+        pageTitle: n.pageTitle,
         actorDisplayName: n.actorDisplayName,
         timestampUtc: n.createdAtUtc,
-        readAtUtc: n.readAtUtc ?? null,
+        readAtUtc: n.readAtUtc,
       })),
     [data],
   )
 
-  const { notifications, unreadCount, markRead } = useNotifications(transport, persisted)
+  const { notifications, unreadCount, markRead } = useNotifications(activeTransport, persisted)
 
   return (
     <>
@@ -72,6 +81,13 @@ export function NotificationBell() {
                     component={linkable ? RouterLink : 'div'}
                     to={linkable ? `/pages/${n.pageId}` : undefined}
                     onClick={() => {
+                      // Server first (the persisted row is the record —
+                      // design.md §8), local immediately: the badge
+                      // shouldn't wait a round-trip, and the next
+                      // `notifications` refetch carries readAtUtc anyway.
+                      if (isUnread) {
+                        void markNotificationRead({ input: { notificationId: n.id } })
+                      }
                       markRead(n.id)
                       setAnchorEl(null)
                     }}

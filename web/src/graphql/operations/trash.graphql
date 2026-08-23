@@ -1,38 +1,46 @@
-mutation DeletePage($input: DeletePageInput!) {
+# design.md §6.4.1: a cascade delete trashes a whole subtree as one batch.
+# The real schema exposes trashed PAGES (each carrying its deleteBatchId),
+# not batch rows — the client groups them back into batches
+# (trash/groupTrashBatches.ts) and restores via the batch's root page id
+# (restorePage restores the whole batch, per PageRestoreSummary).
+mutation DeletePage($input: DeletePageRequestInput!) {
   deletePage(input: $input) {
-    success
-    blockedDescendantCount
-    trashBatchId
-    readOnlyReplicaError {
-      message
-      originInstanceId
+    summary {
+      rootPageId
+      deletedPageCount
+      deletedAtUtc
+    }
+    error {
+      ...MutationError
     }
   }
 }
 
 query SpaceTrash($key: String!) {
   space(key: $key) {
+    id
     key
     name
-    trash {
+    trashedPages {
       id
-      rootPageId
-      rootPageTitle
-      pageCount
+      title
+      parentPageId
+      ancestorPath
+      deleteBatchId
       deletedAtUtc
-      deletedByDisplayName
-      expiresAtUtc
+      deletedByUserId
     }
   }
 }
 
-mutation RestoreTrashBatch($input: RestoreTrashBatchInput!) {
-  restoreTrashBatch(input: $input) {
-    restoredPageCount
-    restoredRootPageId
-    readOnlyReplicaError {
-      message
-      originInstanceId
+mutation RestorePage($input: RestorePageRequestInput!) {
+  restorePage(input: $input) {
+    summary {
+      rootPageId
+      restoredPageCount
+    }
+    error {
+      ...MutationError
     }
   }
 }

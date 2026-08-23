@@ -1,3 +1,9 @@
+# design.md §8: the persisted catch-up list — a flat, capped (100 rows
+# server-side) list, deliberately not a connection; the bell dropdown is
+# the whole product surface. `pageTitle` is null whenever the recipient's
+# canView no longer holds at read time. Live pushes arrive over SignalR
+# with the same field names (realtime/types.ts NotificationPayload) and the
+# same row id, so the client de-duplicates push vs refetch by id.
 query PersistedNotifications {
   notifications {
     id
@@ -16,6 +22,9 @@ mutation MarkNotificationRead($input: MarkNotificationReadInput!) {
     notification {
       id
       readAtUtc
+    }
+    error {
+      ...MutationError
     }
   }
 }

@@ -1,17 +1,13 @@
 import type { CodegenConfig } from '@graphql-codegen/cli'
 
 /**
- * TEMPORARY: points at `src/graphql/schema.placeholder.graphql`, a
- * hand-transcribed guess at the real schema, because RocketWiki.Api hasn't
- * exported `schema.graphql` yet (design.md §8 — the backend is a code-first
- * Hot Chocolate schema, checked in at the repo root once it exists).
- *
- * Swap the `schema` path below to `../schema.graphql` the moment that file
- * exists and re-run `npm run codegen`. Nothing else in this config should
- * need to change.
+ * Points at the real `schema.graphql` exported by RocketWiki.Api (design.md
+ * §8 — code-first Hot Chocolate, SDL checked in at the repo root with a CI
+ * drift guard). The frontend generates its whole typed client from that one
+ * file; nothing here is hand-transcribed anymore.
  */
 const config: CodegenConfig = {
-  schema: './src/graphql/schema.placeholder.graphql',
+  schema: '../schema.graphql',
   documents: ['src/graphql/operations/**/*.graphql'],
   generates: {
     'src/graphql/generated/graphql.ts': {
@@ -26,6 +22,16 @@ const config: CodegenConfig = {
       plugins: ['typescript-operations', 'typescript-urql'],
       config: {
         withHooks: true,
+        // Hot Chocolate's custom scalars, mapped to what actually crosses
+        // the JSON wire. Without these, codegen types every UUID/DateTime
+        // field as `any` and the type-safety the round-trip to the real
+        // schema is supposed to buy silently evaporates.
+        scalars: {
+          UUID: 'string',
+          DateTime: 'string',
+          Long: 'number',
+          UnsignedByte: 'number',
+        },
       },
     },
   },

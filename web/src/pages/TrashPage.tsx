@@ -1,14 +1,19 @@
 import { useParams } from 'react-router-dom'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
-import { useRestoreTrashBatchMutation, useSpaceTrashQuery } from '../graphql/generated/graphql'
+import { useRestorePageMutation, useSpaceTrashQuery } from '../graphql/generated/graphql'
+import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
+import { groupTrashBatches } from '../trash/groupTrashBatches'
 import { describeExpiry } from '../trash/trashCountdown'
 
 /**
  * design.md §6.4.1: a cascade delete trashes a whole subtree as one
  * operation, so this lists **batches**, not one row per page — a subtree
  * of 12 pages shows as one entry, and restoring it brings all 12 back
- * together rather than requiring 12 separate restores.
+ * together rather than requiring 12 separate restores. The real schema
+ * sends trashed pages with a `deleteBatchId` stamp; grouping happens
+ * client-side (trash/groupTrashBatches.ts), and restore goes through
+ * `restorePage` with the batch's root page id.
  */
 export function TrashPage() {
   const { spaceKey } = useParams<{ spaceKey: string }>()
@@ -16,24 +21,36 @@ export function TrashPage() {
     variables: { key: spaceKey ?? '' },
     pause: !spaceKey,
   })
-  const [, restoreTrashBatch] = useRestoreTrashBatchMutation()
+  const [, restorePage] = useRestorePageMutation()
   const [restoringId, setRestoringId] = useState<string | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
+  const [message, setMessage] = useState<{ severity: 'success' | 'warning'; text: string } | null>(null)
+
+  const batches = useMemo(() => groupTrashBatches(data?.space?.trashedPages ?? []), [data])
 
   if (!spaceKey) return null
 
-  const handleRestore = async (batchId: string) => {
+  const handleRestore = async (batchId: string, rootPageId: string) => {
     setRestoringId(batchId)
     setMessage(null)
-    const result = await restoreTrashBatch({ input: { batchId } })
+    const result = await restorePage({ input: { pageId: rootPageId } })
     setRestoringId(null)
-    const payload = result.data?.restoreTrashBatch
-    if (payload?.readOnlyReplicaError) {
-      setMessage(payload.readOnlyReplicaError.message)
+    const payload = result.data?.restorePage
+    const replica = asReadOnlyReplica(payload?.error)
+    if (replica) {
+      setMessage({
+        severity: 'warning',
+        text: `This space is mirrored from ${replica.originInstanceId ?? 'its origin instance'} and is read-only here.`,
+      })
       return
     }
-    if (payload) {
-      setMessage(`Restored ${payload.restoredPageCount} page${payload.restoredPageCount === 1 ? '' : 's'}.`)
+    const errorText = describeMutationError(payload?.error)
+    if (errorText) {
+      setMessage({ severity: 'warning', text: errorText })
+      return
+    }
+    if (payload?.summary) {
+      const count = payload.summary.restoredPageCount
+      setMessage({ severity: 'success', text: `Restored ${count} page${count === 1 ? '' : 's'}.` })
       refetch({ requestPolicy: 'network-only' })
     }
   }
@@ -43,10 +60,8 @@ export function TrashPage() {
   }
 
   if (error || !data?.space) {
-    return <Alert severity="info">Couldn't load trash — there's no live API in this environment yet.</Alert>
+    return <Alert severity="info">Couldn't load trash — the space may not exist, or the API isn't reachable.</Alert>
   }
-
-  const trash = data.space.trash
 
   return (
     <Stack spacing={2}>
@@ -54,18 +69,22 @@ export function TrashPage() {
         Trash: {data.space.name}
       </Typography>
 
-      {message && <Alert severity="success">{message}</Alert>}
+      {message && <Alert severity={message.severity}>{message.text}</Alert>}
 
-      {trash.length === 0 ? (
+      {batches.length === 0 ? (
         <Typography color="text.secondary">Trash is empty.</Typography>
       ) : (
         <List>
-          {trash.map((batch) => (
+          {batches.map((batch) => (
             <ListItem
               key={batch.id}
               divider
               secondaryAction={
-                <Button size="small" disabled={restoringId === batch.id} onClick={() => void handleRestore(batch.id)}>
+                <Button
+                  size="small"
+                  disabled={restoringId === batch.id}
+                  onClick={() => void handleRestore(batch.id, batch.rootPageId)}
+                >
                   Restore
                 </Button>
               }
@@ -76,7 +95,7 @@ export function TrashPage() {
                     ? `${batch.rootPageTitle} + ${batch.pageCount - 1} more page${batch.pageCount - 1 === 1 ? '' : 's'}`
                     : batch.rootPageTitle
                 }
-                secondary={`Deleted by ${batch.deletedByDisplayName} · ${describeExpiry(batch.expiresAtUtc)}`}
+                secondary={batch.expiresAtUtc ? describeExpiry(batch.expiresAtUtc) : undefined}
               />
             </ListItem>
           ))}

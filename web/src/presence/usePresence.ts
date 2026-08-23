@@ -4,8 +4,8 @@ import type { PointerPosition, PresenceTransport, PresenceViewer } from '../real
 
 export interface UsePresenceResult {
   viewers: PresenceViewer[]
-  /** Other viewers' latest pointer positions, keyed by connection id. */
-  pointers: Map<string, { x: number; y: number }>
+  /** Other viewers' latest pointer positions, keyed by user id (the hub exposes no connection ids). */
+  pointers: Map<string, PointerPosition>
   /** Call on every raw pointermove over the content area — cheap, throttled internally (realtime/pointerSampler.ts). */
   recordPointer: (x: number, y: number) => void
 }
@@ -23,7 +23,7 @@ export interface UsePresenceResult {
  */
 export function usePresence(pageId: string, transport: PresenceTransport): UsePresenceResult {
   const [viewers, setViewers] = useState<PresenceViewer[]>([])
-  const [pointers, setPointers] = useState<Map<string, { x: number; y: number }>>(new Map())
+  const [pointers, setPointers] = useState<Map<string, PointerPosition>>(new Map())
 
   useEffect(() => {
     let cancelled = false
@@ -36,7 +36,7 @@ export function usePresence(pageId: string, transport: PresenceTransport): UsePr
       if (cancelled) return
       setPointers((prev) => {
         const next = new Map(prev)
-        next.set(position.connectionId, { x: position.x, y: position.y })
+        next.set(position.userId, position)
         return next
       })
     })
@@ -51,9 +51,13 @@ export function usePresence(pageId: string, transport: PresenceTransport): UsePr
     }
   }, [pageId, transport])
 
+  // Recreated per page, not just per transport: the hub's
+  // `PointerMove(pageId, x, y)` attributes each sample to a page group, so
+  // a sampler bound to a stale pageId would broadcast this viewer's cursor
+  // into a page they've navigated away from.
   const sampler = useMemo(
-    () => new PointerSampler((x, y) => transport.sendPointerPosition(x, y)),
-    [transport],
+    () => new PointerSampler((x, y) => transport.sendPointerPosition(pageId, x, y)),
+    [pageId, transport],
   )
 
   useEffect(() => {
