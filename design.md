@@ -456,6 +456,10 @@ Append-only `AuditEvent` table:
 | Request context | request id, client IP, channel (`graphql` / `mcp` / `attachment`) + MCP client name |
 | Details (JSON) | revision created, search query text, rule before/after, failing restriction on a denial |
 
+The `search.query` row's Details JSON carries the raw query text, facets,
+and result count — the audit table, not telemetry (§15), is where
+who-searched-what lives.
+
 ### Emission and guarantees
 
 - Implemented in the GraphQL execution pipeline: every root query/mutation
@@ -757,6 +761,19 @@ no separate search or vector service to operate.
 
 SQL Server FTS over `Page.CurrentContent` + `Page.Title`, with label and
 space facets. Stemming and ranking out of the box.
+
+Milestone-4 keyword search attributes each hit to the section containing
+the first literal term match: the server extracts ATX headings (fence-aware,
+inline markup reduced to rendered text), computes the breadcrumb path and
+anchor id with the ported cross-language algorithm (§9's shared corpus test
+enforces byte-identical anchors), and builds a plain-text, match-centered
+snippet — strictly after canView passes, so restricted content never reaches
+the excerpting code. Hits an FTS stem matched but a literal scan cannot
+locate degrade to a leading excerpt with no section attribution.
+`totalCount` is the permission-filtered count, saturating at a server-side
+cap (100): an exact total would evaluate canView over every candidate for a
+number nobody scrolls to, and any cheaper count would leak restricted pages
+into it.
 
 ### 9.2 Embedding pipeline
 
