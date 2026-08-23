@@ -93,15 +93,24 @@ internal sealed class SqlServerApiFactory : WebApplicationFactory<Program>
         // only tolerated there.
         builder.UseEnvironment("Development");
 
+        // The connection string must go through UseSetting, not
+        // ConfigureAppConfiguration: Aspire's AddSqlServerDbContext reads it
+        // IMPERATIVELY while Program.cs executes and captures it onto its settings
+        // object, and the factory's ConfigureAppConfiguration sources are appended
+        // after that point — proven by CI run #20, where the in-memory value left
+        // the captured setting null and startup failed with "ConnectionString is
+        // missing". UseSetting flows into the deferred host's configuration before
+        // Program runs. (The SQLite tier never hit this because it replaces the
+        // DbContext registration wholesale.)
+        builder.UseSetting("ConnectionStrings:rocketwiki", _connectionString);
+
         builder.ConfigureAppConfiguration((_, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                // The name Program's AddSqlServerDbContext binds ("rocketwiki") - in
-                // production Aspire injects this; here the container provides it.
                 // Database:MigrateOnStartup is deliberately NOT set: its default of
-                // true IS the behavior under test.
-                ["ConnectionStrings:rocketwiki"] = _connectionString,
+                // true IS the behavior under test. FileStorage is options-bound at
+                // runtime, so ConfigureAppConfiguration suffices for it.
                 ["FileStorage:Provider"] = "FileSystem",
                 ["FileStorage:FileSystem:Root"] = _attachmentsRoot,
             });
