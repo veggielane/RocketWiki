@@ -666,6 +666,17 @@ so it is subject to the same rules as reading (§6):
   so re-saving a page never re-pings its standing mentions. Comment mentions
   notify on add. A user who is both a watcher and newly mentioned receives a
   single notification of type `mention`.
+- **Replies.** A comment with a parent notifies the parent comment's author
+  (`comment_reply`), through the same per-recipient canView fan-out as every
+  notification and never the actor themselves. A parent author who is also
+  newly mentioned by the reply receives a single notification of type
+  `mention` — one notification per user per event, the most specific type
+  wins, the same precedence rule as mention-beats-watch. Editing a comment
+  re-scans mentions delta-style, exactly like a page edit: only users
+  mentioned in the saved body who were absent from the pre-edit body are
+  notified, so touching up a comment never re-pings its standing mentions.
+  Comment activity does not notify page or space watchers:
+  `page_watched_changed` means the page's content changed.
 - **Watching is canView-gated; unwatching is not.** Creating a watch
   requires the target's own read gate (canView for a page, any space role
   for a space) — you can't watch what you can't see. Removing a watch
@@ -675,7 +686,17 @@ so it is subject to the same rules as reading (§6):
   per recipient at send time. Watches on replica spaces are allowed: a
   Watch row is instance-local user metadata, not a write into the replica's
   synced content, and watching a replica is exactly how a user hears that a
-  sync bundle changed it.
+  sync bundle changed it. When a sync bundle lands, the import writes one
+  persisted `sync_bundle_landed` notification per watcher of an affected
+  replica page or space per bundle — never per event. Import runs in the
+  offline sync CLI, where no recipient has a live token, so unlike
+  dispatcher notifications no canView can run at send time; the row
+  therefore carries no title snapshot, and the check is deferred to the
+  notifications fetch, where the recipient's live token-built Principal
+  must pass canView (page rows) or hold any space role (space rows) for
+  the row to be returned at all — the row's existence, not just its title,
+  is gated, fail closed. There is no live push for these; the persisted
+  table is the record and the next fetch is the delivery.
 - Audit actions: `watch.add` / `watch.remove` (subject = the watched page
   or space) and `notification.markRead` flow through the domain-event
   pipeline like every mutation; the persisted list read audits as
@@ -1032,6 +1053,14 @@ exactly once per newly exported space and is refused for a space that isn't
 flagged exported or that this instance doesn't own. Import in directory mode
 applies every `bundle-*.zip` in bundle-number order; exit code 2 (vs. 1 for
 usage errors) marks integrity refusals so a scheduled job can page on them.
+An integrity refusal also leaves a durable audit row: `sync.import.refused`
+on the sync channel, recording the bundle file name, origin instance, and
+refusal reason (gap, chain break, payload-hash mismatch, per-space sequence
+gap, or unreadable file). It is written on a fresh unit of work — never the
+one holding the partially-applied bundle — and is deliberately not
+`sync.import` with a `denied` outcome: §7's denied names a principal
+refused by a failing restriction, and an integrity refusal has neither; the
+refusal itself is the successfully-completed action being recorded.
 The admin status data is served by the admin-only `syncStatus` GraphQL query
 (audited as `sync.status`): per exported space the outbox position, pending
 event count and last drained bundle; per origin instance the last bundle
