@@ -27,6 +27,7 @@ type Query {
   page(id: UUID!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
   me: CurrentUser!
+  customEmojis: [CustomEmojiRef!]! @cost(weight: "10")
   effectivePermission(pageId: UUID!, subject: InspectedPrincipalInput): EffectivePermissionDetail
     @cost(weight: "10")
   gitlabIssue(projectId: String!, iid: Int!): GitLabIssuePayload!
@@ -244,6 +245,11 @@ type CurrentUser {
   isAuthenticated: Boolean!
   isInstanceAdmin: Boolean!
   localUserId: UUID
+}
+
+type CustomEmojiRef {
+  name: String!
+  etag: String!
 }
 
 type DeleteAccessRulePayload {

@@ -118,6 +118,17 @@ public static class DomainEventAuditMapper
 
         GitLabTokenClearedEvent => ("settings.gitlab_token.cleared", null, null, null, null),
 
+        // Custom emojis: no AuditSubjectType fits (the subject list is wiki content
+        // shapes and the registry is instance-local vocabulary), so subject stays null
+        // and the emoji is named in DetailsJson - the same pattern as
+        // notification.markRead. The name is the id an auditor actually recognizes;
+        // the row id rides along for joinability while the row exists.
+        CustomEmojiCreatedEvent e => ("emoji.created", null, null, null,
+            JsonSerializer.Serialize(new { name = e.Name, emojiId = e.EmojiId })),
+
+        CustomEmojiDeletedEvent e => ("emoji.deleted", null, null, null,
+            JsonSerializer.Serialize(new { name = e.Name, emojiId = e.EmojiId })),
+
         SpaceCreatedEvent e => ("space.create", AuditSubjectType.Space, e.SpaceId, e.Key, null),
 
         SpaceRenamedEvent e => ("space.rename", AuditSubjectType.Space, e.SpaceId, e.Key,

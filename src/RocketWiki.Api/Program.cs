@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Attachments;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Embeddings;
+using RocketWiki.Api.Emojis;
 using RocketWiki.Api.GitLab;
 using RocketWiki.Api.GraphQL;
 using RocketWiki.Api.Identity;
@@ -295,6 +296,15 @@ app.MapGraphQL();
 // design.md §8/§10: attachment binary over plain HTTP, same identity/authorization/
 // audit pipeline as GraphQL (see AttachmentEndpoints's own doc). No presigned URLs.
 app.MapAttachmentEndpoints();
+
+// --- Custom emojis: admin-curated :name: registry, instance-local (never synced) ---
+// Binary routes on the attachment pattern (admin-only POST/DELETE, authenticated GET
+// with ETag/304; emoji.created/.deleted audited via the domain-event pipeline). This
+// single call is the feature's entire Program.cs footprint on purpose: options
+// binding, image normalization (SixLabors.ImageSharp, decode-limited + re-encoded),
+// and service construction all live behind it, resolving only services other
+// features already registered - see CustomEmojiEndpoints.
+app.MapCustomEmojiEndpoints();
 
 // design.md §8: MCP at /mcp — anonymous requests are rejected by the endpoint's
 // authorization policy before any tool code runs (McpServerConfiguration).

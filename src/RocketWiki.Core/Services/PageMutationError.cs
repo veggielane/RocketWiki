@@ -32,6 +32,14 @@ public sealed record SubtreeOperationForbiddenError(int BlockedPageCount) : Page
 
 public sealed record NotFoundError(Guid Id) : PageMutationError;
 
+/// <summary>
+/// A uniqueness conflict on a caller-chosen key (custom emoji names). Distinct from
+/// <see cref="ValidationError"/> because the input is well-formed — the fix is a
+/// different name, not a corrected one — and mapped to HTTP 409 on binary routes.
+/// Echoing the name back leaks nothing: the caller supplied it.
+/// </summary>
+public sealed record NameTakenError(string Name) : PageMutationError;
+
 public sealed record ValidationError(string Message) : PageMutationError;
 
 /// <summary>design.md §12: "if bundle 41 hasn't been applied, 42 waits" - a bundle numbered ahead of the next expected one is refused, never silently absorbed.</summary>

@@ -37,6 +37,16 @@
          OpenTelemetry for free (design.md §15) — the idiomatic Aspire path
          rather than hand-rolled AddDbContext/UseSqlServer. -->
     <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.1" />
+    <!-- Custom-emoji image normalization (Emojis/EmojiImageProcessor): decode
+         untrusted uploads under explicit limits, square/downscale, strip metadata by
+         re-encoding. Pinned to 3.1.12 (newest 3.x stable) deliberately, NOT 4.x:
+         ImageSharp 4's build-time license validation hard-fails Release builds
+         without a provisioned SixLaborsLicenseKey, and CI builds Release. The 4.x
+         upgrade is a one-line bump once an operator provisions a key. License note
+         either way: Six Labors Split License — Apache 2.0 for open-source /
+         small-organization use, commercial license otherwise; needs a deliberate
+         sign-off for this deployment. -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
   </ItemGroup>
 
   <ItemGroup>

@@ -17,6 +17,9 @@ public sealed class CurrentAuditContextAccessorTests
     [InlineData("/graphql/", AuditChannel.GraphQl)]
     [InlineData("/mcp", AuditChannel.Mcp)]
     [InlineData("/attachments/123", AuditChannel.Attachment)]
+    // The emoji binary routes share the Attachment channel deliberately - it names
+    // the HTTP surface, not the subject (see DetermineChannel's own comment).
+    [InlineData("/emojis/banana", AuditChannel.Attachment)]
     public void KnownPath_MapsToExpectedChannel(string path, AuditChannel expected)
     {
         var actual = CurrentAuditContextAccessor.DetermineChannel(new PathString(path));
