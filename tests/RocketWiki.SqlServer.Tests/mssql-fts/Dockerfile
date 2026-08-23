@@ -26,7 +26,11 @@
 #    apt repo breaks), then handed to tests via ROCKETWIKI_MSSQL_FTS_IMAGE.
 #  - Local dev with Docker: SqlServerContainerFixture builds it on first run via
 #    Testcontainers' ImageFromDockerfile (cached by the daemon afterwards).
-FROM mcr.microsoft.com/mssql/server:2025-latest
+# Pinned by digest for reproducibility: CI run #28 crashed at engine boot on
+# the SAME digest that ran green in #21-27 (a runner-side flake, proven by
+# comparing build-log digests), and a digest pin removes tag drift as a
+# variable in any future diagnosis. Bump deliberately, not by tag movement.
+FROM mcr.microsoft.com/mssql/server:2025-latest@sha256:4bab24f36c1ecd48e85f7d37df26e6bf301641d84c3fe652f9a0dcc947d512e1
 
 # The base image runs as the non-root mssql user (SQL Server 2019+); apt needs root.
 USER root
