@@ -34,9 +34,15 @@ public partial class Query
     /// by outcome — "probing at restricted content is a signal, not noise to filter out"
     /// per team direction, so no default Outcome filter is applied.
     /// </summary>
+    // IncludeTotalCount: the audit viewer's pager needs the filtered total (design.md
+    // §8's known-deltas list). Admin-only data with no per-row permission filter, so
+    // an exact COUNT leaks nothing here - unlike search's capped totalCount (§9.1),
+    // whose cap exists because ITS rows are canView-filtered. §15's cost story is
+    // unchanged: the @listSize/@cost directives on this field bound the *list* the
+    // slicing arguments control, and totalCount is a scalar outside sizedFields.
     [AuditAction("audit.view")]
     [UseAuditDispatch]
-    [UsePaging]
+    [UsePaging(IncludeTotalCount = true)]
     public async Task<IQueryable<AuditEvent>> AuditEvents(
         AuditFilterInput filter,
         [Service] RocketWikiDbContext db,

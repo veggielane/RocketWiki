@@ -4,6 +4,7 @@ schema {
 }
 
 type Query {
+  archivedSpaces: [ArchivedSpace!]! @cost(weight: "10")
   auditEvents(
     filter: AuditFilterInput!
     "Returns the first _n_ elements from the list."
@@ -27,7 +28,10 @@ type Query {
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
   me: CurrentUser!
   labels(spaceKey: String): [String!]! @cost(weight: "10")
+  labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
+  groups: [String!]! @cost(weight: "10")
+  attributeRegistry: [AttributeDefinition!]! @cost(weight: "10")
   search(query: String!, spaceKey: String, labels: [String!], after: String): SearchConnection!
     @cost(weight: "10")
   spaces: [Space!]! @cost(weight: "10")
@@ -108,6 +112,13 @@ type AddCommentPayload {
   error: PageMutationErrorView
 }
 
+type ArchivedSpace {
+  id: UUID!
+  key: String!
+  name: String!
+  archivedAtUtc: DateTime!
+}
+
 type ArchiveSpacePayload {
   space: Space
   error: PageMutationErrorView
@@ -119,6 +130,7 @@ type AttachLabelPayload {
 }
 
 type Attachment {
+  uploadedBy: UserRef! @cost(weight: "10")
   id: UUID!
   pageId: UUID!
   fileName: String!
@@ -130,6 +142,12 @@ type Attachment {
   deletedByUserId: UUID
   uploadedByUserId: UUID!
   createdAtUtc: DateTime!
+}
+
+type AttributeDefinition {
+  key: String!
+  displayName: String
+  allowedValues: [String!]!
 }
 
 type AuditEvent {
@@ -157,6 +175,8 @@ type AuditEventsConnection {
   edges: [AuditEventsEdge!]
   "A flattened list of the nodes."
   nodes: [AuditEvent!]
+  "Identifies the total count of items in the connection."
+  totalCount: Int! @cost(weight: "10")
 }
 
 "An edge in a connection."
@@ -168,6 +188,7 @@ type AuditEventsEdge {
 }
 
 type Comment {
+  author: UserRef! @cost(weight: "10")
   id: UUID!
   pageId: UUID!
   parentCommentId: UUID
@@ -252,6 +273,12 @@ type Label {
   pageLabels: [PageLabel!]!
 }
 
+type LabelRef {
+  id: UUID!
+  spaceId: UUID!
+  name: String!
+}
+
 type MarkNotificationReadPayload {
   notification: Notification
   error: PageMutationErrorView
@@ -281,6 +308,9 @@ type Page {
   comments: [Comment!]! @cost(weight: "10")
   attachments: [Attachment!]! @cost(weight: "10")
   labels: [String!]! @cost(weight: "10")
+  labelDetails: [LabelRef!]! @cost(weight: "10")
+  viewerIsWatching: Boolean! @cost(weight: "10")
+  deletedBy: UserRef @cost(weight: "10")
   spaceKey: String! @cost(weight: "10")
   id: UUID!
   spaceId: UUID!
@@ -358,6 +388,7 @@ type PageTreeNode {
   slug: String!
   sortOrder: Int!
   children: [PageTreeNode!]!
+  labels: [String!]! @cost(weight: "10")
 }
 
 type RenameSpacePayload {
@@ -404,9 +435,10 @@ type SearchPageInfo {
 }
 
 type Space {
+  isReplica: Boolean!
+  viewerIsWatching: Boolean! @cost(weight: "10")
   grants: [AccessRule!]! @cost(weight: "10")
   trashedPages: [Page!]! @cost(weight: "10")
-  isReplicaOf(localInstanceId: String!): Boolean!
   id: UUID!
   key: String!
   name: String!
@@ -460,6 +492,11 @@ type UpdateAccessRulePayload {
 type UpdatePageContentPayload {
   page: Page
   error: PageMutationErrorView
+}
+
+type UserRef {
+  id: UUID!
+  displayName: String!
 }
 
 type WatchPagePayload {
