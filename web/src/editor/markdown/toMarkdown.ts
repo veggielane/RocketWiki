@@ -2,10 +2,27 @@ import type { JSONContent } from '@tiptap/core'
 
 type MarkJSON = NonNullable<JSONContent['marks']>[number]
 
-/** TipTap `JSONContent` doc -> Markdown source text. The other half of the round trip. */
+/**
+ * TipTap `JSONContent` doc -> Markdown source text. The other half of the
+ * round trip.
+ *
+ * Top-level EMPTY paragraphs are dropped before serialization. They are
+ * editor chrome, not content: StarterKit v3's TrailingNode keeps an empty
+ * paragraph after a trailing code block / table so the editor stays
+ * clickable below it, and GFM has no representation for an empty
+ * paragraph at all — serializing one emits only blank lines, which
+ * `markdownToJson` then (correctly) parses as nothing, so keeping them
+ * would break §4's byte-identity on the very next load. Markdown produced
+ * by the parser never contains them, so dropping them here is exactly the
+ * fixed point the round-trip rule demands.
+ */
 export function jsonToMarkdown(doc: JSONContent): string {
-  const blocks = (doc.content ?? []).map(serializeBlock)
+  const blocks = (doc.content ?? []).filter((node) => !isEmptyParagraph(node)).map(serializeBlock)
   return blocks.length > 0 ? `${blocks.join('\n\n')}\n` : ''
+}
+
+function isEmptyParagraph(node: JSONContent): boolean {
+  return node.type === 'paragraph' && (node.content === undefined || node.content.length === 0)
 }
 
 function serializeChildBlocks(content: JSONContent[]): string {

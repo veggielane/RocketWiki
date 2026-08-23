@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import {
   createNotificationsTransport,
   createPresenceTransport,
+  getDefaultCoEditTransport,
   getDefaultNotificationsTransport,
   getDefaultPresenceTransport,
   notificationsHubUrl,
@@ -17,8 +18,9 @@ import { setAccessToken } from '../../graphql/authToken'
 // the wiring — which implementation the seam picks, which URL the hub
 // connection is built against, and how the bearer token is plumbed — never
 // a live socket (vitest/jsdom has no hub to negotiate with).
-const { withUrlCalls } = vi.hoisted(() => ({
+const { withUrlCalls, builtConnections } = vi.hoisted(() => ({
   withUrlCalls: [] as { url: string; options: { accessTokenFactory?: () => string } }[],
+  builtConnections: [] as { invoke: ReturnType<typeof vi.fn> }[],
 }))
 
 vi.mock('@microsoft/signalr', () => {
@@ -34,14 +36,17 @@ vi.mock('@microsoft/signalr', () => {
       return this
     }
     build() {
-      return {
+      const connection = {
         start: vi.fn(),
         stop: vi.fn(),
         on: vi.fn(),
         off: vi.fn(),
+        onreconnected: vi.fn(),
         invoke: vi.fn().mockResolvedValue(undefined),
         state: 'Disconnected',
       }
+      builtConnections.push(connection)
+      return connection
     }
   }
   return { HubConnectionBuilder, HubConnectionState: { Connected: 'Connected' } }
@@ -51,6 +56,7 @@ vi.mock('@microsoft/signalr-protocol-msgpack', () => ({ MessagePackHubProtocol: 
 
 beforeEach(() => {
   withUrlCalls.length = 0
+  builtConnections.length = 0
   setAccessToken(undefined)
 })
 
@@ -100,6 +106,34 @@ describe('transport selection seam', () => {
   it('returns the same app-lifetime singleton on every call', () => {
     expect(getDefaultNotificationsTransport()).toBe(getDefaultNotificationsTransport())
     expect(getDefaultPresenceTransport()).toBe(getDefaultPresenceTransport())
+  })
+
+  it('co-editing rides the presence connection — getDefaultCoEditTransport IS the presence singleton (never a second hub connection)', () => {
+    expect(getDefaultCoEditTransport()).toBe(getDefaultPresenceTransport())
+  })
+})
+
+describe('JoinEditSession result normalization', () => {
+  it('accepts the MessagePack wire shape (contractless resolver = PascalCase keys, number[] byte arrays) and the JSON one alike', async () => {
+    const transport = new SignalRPresenceTransport('/hubs/notifications')
+    const connection = builtConnections.at(-1)!
+
+    // MessagePack's default contractless resolver serializes .NET property
+    // names verbatim — this connection's live shape.
+    connection.invoke.mockResolvedValueOnce({ Role: 'seeder', BaseRevisionNumber: 7, UpdateLog: [[1, 2, 3]] })
+    const pascal = await transport.joinEditSession('page-1')
+    expect(pascal).toEqual({ role: 'seeder', baseRevisionNumber: 7, updateLog: [Uint8Array.from([1, 2, 3])] })
+
+    connection.invoke.mockResolvedValueOnce({ role: 'joiner', baseRevisionNumber: 3, updateLog: [] })
+    const camel = await transport.joinEditSession('page-1')
+    expect(camel).toEqual({ role: 'joiner', baseRevisionNumber: 3, updateLog: [] })
+  })
+
+  it('a null result (refused — indistinguishable from nonexistent, design.md §6.7) stays null', async () => {
+    const transport = new SignalRPresenceTransport('/hubs/notifications')
+    const connection = builtConnections.at(-1)!
+    connection.invoke.mockResolvedValueOnce(null)
+    expect(await transport.joinEditSession('page-1')).toBeNull()
   })
 })
 

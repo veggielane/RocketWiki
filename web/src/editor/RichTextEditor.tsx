@@ -1,7 +1,11 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
 import { EditorContent, useEditor } from '@tiptap/react'
 import Image from '@tiptap/extension-image'
+import Collaboration from '@tiptap/extension-collaboration'
+import { CollaborationCaret } from '@tiptap/extension-collaboration-caret'
 import type { EditorView } from '@tiptap/pm/view'
+import type * as Y from 'yjs'
+import type { Awareness } from 'y-protocols/awareness'
 import { Alert, Box, Paper, Snackbar } from '@mui/material'
 import { codeBlockExtension, editorExtensions } from './extensions'
 import { AttachmentImage } from './nodes/AttachmentImage'
@@ -10,6 +14,7 @@ import { DrawioDiagram } from './nodes/DrawioDiagram'
 import { DrawioDiagramWithView } from './nodes/DrawioDiagramWithView'
 import { GitLabIssueLink } from './marks/GitLabIssueLink'
 import { GitLabIssueLinkWithView } from './marks/GitLabIssueLinkWithView'
+import { renderCaret } from './coedit/caretRender'
 import { EmojiDecorations } from './emoji/EmojiDecorations'
 import { EmojiSuggestion } from './emoji/EmojiSuggestion'
 import { EmojiSuggestionPopup } from './emoji/EmojiSuggestionPopup'
@@ -46,6 +51,19 @@ export interface RichTextEditorHandle {
   getMarkdown: () => string
 }
 
+/**
+ * Live co-editing binding (design.md §8). The doc/awareness pair belongs
+ * to a SignalRYjsProvider (editor/coedit/) — `provider` is typed
+ * structurally because all CollaborationCaret reads from it is
+ * `.awareness`. `user` is this client's caret identity (see
+ * coedit/caretRender.ts for what may and may not ride awareness).
+ */
+export interface CollabBinding {
+  doc: Y.Doc
+  provider: { awareness: Awareness }
+  user: { name: string; color: string; userId?: string }
+}
+
 export interface RichTextEditorProps {
   /** Markdown as loaded from `Page.content` (design.md §8). */
   initialMarkdown: string
@@ -61,6 +79,31 @@ export interface RichTextEditorProps {
    * nowhere to attach the resulting attachment.
    */
   pageId?: string
+  /**
+   * Present = collaborative mode: the document lives in the binding's
+   * Y.Doc (seeded/replayed by the provider before this component mounts),
+   * so `initialMarkdown` is ignored — setting content AND binding the
+   * fragment would duplicate the page. Must be stable for the editor's
+   * lifetime; the page keys this component on its session so a mode or
+   * session change remounts rather than rebinds.
+   */
+  collab?: CollabBinding
+}
+
+/**
+ * Collaborative variant of the extension list: same schema (the swap rule
+ * above — schema is `editorExtensions`' alone), plus the Yjs binding.
+ * `undoRedo: false` because Collaboration replaces prosemirror-history
+ * with the Yjs undo manager — two undo stacks over one document would
+ * fight (and Collaboration provides its own undo/redo commands +
+ * keybindings, so the editor keeps working undo).
+ */
+function buildCollabExtensions(collab: CollabBinding) {
+  return [
+    ...richTextExtensions.map((ext) => (ext.name === 'starterKit' ? ext.configure({ undoRedo: false }) : ext)),
+    Collaboration.configure({ document: collab.doc }),
+    CollaborationCaret.configure({ provider: collab.provider, user: collab.user, render: renderCaret }),
+  ]
 }
 
 /**
@@ -69,14 +112,16 @@ export interface RichTextEditorProps {
  * so there is never a second Markdown rendering path to drift out of sync).
  */
 export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(function RichTextEditor(
-  { initialMarkdown, editable = true, onChange, showToolbar = true, pageId },
+  { initialMarkdown, editable = true, onChange, showToolbar = true, pageId, collab },
   ref,
 ) {
   const [uploadError, setUploadError] = useState<string | null>(null)
 
   const editor = useEditor({
-    extensions: richTextExtensions,
-    content: markdownToJson(initialMarkdown),
+    extensions: collab ? buildCollabExtensions(collab) : richTextExtensions,
+    // Collaborative mode: content comes from the Y.Doc fragment, never
+    // from here — a second content source would duplicate the document.
+    ...(collab ? {} : { content: markdownToJson(initialMarkdown) }),
     editable,
     editorProps: {
       attributes: {
@@ -119,6 +164,25 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     }),
     [editor, initialMarkdown],
   )
+
+  // `editable` can change mid-lifetime in collaborative mode — eviction
+  // (design.md §8: canEdit revoked → EvictedFromEditSession) drops the
+  // live editor to read-only without remounting, so the user's text stays
+  // on screen to be copied.
+  useEffect(() => {
+    if (editor && editor.isEditable !== editable) {
+      editor.setEditable(editable)
+    }
+  }, [editor, editable])
+
+  // The caret identity can resolve after mount (the CurrentUser query may
+  // still be in flight when the session comes up) — updateUser refreshes
+  // the awareness `user` field without recreating the editor.
+  useEffect(() => {
+    if (editor && collab && editor.isEditable) {
+      editor.commands.updateUser(collab.user)
+    }
+  }, [editor, collab])
 
   // Deep-link targets for search results (design.md §9) — stable, path-derived
   // ids assigned to rendered headings (see headingAnchors.ts). Re-runs on every
