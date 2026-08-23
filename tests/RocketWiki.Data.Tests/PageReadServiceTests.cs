@@ -9,10 +9,15 @@ namespace RocketWiki.Data.Tests;
 
 /// <summary>
 /// design.md §6.7: every read path enforces canView, and a filtered-out page must be
-/// indistinguishable from one that doesn't exist - no title, no placeholder, nothing
-/// that implies something is there. These tests build a tree with restricted branches
-/// at several depths and check the exact shape returned for principals with different
-/// attributes, not just "access denied vs allowed" as a boolean.
+/// indistinguishable from one that doesn't exist *to the API caller* - no title, no
+/// placeholder, nothing that implies something is there. Internally the distinction
+/// now survives on purpose ("indistinguishable to the caller, not to the audit log"):
+/// these tests assert the exact ReadResult case - Found / NotFound / Denied-with-reason
+/// - the service reports, including that a denial carries the specific failing
+/// restriction (§7's audit requirement) in the restriction:{pageId}:{ruleId} form
+/// design.md §15 names. That the API layer collapses NotFound and Denied to one
+/// identical response is proven at the HTTP level in RocketWiki.Api.Tests
+/// (DeniedReadAuditTests), not here.
 /// </summary>
 public class PageReadServiceTests : SqliteTestBase
 {
@@ -49,7 +54,7 @@ public class PageReadServiceTests : SqliteTestBase
     // --- GetPageAsync -------------------------------------------------------------------
 
     [Fact]
-    public async Task GetPage_VisiblePage_Returned()
+    public async Task GetPage_VisiblePage_ReturnsFound()
     {
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space);
@@ -63,12 +68,12 @@ public class PageReadServiceTests : SqliteTestBase
         var service = new PageReadService(context);
         var result = await service.GetPageAsync(page.Id, MakePrincipal());
 
-        Assert.NotNull(result);
-        Assert.Equal(page.Id, result.Id);
+        var found = Assert.IsType<ReadResult<Page>.Found>(result);
+        Assert.Equal(page.Id, found.Value.Id);
     }
 
     [Fact]
-    public async Task GetPage_RestrictedPage_ReturnsNull_SameAsNonExistent()
+    public async Task GetPage_Restricted_IsDeniedWithFailingRuleReason_NonExistent_IsNotFound()
     {
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space);
@@ -78,19 +83,24 @@ public class PageReadServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.AccessRules.Add(ViewerGrant(space.Id));
-        context.AccessRules.Add(ViewRestriction(page.Id, """{ "group": "top-secret" }"""));
+        var restriction = ViewRestriction(page.Id, """{ "group": "top-secret" }""");
+        context.AccessRules.Add(restriction);
         context.SaveChanges();
 
         var service = new PageReadService(context);
         var restrictedResult = await service.GetPageAsync(page.Id, MakePrincipal());
         var nonExistentResult = await service.GetPageAsync(nonExistentId, MakePrincipal());
 
-        Assert.Null(restrictedResult);
-        Assert.Null(nonExistentResult);
+        // design.md §6.7/§15: the reason is the audit-grade restriction:{pageId}:{ruleId}
+        // form - specific enough to reconstruct which rule denied, and never the rule's
+        // expression or the principal's attribute values.
+        var denied = Assert.IsType<ReadResult<Page>.Denied>(restrictedResult);
+        Assert.Equal($"restriction:{page.Id}:{restriction.Id}", denied.Reason);
+        Assert.IsType<ReadResult<Page>.NotFound>(nonExistentResult);
     }
 
     [Fact]
-    public async Task GetPage_NoSpaceRoleAtAll_ReturnsNull()
+    public async Task GetPage_NoSpaceRoleAtAll_IsDeniedWithNoSpaceRoleReason()
     {
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space);
@@ -104,7 +114,8 @@ public class PageReadServiceTests : SqliteTestBase
         var service = new PageReadService(context);
         var result = await service.GetPageAsync(page.Id, MakePrincipal());
 
-        Assert.Null(result);
+        var denied = Assert.IsType<ReadResult<Page>.Denied>(result);
+        Assert.Equal("no-space-role", denied.Reason);
     }
 
     [Fact]
@@ -125,9 +136,9 @@ public class PageReadServiceTests : SqliteTestBase
         var frPrincipal = MakePrincipal(attributes: new() { ["nationality"] = new[] { "FR" } });
         var noAttributePrincipal = MakePrincipal();
 
-        Assert.NotNull(await service.GetPageAsync(page.Id, nzPrincipal));
-        Assert.Null(await service.GetPageAsync(page.Id, frPrincipal));
-        Assert.Null(await service.GetPageAsync(page.Id, noAttributePrincipal));
+        Assert.IsType<ReadResult<Page>.Found>(await service.GetPageAsync(page.Id, nzPrincipal));
+        Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(page.Id, frPrincipal));
+        Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(page.Id, noAttributePrincipal));
     }
 
     // --- GetRevisionHistoryAsync ----------------------------------------------------
@@ -151,14 +162,14 @@ public class PageReadServiceTests : SqliteTestBase
         var service = new PageReadService(context);
         var result = await service.GetRevisionHistoryAsync(page.Id, MakePrincipal());
 
-        Assert.NotNull(result);
-        Assert.Equal(2, result.Count);
-        Assert.Equal(2, result[0].RevisionNumber);
-        Assert.Equal(1, result[1].RevisionNumber);
+        var found = Assert.IsType<ReadResult<IReadOnlyList<PageRevision>>.Found>(result);
+        Assert.Equal(2, found.Value.Count);
+        Assert.Equal(2, found.Value[0].RevisionNumber);
+        Assert.Equal(1, found.Value[1].RevisionNumber);
     }
 
     [Fact]
-    public async Task GetRevisionHistory_RestrictedPage_ReturnsNull_NotEmptyList()
+    public async Task GetRevisionHistory_RestrictedPage_IsDenied_NotAnEmptyFound()
     {
         var actor = TestData.NewUser();
         var space = TestData.NewSpace();
@@ -170,13 +181,17 @@ public class PageReadServiceTests : SqliteTestBase
         context.Pages.Add(page);
         context.PageRevisions.Add(TestData.NewRevision(page, actor, 1));
         context.AccessRules.Add(ViewerGrant(space.Id));
-        context.AccessRules.Add(ViewRestriction(page.Id, """{ "group": "top-secret" }"""));
+        var restriction = ViewRestriction(page.Id, """{ "group": "top-secret" }""");
+        context.AccessRules.Add(restriction);
         context.SaveChanges();
 
         var service = new PageReadService(context);
         var result = await service.GetRevisionHistoryAsync(page.Id, MakePrincipal());
 
-        Assert.Null(result); // not Assert.Empty - a restricted page's history isn't "no history", it's "not your business"
+        // Not Found([]) - a restricted page's history isn't "no history", it's a denial
+        // carrying the same failing restriction its page carries (single canView gate).
+        var denied = Assert.IsType<ReadResult<IReadOnlyList<PageRevision>>.Denied>(result);
+        Assert.Equal($"restriction:{page.Id}:{restriction.Id}", denied.Reason);
     }
 
     // --- GetPageTreeAsync: the multi-depth restricted-branch scenario ------------------
@@ -215,6 +230,12 @@ public class PageReadServiceTests : SqliteTestBase
         return new TreeFixture(space, root, publicChild, restrictedBranch, deepGrandchild, anotherChild, deeplyRestrictedLeaf);
     }
 
+    /// <summary>Unwraps a tree result the way only a test may: asserting it IS Found.
+    /// Pruning happens inside a Found - a pruned node is not a Denied (see the
+    /// interface doc); Denied/NotFound have their own dedicated tests below.</summary>
+    private static IReadOnlyList<PageTreeNode> AssertFound(ReadResult<IReadOnlyList<PageTreeNode>> result) =>
+        Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Found>(result).Value;
+
     private static IEnumerable<Guid> FlattenIds(IReadOnlyList<PageTreeNode> nodes)
     {
         foreach (var node in nodes)
@@ -235,7 +256,7 @@ public class PageReadServiceTests : SqliteTestBase
 
         var service = new PageReadService(context);
         var principal = MakePrincipal(attributes: new() { ["nationality"] = new[] { "NZ" } });
-        var result = await service.GetPageTreeAsync(tree.Space.Id, principal);
+        var result = AssertFound(await service.GetPageTreeAsync(tree.Space.Id, principal));
 
         var visibleIds = FlattenIds(result).ToHashSet();
 
@@ -255,7 +276,7 @@ public class PageReadServiceTests : SqliteTestBase
 
         var service = new PageReadService(context);
         var principal = MakePrincipal(); // no attributes, no groups
-        var result = await service.GetPageTreeAsync(tree.Space.Id, principal);
+        var result = AssertFound(await service.GetPageTreeAsync(tree.Space.Id, principal));
 
         var visibleIds = FlattenIds(result).ToHashSet();
 
@@ -278,7 +299,7 @@ public class PageReadServiceTests : SqliteTestBase
 
         var service = new PageReadService(context);
         var principal = MakePrincipal(groups: new[] { "legal" });
-        var result = await service.GetPageTreeAsync(tree.Space.Id, principal);
+        var result = AssertFound(await service.GetPageTreeAsync(tree.Space.Id, principal));
 
         var visibleIds = FlattenIds(result).ToHashSet();
 
@@ -298,7 +319,7 @@ public class PageReadServiceTests : SqliteTestBase
 
         var service = new PageReadService(context);
         var principal = MakePrincipal(); // sees neither restricted branch
-        var result = await service.GetPageTreeAsync(tree.Space.Id, principal);
+        var result = AssertFound(await service.GetPageTreeAsync(tree.Space.Id, principal));
 
         var allTitles = Flatten(result).Select(n => n.Title).ToList();
         Assert.DoesNotContain(tree.RestrictedBranch.Title, allTitles);
@@ -319,18 +340,18 @@ public class PageReadServiceTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task GetPageTree_NonExistentSpace_ReturnsEmptyList()
+    public async Task GetPageTree_NonExistentSpace_IsNotFound()
     {
         using var context = CreateContext();
 
         var service = new PageReadService(context);
         var result = await service.GetPageTreeAsync(Guid.NewGuid(), MakePrincipal());
 
-        Assert.Empty(result);
+        Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.NotFound>(result);
     }
 
     [Fact]
-    public async Task GetPageTree_PrincipalWithNoSpaceRole_ReturnsEmptyList_EvenThoughUnrestrictedPagesExist()
+    public async Task GetPageTree_PrincipalWithNoSpaceRole_IsDenied_EvenThoughUnrestrictedPagesExist()
     {
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space); // no restriction on this page at all
@@ -344,7 +365,10 @@ public class PageReadServiceTests : SqliteTestBase
         var service = new PageReadService(context);
         var result = await service.GetPageTreeAsync(space.Id, MakePrincipal());
 
-        Assert.Empty(result);
+        // Internally a denial with the §15 category-grade reason; the API boundary
+        // collapses this to the same empty list a fully-pruned Found produces.
+        var denied = Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Denied>(result);
+        Assert.Equal("no-space-role", denied.Reason);
     }
 
     [Fact]
@@ -355,7 +379,7 @@ public class PageReadServiceTests : SqliteTestBase
 
         var service = new PageReadService(context);
         var principal = MakePrincipal(attributes: new() { ["nationality"] = new[] { "NZ" } });
-        var result = await service.GetPageTreeAsync(tree.Space.Id, principal);
+        var result = AssertFound(await service.GetPageTreeAsync(tree.Space.Id, principal));
 
         var root = Assert.Single(result);
         Assert.Equal(tree.Root.Id, root.Id);

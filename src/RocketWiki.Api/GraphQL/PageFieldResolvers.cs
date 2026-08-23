@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
 using RocketWiki.Data;
 
@@ -33,6 +34,7 @@ public sealed class PageFieldResolvers
         [Parent] Page page,
         [Service] IPageReadService readService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
         CancellationToken cancellationToken)
     {
         if (page.ParentPageId is null)
@@ -48,14 +50,26 @@ public sealed class PageFieldResolvers
 
         // Same canView gate as the root query, for the parent id specifically - a
         // restricted parent is absent here exactly like it would be at the root
-        // (design.md §6.7), not a distinguishable "forbidden".
-        return await readService.GetPageAsync(page.ParentPageId.Value, principal, cancellationToken);
+        // (design.md §6.7), not a distinguishable "forbidden". A Denied here should be
+        // unreachable in practice - view restrictions accumulate downward (§6.4), so a
+        // denied parent implies this child was denied too and never resolved - but if a
+        // rule change lands mid-request it's still a real denial, audited like any
+        // other (§7) before collapsing to null.
+        var result = await readService.GetPageAsync(page.ParentPageId.Value, principal, cancellationToken);
+        if (result is ReadResult<Page>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "page.view", AuditSubjectType.Page, page.ParentPageId.Value, denied.Reason, cancellationToken);
+        }
+
+        return result.ValueOrNull();
     }
 
     public async Task<IReadOnlyList<Page>> GetChildrenAsync(
         [Parent] Page page,
         [Service] IPageReadService readService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
         PageByIdDataLoader pageByIdLoader,
         CancellationToken cancellationToken)
     {
@@ -71,7 +85,21 @@ public sealed class PageFieldResolvers
         // to filter ourselves). Materializing each child's full Page goes through
         // PageByIdDataLoader, which dedupes/parallelizes across one request - see its
         // own doc for what it does and doesn't optimize away.
-        var tree = await readService.GetPageTreeAsync(page.SpaceId, principal, cancellationToken);
+        //
+        // A Denied tree here means the caller lost their space role between this page
+        // resolving (which required canView, hence a role) and now - race-only, but a
+        // real denial of a real browse, so audited (§7) then collapsed to the same []
+        // as "no children". Individual children pruned from a Found tree are not
+        // denials - see IPageReadService.GetPageTreeAsync's doc.
+        var treeResult = await readService.GetPageTreeAsync(page.SpaceId, principal, cancellationToken);
+        if (treeResult is ReadResult<IReadOnlyList<PageTreeNode>>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "space.browse", AuditSubjectType.Space, page.SpaceId, denied.Reason, cancellationToken);
+            return [];
+        }
+
+        var tree = treeResult.ValueOrNull() ?? [];
         var node = FindNode(tree, page.Id);
         if (node is null || node.Children.Count == 0)
         {
@@ -89,6 +117,7 @@ public sealed class PageFieldResolvers
         [Parent] Page page,
         [Service] IPageReadService readService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
         CancellationToken cancellationToken)
     {
         var principal = principalAccessor.Current;
@@ -97,8 +126,18 @@ public sealed class PageFieldResolvers
             return [];
         }
 
-        var revisions = await readService.GetRevisionHistoryAsync(page.Id, principal, cancellationToken);
-        return revisions ?? [];
+        // Race-only, like GetParentAsync: this Page already passed canView to resolve
+        // at all, and revisions require nothing beyond canView on the same page - a
+        // Denied means a rule change landed mid-request. Still audited (§7); DbAuditSink
+        // then suppresses AuditFieldMiddleware's would-be Success row for this subject.
+        var result = await readService.GetRevisionHistoryAsync(page.Id, principal, cancellationToken);
+        if (result is ReadResult<IReadOnlyList<PageRevision>>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "page.view", AuditSubjectType.Page, page.Id, denied.Reason, cancellationToken);
+        }
+
+        return result.ValueOrNull() ?? [];
     }
 
     public async Task<IReadOnlyList<Comment>> GetCommentsAsync(

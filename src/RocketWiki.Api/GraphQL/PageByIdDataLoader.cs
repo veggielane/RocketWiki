@@ -45,11 +45,16 @@ public sealed class PageByIdDataLoader : BatchDataLoader<Guid, Page>
         }
 
         var loaded = await Task.WhenAll(keys.Select(async id =>
-            (Id: id, Page: await _readService.GetPageAsync(id, principal, cancellationToken))));
+            (Id: id, Page: (await _readService.GetPageAsync(id, principal, cancellationToken)).ValueOrNull())));
 
         // Ids that failed canView (or vanished) are simply omitted - BatchDataLoader
         // treats a missing key as "no value", which is exactly the absent-not-forbidden
-        // behavior every other Page path already has.
+        // behavior every other Page path already has. No denial auditing here, on
+        // purpose: every id reaching this loader came out of the already-pruned space
+        // tree (GetChildrenAsync), so a Denied is a mid-request rule-change race on a
+        // page the tree just showed - and a loader's per-request result cache would
+        // make any auditing here under-count anyway. Request-level denials are audited
+        // where the ReadResult is consumed by a resolver, not in the batch plumbing.
         return loaded
             .Where(r => r.Page is not null)
             .ToDictionary(r => r.Id, r => r.Page!);

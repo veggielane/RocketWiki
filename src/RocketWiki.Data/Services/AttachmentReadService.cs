@@ -12,7 +12,9 @@ namespace RocketWiki.Data.Services;
 /// PageReadService's precedent: read-path audit (design.md §7 lists `attachment.download`
 /// as an example action) is emitted at the route/resolver layer that owns the actual
 /// HTTP streaming response, not in this service - the same boundary that keeps
-/// resolvers out of Core/Data scope.
+/// resolvers out of Core/Data scope. What this service does supply (design.md §6.7) is
+/// the internal Denied-with-reason outcome that makes that audit possible; the route
+/// collapses it to the same 404 as NotFound after recording it.
 /// </summary>
 public class AttachmentReadService : IAttachmentReadService
 {
@@ -45,12 +47,15 @@ public class AttachmentReadService : IAttachmentReadService
             return new AttachmentDownloadResult.NotFound();
         }
 
-        var canView = await ComputeCanViewAsync(space, page, principal, cancellationToken);
-        if (!canView)
+        var permission = await ComputePermissionAsync(space, page, principal, cancellationToken);
+        if (!permission.CanView)
         {
             // design.md §6.7/§10: absent, not forbidden - identical to the NotFound
-            // case above from the caller's point of view.
-            return new AttachmentDownloadResult.NotFound();
+            // case above from the caller's point of view, once the route collapses it.
+            // Internally Denied so the route can audit the failing restriction (§7)
+            // before returning that identical 404.
+            return new AttachmentDownloadResult.Denied(
+                attachment.Id, permission.ViewDenialReason ?? "no-space-role");
         }
 
         var blobExists = await _fileStorage.ExistsAsync(attachment.StorageKey, cancellationToken);
@@ -65,7 +70,7 @@ public class AttachmentReadService : IAttachmentReadService
         return new AttachmentDownloadResult.Found(attachment, stream);
     }
 
-    private async Task<bool> ComputeCanViewAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
+    private async Task<EffectivePermission> ComputePermissionAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
     {
         var spaceGrants = await _db.AccessRules
             .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
@@ -78,7 +83,6 @@ public class AttachmentReadService : IAttachmentReadService
                 .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && restrictionIds.Contains(r.PageId.Value))
                 .ToListAsync(cancellationToken);
 
-        var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplicaSpace: false, principal);
-        return permission.CanView;
+        return EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplicaSpace: false, principal);
     }
 }

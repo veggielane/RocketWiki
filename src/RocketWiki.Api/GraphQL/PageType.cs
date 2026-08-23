@@ -44,15 +44,15 @@ public sealed class PageType : ObjectType<Page>
 
         descriptor.Field("parent")
             .Type<PageType>()
-            .ResolveWith<PageFieldResolvers>(r => r.GetParentAsync(default!, default!, default!, default));
+            .ResolveWith<PageFieldResolvers>(r => r.GetParentAsync(default!, default!, default!, default!, default));
 
         descriptor.Field("children")
             .Type<NonNullType<ListType<NonNullType<PageType>>>>()
-            .ResolveWith<PageFieldResolvers>(r => r.GetChildrenAsync(default!, default!, default!, default!, default));
+            .ResolveWith<PageFieldResolvers>(r => r.GetChildrenAsync(default!, default!, default!, default!, default!, default));
 
         descriptor.Field(p => p.Revisions)
             .Type<NonNullType<ListType<NonNullType<PageRevisionType>>>>()
-            .ResolveWith<PageFieldResolvers>(r => r.GetRevisionsAsync(default!, default!, default!, default));
+            .ResolveWith<PageFieldResolvers>(r => r.GetRevisionsAsync(default!, default!, default!, default!, default));
 
         descriptor.Field(p => p.Comments)
             .Type<NonNullType<ListType<NonNullType<CommentType>>>>()

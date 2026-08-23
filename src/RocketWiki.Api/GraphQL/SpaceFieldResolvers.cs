@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
@@ -22,6 +23,7 @@ public sealed class SpaceFieldResolvers
         [Parent] Space space,
         [Service] IPageReadService readService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
         CancellationToken cancellationToken)
     {
         if (space.HomepageId is null)
@@ -35,7 +37,17 @@ public sealed class SpaceFieldResolvers
             return null;
         }
 
-        return await readService.GetPageAsync(space.HomepageId.Value, principal, cancellationToken);
+        // A restricted homepage is null here exactly like a nonexistent one (design.md
+        // §6.7), but the denial itself is audited with its failing restriction (§7)
+        // before the collapse - same split as Query.page.
+        var result = await readService.GetPageAsync(space.HomepageId.Value, principal, cancellationToken);
+        if (result is ReadResult<Page>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "page.view", AuditSubjectType.Page, space.HomepageId.Value, denied.Reason, cancellationToken);
+        }
+
+        return result.ValueOrNull();
     }
 
     /// <summary>

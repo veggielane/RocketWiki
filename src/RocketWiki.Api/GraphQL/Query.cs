@@ -2,6 +2,7 @@ using System.Security.Claims;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
 
 namespace RocketWiki.Api.GraphQL;
@@ -15,10 +16,14 @@ public partial class Query
 {
     /// <summary>
     /// design.md §6.7: null for a page that doesn't exist OR one the caller can't
-    /// view — the two are indistinguishable by construction, since IPageReadService
-    /// itself never tells the caller which. An anonymous request (no Principal) is
-    /// treated identically, without even calling the service (design.md: no
-    /// anonymous wikis, so there is nothing an anonymous Principal could pass).
+    /// view — indistinguishable to the caller, but not to the audit log: the service's
+    /// internal ReadResult distinguishes them exactly long enough for the Denied case
+    /// to be recorded with its failing restriction (§7), then both collapse to the
+    /// same null right here. An anonymous request (no Principal) is treated
+    /// identically, without even calling the service (design.md: no anonymous wikis,
+    /// so there is nothing an anonymous Principal could pass) — and without an audit
+    /// row, since no access decision was made and DbAuditSink refuses rows with no
+    /// resolvable acting user anyway.
     /// </summary>
     [AuditAction("page.view")]
     [UseAuditDispatch]
@@ -26,6 +31,7 @@ public partial class Query
         Guid id,
         [Service] IPageReadService readService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
         CancellationToken cancellationToken)
     {
         var principal = principalAccessor.Current;
@@ -34,7 +40,14 @@ public partial class Query
             return null;
         }
 
-        return await readService.GetPageAsync(id, principal, cancellationToken);
+        var result = await readService.GetPageAsync(id, principal, cancellationToken);
+        if (result is ReadResult<Page>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "page.view", AuditSubjectType.Page, id, denied.Reason, cancellationToken);
+        }
+
+        return result.ValueOrNull();
     }
 
     /// <summary>
@@ -49,6 +62,7 @@ public partial class Query
         Guid spaceId,
         [Service] IPageReadService readService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
         CancellationToken cancellationToken)
     {
         var principal = principalAccessor.Current;
@@ -57,7 +71,20 @@ public partial class Query
             return [];
         }
 
-        return await readService.GetPageTreeAsync(spaceId, principal, cancellationToken);
+        // Found may itself carry an empty list (everything pruned), so Denied and
+        // NotFound collapsing to [] leaves all three caller-indistinguishable
+        // (design.md §6.7) - only the audit log learns which one happened (§7).
+        // DbAuditSink suppresses AuditFieldMiddleware's would-be Success row for a
+        // subject already recorded as Denied this request, so a refused browse never
+        // also claims success.
+        var result = await readService.GetPageTreeAsync(spaceId, principal, cancellationToken);
+        if (result is ReadResult<IReadOnlyList<PageTreeNode>>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "space.browse", AuditSubjectType.Space, spaceId, denied.Reason, cancellationToken);
+        }
+
+        return result.ValueOrNull() ?? [];
     }
 
     /// <summary>

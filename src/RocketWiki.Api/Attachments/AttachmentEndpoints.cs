@@ -55,6 +55,18 @@ public static class AttachmentEndpoints
             case AttachmentDownloadResult.NotFound:
                 return Results.NotFound();
 
+            case AttachmentDownloadResult.Denied denied:
+                // design.md §6.7: "indistinguishable to the caller, not to the audit
+                // log" - the denial is recorded with the failing restriction (§7),
+                // then this returns the byte-identical Results.NotFound() the case
+                // above does. Any divergence between these two responses (status,
+                // body, headers) would be exactly the existence leak §6.7 forbids;
+                // DeniedReadAuditTests proves them equal at the HTTP level.
+                await ReadDenialAudit.RecordAsync(
+                    auditSink, "attachment.download", AuditSubjectType.Attachment,
+                    denied.AttachmentId, denied.Reason, cancellationToken);
+                return Results.NotFound();
+
             case AttachmentDownloadResult.BlobMissing blobMissing:
                 // design.md §10: "surfaces as a flagged error, not a 500" - a raw
                 // unhandled exception (a real, unstructured 500) would give an operator

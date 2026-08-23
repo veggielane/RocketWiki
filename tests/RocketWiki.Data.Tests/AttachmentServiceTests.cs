@@ -263,7 +263,7 @@ public class AttachmentServiceTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task Download_AttachmentOnRestrictedPage_ReturnsNotFound_NotForbidden()
+    public async Task Download_AttachmentOnRestrictedPage_ReturnsDenied_WithFailingRuleReason()
     {
         var actor = TestData.NewUser();
         var space = TestData.NewSpace();
@@ -284,15 +284,21 @@ public class AttachmentServiceTests : SqliteTestBase
                 EditorPrincipal(), actor.Id, AuditCtx);
             Assert.True(uploaded.IsSuccess);
 
-            context.AccessRules.Add(ViewRestriction(page.Id, """{ "group": "top-secret" }"""));
+            var restriction = ViewRestriction(page.Id, """{ "group": "top-secret" }""");
+            context.AccessRules.Add(restriction);
             context.SaveChanges();
 
             var readService = new AttachmentReadService(context, storage);
             var download = await readService.DownloadAsync(uploaded.Value.Id, ViewerOnlyPrincipal());
 
-            // design.md §6.7/§10: absent, not forbidden - no typed "you can't see this"
-            // distinct from "this doesn't exist" is exposed to the caller.
-            Assert.IsType<AttachmentDownloadResult.NotFound>(download);
+            // design.md §6.7: internally Denied with the audit-grade failing-restriction
+            // reason and nothing else (no Metadata to leak); the HTTP route collapses
+            // this to the byte-identical 404 NotFound gets - proven at the HTTP level in
+            // RocketWiki.Api.Tests (DeniedReadAuditTests), which is where "absent, not
+            // forbidden" is actually enforced now.
+            var denied = Assert.IsType<AttachmentDownloadResult.Denied>(download);
+            Assert.Equal(uploaded.Value.Id, denied.AttachmentId);
+            Assert.Equal($"restriction:{page.Id}:{restriction.Id}", denied.Reason);
         }
         finally
         {
