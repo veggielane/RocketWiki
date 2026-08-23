@@ -14,6 +14,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useSearchFacetsQuery, useSearchPagesQuery, type SearchPagesQuery } from '../graphql/generated/graphql'
+import { AskWikiSearchNudge } from '../ask/AskWikiSearchNudge'
 
 type SearchEdge = SearchPagesQuery['search']['edges'][number]
 
@@ -130,6 +131,9 @@ export function SearchPage() {
             ))}
           </List>
           {edges.length === 0 && <Typography color="text.secondary">No results for "{query}".</Typography>}
+          {/* Prefills /ask with this query; hides itself for the session
+              once the assistant is known NOT_CONFIGURED. */}
+          <AskWikiSearchNudge query={query} />
           {data.search.pageInfo.hasNextPage && (
             <Button
               variant="outlined"

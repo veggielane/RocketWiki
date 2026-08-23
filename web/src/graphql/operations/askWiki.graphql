@@ -1,0 +1,24 @@
+# "Ask the wiki" (design.md §9.5): permission-filtered RAG under the
+# caller's own principal — retrieval only ever sees pages the asker can
+# view, so neither can the model. Every designed failure mode is a payload
+# fact (`unavailable`), never a GraphQL error (§18 degradation pattern):
+# NOT_CONFIGURED (feature absent on this instance — no chat endpoint),
+# UNREACHABLE (endpoint down; one attempt, bounded timeout), NO_RESULTS
+# (nothing viewable answers this — the model was never called).
+#
+# `answer` carries inline `[Sn]` markers (1-based, in order of first
+# appearance) that index into `citations`; each citation's
+# pageId + anchorId deep-links exactly like a search hit
+# (`/pages/{id}#{anchorId}` — same §9.2 chunker anchors).
+query AskWiki($question: String!) {
+  askWiki(question: $question) {
+    answer
+    citations {
+      pageId
+      title
+      headingPath
+      anchorId
+    }
+    unavailable
+  }
+}

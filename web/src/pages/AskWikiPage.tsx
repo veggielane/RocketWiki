@@ -1,0 +1,282 @@
+import { useRef, useState } from 'react'
+import { Link as RouterLink, useSearchParams } from 'react-router-dom'
+import {
+  Alert,
+  AlertTitle,
+  Box,
+  Button,
+  CircularProgress,
+  Link,
+  List,
+  ListItemButton,
+  ListItemText,
+  Paper,
+  Stack,
+  TextField,
+  Typography,
+} from '@mui/material'
+import SendIcon from '@mui/icons-material/Send'
+import { useClient } from 'urql'
+import {
+  AskWikiDocument,
+  type AskWikiQuery,
+  type AskWikiQueryVariables,
+  type AskWikiUnavailableReason,
+} from '../graphql/generated/graphql'
+import { citationHref, type AskCitation } from '../ask/answerSegments'
+import { AnswerBody } from '../ask/AnswerBody'
+import { isAskWikiMarkedNotConfigured, markAskWikiNotConfigured, useAskWikiPossiblyAvailable } from '../ask/askAvailability'
+
+/**
+ * "Ask the wiki" (design.md §9.5) — single-question RAG over pages the
+ * asker can view. v1 is stateless and non-streaming: each ask is one
+ * `askWiki` query, multi-second, no conversation memory server-side. The
+ * transcript below is therefore pure component state — navigate away and
+ * it's gone, which the hint under the heading says out loud.
+ *
+ * Every designed failure mode arrives as a payload fact (`unavailable`),
+ * never a GraphQL error, and renders as designed UX: NOT_CONFIGURED flips
+ * the session-level availability store (the attempt is the probe — see
+ * askAvailability.ts) and this page shows the honest feature-absent copy;
+ * UNREACHABLE gets a retry; NO_RESULTS gets honest "nothing you can view
+ * answers this" copy plus a keyword-search escape hatch.
+ */
+
+type EntryResult =
+  | { state: 'pending' }
+  | { state: 'answered'; answer: string; citations: AskCitation[] }
+  | { state: 'unavailable'; reason: AskWikiUnavailableReason }
+  /** Transport-level failure reaching our own API — not a designed payload, but still retryable UX, not a raw toast. */
+  | { state: 'failed' }
+
+interface TranscriptEntry {
+  id: number
+  question: string
+  result: EntryResult
+}
+
+function toResult(payload: AskWikiQuery['askWiki'] | undefined): EntryResult {
+  if (payload?.unavailable != null) return { state: 'unavailable', reason: payload.unavailable }
+  if (payload?.answer != null) return { state: 'answered', answer: payload.answer, citations: payload.citations }
+  return { state: 'failed' }
+}
+
+export function AskWikiPage() {
+  const client = useClient()
+  const [params] = useSearchParams()
+  // Prefill from the search page's "Can't find it?" nudge — prefill only,
+  // never auto-submit (an ask is a multi-second model call).
+  const [draft, setDraft] = useState(() => params.get('q') ?? '')
+  const [entries, setEntries] = useState<TranscriptEntry[]>([])
+  const nextId = useRef(1)
+  const possiblyAvailable = useAskWikiPossiblyAvailable()
+
+  const busy = entries.some((e) => e.result.state === 'pending')
+
+  const runAsk = async (id: number, question: string) => {
+    // Imperative query with the *generated* document + types: the generated
+    // `useAskWikiQuery` hook models one live query, while this page keeps N
+    // completed asks on screen — so each ask executes once, network-only
+    // (re-asking the same question must not answer from cache), and lands
+    // in the transcript entry it belongs to.
+    const result = await client
+      .query<AskWikiQuery, AskWikiQueryVariables>(AskWikiDocument, { question }, { requestPolicy: 'network-only' })
+      .toPromise()
+    const payload = result.data?.askWiki
+    setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, result: toResult(payload) } : e)))
+    if (payload?.unavailable === 'NOT_CONFIGURED') markAskWikiNotConfigured()
+  }
+
+  const ask = () => {
+    const question = draft.trim()
+    if (question.length === 0 || busy || isAskWikiMarkedNotConfigured()) return
+    const id = nextId.current++
+    setEntries((prev) => [...prev, { id, question, result: { state: 'pending' } }])
+    setDraft('')
+    void runAsk(id, question)
+  }
+
+  const retry = (entry: TranscriptEntry) => {
+    setEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, result: { state: 'pending' } } : e)))
+    void runAsk(entry.id, entry.question)
+  }
+
+  return (
+    <Stack spacing={3}>
+      <Box>
+        <Typography variant="h4" component="h1">
+          Ask the wiki
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          Answers draw only on wiki pages you can view. Nothing here is saved — the conversation disappears when you
+          leave this page.
+        </Typography>
+      </Box>
+
+      {entries.length > 0 && (
+        <Stack component="ol" spacing={3} aria-label="Questions and answers" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+          {entries.map((entry) => (
+            <Stack component="li" key={entry.id} spacing={1.5}>
+              <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'action.hover' }}>
+                <Typography sx={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontWeight: 600 }}>
+                  {entry.question}
+                </Typography>
+              </Paper>
+              <TranscriptResult entry={entry} onRetry={() => retry(entry)} />
+            </Stack>
+          ))}
+        </Stack>
+      )}
+
+      {possiblyAvailable ? (
+        <Paper
+          component="form"
+          variant="outlined"
+          sx={{ p: 2 }}
+          onSubmit={(e) => {
+            e.preventDefault()
+            ask()
+          }}
+        >
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
+            <TextField
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter submits; Shift+Enter falls through to the textarea's
+                // default and inserts a newline. No length cap — the server
+                // budgets model context, not us.
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  ask()
+                }
+              }}
+              label="Ask a question"
+              multiline
+              minRows={1}
+              maxRows={8}
+              fullWidth
+              autoFocus
+              helperText="Enter to ask · Shift+Enter for a new line"
+            />
+            <Button
+              type="submit"
+              variant="contained"
+              endIcon={<SendIcon />}
+              disabled={busy || draft.trim().length === 0}
+              sx={{ mt: 1 }}
+            >
+              Ask
+            </Button>
+          </Stack>
+        </Paper>
+      ) : (
+        <Alert severity="info">
+          <AlertTitle>The wiki assistant isn't available on this instance</AlertTitle>
+          Ask the wiki needs an instance-level chat model endpoint, and none is configured here. Keyword search still
+          covers everything you can view —{' '}
+          <Link component={RouterLink} to="/search">
+            go to search
+          </Link>
+          .
+        </Alert>
+      )}
+    </Stack>
+  )
+}
+
+function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry: () => void }) {
+  const { result, question } = entry
+  switch (result.state) {
+    case 'pending':
+      return (
+        <Stack direction="row" spacing={1.5} role="status" sx={{ pl: 0.5, alignItems: 'center' }}>
+          <CircularProgress size={18} aria-hidden />
+          <Typography variant="body2" color="text.secondary">
+            Searching the wiki and composing an answer — this can take several seconds.
+          </Typography>
+        </Stack>
+      )
+    case 'answered':
+      return (
+        <Stack spacing={1}>
+          <AnswerBody answer={result.answer} citations={result.citations} />
+          {result.citations.length > 0 && (
+            <Box>
+              <Typography variant="overline" component="h2" color="text.secondary">
+                Sources
+              </Typography>
+              <List dense disablePadding>
+                {result.citations.map((citation, i) => (
+                  <ListItemButton
+                    key={i}
+                    component={RouterLink}
+                    to={citationHref(citation)}
+                    sx={{ borderRadius: 1, alignItems: 'baseline', gap: 1 }}
+                  >
+                    <Typography variant="caption" color="primary" sx={{ fontWeight: 700, flexShrink: 0 }}>
+                      S{i + 1}
+                    </Typography>
+                    <ListItemText
+                      primary={citation.title}
+                      secondary={citation.headingPath.length > 0 ? citation.headingPath.join(' › ') : undefined}
+                      sx={{ my: 0 }}
+                    />
+                  </ListItemButton>
+                ))}
+              </List>
+            </Box>
+          )}
+        </Stack>
+      )
+    case 'unavailable':
+      switch (result.reason) {
+        case 'NO_RESULTS':
+          return (
+            <Stack spacing={0.5}>
+              <Typography>Nothing in the wiki you can view answers this.</Typography>
+              <Typography variant="body2" color="text.secondary">
+                It may not be written down — or it's on pages you don't have access to. Try a{' '}
+                <Link component={RouterLink} to={`/search?q=${encodeURIComponent(question)}`}>
+                  keyword search
+                </Link>{' '}
+                instead.
+              </Typography>
+            </Stack>
+          )
+        case 'UNREACHABLE':
+          return (
+            <Alert
+              severity="warning"
+              action={
+                <Button color="inherit" size="small" onClick={onRetry}>
+                  Retry
+                </Button>
+              }
+            >
+              The assistant endpoint couldn't be reached, so this question wasn't answered. The wiki itself is fine.
+            </Alert>
+          )
+        case 'NOT_CONFIGURED':
+          // The page-level alert (rendered where the composer was) carries
+          // the full explanation; this keeps the transcript honest.
+          return (
+            <Typography color="text.secondary">The wiki assistant isn't configured on this instance.</Typography>
+          )
+      }
+      break
+    case 'failed':
+      return (
+        <Alert
+          severity="warning"
+          action={
+            <Button color="inherit" size="small" onClick={onRetry}>
+              Retry
+            </Button>
+          }
+        >
+          Couldn't reach the wiki API to ask this. Check your connection and retry.
+        </Alert>
+      )
+  }
+}

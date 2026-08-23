@@ -35,6 +35,7 @@ import { NotificationBell } from '../notifications/NotificationBell'
 import { useCurrentUserQuery } from '../graphql/generated/graphql'
 import { UserAvatar } from '../avatars/UserAvatar'
 import { useEmojiRegistryFeed } from '../emoji/useEmojiRegistry'
+import { AskWikiEntryButton } from '../ask/AskWikiEntryButton'
 
 const DRAWER_WIDTH = 280
 
@@ -123,6 +124,11 @@ export function AppShell() {
               }}
             />
           </Box>
+
+          {/* Next to search: the two "find something" affordances live
+              together. Self-hiding once the session learns the assistant
+              is NOT_CONFIGURED (ask/askAvailability.ts). */}
+          <AskWikiEntryButton />
 
           <Box sx={{ flexGrow: 1 }} />
 

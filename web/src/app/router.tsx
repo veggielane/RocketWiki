@@ -124,6 +124,17 @@ export const router = createBrowserRouter([
           return { Component: SearchPage }
         },
       },
+      // Not router-gated: NOT_CONFIGURED is a payload fact learned by
+      // asking (design.md §9.5 — no status query exists), so the page
+      // itself renders the feature-absent state (askAvailability.ts) while
+      // the shell/search affordances collapse.
+      {
+        path: 'ask',
+        lazy: async () => {
+          const { AskWikiPage } = await import('../pages/AskWikiPage')
+          return { Component: AskWikiPage }
+        },
+      },
       // Per-user settings (design.md §18's GitLab token surface). Reachable
       // by anyone; sections gate themselves on server-reported state
       // (gitlabStatus.configured) rather than router-level guards.
