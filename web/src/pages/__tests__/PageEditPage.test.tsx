@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -76,13 +76,14 @@ describe('PageEditPage typed mutation errors', () => {
     expect(dialog).toHaveTextContent('LOW')
   })
 
-  it('StaleRevision opens the merge flow with their revision number, not an exception', async () => {
+  it('StaleRevision opens the merge flow with their revision number and the diff as evidence, not an exception', async () => {
     renderEditPage(
       mutationError({
         kind: 'StaleRevision',
         expectedRevisionNumber: 3,
         actualRevisionNumber: 7,
-        latestContent: 'their newer content',
+        latestTitle: 'Runbook (revised)',
+        latestContent: 'their newer content\n',
       }),
     )
 
@@ -91,10 +92,62 @@ describe('PageEditPage typed mutation errors', () => {
     const dialog = await screen.findByRole('dialog')
     expect(dialog).toHaveTextContent('Someone else saved changes first')
     expect(dialog).toHaveTextContent('revision 7')
+
+    // "View their changes" is not a further click away: the diff of the
+    // error's latestContent against the draft is the dialog body.
+    const diff = screen.getByRole('region', { name: 'Their changes compared with your draft' })
+    expect(diff).toHaveTextContent('their newer content')
+    expect(diff).toHaveTextContent('Hello world.')
+    // Both titles are shown, because theirs changed too.
+    expect(dialog).toHaveTextContent('Their title: Runbook (revised)')
+    expect(dialog).toHaveTextContent('Your title: Runbook')
+
     // The three designed choices are all offered.
-    expect(screen.getByRole('button', { name: 'View their changes' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Keep editing' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Overwrite anyway' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Copy my text and cancel' })).toBeInTheDocument()
+  })
+
+  it('"Keep editing" dismisses the dialog and stays in the editor', async () => {
+    renderEditPage(mutationError({ kind: 'StaleRevision', actualRevisionNumber: 7, latestContent: 'theirs\n' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep editing' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+  })
+
+  it('"Copy my text and cancel" copies the draft to the clipboard, then leaves their revision standing', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(window.navigator, 'clipboard', { value: { writeText }, configurable: true })
+    try {
+      renderEditPage(mutationError({ kind: 'StaleRevision', actualRevisionNumber: 7, latestContent: 'theirs\n' }))
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Copy my text and cancel' }))
+
+      expect(await screen.findByText('view route')).toBeInTheDocument()
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('Hello world.'))
+    } finally {
+      Reflect.deleteProperty(window.navigator, 'clipboard')
+    }
+  })
+
+  it('a refused clipboard write never navigates — the draft must not be silently destroyed', async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'))
+    Object.defineProperty(window.navigator, 'clipboard', { value: { writeText }, configurable: true })
+    try {
+      renderEditPage(mutationError({ kind: 'StaleRevision', actualRevisionNumber: 7, latestContent: 'theirs\n' }))
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Copy my text and cancel' }))
+
+      expect(await screen.findByText(/Couldn't copy your draft/)).toBeInTheDocument()
+      expect(screen.queryByText('view route')).toBeNull()
+    } finally {
+      Reflect.deleteProperty(window.navigator, 'clipboard')
+    }
   })
 
   it('"Overwrite anyway" re-submits against the revision the error reported', async () => {
