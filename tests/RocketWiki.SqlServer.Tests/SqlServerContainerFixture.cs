@@ -59,7 +59,25 @@ public sealed class SqlServerContainerFixture : IAsyncLifetime
             imageName = image.FullName;
         }
 
-        _container = new MsSqlBuilder(imageName).Build();
+        // Explicit, generous process limits: CI runs #28/#29 (and #28's re-run) hit a
+        // boot crash with the byte-identical image and runner release that had just
+        // run green seven times - SQLPAL fatal during lsass init, "Last errno: 11
+        // (Resource temporarily unavailable)", i.e. EAGAIN from thread/process
+        // creation. That signature is the docker default pids/nproc limit biting on
+        // whatever host generation the Actions VM pool served up; SQL Server on
+        // Linux needs generous limits and the fix is to declare them rather than
+        // inherit the daemon's mood. PidsLimit -1 = unlimited within the cgroup.
+        _container = new MsSqlBuilder(imageName)
+            .WithCreateParameterModifier(p =>
+            {
+                p.HostConfig.PidsLimit = -1;
+                p.HostConfig.Ulimits =
+                [
+                    new Docker.DotNet.Models.Ulimit { Name = "nofile", Soft = 65536, Hard = 65536 },
+                    new Docker.DotNet.Models.Ulimit { Name = "nproc", Soft = 65536, Hard = 65536 },
+                ];
+            })
+            .Build();
         await _container.StartAsync();
     }
 
