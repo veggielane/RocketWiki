@@ -15,8 +15,12 @@ import { StaleRevisionDialog } from './StaleRevisionDialog'
  *    origin instance id, not a raw error toast (design.md §12).
  *  - `StaleRevision` opens the merge flow (view their changes /
  *    overwrite / copy my text) instead of throwing — it's UX, not an
- *    exception (design.md §5, §8). "Overwrite anyway" re-submits against
- *    the revision number the error reported.
+ *    exception (design.md §5, §8). The dialog shows a diff of the error's
+ *    `latestContent` against the draft as submitted at conflict time
+ *    (captured here, since the editor stays live behind the dialog).
+ *    "Overwrite anyway" re-submits against the revision number the error
+ *    reported; "Copy my text and cancel" puts the draft on the clipboard
+ *    and leaves their revision standing.
  */
 export function PageEditPage() {
   const { pageId } = useParams<{ pageId: string }>()
@@ -26,7 +30,7 @@ export function PageEditPage() {
   const [, updatePageContent] = useUpdatePageContentMutation()
 
   const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
-  const [staleRevision, setStaleRevision] = useState<StaleRevision | null>(null)
+  const [conflict, setConflict] = useState<{ stale: StaleRevision; draft: string } | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -36,12 +40,13 @@ export function PageEditPage() {
     if (!page || !editorRef.current) return
     setSaving(true)
     setSaveError(null)
+    const draft = editorRef.current.getMarkdown()
     const result = await updatePageContent({
       input: {
         pageId: page.id,
         expectedRevisionNumber,
         title: page.title,
-        content: editorRef.current.getMarkdown(),
+        content: draft,
       },
     })
     setSaving(false)
@@ -54,7 +59,9 @@ export function PageEditPage() {
     }
     const stale = asStaleRevision(payload?.error)
     if (stale) {
-      setStaleRevision(stale)
+      // Capture the draft as submitted: it's what the conflict is *about*,
+      // and what the dialog diffs against their latest revision.
+      setConflict({ stale, draft })
       return
     }
     const errorText = describeMutationError(payload?.error)
@@ -110,24 +117,40 @@ export function PageEditPage() {
       />
 
       <StaleRevisionDialog
-        open={staleRevision !== null}
-        currentRevisionNumber={staleRevision?.actualRevisionNumber ?? null}
-        onViewChanges={() => {
-          setStaleRevision(null)
-          // TODO(page-edit): show a real diff view (staleRevision.latestContent
-          // is already here) once there's a proper compare UI.
-        }}
+        open={conflict !== null}
+        currentRevisionNumber={conflict?.stale.actualRevisionNumber ?? null}
+        yourTitle={page.title}
+        yourDraft={conflict?.draft ?? ''}
+        theirTitle={conflict?.stale.latestTitle ?? null}
+        theirContent={conflict?.stale.latestContent ?? null}
         onOverwriteAnyway={() => {
-          const theirRevision = staleRevision?.actualRevisionNumber
-          setStaleRevision(null)
+          const theirRevision = conflict?.stale.actualRevisionNumber
+          setConflict(null)
           // Re-submit against the revision the error reported as current —
           // an explicit, informed overwrite of exactly the revision the
           // user was just told about (a *newer* save landing in between
           // will surface as another StaleRevision, as it should).
           if (theirRevision != null) void save(theirRevision)
         }}
-        onCopyAndCancel={() => setStaleRevision(null)}
-        onClose={() => setStaleRevision(null)}
+        onCopyAndCancel={() => {
+          // "Take theirs, but don't lose mine": draft to the clipboard,
+          // then leave the editor with their revision standing. If the
+          // clipboard refuses (permissions, insecure context), stay put —
+          // navigating away would silently destroy the draft.
+          void (async () => {
+            const draft = conflict?.draft ?? ''
+            try {
+              await navigator.clipboard.writeText(draft)
+            } catch {
+              setConflict(null)
+              setSaveError("Couldn't copy your draft to the clipboard — it is still in the editor below.")
+              return
+            }
+            setConflict(null)
+            navigate(`/pages/${page.id}`)
+          })()
+        }}
+        onKeepEditing={() => setConflict(null)}
       />
     </Box>
   )
