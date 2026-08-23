@@ -13,26 +13,30 @@ namespace RocketWiki.Api.RealTime;
 /// <summary>
 /// design.md §8's per-user fan-out for durable notifications: compute candidate
 /// recipients (watchers of the page or its space, plus users newly mentioned in the
-/// saved Markdown, minus the actor), evaluate canView per recipient AT SEND TIME, and
-/// persist a Notification row plus push live only to those who pass. Mentions are
+/// saved Markdown, minus the actor), then split by connectivity. Mentions are
 /// parsed from the <c>@[display](user://{id})</c> Markdown form (§4, MentionParser);
 /// on a page edit only mentions ABSENT from the previous revision notify, so re-saving
 /// a page doesn't re-ping everyone already mentioned in it. A user who is both a
-/// watcher and newly mentioned gets one notification, the more specific Mention.
+/// watcher and newly mentioned gets one notification, the more specific Mention — and
+/// that precedence is resolved over the WHOLE candidate set before connectivity is
+/// consulted, so it holds across the connected/offline split, not per-half.
 ///
-/// **Known, deliberately scoped gap.** canView requires a live ABAC <see cref="Principal"/>
-/// built from a validated token (design.md §6.1), and there is no substitute for an
-/// offline recipient's token: the local <c>User</c> row is explicitly not a valid
-/// stand-in for an authorization decision anywhere else in this system (§6.1's whole
-/// point), and manufacturing one here would be the same anti-pattern with extra steps.
-/// So only recipients with a currently-open SignalR connection — and therefore a live
-/// registered Principal via <see cref="IRealtimeConnectionRegistry"/> — are evaluated
-/// and notified; offline watchers get neither a persisted row nor a push from this
-/// implementation. Design.md's "notifications are also persisted so users who were
-/// offline catch up" is therefore not yet fully realized here — flagged to the team,
-/// not silently dropped. Closing it needs either a deliberate policy decision about
-/// what "authorization at send time" can mean for someone with no live token, or a
-/// deferred-evaluation design (re-check at next login instead of at send time).
+/// **Connected recipients** (a live registered Principal via
+/// <see cref="IRealtimeConnectionRegistry"/>): canView is evaluated AT SEND TIME and
+/// only those who pass get a persisted row (with the title snapshot) plus a live push.
+///
+/// **Offline recipients**: canView requires a live ABAC <see cref="Principal"/> built
+/// from a validated token (design.md §6.1), and there is no substitute for an offline
+/// recipient's token — the local <c>User</c> row is explicitly not a valid stand-in
+/// for an authorization decision anywhere else in this system (§6.1's whole point),
+/// and manufacturing one here would be the same anti-pattern with extra steps. So no
+/// authorization decision is made and NOTHING is disclosed: a deferred row is
+/// persisted with <c>TitleSnapshot</c> null, and both the row's EXISTENCE and its
+/// title are resolved at the recipient's next notifications fetch against their live
+/// token-built Principal (NotificationReadModelService.SurvivesReadTimeCheck) — the
+/// same deferred pattern design.md §8 established for sync-imported rows. This is how
+/// "notifications are also persisted so users who were offline catch up" is realized
+/// without ever trading away fail-closed authorization.
 /// </summary>
 public interface INotificationDispatcher
 {
@@ -211,19 +215,42 @@ public sealed class NotificationDispatcher(
             .ToListAsync(cancellationToken);
         var isReplica = space is not null && space.IsReplicaOf(localInstanceId);
 
-        var now = DateTime.UtcNow;
-        var toPush = new List<(Guid RecipientId, Notification Row)>();
-        var skippedOffline = new Dictionary<NotificationType, int>();
-        var skippedNotViewable = new Dictionary<NotificationType, int>();
+        // Split the (already precedence-resolved) candidate set by connectivity. The
+        // split happens AFTER the recipients dictionary is final, so mention-beats-watch
+        // and mention-beats-reply hold across the whole set: a user is one entry with
+        // one winning type, whichever half they land in - one row per user per event.
+        var connected = new List<(Guid RecipientId, NotificationType Type, Principal Principal)>();
+        var offlineCandidateIds = new List<Guid>();
         foreach (var (recipientId, recipientType) in recipients)
         {
-            var principal = registry.GetConnectedPrincipal(recipientId);
-            if (principal is null)
+            if (registry.GetConnectedPrincipal(recipientId) is { } principal)
             {
-                Bump(skippedOffline, recipientType);
-                continue; // offline recipient - see this interface's own doc for the gap
+                connected.Add((recipientId, recipientType, principal));
             }
+            else
+            {
+                offlineCandidateIds.Add(recipientId);
+            }
+        }
 
+        // Mentioned ids come from user-typed Markdown, so an offline candidate may name
+        // no local User row at all - such an id must simply produce nothing, not a
+        // Notification FK violation that fails the whole mutation. Connected recipients
+        // are inherently real users (a live connection implies a provisioned row).
+        var offlineRecipientIds = offlineCandidateIds.Count == 0
+            ? new List<Guid>()
+            : await db.Users.AsNoTracking()
+                .Where(u => offlineCandidateIds.Contains(u.Id))
+                .Select(u => u.Id)
+                .ToListAsync(cancellationToken);
+
+        var now = DateTime.UtcNow;
+        var toPush = new List<(Guid RecipientId, Notification Row)>();
+        var deferredOffline = new Dictionary<NotificationType, int>();
+        var skippedNotViewable = new Dictionary<NotificationType, int>();
+
+        foreach (var (recipientId, recipientType, principal) in connected)
+        {
             var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplica, principal);
             if (!permission.CanView)
             {
@@ -245,7 +272,35 @@ public sealed class NotificationDispatcher(
             toPush.Add((recipientId, row));
         }
 
-        if (toPush.Count > 0)
+        foreach (var recipientId in offlineRecipientIds)
+        {
+            // Deferred row (design.md §8, same pattern as sync-imported rows): no live
+            // token exists for an offline recipient, so no canView ran and NO
+            // DISCLOSURE occurs here - TitleSnapshot stays null precisely because
+            // there was no principal to authorize one. Existence and title are both
+            // resolved at fetch by NotificationReadModelService.SurvivesReadTimeCheck
+            // against the recipient's live token-built Principal, which answers the
+            // two fail-closed questions this row raises:
+            //  - offline AND cannot view at fetch: the recipient never learns the row
+            //    existed (suppressed entirely - same as sync rows);
+            //  - offline, could have viewed at send time, but lost access before
+            //    fetching: also suppressed at fetch. Correct under this pattern -
+            //    no disclosure ever occurred at send time, so unlike a snapshot row
+            //    there is nothing the recipient "legitimately learned" to preserve.
+            db.Notifications.Add(new Notification
+            {
+                RecipientUserId = recipientId,
+                Type = recipients[recipientId],
+                PageId = page.Id,
+                SpaceId = page.SpaceId,
+                ActorUserId = actorUserId,
+                TitleSnapshot = null,
+                CreatedAtUtc = now,
+            });
+            Bump(deferredOffline, recipients[recipientId]);
+        }
+
+        if (toPush.Count > 0 || offlineRecipientIds.Count > 0)
         {
             // Persist BEFORE pushing: the live payload carries the row's id, so the
             // client can de-duplicate a push against a later `notifications` refetch of
@@ -270,18 +325,20 @@ public sealed class NotificationDispatcher(
             }
         }
 
-        // Recorded after the save, so `delivered` counts rows that actually committed
-        // (design.md §15 - see RocketWikiDbContext.PendingTelemetry for the same rule).
-        // The two skip counters are the operational measure of this dispatcher's two
-        // documented behaviours: the offline-recipient gap, and canView at send time.
+        // Recorded after the save, so both row-writing dispositions count rows that
+        // actually committed (design.md §15 - see RocketWikiDbContext.PendingTelemetry
+        // for the same rule). Three dispositions, a bounded vocabulary (§15), one per
+        // candidate: delivered_live (send-time canView passed, row + push),
+        // deferred_offline (no live principal, blind row gated at fetch), and
+        // skipped_not_viewable (send-time canView failed, nothing persisted).
         foreach (var group in toPush.GroupBy(p => p.Row.Type))
         {
-            ApiTelemetry.RecordNotificationFanOut(group.Key, ApiTelemetry.NotificationDelivered, group.Count());
+            ApiTelemetry.RecordNotificationFanOut(group.Key, ApiTelemetry.NotificationDeliveredLive, group.Count());
         }
 
-        foreach (var (skippedType, count) in skippedOffline)
+        foreach (var (deferredType, count) in deferredOffline)
         {
-            ApiTelemetry.RecordNotificationFanOut(skippedType, ApiTelemetry.NotificationSkippedOffline, count);
+            ApiTelemetry.RecordNotificationFanOut(deferredType, ApiTelemetry.NotificationDeferredOffline, count);
         }
 
         foreach (var (skippedType, count) in skippedNotViewable)
@@ -291,6 +348,7 @@ public sealed class NotificationDispatcher(
 
         activity?.SetTag("rocketwiki.notification.candidate_count", recipients.Count);
         activity?.SetTag("rocketwiki.notification.delivered_count", toPush.Count);
+        activity?.SetTag("rocketwiki.notification.deferred_count", offlineRecipientIds.Count);
     }
 
     private static void Bump(Dictionary<NotificationType, int> counts, NotificationType type) =>

@@ -20,7 +20,7 @@ public partial class Mutation
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         CancellationToken cancellationToken)
     {
-        var (_, actingUserId, auditContext, unauthenticated) =
+        var (principal, actingUserId, auditContext, unauthenticated) =
             MutationAuthHelper.Authenticate(principalAccessor, actingUserAccessor, auditContextAccessor);
         if (unauthenticated is not null)
         {
@@ -33,13 +33,16 @@ public partial class Mutation
                 "Validation", "notificationId must be a notification row id.", null, null, null, null, null, null, null, null));
         }
 
-        var result = await notificationService.MarkNotificationReadAsync(notificationId, actingUserId!.Value, auditContext!, cancellationToken);
+        var result = await notificationService.MarkNotificationReadAsync(
+            notificationId, actingUserId!.Value, principal!, auditContext!, cancellationToken);
         if (!result.IsSuccess)
         {
             // No denial audit call here, deliberately: this path can only fail
-            // NotFound/Validation (the service is owner-scoped by construction, so
-            // there is no permission-shaped failure to record - design.md §7 audits
-            // denials, not misses).
+            // NotFound/Validation. The service is owner-scoped by construction, and an
+            // existence-gated row that fails its read-time check is deliberately
+            // surfaced as the same NotFound (to this caller the row does not exist -
+            // fail closed, design.md §8), so there is no permission-shaped failure to
+            // record - design.md §7 audits denials, not misses.
             return new MarkNotificationReadPayload(null, PageMutationErrorView.From(result.Error));
         }
 
