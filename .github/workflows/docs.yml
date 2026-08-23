@@ -1,0 +1,68 @@
+# Builds and deploys the documentation site (docs-site/) to GitHub Pages.
+#
+# The site is GENERATED from the canonical repo docs at build time
+# (docs-site/scripts/generate.mjs) — hence the paths filter covers the
+# generation inputs, not just docs-site/ itself: the root *.md documents
+# (design.md, README.md, DEVELOPING.md, data-model.md), deploy/, and the
+# Keycloak realm README.
+#
+# Deliberately a separate workflow from ci.yml: docs deploys and CI have
+# different triggers, permissions, and failure modes.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs-site/**'
+      - '*.md'
+      - 'deploy/**'
+      - 'src/RocketWiki.AppHost/keycloak/README.md'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deployment at a time; don't cancel an in-flight production
+# deploy, just queue behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs-site
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+      - run: npm ci
+      - name: Generator unit tests
+        run: npm test
+      - name: Validate content generation (fails on missing sources or broken links)
+        run: npm run check
+      - name: Build site
+        run: npm run build
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs-site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

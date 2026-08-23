@@ -1,0 +1,24 @@
+{
+  "name": "rocketwiki-docs-site",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "RocketWiki documentation site — Astro Starlight, generated at build time from the canonical repo docs (design.md, README.md, DEVELOPING.md, data-model.md, deploy/, keycloak/). See README.md in this directory.",
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "check": "node scripts/generate.mjs --check",
+    "test": "node --test scripts/lib.test.mjs",
+    "predev": "node scripts/generate.mjs",
+    "dev": "astro dev",
+    "start": "astro dev",
+    "prebuild": "node scripts/generate.mjs",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.41.7",
+    "astro": "7.2.4",
+    "sharp": "0.35.3"
+  }
+}
