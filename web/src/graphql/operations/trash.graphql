@@ -31,6 +31,7 @@ query SpaceTrash($key: String!) {
       deletedBy {
         id
         displayName
+        hasAvatar
       }
     }
   }

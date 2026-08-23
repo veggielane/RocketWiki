@@ -41,6 +41,7 @@ query PageById($id: UUID!) {
       author {
         id
         displayName
+        hasAvatar
       }
       createdAtUtc
       editedAtUtc
@@ -53,6 +54,7 @@ query PageById($id: UUID!) {
       uploadedBy {
         id
         displayName
+        hasAvatar
       }
     }
   }

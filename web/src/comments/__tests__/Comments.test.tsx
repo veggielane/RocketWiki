@@ -120,3 +120,60 @@ describe('Comments — delete authorization', () => {
     expect(screen.queryByRole('button', { name: 'Reply' })).not.toBeInTheDocument()
   })
 })
+
+/**
+ * Comment authors get a face (design.md §19): image only when the read's
+ * `UserRef.hasAvatar` says so — never a probing GET per row — with the
+ * initials chip as the unchanged fallback. The blob-fetch behavior itself
+ * is covered in avatars/__tests__/UserAvatar.test.tsx; this pins the
+ * wiring: the flag reaches the avatar, and absent means initials.
+ */
+describe('Comments — author avatars', () => {
+  it('renders initials without fetching when the author has no avatar', () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      render(
+        <Comments
+          pageId="page-1"
+          comments={[comment({ id: 'c1', authorHasAvatar: false })]}
+          canComment={false}
+          currentUserId="me"
+          canManageAccess={false}
+          onAdd={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      )
+      expect(screen.getByText('A')).toBeInTheDocument() // initials chip
+      expect(fetchSpy).not.toHaveBeenCalledWith('/users/user-ada/avatar', expect.anything())
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('fetches the avatar through the authenticated route when hasAvatar is true', async () => {
+    const fetchSpy = vi.fn(async () => new Response(new Blob(['png']), { status: 200 }))
+    vi.stubGlobal('fetch', fetchSpy)
+    URL.createObjectURL = vi.fn(() => 'blob:ada-face')
+    URL.revokeObjectURL = vi.fn()
+    try {
+      render(
+        <Comments
+          pageId="page-1"
+          comments={[comment({ id: 'c1', authorHasAvatar: true })]}
+          canComment={false}
+          currentUserId="me"
+          canManageAccess={false}
+          onAdd={vi.fn()}
+          onDelete={vi.fn()}
+        />,
+      )
+      const img = await screen.findByRole('img', { name: 'Ada' })
+      expect(img).toHaveAttribute('src', 'blob:ada-face')
+      expect(fetchSpy).toHaveBeenCalledWith('/users/user-ada/avatar', expect.anything())
+    } finally {
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    }
+  })
+})

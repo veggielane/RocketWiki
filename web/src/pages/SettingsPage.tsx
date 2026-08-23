@@ -13,24 +13,31 @@ import {
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined'
 import {
   useClearGitLabTokenMutation,
+  useCurrentUserQuery,
   useGitLabStatusQuery,
   useSetGitLabTokenMutation,
 } from '../graphql/generated/graphql'
 import { describeMutationError } from '../graphql/mutationError'
+import { AvatarSettingsSection } from '../avatars/AvatarSettingsSection'
 
 /**
- * User settings. v1 holds one section: the per-user GitLab personal access
- * token (design.md §18) — entered here, stored encrypted server-side, and
- * write-only by construction: nothing in the schema can return it, and this
- * page never displays it back (the field is cleared on submit; state is
- * only ever the boolean `viewerHasToken`).
+ * User settings. Two sections:
+ *
+ * - **Profile picture** (design.md §19) — always present; upload/clear go
+ *   through the plain HTTP avatar routes (avatars/avatarApi.ts), and the
+ *   current state comes from `me.hasAvatar`, refetched after every change.
+ * - **GitLab token** (design.md §18) — entered here, stored encrypted
+ *   server-side, and write-only by construction: nothing in the schema can
+ *   return it, and this page never displays it back (the field is cleared
+ *   on submit; state is only ever the boolean `viewerHasToken`).
  *
  * §15/§18 fail-closed extends to UI affordances: when the instance has no
- * GitLab configured the section is hidden entirely — the steady state on a
+ * GitLab configured that section is hidden entirely — the steady state on a
  * high-side replica, where mentioning the integration would only mislead.
  */
 export function SettingsPage() {
   const [{ data, fetching }, refetchStatus] = useGitLabStatusQuery()
+  const [{ data: meData }, refetchMe] = useCurrentUserQuery()
   const [{ fetching: saving }, setGitLabToken] = useSetGitLabTokenMutation()
   const [{ fetching: clearing }, clearGitLabToken] = useClearGitLabTokenMutation()
   const [tokenInput, setTokenInput] = useState('')
@@ -89,9 +96,16 @@ export function SettingsPage() {
         Settings
       </Typography>
 
-      {status?.configured !== true ? (
-        <Typography color="text.secondary">There are no integration settings on this instance.</Typography>
-      ) : (
+      <Box sx={{ mb: 3 }}>
+        <AvatarSettingsSection
+          localUserId={meData?.me.localUserId}
+          hasAvatar={meData?.me.hasAvatar === true}
+          displayName={meData?.me.name ?? '?'}
+          onChanged={() => refetchMe({ requestPolicy: 'network-only' })}
+        />
+      </Box>
+
+      {status?.configured === true && (
         <Paper variant="outlined" sx={{ p: 3, maxWidth: 640 }}>
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
             <Typography variant="h6" component="h2">

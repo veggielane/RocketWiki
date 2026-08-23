@@ -21,6 +21,10 @@ export interface TrashedPage {
   deletedAtUtc: string | null
   /** Resolved from `Page.deletedBy` (UserRef) — the display name, not a derived id stand-in. */
   deletedByDisplayName?: string | null
+  /** `UserRef.id` — the local user id the avatar route takes (design.md §19). */
+  deletedById?: string | null
+  /** `UserRef.hasAvatar` — the avatar render decision; false/absent renders initials, never a probing GET. */
+  deletedByHasAvatar?: boolean | null
 }
 
 export interface TrashBatch {
@@ -33,6 +37,8 @@ export interface TrashBatch {
   expiresAtUtc: string | null
   /** Who deleted the batch's root page (the whole cascade is one audited operation, so one actor). */
   deletedByDisplayName: string | null
+  deletedById: string | null
+  deletedByHasAvatar: boolean | null
 }
 
 const TRASH_WINDOW_DAYS = 30
@@ -67,6 +73,8 @@ export function groupTrashBatches(pages: TrashedPage[]): TrashBatch[] {
       deletedAtUtc: root.deletedAtUtc,
       expiresAtUtc: expiryOf(root.deletedAtUtc),
       deletedByDisplayName: root.deletedByDisplayName ?? null,
+      deletedById: root.deletedById ?? null,
+      deletedByHasAvatar: root.deletedByHasAvatar ?? null,
     })
   }
 

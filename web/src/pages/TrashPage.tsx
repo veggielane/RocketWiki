@@ -5,6 +5,7 @@ import { useRestorePageMutation, useSpaceTrashQuery } from '../graphql/generated
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
 import { groupTrashBatches } from '../trash/groupTrashBatches'
 import { describeExpiry } from '../trash/trashCountdown'
+import { UserAvatar } from '../avatars/UserAvatar'
 
 /**
  * design.md §6.4.1: a cascade delete trashes a whole subtree as one
@@ -31,6 +32,8 @@ export function TrashPage() {
         (data?.space?.trashedPages ?? []).map((page) => ({
           ...page,
           deletedByDisplayName: page.deletedBy?.displayName ?? null,
+          deletedById: page.deletedBy?.id ?? null,
+          deletedByHasAvatar: page.deletedBy?.hasAvatar ?? null,
         })),
       ),
     [data],
@@ -104,12 +107,33 @@ export function TrashPage() {
                     ? `${batch.rootPageTitle} + ${batch.pageCount - 1} more page${batch.pageCount - 1 === 1 ? '' : 's'}`
                     : batch.rootPageTitle
                 }
-                secondary={[
-                  batch.deletedByDisplayName ? `Deleted by ${batch.deletedByDisplayName}` : null,
-                  batch.expiresAtUtc ? describeExpiry(batch.expiresAtUtc) : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ') || undefined}
+                // The secondary line can hold an Avatar (a div) — rendered
+                // as a div, not the default <p>, to keep the markup valid.
+                slotProps={{ secondary: { component: 'div' } }}
+                secondary={
+                  batch.deletedByDisplayName || batch.expiresAtUtc ? (
+                    <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                      {batch.deletedByDisplayName && (
+                        <>
+                          <span>Deleted by</span>
+                          <UserAvatar
+                            userId={batch.deletedById}
+                            hasAvatar={batch.deletedByHasAvatar ?? false}
+                            displayName={batch.deletedByDisplayName}
+                            size={16}
+                          />
+                          <span>{batch.deletedByDisplayName}</span>
+                        </>
+                      )}
+                      {batch.expiresAtUtc && (
+                        <span>
+                          {batch.deletedByDisplayName ? ' · ' : ''}
+                          {describeExpiry(batch.expiresAtUtc)}
+                        </span>
+                      )}
+                    </Stack>
+                  ) : undefined
+                }
               />
             </ListItem>
           ))}

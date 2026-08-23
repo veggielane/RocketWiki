@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Box, Button, Stack, Typography } from '@mui/material'
 import { RichTextEditor, type RichTextEditorHandle } from '../editor/RichTextEditor'
 import { buildCommentTree, type CommentNode, type FlatComment } from './buildCommentTree'
+import { UserAvatar } from '../avatars/UserAvatar'
 
 export interface CommentsProps {
   pageId: string
@@ -121,7 +122,16 @@ function CommentItem({
       }}
     >
       <Stack spacing={0.5}>
-        <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline' }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          {/* Face + name (design.md §19): image only when `hasAvatar` says
+              so; the initials chip is the unchanged fallback. One fetch per
+              author per session via the avatar cache, not per comment row. */}
+          <UserAvatar
+            userId={node.authorUserId}
+            hasAvatar={node.authorHasAvatar ?? false}
+            displayName={node.authorDisplayName}
+            size={24}
+          />
           <Typography variant="subtitle2">{node.authorDisplayName}</Typography>
           <Typography variant="caption" color="text.secondary">
             {new Date(node.createdAtUtc).toLocaleString()}

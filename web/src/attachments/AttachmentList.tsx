@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Alert, IconButton, List, ListItem, ListItemIcon, ListItemText, Tooltip } from '@mui/material'
+import { Alert, IconButton, List, ListItem, ListItemIcon, ListItemText, Stack, Tooltip } from '@mui/material'
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined'
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined'
 import { fetchAttachmentBlob } from './attachmentApi'
 import { formatBytes } from './formatBytes'
+import { UserAvatar } from '../avatars/UserAvatar'
 
 export interface AttachmentSummary {
   id: string
@@ -12,6 +13,10 @@ export interface AttachmentSummary {
   sizeBytes: number
   /** Resolved from `Attachment.uploadedBy` (UserRef). */
   uploadedByDisplayName: string
+  /** `UserRef.id` — the local user id the avatar route takes (design.md §19). */
+  uploadedById?: string
+  /** `UserRef.hasAvatar` — image when true, initials otherwise, never a probing GET. */
+  uploadedByHasAvatar?: boolean
 }
 
 /**
@@ -69,7 +74,21 @@ export function AttachmentList({ attachments }: { attachments: AttachmentSummary
             </ListItemIcon>
             <ListItemText
               primary={attachment.fileName}
-              secondary={`${formatBytes(attachment.sizeBytes)} · uploaded by ${attachment.uploadedByDisplayName}`}
+              // The secondary line holds an Avatar (a div) — rendered as a
+              // div, not the default <p>, to keep the markup valid.
+              slotProps={{ secondary: { component: 'div' } }}
+              secondary={
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                  <span>{`${formatBytes(attachment.sizeBytes)} · uploaded by`}</span>
+                  <UserAvatar
+                    userId={attachment.uploadedById}
+                    hasAvatar={attachment.uploadedByHasAvatar ?? false}
+                    displayName={attachment.uploadedByDisplayName}
+                    size={16}
+                  />
+                  <span>{attachment.uploadedByDisplayName}</span>
+                </Stack>
+              }
             />
           </ListItem>
         ))}

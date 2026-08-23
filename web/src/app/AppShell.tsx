@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { Outlet, Link as RouterLink, useLocation, useNavigation } from 'react-router-dom'
 import {
   AppBar,
-  Avatar,
   Box,
   Divider,
   Drawer,
@@ -33,6 +32,9 @@ import { useNavigate } from 'react-router-dom'
 import { useColorMode } from '../theme/colorModeContext'
 import { SpaceTreeNav } from './SpaceTreeNav'
 import { NotificationBell } from '../notifications/NotificationBell'
+import { useCurrentUserQuery } from '../graphql/generated/graphql'
+import { UserAvatar } from '../avatars/UserAvatar'
+import { useEmojiRegistryFeed } from '../emoji/useEmojiRegistry'
 
 const DRAWER_WIDTH = 280
 
@@ -49,6 +51,12 @@ export function AppShell() {
   // between click and render. Surfacing it beats a navigation that appears
   // to silently do nothing.
   const navigation = useNavigation()
+  // `me` supplies the local user id + hasAvatar for the account button
+  // (design.md §19: the render decision is the flag, never a probing GET).
+  const [{ data: meData }] = useCurrentUserQuery()
+  // One feed for the custom-emoji registry (emoji/registry.ts) — every
+  // editor/picker below the shell reads the module store.
+  useEmojiRegistryFeed()
 
   const handleSearchSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -134,9 +142,12 @@ export function AppShell() {
 
           <Tooltip title={auth.user?.profile.name ?? 'Account'}>
             <IconButton onClick={(e) => setUserMenuAnchor(e.currentTarget)} aria-label="Account menu">
-              <Avatar sx={{ width: 32, height: 32 }}>
-                {(auth.user?.profile.name ?? '?').slice(0, 1).toUpperCase()}
-              </Avatar>
+              <UserAvatar
+                userId={meData?.me.localUserId}
+                hasAvatar={meData?.me.hasAvatar}
+                displayName={meData?.me.name ?? auth.user?.profile.name ?? '?'}
+                size={32}
+              />
             </IconButton>
           </Tooltip>
           <Menu anchorEl={userMenuAnchor} open={Boolean(userMenuAnchor)} onClose={() => setUserMenuAnchor(null)}>

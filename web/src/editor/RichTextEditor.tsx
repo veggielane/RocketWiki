@@ -10,6 +10,9 @@ import { DrawioDiagram } from './nodes/DrawioDiagram'
 import { DrawioDiagramWithView } from './nodes/DrawioDiagramWithView'
 import { GitLabIssueLink } from './marks/GitLabIssueLink'
 import { GitLabIssueLinkWithView } from './marks/GitLabIssueLinkWithView'
+import { EmojiDecorations } from './emoji/EmojiDecorations'
+import { EmojiSuggestion } from './emoji/EmojiSuggestion'
+import { EmojiSuggestionPopup } from './emoji/EmojiSuggestionPopup'
 import { markdownToJson } from './markdown/fromMarkdown'
 import { jsonToMarkdown } from './markdown/toMarkdown'
 import { EditorToolbar } from './EditorToolbar'
@@ -20,13 +23,23 @@ import './editor-content.css'
 // Same node names/attrs/schema as the plain extensions used by
 // `editorExtensions` (see extensions.ts's comment) — only the rendering
 // differs, so these swaps never affect what gets serialized.
-const richTextExtensions = editorExtensions.map((ext) => {
-  if (ext === Image) return AttachmentImage
-  if (ext === codeBlockExtension) return MermaidCodeBlock
-  if (ext === DrawioDiagram) return DrawioDiagramWithView
-  if (ext === GitLabIssueLink) return GitLabIssueLinkWithView
-  return ext
-})
+//
+// The two emoji extensions appended at the end are schema-free (a
+// decoration renderer and the `:` autocomplete — see editor/emoji/): they
+// belong here with the other network-touching render concerns, not in the
+// shared `editorExtensions` list the round-trip suite validates, precisely
+// because they can never affect what gets serialized.
+const richTextExtensions = [
+  ...editorExtensions.map((ext) => {
+    if (ext === Image) return AttachmentImage
+    if (ext === codeBlockExtension) return MermaidCodeBlock
+    if (ext === DrawioDiagram) return DrawioDiagramWithView
+    if (ext === GitLabIssueLink) return GitLabIssueLinkWithView
+    return ext
+  }),
+  EmojiDecorations,
+  EmojiSuggestion,
+]
 
 export interface RichTextEditorHandle {
   /** Current document, serialized back to Markdown for saving. */
@@ -142,6 +155,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       <Box sx={{ p: 2 }}>
         <EditorContent editor={editor} />
       </Box>
+      {editable && editor && <EmojiSuggestionPopup editor={editor} />}
       <Snackbar open={Boolean(uploadError)} autoHideDuration={5000} onClose={() => setUploadError(null)}>
         <Alert severity="error" onClose={() => setUploadError(null)}>
           {uploadError}

@@ -5,6 +5,8 @@ export interface FlatComment {
   isDeleted: boolean
   authorUserId: string
   authorDisplayName: string
+  /** `UserRef.hasAvatar` (design.md §19) — the render decision for the author's face; false means initials, never a probing GET. */
+  authorHasAvatar?: boolean
   createdAtUtc: string
   editedAtUtc: string | null
 }

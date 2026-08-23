@@ -163,6 +163,13 @@ export const router = createBrowserRouter([
               return { Component: SyncStatusPage }
             },
           },
+          {
+            path: 'emojis',
+            lazy: async () => {
+              const { AdminEmojisPage } = await import('../pages/AdminEmojisPage')
+              return { Component: AdminEmojisPage }
+            },
+          },
         ],
       },
       // Statically imported, not `lazy`: AccessGate.tsx renders it directly
