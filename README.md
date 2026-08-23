@@ -303,6 +303,20 @@ Being explicit about what has and hasn't been checked, rather than letting
   assumptions about it, and the GraphQL operation-name enrichment —
   including an assertion that no variable value, document text, or response
   body reaches a span.
+- **The k3s deployment package (milestone 9) is authored but entirely
+  unexercised.** `Dockerfile.api`, `Dockerfile.web`, and the Helm chart in
+  `deploy/helm/rocketwiki/` exist, `helm lint` passes and `helm template`
+  renders valid YAML (including the guard rails: api.replicaCount is
+  hard-locked to 1, telemetry export fails closed, secrets are referenced
+  never templated) — and that is the *whole* claim. No image has ever been
+  built, no manifest applied, and the EF migrations bundle the migration Job
+  depends on has never been generated or run; like everything else behind
+  the container-runtime gap, assume it doesn't work until it's been watched
+  working. Known src-side follow-up it surfaced: ServiceDefaults maps
+  `/health`/`/alive` only in Development, so the chart probes TCP until
+  those endpoints get a config gate for production. `deploy/README.md` has
+  the build/offline-install/restore-drill procedures and its own, longer
+  "what has never been verified" list.
 - `RocketWiki.Core.Tests` and `RocketWiki.Data.Tests` (owned by another
   agent) have passed as part of a solution-wide run in the past — not
   independently reverified by this file's author this round (see the

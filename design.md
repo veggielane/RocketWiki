@@ -1223,6 +1223,26 @@ outside the cluster is a legitimate production shape for a wiki, and it
 keeps the backplane and migration-job complexity off the table until real
 load justifies them.
 
+The milestone 9 artifacts now exist in-repo: `Dockerfile.api`/`Dockerfile.web`
+at the root and a hand-authored Helm chart under `deploy/helm/rocketwiki/` —
+owned manifests, not generated output, per the rule above. The shape they
+encode: single api replica (enforced by a values-schema and a template guard
+until a Redis backplane exists), migrations moved out of startup into a
+pre-install/pre-upgrade Job running an EF migrations bundle baked into the
+api image, a standard Ingress for Traefik (IngressRoute's apiVersion churn
+across k3s-bundled Traefik versions makes the stable API the better reviewed
+artifact; Traefik upgrades `/hubs` WebSockets natively, and the web pod's
+nginx sets the upgrade headers explicitly on its own proxy hop), secrets by
+reference to one operator-created Secret, and both offline image paths
+(registry mirror via one values key, or `k3s ctr images import` with
+`pullPolicy: Never`). One honest gap: the health endpoints this section says
+to wire to probes are mapped only in the Development environment
+(ServiceDefaults), so the chart defaults to TCP probes and carries an `http`
+mode to flip on once `MapDefaultEndpoints` learns a config gate — a small
+src change deliberately not smuggled in with deployment work. `helm lint` /
+`helm template` pass; nothing has been applied to a cluster (see §16's
+standing caveat).
+
 ### Telemetry is not audit
 
 Aspire brings OpenTelemetry, which is operational data: latencies, error
