@@ -1096,6 +1096,14 @@ renames never touch storage; the `Attachment` row owns all meaning.
   perf cost is acceptable at wiki scale. The rule is enforced by a tripwire
   test that pins `IFileStorage` to its four streaming members and fails on any
   member whose name suggests minting a URL.
+- **The three binary routes answer alike.** Attachments, avatars and emojis
+  share one domain-error→status map, one 413 shape, and one upload-cap guard
+  (`Api/Http/BinaryRoutes.cs`) — they had drifted into three partial maps
+  where a given error kind mapped correctly on at most one route. Replica
+  refusals are `403` everywhere, never `400`; a name collision is `409`. The
+  shared cap guard also gives the multipart routes the in-handler streaming
+  bound that only the emoji route had, which matters because the Kestrel
+  body-size feature it previously relied on is absent under TestServer.
 - **Download-response hardening.** The attachment download carries
   `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment`, and
   `Cache-Control: private, no-cache` with a strong ETag (the attachment id —
@@ -1617,9 +1625,22 @@ listens to **every** ActivitySource in the process and every RocketWiki
 meter; and fails if any sentinel reaches a span name, tag, event, baggage
 entry, or metric tag. The listener is deliberately unfiltered, so a package
 upgrade that turns on a new span carrying the GraphQL document fails the
-build rather than shipping. Logs are the one gap: .NET logging isn't
-interceptable the same way, so "no content in log messages" stays a review
-rule.
+build rather than shipping.
+
+Logs were long described here as uninterceptable. That was wrong, and the
+correction matters: log records *are* interceptable in-process — an in-memory
+`BaseExporter<LogRecord>` in a test host is exactly how the gravatar guard
+below works. What is genuinely impossible is filtering *inside* the
+OpenTelemetry pipeline: processors compose into a `CompositeProcessor` whose
+`OnEnd` calls every child unconditionally, so a processor cannot drop a
+record, and scopes are readable only through `ForEachScope` with no setter,
+so it cannot de-scope one either (verified against OpenTelemetry 1.15.3 — a
+processor that blanked attributes, body, and formatted message still exported
+the `RequestPath` scope). Filtering therefore has to happen **ahead of the
+provider**, via `AddFilter<OpenTelemetryLoggerProvider>`. So: content in log
+*messages* remains a review rule, but the one identity-derived path is closed
+structurally (§19), and the closure is pinned by a test that fails when the
+filter is removed.
 
 That review rule rests on a posture worth stating outright: **the backend
 logs almost nothing, by design.** Traces, metrics, and the audit table (§7)
@@ -1704,7 +1725,12 @@ reference back would be circular. That makes the convention load-bearing: a
 source named outside it would compile, emit, and be silently dropped, so a
 test asserts every telemetry class matches the pattern. Instruments are
 `rocketwiki.<area>.<thing>` and tags `rocketwiki.<area>.<tag>`, following
-OpenTelemetry's lowercase dotted convention.
+OpenTelemetry's lowercase dotted convention — and that rule is enforced too,
+not just stated: `TelemetryNamingTests` reflects over every telemetry class
+and fails on any instrument name or `*Tag` constant that doesn't match.
+Writing it surfaced the one historical offender, an area-less
+`rocketwiki.outcome` (now `rocketwiki.data.outcome`), which had made
+Data-layer outcomes ungroupable alongside every other area's.
 
 #### Rules for adding instrumentation
 
@@ -2041,8 +2067,13 @@ story for a resize that costs milliseconds, and HTTP caching absorbs the
 repeats). No JIT row, no principal, and no audit row exist on this path —
 there is no acting user to attribute one to, and §7's vocabulary has no
 anonymous case; the only telemetry is a bounded hit/miss/disabled counter,
-and the route is excluded from HTTP tracing wholesale because a server
-span's `url.path` would carry the email hash. Beyond the flag there is no
+and the route is excluded from HTTP tracing **and from exported logs**
+wholesale, because a server span's `url.path`, the `RequestPath` logging
+scope, and hosting's own "Request starting" message each carry the email
+hash. The log side is an `AddFilter<OpenTelemetryLoggerProvider>` predicate
+rather than a pipeline processor — see §15 for why a processor cannot do it
+— and the one consequence worth knowing is that this route's blob-missing
+operator error stays in local/console logs and is never exported. Beyond the flag there is no
 rate limiting in v1 — stated as a fact, not an oversight. In-wiki
 rendering does **not** depend on the flag: the authenticated
 `GET /users/{id}/avatar` route serves the SPA regardless. Contrast with

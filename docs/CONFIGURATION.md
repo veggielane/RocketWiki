@@ -45,7 +45,7 @@ configuration binding.
 |---|---|---|---|---|
 | `FileStorage:Provider` | `FileSystem` (unset/empty selects it) | Filesystem provider. Any value other than `FileSystem`/`S3` **fails startup** — no silent fallback | `Storage/ServiceCollectionExtensions.cs` | §10 |
 | `FileStorage:FileSystem:Root` | *(none)* | With the FileSystem provider selected: `InvalidOperationException` when the provider is constructed — the root must be configured. Directory is created on first use | `Storage/FileSystemFileStorage.cs` | §10 |
-| `FileStorage:S3:ServiceUrl` | *(none)* | AWS SDK default endpoint resolution (i.e. real AWS S3). Set it for MinIO/Ceph/any S3-compatible endpoint | `Storage/ServiceCollectionExtensions.cs` | §10 |
+| `FileStorage:S3:ServiceUrl` | *(none)* | AWS SDK default endpoint resolution (i.e. real AWS S3). Set it for MinIO/Ceph/any S3-compatible endpoint. **When set** it must be an absolute URL including scheme, or startup fails | `Storage/ServiceCollectionExtensions.cs` | §10 |
 | `FileStorage:S3:Bucket` | *(none)* | No bucket — S3 operations fail | `Storage/S3FileStorage.cs` | §10 |
 | `FileStorage:S3:ForcePathStyle` | `true` | n/a (has a default). Required true for MinIO/Ceph/most non-AWS stores | `Storage/FileStorageOptions.cs` | §10 |
 | `FileStorage:S3:AccessKey` / `SecretKey` | *(none)* | AWS SDK default credential chain | `Storage/ServiceCollectionExtensions.cs` | §10 |
@@ -56,10 +56,10 @@ configuration binding.
 
 | Key | Default | Unset means | Read at | design.md |
 |---|---|---|---|---|
-| `Attachments:MaxSizeBytes` | `104857600` (100 MiB — matches the nginx `client_max_body_size` in front of the API) | n/a (has a default). Enforced in the upload route before any blob write or row insert; over-limit is a structured 413, deliberately not audited | `Attachments/AttachmentOptions.cs`, bound in `Program.cs` | §10 |
-| `Avatars:MaxSizeBytes` | `5242880` (5 MiB) | n/a (has a default). Same layered 413 enforcement | `Avatars/AvatarOptions.cs` | §19 |
+| `Attachments:MaxSizeBytes` | `104857600` (100 MiB — matches the nginx `client_max_body_size` in front of the API) | n/a (has a default). Enforced in the upload route before any blob write or row insert; over-limit is a structured 413, deliberately not audited. **Validated at startup**: a non-positive value fails the host with `Attachments:MaxSizeBytes must be a positive number of bytes.` | `Attachments/AttachmentOptions.cs`, bound in `Program.cs` | §10 |
+| `Avatars:MaxSizeBytes` | `5242880` (5 MiB) | n/a (has a default). Same layered 413 enforcement. **Validated at startup** (must be positive) | `Avatars/AvatarOptions.cs`, bound in `Program.cs` | §19 |
 | ⛔ `Avatars:GravatarEndpointEnabled` | `false` | The **unauthenticated** Gravatar/Libravatar endpoint `GET /avatar/{hash}` 404s for every hash. Enabling it is the codebase's one deliberate exception to "all access requires sign-in" — anyone on the network can fetch avatars and probe email hashes | `Avatars/AvatarOptions.cs` | §19 |
-| `Emojis:MaxSizeBytes` | `262144` (256 KiB) | n/a (has a default). Applied twice: to the raw upload (413) and to the re-encoded stored bytes (validation error) | `Emojis/EmojiOptions.cs` | §19 |
+| `Emojis:MaxSizeBytes` | `262144` (256 KiB) | n/a (has a default). Applied twice: to the raw upload (413) and to the re-encoded stored bytes (validation error). **Validated at startup** (must be positive) | `Emojis/EmojiOptions.cs`, bound in `Program.cs` | §19 |
 
 ## Real-time co-editing (operational caps, not authorization)
 
@@ -67,6 +67,13 @@ All five bound from the `CoEdit` section (`RealTime/CoEditOptions.cs`; read
 in `Program.cs` both for options binding and to derive the SignalR transport
 message-size limit). All have defaults, so unset means the defaults below.
 design.md §8.
+
+Like the three upload caps, these bind through
+`AddOptions().Bind().ValidateDataAnnotations().ValidateOnStart()`: the four
+byte caps must be positive or the host fails to start with
+`CoEdit:<Name> must be a positive number of bytes.` `EmptySessionGrace` is
+deliberately not validated — a `TimeSpan` range attribute drags in
+`TypeDescriptor` and is trim-hostile.
 
 | Key | Default | What it bounds |
 |---|---|---|

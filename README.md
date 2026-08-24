@@ -391,6 +391,15 @@ Being explicit about what has and hasn't been checked, rather than letting
 **Verified by tests and CI** (the standing caveat — design.md §16 —
 applies: test-proven, never yet run against live infrastructure; each
 bullet keeps its own sharper caveat where one exists):
+- **Backend consistency round (from the consistency reviews)**: the three
+  binary routes share one error-status map, 413 shape and upload-cap guard
+  (they had drifted into three partial maps); the options families now
+  validate at startup, so a non-positive size cap fails the host at boot
+  instead of every upload at runtime; telemetry naming is enforced by a
+  reflection guard rather than convention; and log records emitted during
+  `GET /avatar/{hash}` no longer reach the exporter — the logging
+  counterpart of the tracing exclusion that already existed, closing an
+  email-hash leak via the `RequestPath` scope.
 - **Consolidation round (from the consistency reviews)**: one
   `PermissionContextLoader` replaces fourteen hand-rolled copies of the
   grants + ancestor-chain + restrictions load, and with it the audited
