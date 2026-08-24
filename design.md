@@ -109,7 +109,7 @@ deliberately constrained to GitHub-Flavored Markdown plus a few extensions:
 | Feature | Markdown representation |
 |---|---|
 | Headings, bold/italic/strike, lists, quotes, links | Standard GFM |
-| Tables | GFM pipe tables (no merged cells — accepted limitation vs Confluence; column alignment `:---:` not supported in v1) |
+| Tables | GFM pipe tables with column alignment (`:---` / `:---:` / `---:` delimiters) and merged cells via MultiMarkdown table syntax (markdown-it-multimd-table): colspan as an adjacent-pipe merge (`\| wide \|\| x \|`), rowspan as `^^` continuation cells, both combinable; newlines inside cells as literal `<br>`. Cells are single logical lines of inline content; an empty cell keeps spaces between pipes (`\|  \|`) to stay distinct from a colspan merge, and literal `^^` / `\|` cell text is backslash-escaped. Table captions and multi-row headers are outside the feature set and rejected rather than reshaped |
 | Code blocks with language | Fenced code blocks |
 | Task lists | GFM `- [ ]` |
 | Images / attachments | `![alt](attachment://{id})` — resolved to URLs at render time |
