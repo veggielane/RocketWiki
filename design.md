@@ -1308,6 +1308,18 @@ which runs the suites and fails on a dirty working tree under the fixture
 directories. Until it exists, "regenerated and asserted" must not be read as
 "drift is impossible".
 
+The importer converts tables at full §4 fidelity: merged cells become
+MultiMarkdown spans (adjacent-pipe colspans, `^^` rowspan continuations),
+per-cell alignment becomes GFM per-column delimiter colons (header cell
+wins, else body majority), and in-cell line breaks become literal `<br>` —
+all byte-compatible with the editor serializer and enforced by the
+regenerated converted-markdown corpus. The only table shape that still
+degrades is a rowspan crossing the header/body boundary, which is split
+(header keeps the content, covered body cells are emptied) and flagged in
+the conversion report; multi-row headers, captions, and block content
+inside cells are likewise flattened with a report note rather than
+silently reshaped.
+
 Migration fidelity is a known risk — budget real time for it, and run trial
 imports early (see §16).
 

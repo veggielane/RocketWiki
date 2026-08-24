@@ -204,11 +204,12 @@ describe('span structure is valid against the real ProseMirror table schema', ()
   })
 })
 
-describe('the importer fixture contract (phase 2 unblocks on this exact behaviour)', () => {
+describe('the importer fixture contract', () => {
   it('a space-padded empty cell (`|  |`) is an empty cell, never a colspan merge', () => {
-    // tests/fixtures/converted-markdown/table-merged-cells-degraded.md
-    // depends on this: the degraded form must keep parsing as three cells
-    // until the phase-2 importer starts emitting real spans.
+    // The importer (phase 2, landed) emits real spans as adjacent-pipe merges
+    // and space-padded `|  |` for genuinely empty cells — e.g.
+    // tests/fixtures/converted-markdown/table-header-boundary-rowspan-degraded.md
+    // relies on this distinction for its emptied body cells.
     const row = markdownToJson('| A | B | C |\n| --- | --- | --- |\n| Merged AB |  | c1 |\n').content![0].content![1]
     expect(row.content).toHaveLength(3)
     expect(row.content![1].attrs?.colspan).toBeUndefined()

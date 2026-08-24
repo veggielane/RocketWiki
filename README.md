@@ -546,8 +546,11 @@ Being explicit about what has and hasn't been checked, rather than letting
   section) vanishes entirely when `GitLab:BaseUrl` is unconfigured.
 - **Tables** support GFM column alignment, merged cells (colspan/rowspan
   via MultiMarkdown syntax), and `<br>` line breaks inside cells — all
-  round-tripping byte-identically through the editor. (The Confluence
-  importer's merged-cell preservation is the pending phase 2.)
+  round-tripping byte-identically through the editor. The Confluence
+  importer preserves them too — merged cells, alignment, and cell line
+  breaks convert at full fidelity (only header-boundary-crossing rowspans
+  still degrade, split with a conversion-report note; captions, previously
+  dropped silently, now flatten with a note — a fixed bug).
 - **Edit conflicts show a Markdown diff** of the other author's revision
   against your draft right in the conflict dialog, so you can keep yours,
   take theirs (your text goes to the clipboard), or keep editing.
