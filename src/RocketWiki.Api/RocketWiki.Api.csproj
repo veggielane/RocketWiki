@@ -36,7 +36,7 @@
          the AppHost via service discovery, plus health checks, retry, and
          OpenTelemetry for free (design.md §15) — the idiomatic Aspire path
          rather than hand-rolled AddDbContext/UseSqlServer. -->
-    <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.1" />
+    <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.2" />
     <!-- Image normalization for both binary-upload features: avatars
          (Avatars/ImageSharpAvatarProcessor — decode-with-limits, center-crop/resize
          to the canonical 512×512, re-encode to PNG) and custom emojis

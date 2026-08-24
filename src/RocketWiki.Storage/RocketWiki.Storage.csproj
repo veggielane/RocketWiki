@@ -16,7 +16,7 @@
          RocketWiki.Data, whose blob table would otherwise have to join the migration
          chain every deployment applies. -->
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.1" />
-    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
     <!-- ValidateDataAnnotations() for FileStorageOptions. The API host gets this
          assembly free from the ASP.NET Core shared framework; this class library
          does not, and AddFileStorage is where the validation belongs (every host
