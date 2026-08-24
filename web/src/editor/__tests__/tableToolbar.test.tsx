@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { Provider as UrqlProvider } from 'urql'
 import { Editor } from '@tiptap/core'
@@ -7,6 +7,16 @@ import { editorExtensions } from '../extensions'
 import { markdownToJson } from '../markdown/fromMarkdown'
 import { jsonToMarkdown } from '../markdown/toMarkdown'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
+import { setEmojiRegistry } from '../../emoji/registry'
+import { expectNoAxeViolations } from '../../test/axe'
+
+// The emoji picker's previews go through the authenticated blob cache —
+// stub it so the axe pass below never touches the network.
+vi.mock('../../emoji/emojiBlobCache', () => ({
+  getEmojiUrl: () => Promise.resolve('data:image/gif;base64,R0lGODlhAQABAAAAACw='),
+  peekEmojiUrl: () => 'data:image/gif;base64,R0lGODlhAQABAAAAACw=',
+  resetEmojiBlobCache: () => {},
+}))
 
 /**
  * The contextual table toolbar section (design.md §4 phase 1): present only
@@ -47,6 +57,22 @@ function cellPositions(e: Editor): number[] {
   })
   return positions
 }
+
+describe('editor toolbar — axe pass (WCAG 2.2 AA policy, test/axe.ts)', () => {
+  it('has no axe violations with table controls showing and the emoji picker open', async () => {
+    setEmojiRegistry([
+      { name: 'rocket', etag: '"r1"' },
+      { name: 'banana', etag: '"b1"' },
+    ])
+    renderToolbar(TWO_BY_TWO)
+    screen.getByRole('group', { name: 'Table cell controls' })
+    await expectNoAxeViolations()
+    fireEvent.click(screen.getByRole('button', { name: 'Insert emoji' }))
+    await screen.findByRole('listbox', { name: 'Custom emojis' })
+    await expectNoAxeViolations()
+    setEmojiRegistry([])
+  })
+})
 
 describe('contextual table controls', () => {
   it('are absent while the selection is outside any table', () => {

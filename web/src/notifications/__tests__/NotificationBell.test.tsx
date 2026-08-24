@@ -5,6 +5,7 @@ import { Provider as UrqlProvider } from 'urql'
 import { NotificationBell } from '../NotificationBell'
 import { FakeNotificationsTransport } from '../../realtime/FakeNotificationsTransport'
 import { createMockUrqlClient, type MockClient } from '../../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../../test/axe'
 
 // Shaped exactly like the real `notifications` query rows (flat capped
 // list, String ids, nullable pageId/spaceKey/pageTitle) — these tests run
@@ -63,6 +64,13 @@ describe('NotificationBell', () => {
     fireEvent.click(bell)
 
     expect(await screen.findByText('Ada Lovelace mentioned you on "Runbook"')).toBeInTheDocument()
+  })
+
+  it('has no axe violations with the menu open (menu portals into document.body)', async () => {
+    renderBell()
+    fireEvent.click(await screen.findByRole('button', { name: 'Notifications (1 unread)' }))
+    await screen.findByText('Ada Lovelace mentioned you on "Runbook"')
+    await expectNoAxeViolations()
   })
 
   it('connects the injected transport and prepends a live push, de-duplicated against persisted rows by id', async () => {

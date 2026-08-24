@@ -8,6 +8,7 @@ import { AskWikiEntryButton } from '../AskWikiEntryButton'
 import { AskWikiSearchNudge } from '../AskWikiSearchNudge'
 import { markAskWikiNotConfigured, resetAskWikiAvailability } from '../askAvailability'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../../test/axe'
 import type { AskWikiQuery } from '../../graphql/generated/graphql'
 
 /**
@@ -90,6 +91,13 @@ describe('AskWikiPage — ask flow', () => {
     const ops = mock.operations.filter((o) => o.name === 'AskWiki')
     expect(ops).toHaveLength(1)
     expect(ops[0].variables).toEqual({ question: 'What is the impeller made of?' })
+  })
+
+  it('has no axe violations in the answered state (citations + sources)', async () => {
+    renderAsk(() => answered('Titanium impeller [S1], igniter per spec [S2].'))
+    askQuestion('What is the impeller made of?')
+    await screen.findByText(/Titanium impeller/)
+    await expectNoAxeViolations()
   })
 
   it('a marker without a matching citation renders as plain text, not a dead link', async () => {

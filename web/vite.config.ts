@@ -25,5 +25,8 @@ export default defineConfig({
     environment: 'jsdom',
     globals: false,
     setupFiles: ['./src/test/setup.ts'],
+    // web/a11y is the Playwright browser-a11y package (its *.spec.ts run
+    // under `playwright test`, not vitest) — see docs/ACCESSIBILITY.md.
+    exclude: ['**/node_modules/**', 'a11y/**'],
   },
 })

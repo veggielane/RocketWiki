@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Provider as UrqlProvider } from 'urql'
 import { SettingsPage } from '../SettingsPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../../test/axe'
 
 /**
  * The GitLab token surface (design.md §18). The load-bearing properties:
@@ -51,6 +52,15 @@ describe('SettingsPage — hidden when unconfigured (§15/§18 fail-closed)', ()
     expect(await screen.findByText('Profile picture')).toBeInTheDocument()
     expect(screen.queryByText(/GitLab/)).not.toBeInTheDocument()
     expect(screen.queryByLabelText(/Personal access token/)).not.toBeInTheDocument()
+  })
+})
+
+describe('SettingsPage — accessibility', () => {
+  it('has no axe violations with the GitLab section present', async () => {
+    renderPage({ configured: true, hasTokenInitially: true })
+    await screen.findByText('Profile picture')
+    await screen.findByLabelText('Personal access token')
+    await expectNoAxeViolations()
   })
 })
 

@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import {
   Badge,
-  Divider,
   IconButton,
   List,
+  ListItem,
   ListItemButton,
   ListItemText,
-  Menu,
+  Popover,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -64,19 +64,28 @@ export function NotificationBell({ transport }: NotificationBellProps = {}) {
           </Badge>
         </IconButton>
       </Tooltip>
-      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
+      {/* A Popover with a real list, NOT a Menu: role="menu" may only
+          contain menuitems, and these entries are a list of notification
+          links — nesting a <ul> of <div>s inside a menu was an axe
+          aria-required-children/list violation (WCAG 1.3.1/4.1.2). */}
+      <Popover
+        anchorEl={anchorEl}
+        open={Boolean(anchorEl)}
+        onClose={() => setAnchorEl(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
         {notifications.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1.5 }}>
             No notifications.
           </Typography>
         ) : (
-          <List dense sx={{ minWidth: 320, maxWidth: 400 }}>
+          <List dense aria-label="Notifications" sx={{ minWidth: 320, maxWidth: 400 }}>
             {notifications.map((n, i) => {
               const { headline, linkable } = describeNotification(n)
               const isUnread = !n.readAtUtc
               return (
-                <div key={n.id}>
-                  {i > 0 && <Divider component="li" />}
+                <ListItem key={n.id} disablePadding divider={i < notifications.length - 1}>
                   <ListItemButton
                     component={linkable ? RouterLink : 'div'}
                     to={linkable ? `/pages/${n.pageId}` : undefined}
@@ -91,20 +100,26 @@ export function NotificationBell({ transport }: NotificationBellProps = {}) {
                       markRead(n.id)
                       setAnchorEl(null)
                     }}
-                    sx={{ opacity: isUnread ? 1 : 0.6 }}
                   >
+                    {/* Read rows de-emphasize via weight + the theme's
+                        secondary text color — never via opacity, which
+                        multiplies below the WCAG 1.4.3 contrast floor. */}
                     <ListItemText
                       primary={headline}
                       secondary={new Date(n.timestampUtc).toLocaleString()}
-                      slotProps={{ primary: { sx: { fontWeight: isUnread ? 600 : 400 } } }}
+                      slotProps={{
+                        primary: {
+                          sx: { fontWeight: isUnread ? 600 : 400, color: isUnread ? 'text.primary' : 'text.secondary' },
+                        },
+                      }}
                     />
                   </ListItemButton>
-                </div>
+                </ListItem>
               )
             })}
           </List>
         )}
-      </Menu>
+      </Popover>
     </>
   )
 }

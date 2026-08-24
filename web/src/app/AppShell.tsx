@@ -112,7 +112,6 @@ export function AppShell() {
               size="small"
               fullWidth
               placeholder="Search…"
-              aria-label="Search the wiki"
               slotProps={{
                 input: {
                   startAdornment: (
@@ -121,6 +120,10 @@ export function AppShell() {
                     </InputAdornment>
                   ),
                 },
+                // On the <input> itself, not the TextField: a root-level
+                // aria-label lands on the FormControl div, where the generic
+                // role prohibits it (axe aria-prohibited-attr, WCAG 4.1.2).
+                htmlInput: { 'aria-label': 'Search the wiki' },
               }}
             />
           </Box>
@@ -219,6 +222,11 @@ export function AppShell() {
           overflow: 'auto',
           bgcolor: 'background.default',
           outline: 'none',
+          // WCAG 2.4.11 (focus not obscured): the app bar is position:fixed
+          // over the top of this scroll container, so when the browser
+          // scrolls a focused element into view it could land underneath it.
+          // scroll-padding keeps keyboard-focus targets below the bar.
+          scrollPaddingTop: '80px',
         }}
       >
         <Toolbar />

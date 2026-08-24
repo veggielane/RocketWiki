@@ -1,4 +1,5 @@
 import { getAvatarUrl, peekAvatarUrl } from '../../avatars/avatarCache'
+import { readableTextOn } from '../../presence/readableTextOn'
 
 /**
  * The identity a client announces on the awareness channel (the caret
@@ -36,6 +37,11 @@ export function renderCaret(user: Record<string, unknown>): HTMLElement {
   const label = document.createElement('div')
   label.classList.add('collaboration-carets__label')
   label.style.backgroundColor = color ?? 'currentColor'
+  if (color) {
+    // The CSS default is white text; adapt to the assigned colour so light
+    // hues keep WCAG 1.4.3 contrast (see presence/readableTextOn.ts).
+    label.style.color = readableTextOn(color)
+  }
 
   if (userId) {
     const img = document.createElement('img')

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { SpaceBrowserPage } from '../SpaceBrowserPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../../test/axe'
 
 const baseSpace = {
   id: 'space-1',
@@ -100,5 +101,20 @@ describe('SpaceBrowserPage', () => {
     expect(await screen.findByRole('link', { name: 'Grants' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument()
+  })
+
+  it('has no axe violations with tree, lock badge, replica banner, and management affordances', async () => {
+    renderPage({ spaceOverrides: { isReplica: true, originInstanceId: 'LOW', grants: [{ id: 'g1' }] } })
+    await screen.findByText('Restricted Page')
+    await expectNoAxeViolations()
+
+    // And again with the label filter active — the match list is a separate
+    // render path (it once shipped bare <a> children in a <ul>).
+    const facet = screen.getByLabelText('Filter by label')
+    fireEvent.mouseDown(facet)
+    fireEvent.change(facet, { target: { value: 'onboarding' } })
+    fireEvent.click(screen.getByText('onboarding'))
+    await screen.findByRole('region', { name: 'Pages labelled onboarding' })
+    await expectNoAxeViolations()
   })
 })

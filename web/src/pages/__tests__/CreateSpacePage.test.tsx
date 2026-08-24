@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Provider as UrqlProvider, createClient, fetchExchange } from 'urql'
 import { CreateSpacePage } from '../CreateSpacePage'
+import { expectNoAxeViolations } from '../../test/axe'
 
 // No live API in this environment — queries/mutations simply won't
 // resolve, which is fine here: these tests only assert the form's own
@@ -53,5 +54,11 @@ describe('CreateSpacePage — required initial grant, no default', () => {
   it('explains why the initial grant is required rather than silently blocking submission', () => {
     renderPage()
     expect(screen.getByText(/no default like "everyone"/i)).toBeInTheDocument()
+  })
+
+  it('has no axe violations (WCAG 2.2 AA policy, test/axe.ts)', async () => {
+    renderPage()
+    screen.getByRole('button', { name: 'Create space' })
+    await expectNoAxeViolations()
   })
 })

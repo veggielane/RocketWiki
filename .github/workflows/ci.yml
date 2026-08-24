@@ -156,3 +156,69 @@ jobs:
             git --no-pager diff -- tests/fixtures/heading-anchors
             exit 1
           fi
+
+  # The browser accessibility tier (docs/ACCESSIBILITY.md). The `frontend`
+  # job's vitest run already includes the jsdom axe layer (fast, structural,
+  # contrast excluded); THIS job is the layer that needs a real browser:
+  # render every major screen in both themes to standalone HTML (the
+  # a11yScreens capture harness), then run axe-core in Chromium with the full
+  # WCAG 2.2 AA tag set — color-contrast and target-size enforced against
+  # real layout and painted pixels. Fails on any violation; the JSON/HTML
+  # report is uploaded as an artifact on failure.
+  a11y:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            web/a11y/package-lock.json
+      - run: npm ci
+        working-directory: web
+      # Generated GraphQL client — same reasoning as the frontend job.
+      - run: npm run codegen
+        working-directory: web
+      - name: Generate the accessibility capture set (both themes)
+        run: PREVIEW_OUT="$GITHUB_WORKSPACE/web/a11y/screens" npx vitest run src/preview/a11yScreens.test.tsx
+        working-directory: web
+      # Playwright lives in its own package (web/a11y) so the SPA's npm ci
+      # never pays for the browser toolchain.
+      - run: npm ci
+        working-directory: web/a11y
+      - name: Resolve Playwright version for the browser cache key
+        id: playwright-version
+        run: echo "version=$(node -e "console.log(require('@playwright/test/package.json').version)")" >> "$GITHUB_OUTPUT"
+        working-directory: web/a11y
+      - name: Cache Playwright Chromium
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+      # Playwright's own recommended cache split: download the browser only
+      # on a cache miss, but ALWAYS ensure the OS shared libraries — a cached
+      # browser on a fresh runner still needs them.
+      - name: Install Chromium (browser + OS deps)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+        working-directory: web/a11y
+      - name: Install Chromium OS deps (browser restored from cache)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+        working-directory: web/a11y
+      - name: Run axe (WCAG 2.2 AA, both themes) over the capture set
+        run: npx playwright test
+        working-directory: web/a11y
+      - name: Upload violations report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-violations-report
+          path: |
+            web/a11y/report/
+            web/a11y/test-results/
+            web/a11y/screens/
+          if-no-files-found: ignore

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MovePageDialog, type MoveTargetOption } from '../MovePageDialog'
 import { group } from '../../access/ruleTypes'
+import { expectNoAxeViolations } from '../../test/axe'
 import type { RestrictionSummary } from '../../access/move/visibilityChange'
 
 const restrictedRule: RestrictionSummary = {
@@ -73,6 +74,25 @@ describe('MovePageDialog', () => {
     expect(screen.getByText('This move changes who can see this page.')).toBeInTheDocument()
     expect(screen.getByText('group: export-cleared')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Move anyway' })).toBeEnabled()
+  })
+
+  it('has no axe violations with the visibility warning showing', async () => {
+    render(
+      <MovePageDialog
+        open
+        onClose={() => {}}
+        pageTitle="Onboarding"
+        currentAncestorRestrictions={[]}
+        targetOptions={targets}
+        onConfirm={() => {}}
+      />,
+    )
+    const input = screen.getByLabelText('New parent')
+    fireEvent.mouseDown(input)
+    fireEvent.change(input, { target: { value: 'Export-Controlled' } })
+    fireEvent.click(screen.getByText('Export-Controlled Docs'))
+    screen.getByText('This move changes who can see this page.')
+    await expectNoAxeViolations()
   })
 
   it('calls onConfirm with the selected target id', () => {

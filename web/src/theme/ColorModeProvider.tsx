@@ -18,6 +18,13 @@ export function ColorModeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, mode)
+    // The plain-CSS layer (editor-content.css) themes on
+    // `:root[data-theme='dark']` in addition to prefers-color-scheme — the
+    // app's own toggle must win over the OS preference there too, or the
+    // editor content keeps light-theme colors (light code-block/table-header
+    // backgrounds under white text) on an app-dark page. Found by the
+    // browser a11y layer's dark captures (docs/ACCESSIBILITY.md).
+    document.documentElement.dataset.theme = mode
   }, [mode])
 
   const value = useMemo<ColorModeContextValue>(

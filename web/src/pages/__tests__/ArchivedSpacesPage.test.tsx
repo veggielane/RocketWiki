@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Provider as UrqlProvider } from 'urql'
 import { ArchivedSpacesPage } from '../ArchivedSpacesPage'
 import { createMockUrqlClient, type MockClient } from '../../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../../test/axe'
 
 const archived = [
   { id: 'space-1', key: 'ENG', name: 'Engineering', archivedAtUtc: '2026-07-01T12:00:00Z' },
@@ -35,6 +36,12 @@ describe('ArchivedSpacesPage', () => {
   it('states the scoped truth for an empty list — nothing YOU can restore, not "nothing archived"', async () => {
     renderPage([])
     expect(await screen.findByText('No archived spaces you can restore.')).toBeInTheDocument()
+  })
+
+  it('has no axe violations (WCAG 2.2 AA policy, test/axe.ts)', async () => {
+    renderPage(archived)
+    await screen.findByText('Engineering (ENG)')
+    await expectNoAxeViolations()
   })
 
   it('restores via the restoreSpace mutation with the space id', async () => {

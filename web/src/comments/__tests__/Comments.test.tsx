@@ -168,7 +168,9 @@ describe('Comments — author avatars', () => {
           onDelete={vi.fn()}
         />,
       )
-      const img = await screen.findByRole('img', { name: 'Ada' })
+      // findByAltText targets the <img> element itself — the avatar root is
+      // also role="img" now (UserAvatar names it for Tooltip compatibility).
+      const img = await screen.findByAltText('Ada')
       expect(img).toHaveAttribute('src', 'blob:ada-face')
       expect(fetchSpy).toHaveBeenCalledWith('/users/user-ada/avatar', expect.anything())
     } finally {

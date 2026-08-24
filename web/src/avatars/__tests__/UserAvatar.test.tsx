@@ -28,7 +28,9 @@ describe('UserAvatar — hasAvatar decides, never a probing GET (design.md §19)
 
   it('fetches through the blob cache and renders the image when hasAvatar is true', async () => {
     render(<UserAvatar userId="user-1" hasAvatar displayName="Ada Lovelace" />)
-    const img = await screen.findByRole('img', { name: 'Ada Lovelace' })
+    // The root carries role="img" + aria-label (Tooltip-compat, WCAG 4.1.2);
+    // the actual <img> element is found by its alt.
+    const img = await screen.findByAltText('Ada Lovelace')
     expect(img).toHaveAttribute('src', 'blob:avatar-url')
     expect(fetch).toHaveBeenCalledWith('/users/user-1/avatar', expect.anything())
   })
@@ -41,7 +43,10 @@ describe('UserAvatar — hasAvatar decides, never a probing GET (design.md §19)
     render(<UserAvatar userId="user-2" displayName="Grace Hopper" />)
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
     expect(screen.getByText('G')).toBeInTheDocument()
-    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    // No <img> element — the initials div is the identity graphic (it
+    // legitimately carries role="img" with the display name).
+    expect(document.querySelector('img')).toBeNull()
+    expect(screen.getByRole('img', { name: 'Grace Hopper' })).toBeInTheDocument()
   })
 
   it('one fetch per user, however many mounts (comment rows share the session cache)', async () => {
