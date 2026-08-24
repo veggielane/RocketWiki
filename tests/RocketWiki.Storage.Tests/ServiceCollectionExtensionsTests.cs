@@ -64,6 +64,41 @@ public sealed class ServiceCollectionExtensionsTests
     }
 
     [Fact]
+    public void SqlServerProvider_RegistersSqlServerFileStorage()
+    {
+        var config = BuildConfig(new()
+        {
+            ["FileStorage:Provider"] = "SqlServer",
+            ["FileStorage:SqlServer:ConnectionString"] = "Server=blobs;Database=blobs",
+        });
+
+        var services = new ServiceCollection().AddFileStorage(config);
+        using var provider = services.BuildServiceProvider();
+
+        Assert.IsType<SqlServerFileStorage>(provider.GetRequiredService<IFileStorage>());
+    }
+
+    [Fact]
+    public void SqlServerProvider_WithNoSectionOfItsOwn_FallsBackToTheApplicationDatabase()
+    {
+        // Selecting the provider and configuring nothing else is the shape design.md §10
+        // documents: blobs land in the application database, which is the only reason to
+        // accept them into a database at all. The registration must therefore reach the
+        // configuration root, not just the bound FileStorage section.
+        var config = BuildConfig(new()
+        {
+            ["FileStorage:Provider"] = "SqlServer",
+            ["ConnectionStrings:rocketwiki"] = "Server=app;Database=app",
+        });
+
+        var services = new ServiceCollection().AddFileStorage(config);
+        using var provider = services.BuildServiceProvider();
+
+        var storage = Assert.IsType<SqlServerFileStorage>(provider.GetRequiredService<IFileStorage>());
+        Assert.Equal("Server=app;Database=app", storage.ConnectionString);
+    }
+
+    [Fact]
     public void UnrecognizedProvider_ThrowsAtRegistration()
     {
         var config = BuildConfig(new()
@@ -71,7 +106,11 @@ public sealed class ServiceCollectionExtensionsTests
             ["FileStorage:Provider"] = "Dropbox",
         });
 
-        Assert.Throws<InvalidOperationException>(
+        var thrown = Assert.Throws<InvalidOperationException>(
             () => new ServiceCollection().AddFileStorage(config));
+
+        // The message is an operator's only clue at boot, so it must list every provider
+        // that exists - a switch that grew a case without updating it is the failure mode.
+        Assert.Contains("'FileSystem', 'S3' or 'SqlServer'", thrown.Message, StringComparison.Ordinal);
     }
 }

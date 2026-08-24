@@ -9,6 +9,13 @@
 
   <ItemGroup>
     <PackageReference Include="AWSSDK.S3" Version="4.0.102.3" />
+    <!-- SqlServerFileStorage (design.md §10, the opt-in provider). 6.1.1 is exactly what
+         Microsoft.EntityFrameworkCore.SqlServer 10.0.0 already drags into the solution
+         transitively, so this adds a direct reference rather than a second major version.
+         ADO.NET only: this project deliberately references neither EF Core nor
+         RocketWiki.Data, whose blob table would otherwise have to join the migration
+         chain every deployment applies. -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.1" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.0" />
     <!-- ValidateDataAnnotations() for FileStorageOptions. The API host gets this
          assembly free from the ASP.NET Core shared framework; this class library

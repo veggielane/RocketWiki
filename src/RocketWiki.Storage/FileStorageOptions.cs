@@ -6,10 +6,11 @@ namespace RocketWiki.Storage;
 /// Binds the "FileStorage" configuration section (design.md §10):
 /// <code>
 /// "FileStorage": {
-///   "Provider": "S3",                          // or "FileSystem"
+///   "Provider": "S3",                          // or "FileSystem", or "SqlServer"
 ///   "S3": { "ServiceUrl": "http://minio:9000",
 ///           "Bucket": "rocketwiki", "ForcePathStyle": true },
-///   "FileSystem": { "Root": "/data/attachments" }
+///   "FileSystem": { "Root": "/data/attachments" },
+///   "SqlServer": { "ConnectionString": null }   // null: share ConnectionStrings:rocketwiki
 /// }
 /// </code>
 ///
@@ -22,19 +23,21 @@ public sealed class FileStorageOptions : IValidatableObject
 {
     public const string SectionName = "FileStorage";
 
-    /// <summary>"FileSystem" (default) or "S3". Unrecognized values fail closed
-    /// at startup rather than silently falling back — AddFileStorage's switch throws
+    /// <summary>"FileSystem" (default), "S3", or "SqlServer". Unrecognized values fail
+    /// closed at startup rather than silently falling back — AddFileStorage's switch throws
     /// while the container is still being built (which is earlier, and therefore what
     /// an operator actually sees); this annotation states the same rule declaratively
     /// and is what a future binding path that skipped that switch would still hit.
     /// Null/empty pass: unset means FileSystem.</summary>
-    [RegularExpression("FileSystem|S3",
-        ErrorMessage = "FileStorage:Provider must be 'FileSystem' or 'S3'; unset means FileSystem.")]
+    [RegularExpression("FileSystem|S3|SqlServer",
+        ErrorMessage = "FileStorage:Provider must be 'FileSystem', 'S3' or 'SqlServer'; unset means FileSystem.")]
     public string? Provider { get; set; }
 
     public S3FileStorageOptions? S3 { get; set; }
 
     public FileSystemFileStorageOptions? FileSystem { get; set; }
+
+    public SqlServerFileStorageOptions? SqlServer { get; set; }
 
     /// <summary>
     /// DataAnnotations validation does not recurse into complex sub-objects, so the
@@ -51,6 +54,14 @@ public sealed class FileStorageOptions : IValidatableObject
         }
 
         foreach (var result in ValidateSection(FileSystem, $"{SectionName}:FileSystem"))
+        {
+            yield return result;
+        }
+
+        // Carries no annotations today — an unset or empty connection string is the
+        // supported "share the application database" state, not an error. It is walked
+        // anyway so the first annotation added to it is enforced rather than decorative.
+        foreach (var result in ValidateSection(SqlServer, $"{SectionName}:SqlServer"))
         {
             yield return result;
         }
@@ -105,4 +116,15 @@ public sealed class FileSystemFileStorageOptions
     /// <summary>Root directory attachments are written under. Created on first
     /// use if it doesn't exist.</summary>
     public string? Root { get; set; }
+}
+
+public sealed class SqlServerFileStorageOptions
+{
+    /// <summary>Database the blob table lives in. Unset (the expected case) falls back to
+    /// the application's <c>ConnectionStrings:rocketwiki</c> — sharing one database is the
+    /// reason to pick this provider at all (one backup, one restore). Set it to point blob
+    /// storage at a separate database, which is often wiser: blob churn then lands in its
+    /// own transaction log rather than the one carrying page edits. With neither set, the
+    /// provider throws at construction naming both keys.</summary>
+    public string? ConnectionString { get; set; }
 }

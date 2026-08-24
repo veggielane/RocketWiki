@@ -65,9 +65,18 @@ public static class ServiceCollectionExtensions
                 services.AddSingleton<IFileStorage, S3FileStorage>();
                 break;
 
+            case "SqlServer":
+                // Constructed from the configuration root, not just the bound options: the
+                // provider falls back to ConnectionStrings:rocketwiki when
+                // FileStorage:SqlServer:ConnectionString is unset, which is the ordinary
+                // case (design.md §10 — sharing the application database is the point).
+                services.AddSingleton<IFileStorage>(sp => new SqlServerFileStorage(
+                    sp.GetRequiredService<IOptions<FileStorageOptions>>(), configuration));
+                break;
+
             default:
                 throw new InvalidOperationException(
-                    $"Unrecognized FileStorage:Provider '{provider}'. Expected 'FileSystem' or 'S3'.");
+                    $"Unrecognized FileStorage:Provider '{provider}'. Expected 'FileSystem', 'S3' or 'SqlServer'.");
         }
 
         return services;
