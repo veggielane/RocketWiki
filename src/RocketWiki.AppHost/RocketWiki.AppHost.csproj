@@ -10,9 +10,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.AppHost" Version="13.5.1" />
-    <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.5.1" />
-    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.5.1" />
+    <PackageReference Include="Aspire.Hosting.AppHost" Version="13.5.2" />
+    <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.5.2" />
+    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.5.2" />
     <!-- No official Microsoft Aspire hosting integration exists for Keycloak or MinIO.
          Keycloak.AuthServices.Aspire.Hosting (NikiforovAll) is the leading community
          package for Keycloak; MinIO is wired via the generic AddContainer API, which
