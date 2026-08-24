@@ -391,6 +391,15 @@ Being explicit about what has and hasn't been checked, rather than letting
 **Verified by tests and CI** (the standing caveat — design.md §16 —
 applies: test-proven, never yet run against live infrastructure; each
 bullet keeps its own sharper caveat where one exists):
+- **UX polish round (from the consistency reviews)**: author-supplied alt
+  text for draw.io (optional `alt:` first line of the fence body, inert to
+  sync and importer) and mermaid (`accTitle:`/`accDescr:` surface properly);
+  Ctrl/Cmd+Enter submits comments with visible helper text; degraded-state
+  copy is centralized (`web/src/feedback/unavailableCopy.ts`) with "replica"
+  as the one user-facing word for synced spaces; blob caches and authed
+  fetch are shared modules (fixing an emoji swap-flicker bug); read-only
+  page views no longer download the Yjs/co-edit chunk (~126 kB deferred to
+  edit-session start).
 - **Hardening round (from the consistency reviews)**: attachment downloads
   carry nosniff/no-cache/ETag-304 semantics without weakening per-read
   auditing (a 304 still runs `canView` and writes its audit row — tested);

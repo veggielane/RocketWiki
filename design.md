@@ -116,7 +116,7 @@ deliberately constrained to GitHub-Flavored Markdown plus a few extensions:
 | Callouts (info/warning/note) | Directive syntax: `:::info … :::` |
 | Page links | `[title](page://{id})` — stable across renames |
 | Mentions | `@[display](user://{id})` |
-| Diagrams | ` ```mermaid ` fenced block (source rendered client-side); ` ```drawio ` fenced block whose body is base64 of the diagrams.net editable-SVG export — one payload renders as an inert data-URI image and reloads into the embed editor. Both are plain fenced text to the serializer, sync bundles (§12), and the importer (§13); `drawio` is a reserved fence language. Per-diagram payload cap: 512 KB of base64 |
+| Diagrams | ` ```mermaid ` fenced block (source rendered client-side); ` ```drawio ` fenced block whose body is base64 of the diagrams.net editable-SVG export — one payload renders as an inert data-URI image and reloads into the embed editor. The drawio body may begin with one optional `alt: <text>` line (author-supplied alt text for the rendered diagram; `:` isn't base64, so it can't collide with a payload, and an absent line is the old format byte-identically); mermaid alt text uses mermaid's own `accTitle:`/`accDescr:` directives, part of the fence source. Both fences stay plain text to the serializer, sync bundles (§12), and the importer (§13); `drawio` is a reserved fence language. Per-diagram payload cap: 512 KB of base64 |
 | GitLab references (§18) | `[text](gitlab-issue://{project}/{iid})` link mark; ` ```gitlab-file ` and ` ```gitlab-issues ` fences (reserved languages, `key=value` bodies) — host-free scheme forms, inert text to every pipeline but the SPA |
 | Custom emojis (§19) | `:name:` where the name matches `[a-z0-9_-]{1,64}` **and exists in this instance's emoji registry**; anything else is literal text. Plain TEXT to the serializer, round-trip suite, sync bundles (§12), and importer (§13) — no mark, no node, zero pipeline changes. Deleting a definition leaves content rendering the literal text — harmless by construction |
 
@@ -1178,8 +1178,12 @@ files** and never assumes a back-channel.
   high it materializes as a replica.
 - **Replicas are read-only. Always.** On a replica, `canEdit` is
   unconditionally false — an instance-level invariant in the rule engine that
-  beats every grant (§6.4). The UI shows a "mirrored from LOW — read-only"
-  banner; mutations fail with a typed `ReadOnlyReplicaError` (§8).
+  beats every grant (§6.4). The UI shows a "Replica of {origin} — read-only"
+  banner; mutations fail with a typed `ReadOnlyReplicaError` (§8). UI
+  terminology: a synced space is a *replica* everywhere user-facing —
+  "mirror"/"mirrored" wording was retired in the UX polish round, and
+  degraded-state copy across features is centralized in
+  `web/src/feedback/unavailableCopy.ts`.
 - One-way flow + immutable replicas = **no merge problem by construction**.
   Serialized replay cannot conflict, which is what makes one-way sync safe.
 
@@ -1288,8 +1292,8 @@ The admin status data is served by the admin-only `syncStatus` GraphQL query
 event count and last drained bundle; per origin instance the last bundle
 applied, its manifest hash (the link the next bundle must chain from), the
 import time, and per-space applied sequences. `ReadOnlyReplicaError` carries
-the space id and its `OriginInstanceId`, so the client can render "mirrored
-from LOW — read-only" rather than a bare refusal.
+the space id and its `OriginInstanceId`, so the client can render "Replica
+of {origin} — read-only" rather than a bare refusal.
 
 ---
 
