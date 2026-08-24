@@ -1,17 +1,19 @@
 namespace RocketWiki.Api.Audit;
 
 /// <summary>
-/// Explicitly declares that a root Query/Mutation field emits no audit event,
-/// with a reason. Use sparingly: design.md §7 requires every user action —
-/// reads and writes, successes and denials — to be audited. This exists for
-/// the rare root field that isn't a user action on wiki content at all (e.g.
-/// echoing the caller's own already-validated token claims back to them).
+/// Explicitly declares that a user-reachable entry point (root Query/Mutation
+/// field, MCP tool, hub method, or minimal-API route handler) emits no audit
+/// event, with a reason. Use sparingly: design.md §7 requires every user
+/// action — reads and writes, successes and denials — to be audited. This
+/// exists for the rare entry point that isn't a user action on wiki content
+/// at all (echoing the caller's own already-validated token claims back to
+/// them; serving display assets like avatars and emoji images).
 ///
 /// Paired with <see cref="AuditActionAttribute"/>: AuditCoverageTests requires
-/// every root field to carry exactly one of the two, so a field can't ship
+/// every entry point to carry exactly one of the two, so none can ship
 /// silently undeclared either way.
 /// </summary>
-[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+[AttributeUsage(AttributeTargets.Method | AttributeTargets.Property, AllowMultiple = false)]
 public sealed class NoAuditAttribute : Attribute
 {
     public NoAuditAttribute(string reason)

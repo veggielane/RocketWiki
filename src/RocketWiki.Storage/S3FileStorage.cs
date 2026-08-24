@@ -15,6 +15,10 @@ namespace RocketWiki.Storage;
 /// through the API's own attachment routes, which enforce `canView` and audit
 /// the read before streaming (design.md §7, §10). Do not add one as a
 /// "convenience" — it would silently bypass both.
+///
+/// Every method validates its key via <see cref="StorageKey"/> before the SDK
+/// is touched — the same provider-independent rejections FileSystemFileStorage
+/// applies, minus the under-root containment only a filesystem can prove.
 /// </summary>
 public sealed class S3FileStorage : IFileStorage
 {
@@ -34,6 +38,7 @@ public sealed class S3FileStorage : IFileStorage
         using var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.SaveOperation);
         try
         {
+            StorageKey.Validate(key);
             var request = new PutObjectRequest
             {
                 BucketName = _bucket,
@@ -66,6 +71,7 @@ public sealed class S3FileStorage : IFileStorage
         using var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.OpenReadOperation);
         try
         {
+            StorageKey.Validate(key);
             var response = await _client.GetObjectAsync(_bucket, key, ct);
             operation.Bytes = response.ContentLength;
             return response.ResponseStream;
@@ -87,6 +93,7 @@ public sealed class S3FileStorage : IFileStorage
         using var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.DeleteOperation);
         try
         {
+            StorageKey.Validate(key);
             await _client.DeleteObjectAsync(_bucket, key, ct);
         }
         catch (Exception ex)
@@ -101,6 +108,7 @@ public sealed class S3FileStorage : IFileStorage
         using var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.ExistsOperation);
         try
         {
+            StorageKey.Validate(key);
             await _client.GetObjectMetadataAsync(_bucket, key, cancellationToken: ct);
             operation.SetOutcome("found");
             return true;

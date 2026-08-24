@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
+using Microsoft.Net.Http.Headers;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.GraphQL;
 using RocketWiki.Api.Identity;
@@ -25,6 +26,7 @@ public static class AttachmentEndpoints
         return app;
     }
 
+    [AuditAction("attachment.download")]
     private static async Task<IResult> DownloadAsync(
         Guid id,
         IAttachmentReadService attachmentReadService,
@@ -52,7 +54,22 @@ public static class AttachmentEndpoints
                 await auditSink.RecordAsync(
                     new AuditRecord("attachment.download", AuditOutcome.Success, AuditSubjectType.Attachment, found.Metadata.Id),
                     cancellationToken);
-                return Results.Stream(found.Content, found.Metadata.ContentType, found.Metadata.FileName);
+                // Uploader-supplied bytes under an uploader-supplied content type, so:
+                // nosniff (no browser second-guesses the declared type), on top of the
+                // fileDownloadName below (Content-Disposition: attachment - deliberate,
+                // keeps the bytes from rendering in-page). Cache-Control is no-cache,
+                // NOT a max-age: attachment reads are audited (§7), and a freshness
+                // window would let repeat reads bypass the API - and with it canView
+                // and the audit row. Every use revalidates here instead; the strong
+                // ETag (the attachment id - blobs are immutable per id, a re-upload is
+                // a new row) turns the unchanged case into a framework-handled 304
+                // after the same authorization and audit as a 200.
+                httpContext.Response.Headers[HeaderNames.XContentTypeOptions] = "nosniff";
+                httpContext.Response.Headers[HeaderNames.CacheControl] = "private, no-cache";
+                return Results.Stream(
+                    found.Content, found.Metadata.ContentType, found.Metadata.FileName,
+                    lastModified: null,
+                    entityTag: new EntityTagHeaderValue($"\"{found.Metadata.Id:N}\""));
 
             case AttachmentDownloadResult.NotFound:
                 return Results.NotFound();
@@ -101,6 +118,7 @@ public static class AttachmentEndpoints
     /// </summary>
     private const long MultipartEnvelopeAllowanceBytes = 64 * 1024;
 
+    [AuditAction("attachment.upload")]
     private static async Task<IResult> UploadAsync(
         Guid pageId,
         HttpRequest request,

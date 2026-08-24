@@ -81,6 +81,7 @@ public static class AvatarEndpoints
     /// byte-precise check being the file length itself.</summary>
     private const long MultipartEnvelopeAllowanceBytes = 64 * 1024;
 
+    [AuditAction("settings.avatar.set")]
     private static async Task<IResult> SetAsync(
         HttpRequest request,
         IUserAvatarService avatarService,
@@ -156,6 +157,7 @@ public static class AvatarEndpoints
             : ErrorResult(result.Error);
     }
 
+    [AuditAction("settings.avatar.cleared")]
     private static async Task<IResult> ClearAsync(
         IUserAvatarService avatarService,
         ICurrentPrincipalAccessor principalAccessor,
@@ -176,6 +178,7 @@ public static class AvatarEndpoints
             : ErrorResult(result.Error);
     }
 
+    [NoAudit("Display data, same as the display-name resolution comment bylines use (design.md §8's nested-field rule): rendering an avatar is not a content read, and there is no per-avatar access rule whose decision a §7 row could record — see the class doc.")]
     private static async Task<IResult> GetUserAvatarAsync(
         Guid id,
         IUserAvatarService avatarService,
@@ -224,6 +227,7 @@ public static class AvatarEndpoints
     /// mush; consumers asking for less get this and scale down themselves.</summary>
     private const int MinGravatarSize = 16;
 
+    [NoAudit("Anonymous-by-design Gravatar-protocol endpoint (design.md §19): there is no acting user to attribute a row to, and DbAuditSink correctly refuses exactly that; display data besides — see the class doc.")]
     private static async Task<IResult> GetByEmailHashAsync(
         string hash,
         IUserAvatarService avatarService,

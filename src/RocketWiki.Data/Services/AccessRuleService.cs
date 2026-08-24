@@ -42,7 +42,7 @@ public class AccessRuleService : IAccessRuleService
 
         if (!await CanManageRulesAsync(spaceLookup.Id, principal, isInstanceAdmin, cancellationToken))
         {
-            return PageMutationResult<AccessRule>.Failure(new ForbiddenError("instance-admin or space-admin required"));
+            return PageMutationResult<AccessRule>.Failure(new ForbiddenError("instance admin or space admin required"));
         }
 
         var now = DateTime.UtcNow;
@@ -100,7 +100,7 @@ public class AccessRuleService : IAccessRuleService
 
         if (!await CanManageRulesAsync(spaceLookup.Id, principal, isInstanceAdmin, cancellationToken))
         {
-            return PageMutationResult<AccessRule>.Failure(new ForbiddenError("instance-admin or space-admin required"));
+            return PageMutationResult<AccessRule>.Failure(new ForbiddenError("instance admin or space admin required"));
         }
 
         // Captured before any field is mutated - this IS the "before" state design.md
@@ -137,7 +137,7 @@ public class AccessRuleService : IAccessRuleService
 
         if (!await CanManageRulesAsync(spaceLookup.Id, principal, isInstanceAdmin, cancellationToken))
         {
-            return PageMutationResult<Guid>.Failure(new ForbiddenError("instance-admin or space-admin required"));
+            return PageMutationResult<Guid>.Failure(new ForbiddenError("instance admin or space admin required"));
         }
 
         var before = rule.ToSnapshot();
