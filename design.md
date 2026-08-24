@@ -447,6 +447,20 @@ auditing the denial. The distinction exists throughout the system and dies
 exactly once, at the response edge. A service that returns bare `null` makes
 denial auditing impossible — that is the anti-pattern to avoid.
 
+**The recorded reason is deterministic.** A denial's reason names the *first
+failing restriction*, so "first" has to mean something stable: restrictions
+are always evaluated **root-most ancestor first, the page's own rules last**,
+and by creation time within a single page. A denial therefore reports the
+outermost boundary the caller failed, reports the same rule on every request,
+and reports the same rule the permission inspector (§6.6) shows — the
+inspector exists to explain audit rows, and the two disagreeing would make
+both useless. Ordering never affects the *decision*: restrictions accumulate
+as a conjunction, so which rule is named is the only thing that depends on
+it. Enforcing this is a loading concern, not a calculator one — the
+calculator states the input contract, and a single loader in the data layer
+(`PermissionContextLoader`) is the only thing that assembles rule chains, so
+a new call site cannot quietly reintroduce database-enumeration order.
+
 ---
 
 ## 7. Audit logging

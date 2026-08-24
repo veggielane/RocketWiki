@@ -391,6 +391,15 @@ Being explicit about what has and hasn't been checked, rather than letting
 **Verified by tests and CI** (the standing caveat — design.md §16 —
 applies: test-proven, never yet run against live infrastructure; each
 bullet keeps its own sharper caveat where one exists):
+- **Consolidation round (from the consistency reviews)**: one
+  `PermissionContextLoader` replaces fourteen hand-rolled copies of the
+  grants + ancestor-chain + restrictions load, and with it the audited
+  denial reason became deterministic everywhere (§6.7) rather than
+  following database enumeration order — pinned by a regression test that
+  fails against the old code. Frontend: route folder holds routes only
+  (five dialogs moved to their owning features), load failures speak one
+  vocabulary distinct from empty states, and an actionable upload error is
+  an inline Alert rather than a snackbar that can vanish unread.
 - **UX polish round (from the consistency reviews)**: author-supplied alt
   text for draw.io (optional `alt:` first line of the fence body, inert to
   sync and importer) and mermaid (`accTitle:`/`accDescr:` surface properly);
