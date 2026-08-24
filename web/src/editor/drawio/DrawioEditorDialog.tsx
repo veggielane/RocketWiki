@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, Typography } from '@mui/material'
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField, Typography } from '@mui/material'
 import { buildEmbedUrl, embedOrigin, readDrawioConfig, type DrawioConfig } from './drawioConfig'
 import { createDrawioSession } from './drawioEmbed'
 import { DRAWIO_MAX_PAYLOAD_CHARS } from './drawioPayload'
@@ -9,7 +9,10 @@ export interface DrawioEditorDialogProps {
   open: boolean
   /** Current base64 payload ('' for a new diagram). */
   payload: string
-  onSave: (payloadBase64: string) => void
+  /** Current alt text ('' for none). */
+  alt: string
+  /** Fires on the editor's Save and Exit, with the alt field as typed. */
+  onSave: (payloadBase64: string, alt: string) => void
   onClose: () => void
   /**
    * Overridable for tests. `undefined` (the default) reads the build-time
@@ -25,13 +28,16 @@ export interface DrawioEditorDialogProps {
  * frame or origin can inject protocol messages (the drawio payload is page
  * content, but the editor URL is config — treat its channel carefully).
  */
-export function DrawioEditorDialog({ open, payload, onSave, onClose, config }: DrawioEditorDialogProps) {
+export function DrawioEditorDialog({ open, payload, alt, onSave, onClose, config }: DrawioEditorDialogProps) {
   const resolvedConfig = useMemo(
     () => (config !== undefined ? config : readDrawioConfig(import.meta.env as Record<string, unknown>)),
     [config],
   )
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
+  // The alt text field, saved together with the diagram on Save and Exit —
+  // one save gesture for the whole edit, so Cancel discards both alike.
+  const [altDraft, setAltDraft] = useState(alt)
 
   // Keep the latest callbacks reachable from the (per-open) session without
   // tearing the handshake down every parent re-render.
@@ -39,6 +45,8 @@ export function DrawioEditorDialog({ open, payload, onSave, onClose, config }: D
   saveRef.current = onSave
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  const altDraftRef = useRef(altDraft)
+  altDraftRef.current = altDraft
 
   const url = resolvedConfig?.url
   useEffect(() => {
@@ -51,7 +59,10 @@ export function DrawioEditorDialog({ open, payload, onSave, onClose, config }: D
       },
       payload,
       {
-        onSave: (next) => saveRef.current(next),
+        // The alt draft rides along with the payload; trimmed because the
+        // Markdown form is a single `alt: <text>` line (a stray newline or
+        // edge whitespace would not survive the round trip byte-identically).
+        onSave: (next) => saveRef.current(next, altDraftRef.current.replace(/\s+/g, ' ').trim()),
         onExit: () => closeRef.current(),
         onPayloadTooLarge: (chars) =>
           setSessionError(
@@ -125,6 +136,14 @@ export function DrawioEditorDialog({ open, payload, onSave, onClose, config }: D
             {sessionError}
           </Alert>
         )}
+        <TextField
+          label="Diagram description (alt text)"
+          value={altDraft}
+          onChange={(event) => setAltDraft(event.target.value)}
+          size="small"
+          fullWidth
+          helperText="Read by screen readers in place of the image. Saved with the diagram on Save and Exit."
+        />
         {open && (
           <Box
             component="iframe"

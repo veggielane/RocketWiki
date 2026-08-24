@@ -138,7 +138,7 @@ describe('PageEditPage typed mutation errors', () => {
 
     const dialog = await screen.findByRole('dialog')
     expect(dialog).toHaveTextContent('read-only')
-    // design.md §12: "mirrored from LOW — read-only" needs the origin id.
+    // design.md §12: "Replica of LOW — read-only" needs the origin id.
     expect(dialog).toHaveTextContent('LOW')
   })
 

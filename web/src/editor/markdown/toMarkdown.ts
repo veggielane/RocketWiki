@@ -80,9 +80,13 @@ function serializeBlock(node: JSONContent): string {
 
     case 'drawioDiagram': {
       // The mirror of fromMarkdown.ts's drawio branch: a plain fenced block
-      // with the reserved `drawio` language, payload emitted verbatim.
+      // with the reserved `drawio` language, an optional `alt: <text>`
+      // first line (author alt text — omitted entirely when empty, so
+      // pre-alt pages stay byte-identical), payload emitted verbatim.
       const payload = (node.attrs?.payload as string | undefined) ?? ''
-      return `\`\`\`drawio\n${payload}\n\`\`\``
+      const alt = (node.attrs?.alt as string | undefined) ?? ''
+      const altLine = alt.length > 0 ? `alt: ${alt}\n` : ''
+      return `\`\`\`drawio\n${altLine}${payload}\n\`\`\``
     }
 
     case 'callout': {

@@ -17,8 +17,8 @@ export function ReadOnlyReplicaDialog({ open, originInstanceId, onClose }: ReadO
       <DialogTitle>This space is read-only</DialogTitle>
       <DialogContent>
         <DialogContentText>
-          This page belongs to a space mirrored from instance <strong>{originInstanceId}</strong>. Replicated spaces
-          are always read-only — edit the page on its origin instance instead.
+          This page belongs to a replica of a space owned by instance <strong>{originInstanceId}</strong>. Replica
+          spaces are always read-only — edit the page on its origin instance instead.
         </DialogContentText>
       </DialogContent>
       <DialogActions>

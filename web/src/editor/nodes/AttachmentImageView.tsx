@@ -1,6 +1,7 @@
 import { NodeViewWrapper } from '@tiptap/react'
 import type { NodeViewProps } from '@tiptap/core'
 import { useAttachmentBlobUrl } from '../../attachments/useAttachmentBlobUrl'
+import { describeAttachmentUnavailable } from '../../feedback/unavailableCopy'
 
 function extractAttachmentId(src: string): string | null {
   return src.startsWith('attachment://') ? src.slice('attachment://'.length) : null
@@ -16,7 +17,11 @@ export function AttachmentImageView({ node }: NodeViewProps) {
       {/* Same placeholder whether the attachment doesn't exist or the
           viewer just can't see it — design.md §6.7 applies to attachments
           exactly like pages (see attachmentApi.ts). */}
-      {state.status === 'error' && <span className="rw-attachment-image-placeholder">Image unavailable</span>}
+      {state.status === 'error' && (
+        <span className="rw-attachment-image-placeholder">
+          {describeAttachmentUnavailable('INLINE_IMAGE').summary}
+        </span>
+      )}
       {state.status === 'ready' && (
         <img
           src={state.url}

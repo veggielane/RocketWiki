@@ -23,7 +23,7 @@ export interface StaleRevision {
 
 export interface ReadOnlyReplica {
   spaceId: string | null
-  /** design.md §12: the origin instance, so the UI can say "mirrored from <origin> — read-only" rather than a bare refusal. */
+  /** design.md §12: the origin instance, so the UI can say "Replica of <origin> — read-only" rather than a bare refusal. */
   originInstanceId: string | null
 }
 

@@ -3,6 +3,7 @@ import { NodeViewWrapper } from '@tiptap/react'
 import type { NodeViewProps } from '@tiptap/core'
 import { decodeDrawioPayload } from '../drawio/drawioPayload'
 import { DrawioEditorDialog } from '../drawio/DrawioEditorDialog'
+import { describeDiagramUnavailable } from '../../feedback/unavailableCopy'
 
 /**
  * Renders the drawioDiagram node (see DrawioDiagram.ts for the format).
@@ -15,6 +16,7 @@ import { DrawioEditorDialog } from '../drawio/DrawioEditorDialog'
  */
 export function DrawioDiagramView({ node, editor, updateAttributes }: NodeViewProps) {
   const payload = (node.attrs.payload as string) ?? ''
+  const alt = (node.attrs.alt as string) ?? ''
   const editable = editor.isEditable
   const [editorOpen, setEditorOpen] = useState(false)
   const decoded = payload.trim().length > 0 ? decodeDrawioPayload(payload) : null
@@ -26,11 +28,16 @@ export function DrawioDiagramView({ node, editor, updateAttributes }: NodeViewPr
           {editable ? 'Empty draw.io diagram — use "Edit diagram" to draw it.' : 'Empty draw.io diagram.'}
         </div>
       )}
-      {decoded?.ok === true && <img className="rw-drawio-img" src={decoded.dataUri} alt="draw.io diagram" />}
+      {/* Author-supplied alt when there is one; the generic fallback only
+          says what KIND of thing sits here, which is why the editor dialog
+          asks for a real description. */}
+      {decoded?.ok === true && (
+        <img className="rw-drawio-img" src={decoded.dataUri} alt={alt.length > 0 ? alt : 'draw.io diagram'} />
+      )}
       {decoded?.ok === false && (
         <div role="alert" className="rw-diagram-error">
-          <strong>Diagram can't be displayed.</strong> {decoded.reason} The payload itself is still stored
-          in the page content.
+          <strong>{describeDiagramUnavailable('DRAWIO_PAYLOAD').summary}</strong> {decoded.reason} The payload
+          itself is still stored in the page content.
         </div>
       )}
       {editable && (
@@ -47,8 +54,9 @@ export function DrawioDiagramView({ node, editor, updateAttributes }: NodeViewPr
           // editor's `load` — start it blank instead; saving then replaces
           // the broken payload deliberately, via the user, not silently.
           payload={decoded?.ok ? payload : ''}
-          onSave={(next) => {
-            updateAttributes({ payload: next })
+          alt={alt}
+          onSave={(next, nextAlt) => {
+            updateAttributes({ payload: next, alt: nextAlt })
             setEditorOpen(false)
           }}
           onClose={() => setEditorOpen(false)}

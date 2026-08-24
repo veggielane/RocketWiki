@@ -69,7 +69,7 @@ describe('AskWikiSearchNudge ("Can\'t find it?")', () => {
         </MemoryRouter>
       </UrqlProvider>,
     )
-    expect(await screen.findByText('No results for "flux".')).toBeInTheDocument()
+    expect(await screen.findByText(/No results for "flux"/)).toBeInTheDocument()
     expect(screen.getByText(/Can't find it\?/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Ask the wiki' })).toHaveAttribute('href', '/ask?q=flux')
   })

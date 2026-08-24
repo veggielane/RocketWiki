@@ -65,9 +65,12 @@ describe('AskWikiPage — ask flow', () => {
     const { mock } = renderAsk(() => answered('Titanium impeller [S1], igniter per spec [S2].'))
     const field = askQuestion('What is the impeller made of?')
 
-    // Multi-second latency is the norm (§9.5, non-streaming) — the pending
-    // state says so out loud before the (microtask-mocked) answer lands.
-    expect(screen.getByRole('status')).toHaveTextContent(/several seconds/)
+    // Multi-second latency is the norm (§9.5, non-streaming). The visible
+    // pending row says so; the announcement rides the page's persistent
+    // live region (mounted before the wait — a region inserted with its
+    // content is not reliably announced).
+    expect(screen.getByText(/several seconds/)).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Looking for an answer…')
 
     expect(await screen.findByText(/Titanium impeller/)).toBeInTheDocument()
     // The question stays on screen; the composer emptied for the next one.
@@ -91,6 +94,17 @@ describe('AskWikiPage — ask flow', () => {
     const ops = mock.operations.filter((o) => o.name === 'AskWiki')
     expect(ops).toHaveLength(1)
     expect(ops[0].variables).toEqual({ question: 'What is the impeller made of?' })
+  })
+
+  it('the live region is mounted before any ask and settles to "Answer ready." after one', async () => {
+    renderAsk(() => answered('Titanium.'))
+    // Present-and-empty from first render: announcement only works for
+    // mutations inside an already-existing region.
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
+    askQuestion('What is the impeller made of?')
+    expect(screen.getByRole('status')).toHaveTextContent('Looking for an answer…')
+    await screen.findByText('Titanium.')
+    expect(screen.getByRole('status')).toHaveTextContent('Answer ready.')
   })
 
   it('has no axe violations in the answered state (citations + sources)', async () => {
@@ -142,7 +156,9 @@ describe('AskWikiPage — ask flow', () => {
     fireEvent.change(field, { target: { value: '   \n ' } })
     fireEvent.keyDown(field, { key: 'Enter' })
     expect(mock.operations).toHaveLength(0)
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    // The persistent live region is always mounted — "nothing pending" is
+    // it staying empty, not it being absent.
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
   })
 
   it('prefills the question from ?q= (search handoff) without auto-submitting', () => {

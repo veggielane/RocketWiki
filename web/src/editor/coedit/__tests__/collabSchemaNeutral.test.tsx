@@ -6,6 +6,9 @@ import { Awareness } from 'y-protocols/awareness'
 import { RichTextEditor, type RichTextEditorHandle } from '../../RichTextEditor'
 import { renderMermaid } from '../../diagrams/mermaidRenderer'
 import { seedDocFromMarkdown } from '../seedDoc'
+// In production this module arrives via useCoEditSession's dynamic import
+// (the CRDT chunk split); the test binds directly, so it imports it here.
+import * as collabExtensionsModule from '../collabExtensions'
 
 /**
  * The recently-merged render features must keep working INSIDE the
@@ -42,7 +45,12 @@ function collabEditor(markdown: string) {
       initialMarkdown="THIS MUST NOT RENDER" // collab mode ignores it — the Y.Doc is the document
       editable
       showToolbar={false}
-      collab={{ doc, provider: { awareness }, user: { name: 'Ada', color: 'hsl(1, 70%, 45%)' } }}
+      collab={{
+        doc,
+        provider: { awareness },
+        user: { name: 'Ada', color: 'hsl(1, 70%, 45%)' },
+        extensionsModule: collabExtensionsModule,
+      }}
     />,
   )
   return { doc, awareness, handle, view }
@@ -53,7 +61,7 @@ describe('schema-neutral render features inside the collaborative editor', () =>
     renderMermaidMock.mockResolvedValue({ status: 'ok', svg: '<svg data-marker="mermaid-out"></svg>' })
     const { view } = collabEditor(MARKDOWN)
 
-    await screen.findByRole('img', { name: 'Mermaid diagram' })
+    await screen.findByRole('img', { name: 'Mermaid flowchart' })
     expect(renderMermaidMock).toHaveBeenCalledExactlyOnceWith('graph TD\n  A --> B')
     expect(view.container.querySelector('.rw-mermaid-block')).toHaveClass('rw-mermaid-block-editing')
     expect(view.container.textContent).not.toContain('THIS MUST NOT RENDER')
@@ -62,7 +70,7 @@ describe('schema-neutral render features inside the collaborative editor', () =>
   it('emoji stays literal text while editing (the decoration is read-mode-only by design) and the doc round-trips byte-identical', async () => {
     renderMermaidMock.mockResolvedValue({ status: 'ok', svg: '<svg></svg>' })
     const { handle, view } = collabEditor(MARKDOWN)
-    await screen.findByRole('img', { name: 'Mermaid diagram' })
+    await screen.findByRole('img', { name: 'Mermaid flowchart' })
 
     // The literal `:rocket:` is the source of truth the author manipulates
     // in edit mode (EmojiDecorations.ts) — collab must not change that.
@@ -76,7 +84,7 @@ describe('schema-neutral render features inside the collaborative editor', () =>
   it('a remote edit arriving through the Y.Doc updates what the local editor serializes', async () => {
     renderMermaidMock.mockResolvedValue({ status: 'ok', svg: '<svg></svg>' })
     const { doc, handle } = collabEditor(MARKDOWN)
-    await screen.findByRole('img', { name: 'Mermaid diagram' })
+    await screen.findByRole('img', { name: 'Mermaid flowchart' })
 
     // A peer doc (same lineage) appends a paragraph; its update lands in
     // our Y.Doc exactly as UpdateReceived would deliver it.

@@ -1,9 +1,10 @@
-import { getAccessToken } from '../graphql/authToken'
+import { authHeaders } from '../http/authedFetch'
 
 /**
  * design.md §8/§10: attachment binary is a plain HTTP route, not GraphQL —
  * streaming large binaries doesn't belong in a GraphQL response. Same
- * bearer-token auth as every other channel (design.md §11).
+ * bearer-token auth as every other channel (design.md §11), via the shared
+ * http/authedFetch.ts helpers.
  */
 const ATTACHMENTS_BASE = '/attachments'
 
@@ -12,11 +13,6 @@ export interface UploadedAttachment {
   fileName: string
   contentType: string
   sizeBytes: number
-}
-
-function authHeaders(): HeadersInit {
-  const token = getAccessToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 /** `POST /attachments/{pageId}` — multipart upload (design.md §8). */

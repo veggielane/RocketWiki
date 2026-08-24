@@ -1,5 +1,5 @@
-# `Space.isReplica` + `originInstanceId` drive the proactive "mirrored
-# from {origin} — read-only" marking (design.md §12) on the space list,
+# `Space.isReplica` + `originInstanceId` drive the proactive "Replica of
+# {origin} — read-only" marking (design.md §12) on the space list,
 # nav, space browser, and page view; replica-ness still also surfaces
 # reactively on any write via the typed ReadOnlyReplica error.
 # `viewerIsWatching` is the server truth behind the watch toggle. There is

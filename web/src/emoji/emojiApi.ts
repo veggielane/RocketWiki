@@ -1,4 +1,4 @@
-import { getAccessToken } from '../graphql/authToken'
+import { authHeaders, maxSizeBytesOf, readFailureBody } from '../http/authedFetch'
 
 /**
  * Custom-emoji binary routes (design.md §19), following the attachment/
@@ -8,11 +8,6 @@ import { getAccessToken } from '../graphql/authToken'
  * `PageMutationErrorView` shape (kind/message) the routes return, plus the
  * ProblemDetails 413 with its `maxSizeBytes` extension.
  */
-
-function authHeaders(): HeadersInit {
-  const token = getAccessToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
 
 /** Upload formats the server accepts (it re-encodes; animated GIF survives frame-preserving). */
 export const EMOJI_ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
@@ -34,15 +29,9 @@ export class EmojiMutationFailure extends Error {
 }
 
 async function parseFailure(response: Response): Promise<EmojiMutationFailure> {
-  let body: Record<string, unknown> | null = null
-  try {
-    body = (await response.json()) as Record<string, unknown>
-  } catch {
-    body = null
-  }
+  const body = await readFailureBody(response)
   if (response.status === 413) {
-    const max = typeof body?.maxSizeBytes === 'number' ? body.maxSizeBytes : null
-    return new EmojiMutationFailure({ kind: 'tooLarge', maxSizeBytes: max })
+    return new EmojiMutationFailure({ kind: 'tooLarge', maxSizeBytes: maxSizeBytesOf(body) })
   }
   const message = typeof body?.message === 'string' ? body.message : null
   const kind = typeof body?.kind === 'string' ? body.kind : null

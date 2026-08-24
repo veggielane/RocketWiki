@@ -28,7 +28,7 @@ describe('mermaid code blocks — page view (read mode)', () => {
     renderMermaidMock.mockResolvedValue({ status: 'ok', svg: '<svg data-marker="mermaid-out"></svg>' })
     render(<RichTextEditor initialMarkdown={MERMAID_MD} editable={false} showToolbar={false} />)
 
-    const figure = await screen.findByRole('img', { name: 'Mermaid diagram' })
+    const figure = await screen.findByRole('img', { name: 'Mermaid flowchart' })
     expect(figure.innerHTML).toContain('data-marker="mermaid-out"')
     expect(renderMermaidMock).toHaveBeenCalledExactlyOnceWith('graph TD\n  A --> B')
   })
@@ -38,7 +38,7 @@ describe('mermaid code blocks — page view (read mode)', () => {
     const { container } = render(
       <RichTextEditor initialMarkdown={MERMAID_MD} editable={false} showToolbar={false} />,
     )
-    await screen.findByRole('img', { name: 'Mermaid diagram' })
+    await screen.findByRole('img', { name: 'Mermaid flowchart' })
     const block = container.querySelector('.rw-mermaid-block')
     expect(block).toHaveClass('rw-mermaid-block-readonly')
     expect(block).toHaveAttribute('data-render-state', 'ok')
@@ -58,9 +58,46 @@ describe('mermaid code blocks — page view (read mode)', () => {
     expect(container.querySelector('.rw-mermaid-source')?.textContent).toContain('not a diagram')
   })
 
+  it('accTitle/accDescr in the source suppress the generic wrapper role — the SVG carries its own name', async () => {
+    // What mermaid actually emits for these directives: aria-labelledby on
+    // the <svg> pointing at a <title>. The wrapper must NOT be role="img"
+    // (that would demote the SVG to a presentational child and silence the
+    // author's text — see diagrams/mermaidAccessibility.ts).
+    renderMermaidMock.mockResolvedValue({
+      status: 'ok',
+      svg: '<svg aria-labelledby="chart-title-x"><title id="chart-title-x">Pump feed system</title></svg>',
+    })
+    const { container } = render(
+      <RichTextEditor
+        initialMarkdown={'```mermaid\ngraph TD\naccTitle: Pump feed system\n  A --> B\n```\n'}
+        editable={false}
+        showToolbar={false}
+      />,
+    )
+
+    // getByTitle resolves SVG <title> children — the author's text is in
+    // the DOM and nothing between it and the a11y tree overrides it.
+    await screen.findByTitle('Pump feed system')
+    const surface = container.querySelector('.rw-diagram-surface')
+    expect(surface).not.toHaveAttribute('role')
+    expect(surface).not.toHaveAttribute('aria-label')
+  })
+
+  it('the fallback label names the diagram type when the author gave no accTitle/accDescr', async () => {
+    renderMermaidMock.mockResolvedValue({ status: 'ok', svg: '<svg></svg>' })
+    render(
+      <RichTextEditor
+        initialMarkdown={'```mermaid\nsequenceDiagram\n  A->>B: hi\n```\n'}
+        editable={false}
+        showToolbar={false}
+      />,
+    )
+    expect(await screen.findByRole('img', { name: 'Mermaid sequence diagram' })).toBeInTheDocument()
+  })
+
   it('non-mermaid code blocks never touch the mermaid renderer', () => {
     render(<RichTextEditor initialMarkdown={'```js\nconst a = 1;\n```\n'} editable={false} showToolbar={false} />)
-    expect(screen.queryByRole('img', { name: 'Mermaid diagram' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'Mermaid flowchart' })).not.toBeInTheDocument()
     expect(renderMermaidMock).not.toHaveBeenCalled()
     expect(screen.getByText('const a = 1;')).toBeInTheDocument()
   })
@@ -71,7 +108,7 @@ describe('mermaid code blocks — editing', () => {
     renderMermaidMock.mockResolvedValue({ status: 'ok', svg: '<svg></svg>' })
     const { container } = render(<RichTextEditor initialMarkdown={MERMAID_MD} editable showToolbar={false} />)
 
-    await screen.findByRole('img', { name: 'Mermaid diagram' })
+    await screen.findByRole('img', { name: 'Mermaid flowchart' })
     const block = container.querySelector('.rw-mermaid-block')
     expect(block).toHaveClass('rw-mermaid-block-editing')
     // Source stays visible (and editable) alongside the preview.

@@ -1,6 +1,6 @@
 import { useGitLabIssuesQuery, useGitLabStatusQuery } from '../graphql/generated/graphql'
 import type { GitLabIssuesSpec } from './fenceBody'
-import { describeUnavailable } from './unavailableCopy'
+import { describeGitLabUnavailable } from '../feedback/unavailableCopy'
 
 /**
  * Live preview for a ` ```gitlab-issues ` fence (design.md §18): a compact
@@ -37,7 +37,7 @@ export function GitLabIssuesBlock({ spec }: { spec: GitLabIssuesSpec }) {
     payload?.unavailable ?? (statusData && !configured ? { reason: 'NOT_CONFIGURED' as const } : null)
 
   if (unavailable) {
-    const copy = describeUnavailable(unavailable.reason)
+    const copy = describeGitLabUnavailable(unavailable.reason)
     return (
       <div className="rw-gitlab-placeholder" role="note">
         <div className="rw-gitlab-placeholder-reason">

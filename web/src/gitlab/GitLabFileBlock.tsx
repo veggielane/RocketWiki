@@ -1,6 +1,10 @@
 import { useGitLabFileQuery, useGitLabStatusQuery } from '../graphql/generated/graphql'
 import type { GitLabFileRef } from './fenceBody'
-import { describeUnavailable } from './unavailableCopy'
+import { describeGitLabUnavailable } from '../feedback/unavailableCopy'
+// The one size formatter (decimal KB/MB): a hand-rolled binary KiB version
+// here once made the same file show a different size than the attachment
+// list — same number, two renderings.
+import { formatBytes } from '../attachments/formatBytes'
 
 /**
  * Live preview for a ` ```gitlab-file ` fence (design.md §18): header with
@@ -32,7 +36,7 @@ export function GitLabFileBlock({ fileRef }: { fileRef: GitLabFileRef }) {
     payload?.unavailable ?? (statusData && !configured ? { reason: 'NOT_CONFIGURED' as const } : null)
 
   if (unavailable) {
-    const copy = describeUnavailable(unavailable.reason)
+    const copy = describeGitLabUnavailable(unavailable.reason)
     return (
       <div className="rw-gitlab-placeholder" role="note">
         <div className="rw-gitlab-placeholder-reason">
@@ -109,8 +113,3 @@ function fileWebUrl(baseUrl: string | null, project: string, path: string, ref: 
   return `${baseUrl.replace(/\/$/, '')}/${project}/-/blob/${encodeURIComponent(ref ?? 'HEAD')}/${encodedPath}`
 }
 
-function formatBytes(sizeBytes: number): string {
-  if (sizeBytes < 1024) return `${sizeBytes} B`
-  if (sizeBytes < 1024 * 1024) return `${(sizeBytes / 1024).toFixed(1)} KiB`
-  return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MiB`
-}

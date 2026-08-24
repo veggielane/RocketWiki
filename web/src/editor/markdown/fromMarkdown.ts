@@ -79,10 +79,23 @@ function parseBlock(cursor: TokenCursor): JSONContent {
     const code = tok.content.replace(/\n$/, '')
     if (language === 'drawio') {
       // ```drawio is the reserved storage form of the draw.io diagram node
-      // (base64 editable-SVG payload — see nodes/DrawioDiagram.ts). The
-      // payload is the fence body verbatim, so whatever bytes were stored
-      // serialize back out unchanged even when they're not valid base64.
-      return { type: 'drawioDiagram', attrs: { payload: code } }
+      // (base64 editable-SVG payload — see nodes/DrawioDiagram.ts). An
+      // optional first line `alt: <text>` carries the author's alt text —
+      // in the fence *body* (like mermaid's accTitle/accDescr) so the fence
+      // stays inert text to everything outside the SPA. The line cannot
+      // collide with a real payload (`:` and space are not base64), and the
+      // match requires the trailing newline so an alt-line-only body is not
+      // reshaped; everything after it is the payload verbatim, so whatever
+      // bytes were stored serialize back out unchanged even when they're
+      // not valid base64.
+      const altMatch = /^alt: (.+)\n/.exec(code)
+      return {
+        type: 'drawioDiagram',
+        attrs: {
+          payload: altMatch ? code.slice(altMatch[0].length) : code,
+          alt: altMatch ? altMatch[1] : '',
+        },
+      }
     }
     return {
       type: 'codeBlock',

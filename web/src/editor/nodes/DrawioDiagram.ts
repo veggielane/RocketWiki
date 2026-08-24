@@ -36,6 +36,16 @@ export const DrawioDiagram = Node.create({
           'data-drawio-payload': attributes.payload,
         }),
       },
+      // Author-supplied alt text for the rendered diagram (stored as the
+      // fence body's optional `alt:` first line — see markdown/fromMarkdown.ts).
+      // '' means "none": display falls back to the generic alt.
+      alt: {
+        default: '',
+        parseHTML: (element) => element.getAttribute('data-drawio-alt') ?? '',
+        renderHTML: (attributes: Record<string, unknown>) => ({
+          'data-drawio-alt': attributes.alt,
+        }),
+      },
     }
   },
 

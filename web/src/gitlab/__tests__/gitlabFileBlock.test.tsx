@@ -58,7 +58,8 @@ describe('gitlab-file block — live content (read mode)', () => {
   it('shows header (fileName, ref, size, link out) and the content in a pre', async () => {
     const { mock, container } = renderBlock({ file: BASE_FILE })
     expect(await screen.findByText('spec.md')).toBeInTheDocument()
-    expect(screen.getByText(/main · 2\.0 KiB/)).toBeInTheDocument()
+    // 2048 bytes through the one shared decimal formatter (attachments/formatBytes.ts).
+    expect(screen.getByText(/main · 2\.0 KB/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Open in GitLab' })).toHaveAttribute(
       'href',
       'https://gitlab.example.com/propulsion/turbopump/-/blob/main/docs/spec.md',
@@ -102,7 +103,7 @@ describe('gitlab-file block — content withheld (metadata still present)', () =
     })
     expect(await screen.findByText('spec.md')).toBeInTheDocument()
     expect(screen.getByText('Content withheld: too large to embed.')).toBeInTheDocument()
-    expect(screen.getByText(/5\.0 MiB/)).toBeInTheDocument()
+    expect(screen.getByText(/5\.2 MB/)).toBeInTheDocument()
     expect(container.querySelector('.rw-gitlab-file-content')).toBeNull()
   })
 

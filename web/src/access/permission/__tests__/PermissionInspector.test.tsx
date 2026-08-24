@@ -50,7 +50,7 @@ describe('PermissionInspector', () => {
 
   it('shows the replica banner when the space is a read-only replica', () => {
     render(<PermissionInspector detail={baseDetail({ isReplicaSpace: true, canEdit: false, editDenialReason: 'replica-read-only' })} />)
-    expect(screen.getByText(/mirrored from another instance/i)).toBeInTheDocument()
+    expect(screen.getByText(/replica of another instance/i)).toBeInTheDocument()
   })
 
   it('lists each restriction with its pass/fail state and rule expression', () => {

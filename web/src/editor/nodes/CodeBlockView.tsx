@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { NodeViewContent, NodeViewWrapper } from '@tiptap/react'
 import type { NodeViewProps } from '@tiptap/core'
 import { renderMermaid, type MermaidRenderResult } from '../diagrams/mermaidRenderer'
+import { hasMermaidAccDirectives, mermaidFallbackLabel } from '../diagrams/mermaidAccessibility'
 import { parseFileFence, parseIssuesFence } from '../../gitlab/fenceBody'
+import { describeDiagramUnavailable } from '../../feedback/unavailableCopy'
 import { GitLabFileBlock } from '../../gitlab/GitLabFileBlock'
 import { GitLabIssuesBlock } from '../../gitlab/GitLabIssuesBlock'
 
@@ -88,8 +90,15 @@ function MermaidBlock({ node, editor }: NodeViewProps) {
         {renderState === 'ok' && result?.status === 'ok' && (
           <div
             className="rw-diagram-surface"
-            role="img"
-            aria-label="Mermaid diagram"
+            // With accTitle/accDescr in the source, mermaid wires the name
+            // onto the <svg> itself and the wrapper must stay role-less —
+            // role="img" here would demote the SVG to a presentational
+            // child and silence the author's text. Without them, fall back
+            // to a label naming the diagram type. See
+            // diagrams/mermaidAccessibility.ts.
+            {...(hasMermaidAccDirectives(source)
+              ? {}
+              : { role: 'img', 'aria-label': mermaidFallbackLabel(source) })}
             // The SVG comes from mermaid running with securityLevel:
             // 'strict' (see diagrams/mermaidRenderer.ts) — that sanitizer
             // is the trust boundary for this injection point.
@@ -98,7 +107,7 @@ function MermaidBlock({ node, editor }: NodeViewProps) {
         )}
         {renderState === 'error' && result?.status === 'error' && (
           <div role="alert" className="rw-diagram-error">
-            <strong>Diagram doesn't render.</strong> {result.message}
+            <strong>{describeDiagramUnavailable('MERMAID_SOURCE').summary}</strong> {result.message}
           </div>
         )}
       </div>

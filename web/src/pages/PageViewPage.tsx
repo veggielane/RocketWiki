@@ -41,6 +41,7 @@ import {
   useDetachLabelMutation,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, blockedPageCount, describeMutationError } from '../graphql/mutationError'
+import { REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from './MovePageDialog'
 import { DeletePageDialog } from './DeletePageDialog'
@@ -113,7 +114,7 @@ export function PageViewPage() {
     variables: { spaceId: spaceId ?? '' },
     pause: !spaceId || !canEdit,
   })
-  // design.md §12: proactive "mirrored from {origin} — read-only" banner.
+  // design.md §12: proactive "Replica of {origin} — read-only" banner.
   const [{ data: spaceMeta }] = useSpaceReplicaBannerQuery({ variables: { key: spaceKey ?? '' }, pause: !spaceKey })
   // Label-id vocabulary for the editor — only fetched while editing.
   const [{ data: labelData }] = useSpaceLabelDetailsQuery({
@@ -325,8 +326,7 @@ export function PageViewPage() {
 
       {replicaSpace && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          Mirrored from {replicaSpace.originInstanceId} — read-only. Content arrives via one-way sync; editing
-          happens on the origin instance (design.md §12).
+          {replicaBadgeLabel(replicaSpace.originInstanceId)}. {REPLICA_EXPLANATION}
         </Alert>
       )}
 
@@ -468,7 +468,7 @@ export function PageViewPage() {
       </Dialog>
 
       {/* One replica dialog for every write on this page (move, delete,
-          watch, comments) — design.md §12: explain the mirror, never a raw
+          watch, comments) — design.md §12: explain the replica, never a raw
           error toast. */}
       <ReadOnlyReplicaDialog
         open={replicaOrigin !== null}

@@ -109,6 +109,10 @@ describe('Markdown round trip — required v1 feature set (design.md §4)', () =
       'drawio fence with a payload that is not even base64 survives verbatim (renders as an inline error, never lost)',
       '```drawio\nnot really base64!!\n```\n',
     ],
+    [
+      'drawio fence with an alt: first line (author alt text) round-trips byte-identically',
+      '```drawio\nalt: Feed system overview\nPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5v\ncmcvMjAwMC9zdmciLz4=\n```\n',
+    ],
     ['empty drawio fence (freshly inserted, not yet drawn)', '```drawio\n\n```\n'],
     // GitLab references (design.md §18): the link is a mark like page://,
     // the fences are *plain code blocks* — all three are inert text to the

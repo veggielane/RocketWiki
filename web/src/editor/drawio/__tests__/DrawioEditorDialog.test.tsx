@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { DrawioEditorDialog } from '../DrawioEditorDialog'
 import type { DrawioConfig } from '../drawioConfig'
 
@@ -11,7 +11,15 @@ function renderDialog(overrides: Partial<Parameters<typeof DrawioEditorDialog>[0
   const onSave = vi.fn()
   const onClose = vi.fn()
   render(
-    <DrawioEditorDialog open payload={PAYLOAD} onSave={onSave} onClose={onClose} config={INTERNAL} {...overrides} />,
+    <DrawioEditorDialog
+      open
+      payload={PAYLOAD}
+      alt=""
+      onSave={onSave}
+      onClose={onClose}
+      config={INTERNAL}
+      {...overrides}
+    />,
   )
   return { onSave, onClose }
 }
@@ -80,7 +88,22 @@ describe('DrawioEditorDialog — message wiring around the protocol session', ()
     const updated = btoa('<svg xmlns="http://www.w3.org/2000/svg"><circle r="5"/></svg>')
 
     deliver(iframe, JSON.stringify({ event: 'export', format: 'xmlsvg', data: `data:image/svg+xml;base64,${updated}` }))
-    await waitFor(() => expect(onSave).toHaveBeenCalledExactlyOnceWith(updated))
+    await waitFor(() => expect(onSave).toHaveBeenCalledExactlyOnceWith(updated, ''))
+  })
+
+  it('the alt text field rides along with the export, whitespace-normalized for the single-line Markdown form', async () => {
+    const { onSave } = renderDialog({ alt: 'old description' })
+    const field = screen.getByLabelText('Diagram description (alt text)')
+    expect(field).toHaveValue('old description')
+    // A single-line <input> already strips pasted newlines; edge/internal
+    // whitespace runs are what can still reach the save path.
+    fireEvent.change(field, { target: { value: '  Feed system:   tanks to combustion chamber  ' } })
+
+    const iframe = screen.getByTitle<HTMLIFrameElement>('draw.io diagram editor')
+    deliver(iframe, JSON.stringify({ event: 'export', data: `data:image/svg+xml;base64,${PAYLOAD}` }))
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledExactlyOnceWith(PAYLOAD, 'Feed system: tanks to combustion chamber'),
+    )
   })
 
   it('an oversized export surfaces the size-cap refusal in the dialog and saves nothing', async () => {
