@@ -134,6 +134,17 @@
   background: var(--rw-code-bg, #f2f3f5);
 }
 
+/* Column alignment (design.md §4: GFM `:---:` delimiters) arrives as an
+   inline text-align style from the cell's `align` attr — same markup in
+   edit and read mode, so nothing alignment-specific is needed here beyond
+   the default left alignment above. */
+
+/* Multi-cell selection (prosemirror-tables' CellSelection) — without a
+   visible highlight the merge-cells affordance is unusable. */
+.rw-editor-content .selectedCell {
+  background: var(--rw-selected-cell-bg, rgba(107, 155, 247, 0.18));
+}
+
 .rw-editor-content ul[data-type='taskList'] {
   list-style: none;
   padding-left: 0.25em;
@@ -469,6 +480,7 @@
     --rw-code-bg: #20232b;
     --rw-link: #6b9bf7;
     --rw-mention-bg: rgba(107, 155, 247, 0.22);
+    --rw-selected-cell-bg: rgba(107, 155, 247, 0.28);
   }
 }
 
@@ -478,6 +490,7 @@
   --rw-code-bg: #20232b;
   --rw-link: #6b9bf7;
   --rw-mention-bg: rgba(107, 155, 247, 0.22);
+  --rw-selected-cell-bg: rgba(107, 155, 247, 0.28);
 }
 
 /* Collaboration carets (design.md §8 co-editing) — the DOM produced by

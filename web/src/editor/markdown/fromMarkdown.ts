@@ -138,14 +138,52 @@ function parseListItem(
   return { type, ...(extraAttrs ? { attrs: extraAttrs } : {}), ...withContent(content) }
 }
 
+type ColumnAlign = 'left' | 'center' | 'right'
+
+/**
+ * markdown-it-multimd-table records the delimiter row verbatim on the
+ * `table_open` token: `meta.sep.aligns` is one entry per COLUMN —
+ * `""` (no colons), `"left"`, `"center"`, or `"right"`. This is the only
+ * complete source of per-column alignment: the `style` attr on individual
+ * th/td tokens carries just the cell's own anchor column, so a header cell
+ * spanning mixed-aligned columns would lose the columns it covers.
+ */
+function columnAlignsFromMeta(tableOpen: Token): (ColumnAlign | null)[] {
+  const meta = tableOpen.meta as { sep?: { aligns?: unknown[] } } | null
+  const aligns = meta?.sep?.aligns ?? []
+  return aligns.map((a) => (a === 'left' || a === 'center' || a === 'right' ? a : null))
+}
+
 function parseTable(cursor: TokenCursor): JSONContent {
-  cursor.next() // table_open
+  const open = cursor.next() // table_open
+  const aligns = columnAlignsFromMeta(open)
   const rows: JSONContent[] = []
+  // How many further rows each column stays covered by a rowspan opened in
+  // an earlier row — a covered column produces NO cell token in later rows,
+  // so column positions can only be tracked by replaying the spans.
+  const pendingRowspans: number[] = []
+
+  if (cursor.peek().type === 'caption_open') {
+    // MultiMarkdown table captions (`[caption]` on the line directly above
+    // or below a table) have no editor representation and the serializer
+    // never emits them — silently dropping one would violate the §4
+    // round-trip rule, so refuse loudly like any other unsupported token.
+    throw new Error('markdownToJson: table captions ("[…]" adjacent to a table) are not supported')
+  }
 
   if (cursor.peek().type === 'thead_open') {
     cursor.next()
+    let headerRows = 0
     while (cursor.peek().type === 'tr_open') {
-      rows.push(parseTableRow(cursor, 'tableHeader'))
+      if (headerRows === 1) {
+        // multimd accepts several source lines above the delimiter row as a
+        // multi-row header. The editor's table model has exactly one header
+        // row (row 0), so a second one could only be silently reshaped into
+        // a body row — a §4 violation. Refuse loudly instead.
+        throw new Error('markdownToJson: tables with more than one header row are not supported')
+      }
+      rows.push(parseTableRow(cursor, 'tableHeader', aligns, pendingRowspans))
+      headerRows += 1
     }
     cursor.next() // thead_close
   }
@@ -153,7 +191,7 @@ function parseTable(cursor: TokenCursor): JSONContent {
   if (cursor.peek().type === 'tbody_open') {
     cursor.next()
     while (cursor.peek().type === 'tr_open') {
-      rows.push(parseTableRow(cursor, 'tableCell'))
+      rows.push(parseTableRow(cursor, 'tableCell', aligns, pendingRowspans))
     }
     cursor.next() // tbody_close
   }
@@ -162,21 +200,77 @@ function parseTable(cursor: TokenCursor): JSONContent {
   return { type: 'table', content: rows }
 }
 
-function parseTableRow(cursor: TokenCursor, cellType: 'tableHeader' | 'tableCell'): JSONContent {
+function parseTableRow(
+  cursor: TokenCursor,
+  cellType: 'tableHeader' | 'tableCell',
+  aligns: (ColumnAlign | null)[],
+  pendingRowspans: number[],
+): JSONContent {
   cursor.next() // tr_open
   const cells: JSONContent[] = []
+  let col = 0
+  const skipCoveredColumns = () => {
+    while ((pendingRowspans[col] ?? 0) > 0) {
+      pendingRowspans[col] -= 1
+      col += 1
+    }
+  }
+
+  skipCoveredColumns()
   while (cursor.peek().type === 'th_open' || cursor.peek().type === 'td_open') {
-    cursor.next()
+    const openTok = cursor.next()
     const inlineTok = cursor.peek().type === 'inline' ? cursor.next() : null
     cursor.next() // th_close / td_close
-    const inlineContent = inlineTok ? parseInlineChildren(inlineTok.children ?? []) : []
-    cells.push({ type: cellType, content: [{ type: 'paragraph', ...withContent(inlineContent) }] })
+
+    const colspan = Number(openTok.attrGet('colspan') ?? 1)
+    const rowspan = Number(openTok.attrGet('rowspan') ?? 1)
+    const align = aligns[col] ?? null
+
+    const attrs: Record<string, unknown> = {}
+    if (colspan > 1) attrs.colspan = colspan
+    if (rowspan > 1) attrs.rowspan = rowspan
+    if (align !== null) attrs.align = align
+
+    const inlineContent = inlineTok ? parseInlineChildren(inlineTok.children ?? [], { inTableCell: true }) : []
+    cells.push({
+      type: cellType,
+      ...(Object.keys(attrs).length > 0 ? { attrs } : {}),
+      content: [{ type: 'paragraph', ...withContent(inlineContent) }],
+    })
+
+    if (rowspan > 1) {
+      for (let c = col; c < col + colspan; c++) {
+        pendingRowspans[c] = (pendingRowspans[c] ?? 0) + (rowspan - 1)
+      }
+    }
+    col += colspan
+    skipCoveredColumns()
   }
   cursor.next() // tr_close
   return { type: 'tableRow', content: cells }
 }
 
-function parseInlineChildren(children: Token[]): JSONContent[] {
+/**
+ * The `<br>` forms recognised inside table cells (design.md §4: cell
+ * newlines). `<br>` is canonical; `<br/>`, `<br />`, and case variants are
+ * accepted on the way in and normalize to `<br>` on the next save — the
+ * same one-way-canonicalization posture as `_x_` → `*x*`.
+ */
+const CELL_BR_PATTERN = /<br\s*\/?>/gi
+
+interface InlineParseOptions {
+  /**
+   * Inside a table cell: literal `<br>` text becomes a hardBreak node
+   * (GFM's only in-cell newline representation — a real newline would end
+   * the row), and `\|` inside inline code sheds its backslash (the block
+   * parser needs the escape to not split the cell, but unlike plain text —
+   * where markdown-it unescapes automatically — code spans keep the raw
+   * backslash; toMarkdown.ts re-escapes symmetrically).
+   */
+  inTableCell?: boolean
+}
+
+function parseInlineChildren(children: Token[], opts: InlineParseOptions = {}): JSONContent[] {
   const result: JSONContent[] = []
   const stack: MarkJSON[] = []
 
@@ -185,6 +279,21 @@ function parseInlineChildren(children: Token[]): JSONContent[] {
   for (const child of children) {
     switch (child.type) {
       case 'text': {
+        if (opts.inTableCell) {
+          // Split on <br> variants; the segments stay text, the separators
+          // become hardBreak nodes carrying the current mark stack (so a
+          // break inside `**bold<br>text**` doesn't sever the bold span).
+          const segments = child.content.split(CELL_BR_PATTERN)
+          segments.forEach((segment, i) => {
+            if (segment.length > 0) {
+              result.push({ type: 'text', text: segment, ...(activeMarks() ? { marks: activeMarks() } : {}) })
+            }
+            if (i < segments.length - 1) {
+              result.push({ type: 'hardBreak', ...(activeMarks() ? { marks: activeMarks() } : {}) })
+            }
+          })
+          break
+        }
         if (child.content.length > 0) {
           result.push({ type: 'text', text: child.content, ...(activeMarks() ? { marks: activeMarks() } : {}) })
         }
@@ -200,11 +309,22 @@ function parseInlineChildren(children: Token[]): JSONContent[] {
         break
       }
       case 'hardbreak':
-        result.push({ type: 'hardBreak' })
+        // Carries the current mark stack so `**a  \nb**` keeps its bold
+        // span open across the break instead of serializing as
+        // `**a**  \n**b**`.
+        result.push({ type: 'hardBreak', ...(activeMarks() ? { marks: activeMarks() } : {}) })
         break
       case 'code_inline': {
         const marks = [...stack, { type: 'code' }]
-        result.push({ type: 'text', text: child.content, marks })
+        // In a table cell, `\|` was required to stop the pipe from ending
+        // the cell; markdown-it leaves the backslash in code-span content
+        // (unlike plain text), so shed it here. Exact inverse of
+        // toMarkdown.ts's escapeCellPipes: `\\` directly before an escaped
+        // pipe collapses back to `\`, then `\|` back to `|`.
+        const text = opts.inTableCell
+          ? child.content.replace(/\\\\(?=\\\|)|\\\|/g, (m) => (m === '\\|' ? '|' : '\\'))
+          : child.content
+        result.push({ type: 'text', text, marks })
         break
       }
       case 'strong_open':

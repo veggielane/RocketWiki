@@ -124,19 +124,131 @@ function serializeListItemLike(item: JSONContent, { marker, indentWidth }: ListM
   return [firstLine, ...restLines].join('\n')
 }
 
+type ColumnAlign = 'left' | 'center' | 'right'
+
+interface GridSlot {
+  cell: JSONContent
+  anchorRow: number
+  anchorCol: number
+}
+
+/**
+ * Expands a table's rows (which, per the ProseMirror table model, contain
+ * only the cells that START in each row) into a full occupancy grid, so
+ * every column position knows which cell covers it. This is what lets the
+ * serializer emit multimd-table's span syntax: a colspan continuation is an
+ * immediately-adjacent `|`, a rowspan continuation is a `^^` cell.
+ */
+function buildTableGrid(rows: JSONContent[]): { width: number; slots: (GridSlot | undefined)[][] } {
+  const slots: (GridSlot | undefined)[][] = rows.map(() => [])
+  let width = 0
+  rows.forEach((row, r) => {
+    let col = 0
+    for (const cell of row.content ?? []) {
+      while (slots[r][col] !== undefined) col += 1
+      const colspan = Number(cell.attrs?.colspan ?? 1)
+      const rowspan = Number(cell.attrs?.rowspan ?? 1)
+      for (let rr = r; rr < Math.min(r + rowspan, rows.length); rr++) {
+        for (let cc = col; cc < col + colspan; cc++) {
+          slots[rr][cc] = { cell, anchorRow: r, anchorCol: col }
+        }
+      }
+      col += colspan
+    }
+    width = Math.max(width, slots[r].length)
+  })
+  return { width, slots }
+}
+
+function delimiterFor(align: ColumnAlign | null): string {
+  switch (align) {
+    case 'left':
+      return ':---'
+    case 'center':
+      return ':---:'
+    case 'right':
+      return '---:'
+    default:
+      return '---'
+  }
+}
+
+function cellAlign(cell: JSONContent): ColumnAlign | null {
+  const align = cell.attrs?.align
+  return align === 'left' || align === 'center' || align === 'right' ? align : null
+}
+
 function serializeTable(node: JSONContent): string {
   const rows = node.content ?? []
-  const [headerRow, ...bodyRows] = rows
-  const headerCells = (headerRow?.content ?? []).map(serializeCell)
-  const headerLine = `| ${headerCells.join(' | ')} |`
-  const separatorLine = `| ${headerCells.map(() => '---').join(' | ')} |`
-  const bodyLines = bodyRows.map((row) => `| ${(row.content ?? []).map(serializeCell).join(' | ')} |`)
-  return [headerLine, separatorLine, ...bodyLines].join('\n')
+  const { width, slots } = buildTableGrid(rows)
+
+  const serializeRowLine = (r: number): string => {
+    let line = ''
+    for (let c = 0; c < width; c++) {
+      const slot = slots[r][c]
+      if (slot === undefined) {
+        line += '|  ' // structural hole — unreachable from parse or editor ops, kept as an explicit empty cell
+      } else if (slot.anchorRow === r && slot.anchorCol === c) {
+        line += `| ${serializeCell(slot.cell)} `
+      } else if (slot.anchorRow < r && slot.anchorCol === c) {
+        line += '| ^^ ' // rowspan continuation (leftmost column of the covering cell)
+      } else {
+        line += '|' // colspan continuation: an immediately-adjacent pipe
+      }
+    }
+    return `${line}|`
+  }
+
+  // Delimiter-row alignment per column: the topmost cell ANCHORED at that
+  // exact column wins (documented mixed-alignment rule) — this is also what
+  // makes alignment byte-stable under header colspans, because the parser
+  // assigned each cell the alignment of its own anchor column. A column no
+  // cell anchors at (it is covered by spans in every row) falls back to the
+  // topmost covering cell's alignment; the source delimiter for such a
+  // column is unrecoverable and normalizes.
+  const delimiterLine = () => {
+    const parts: string[] = []
+    for (let c = 0; c < width; c++) {
+      let align: ColumnAlign | null = null
+      let fallback: ColumnAlign | null = null
+      let anchored = false
+      for (let r = 0; r < rows.length; r++) {
+        const slot = slots[r][c]
+        if (slot === undefined) continue
+        if (fallback === null) fallback = cellAlign(slot.cell)
+        if (slot.anchorRow === r && slot.anchorCol === c) {
+          align = cellAlign(slot.cell)
+          anchored = true
+          break
+        }
+      }
+      parts.push(delimiterFor(anchored ? align : fallback))
+    }
+    return `| ${parts.join(' | ')} |`
+  }
+
+  const lines = [serializeRowLine(0), delimiterLine()]
+  for (let r = 1; r < rows.length; r++) lines.push(serializeRowLine(r))
+  return lines.join('\n')
 }
 
 function serializeCell(cell: JSONContent): string {
-  const paragraph = cell.content?.[0]
-  return paragraph ? serializeInline(paragraph.content ?? []) : ''
+  // A cell's paragraphs join with `<br>` — the §4 in-cell newline. The
+  // parser only ever produces a single paragraph per cell, so this is
+  // byte-stable; multiple paragraphs (paste, block joins) degrade to
+  // explicit breaks instead of silently dropping content.
+  const text = (cell.content ?? [])
+    .map((block) => {
+      if (block.type !== 'paragraph') {
+        throw new Error(`jsonToMarkdown: unsupported block "${block.type}" in a table cell — cells hold inline text only`)
+      }
+      return serializeInline(block.content ?? [], { inTableCell: true })
+    })
+    .join('<br>')
+  // A cell whose entire content is `^^` would re-parse as a rowspan
+  // continuation marker and merge into the cell above; the backslash keeps
+  // it literal text (and `\^^` re-parses to exactly `^^`, so it is stable).
+  return text.trim() === '^^' ? '\\^^' : text
 }
 
 // Canonical delimiters per design.md §4's "Canonical normalization" table —
@@ -191,6 +303,23 @@ function marksEqual(a: MarkJSON, b: MarkJSON): boolean {
   return true
 }
 
+interface InlineSerializeOptions {
+  /**
+   * Inside a table cell: a hardBreak becomes literal `<br>` (a real newline
+   * would end the table row — see design.md §4), and `|` in text is escaped
+   * as `\|` so it can't split the cell. The escape also covers code-marked
+   * text — code spans do NOT protect pipes from the table's block-level
+   * cell split — with any backslash directly before a pipe doubled first so
+   * the escape stays unambiguous (fromMarkdown.ts undoes the code-span
+   * escape symmetrically; plain text is unescaped by markdown-it itself).
+   */
+  inTableCell?: boolean
+}
+
+function escapeCellPipes(text: string): string {
+  return text.replace(/\\(?=\|)|\|/g, (m) => (m === '|' ? '\\|' : '\\\\'))
+}
+
 /**
  * Walks a run of inline leaves (text/image/mention/hardBreak), each
  * carrying an ordered stack of marks, and emits markdown by diffing each
@@ -200,7 +329,7 @@ function marksEqual(a: MarkJSON, b: MarkJSON): boolean {
  * "**a *b* c**" (bold covering all three, italic covering only "b"),
  * without over- or under-closing delimiters.
  */
-function serializeInline(nodes: JSONContent[]): string {
+function serializeInline(nodes: JSONContent[], opts: InlineSerializeOptions = {}): string {
   let out = ''
   const openStack: MarkJSON[] = []
 
@@ -225,10 +354,11 @@ function serializeInline(nodes: JSONContent[]): string {
 
   for (const node of nodes) {
     if (node.type === 'text') {
-      emit(node.marks ?? [], node.text ?? '')
+      const text = node.text ?? ''
+      emit(node.marks ?? [], opts.inTableCell ? escapeCellPipes(text) : text)
     } else if (node.type === 'hardBreak') {
       emit(node.marks ?? [], '')
-      out += '  \n'
+      out += opts.inTableCell ? '<br>' : '  \n'
     } else if (node.type === 'image') {
       const alt = (node.attrs?.alt as string | null) ?? ''
       const title = node.attrs?.title ? ` "${node.attrs.title as string}"` : ''

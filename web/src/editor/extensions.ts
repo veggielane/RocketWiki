@@ -10,6 +10,7 @@ import { GitLabIssueLink } from './marks/GitLabIssueLink'
 import { Mention } from './nodes/Mention'
 import { Callout } from './nodes/Callout'
 import { DrawioDiagram } from './nodes/DrawioDiagram'
+import { TableEnhancements } from './tableEditing'
 
 /**
  * The full v1 extension set (design.md §4). This list is the schema: it is
@@ -67,5 +68,12 @@ export const editorExtensions: AnyExtension[] = [
   Image,
   TaskList,
   TaskItem.configure({ nested: true }),
+  // TableKit's cells natively carry colspan/rowspan/align attrs — the §4
+  // "no merged cells / no alignment" limitation was always the
+  // serializer's, and markdown/ now speaks both (GFM alignment colons +
+  // multimd-table span syntax). TableEnhancements adds the editing
+  // behaviour (column alignment command, header-boundary merge guard,
+  // Enter-inserts-a-line-break) without touching the schema.
   TableKit.configure({ table: { resizable: false } }),
+  TableEnhancements,
 ]

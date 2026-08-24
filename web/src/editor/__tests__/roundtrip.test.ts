@@ -39,6 +39,54 @@ describe('Markdown round trip — required v1 feature set (design.md §4)', () =
     ['link with title', 'See [the docs](https://example.com/docs "Docs").\n'],
     ['pipe table', '| a | b |\n| --- | --- |\n| 1 | 2 |\n'],
     ['pipe table multi-row', '| Name | Age |\n| --- | --- |\n| Ada | 36 |\n| Alan | 41 |\n'],
+    // Tables: alignment, spans, and in-cell newlines (design.md §4 phase 1 —
+    // resolves the former "no merged cells / no alignment" limitations).
+    // Alignment is GFM delimiter colons; colspan is multimd-table's
+    // adjacent-pipe merge (`| wide || x |`); rowspan is its `^^`
+    // continuation cell; in-cell newlines are literal `<br>`.
+    ['table column alignment, all three plus unaligned', '| l | c | r | n |\n| :--- | :---: | ---: | --- |\n| 1 | 2 | 3 | 4 |\n'],
+    ['table alignment on a single column', '| a | b |\n| --- | :---: |\n| 1 | 2 |\n'],
+    ['table alignment with no body rows', '| a | b |\n| ---: | :--- |\n'],
+    ['table colspan in a body row', '| a | b | c |\n| --- | --- | --- |\n| spans two || x |\n'],
+    ['table colspan across three columns', '| a | b | c | d |\n| --- | --- | --- | --- |\n| wide ||| x |\n'],
+    ['table colspan at the end of a row', '| a | b |\n| --- | --- |\n| wide ||\n'],
+    ['table colspan in the header row', '| Grouping || c |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n'],
+    [
+      'table header colspan over mixed-aligned columns (covered column alignment recovered from its body anchor)',
+      '| G || c |\n| :--- | :---: | ---: |\n| 1 | 2 | 3 |\n',
+    ],
+    ['table rowspan', '| a | b |\n| --- | --- |\n| tall | 1 |\n| ^^ | 2 |\n'],
+    ['table rowspan spanning three rows', '| a | b |\n| --- | --- |\n| t | 1 |\n| ^^ | 2 |\n| ^^ | 3 |\n'],
+    ['table rowspan in a middle column', '| a | b | c |\n| --- | --- | --- |\n| 1 | t | x |\n| 2 | ^^ | y |\n'],
+    [
+      'table cell that is both colspan and rowspan (2x2)',
+      '| a | b | c |\n| --- | --- | --- |\n| big || x |\n| ^^ || y |\n| 1 | 2 | 3 |\n',
+    ],
+    [
+      'table row fully absorbed by rowspans from above',
+      '| a | b |\n| --- | --- |\n| t1 | t2 |\n| ^^ | ^^ |\n| 1 | 2 |\n',
+    ],
+    ['table cell with a <br> newline', '| a |\n| --- |\n| line1<br>line2 |\n'],
+    ['table cell with multiple <br> newlines', '| a |\n| --- |\n| one<br>two<br>three |\n'],
+    ['table <br> in a header cell', '| first<br>second | b |\n| --- | --- |\n| 1 | 2 |\n'],
+    ['table <br> inside a colspan cell', '| a | b |\n| --- | --- |\n| top<br>bottom ||\n'],
+    ['table <br> inside bold text in a cell', '| a |\n| --- |\n| **x<br>y** |\n'],
+    ['table cell with an escaped pipe', '| a |\n| --- |\n| x \\| y |\n'],
+    ['table cell with an escaped pipe inside inline code', '| a |\n| --- |\n| `x \\| y` |\n'],
+    ['table cell whose literal text is ^^ (backslash-escaped, not a rowspan marker)', '| a |\n| --- |\n| x |\n| \\^^ |\n'],
+    ['table empty cell (spaces between pipes) is NOT a colspan', '| A | B | C |\n| --- | --- | --- |\n| Merged AB |  | c1 |\n'],
+    ['table empty cell that IS a colspan (zero-width merge)', '| a | b | c |\n| --- | --- | --- |\n|  || x |\n'],
+    [
+      'table kitchen sink: alignment + colspan + rowspan + <br> + marks together',
+      [
+        '| Stage | Result | Notes |',
+        '| :--- | :---: | ---: |',
+        '| Boost | go<br>go | nominal |',
+        '| Coast || **hold** |',
+        '| ^^ || 3 |',
+        '',
+      ].join('\n'),
+    ],
     ['fenced code block with language', '```js\nconst a = 1;\nconsole.log(a);\n```\n'],
     ['fenced code block no language', '```\nplain text\n```\n'],
     // Diagrams (design.md §17 resolution): both are *plain fenced blocks*
@@ -209,9 +257,24 @@ describe('Known, documented round-trip limitations', () => {
     expect(roundTrip(repeatedMarkers)).toBe('1. a\n2. b\n3. c\n')
   })
 
-  it.skip('GFM table column alignment (:---:) is not implemented — v1 scope only covers unaligned pipe tables, per design.md §4 ("no merged cells" is the only stated table limitation; alignment was descoped for the spike, not because it cannot round-trip)', () => {
-    const alignedTable = '| a | b |\n| :--- | ---: |\n| 1 | 2 |\n'
-    expect(roundTrip(alignedTable)).toBe(alignedTable)
+  it('table delimiter dash-count and <br> spelling variants normalize to the canonical forms (not byte-identical)', () => {
+    // The parser records only each column's alignment, not how many dashes
+    // the author typed (`:-----:` and `:-:` are the same column), and only
+    // that a cell newline exists, not which <br> spelling produced it. The
+    // serializer emits the canonical `---`/`:---`/`:---:`/`---:` and
+    // `<br>`. The editor can't produce the variants; imported/hand-written
+    // content normalizes on first save — same posture as `_x_` → `*x*`.
+    expect(roundTrip('| a | b |\n| :----- | --: |\n| 1 | 2 |\n')).toBe('| a | b |\n| :--- | ---: |\n| 1 | 2 |\n')
+    expect(roundTrip('| a |\n| --- |\n| x<br/>y<br />z |\n')).toBe('| a |\n| --- |\n| x<br>y<br>z |\n')
+  })
+
+  it('a literal ^^ cell in the first body row gains its escape on save (not byte-identical)', () => {
+    // In the first body row there is no body cell above, so multimd leaves
+    // a raw `^^` as literal text — but the serializer always emits the
+    // escaped `\^^` for literal-^^ cells (in any deeper row the raw form
+    // would BE the rowspan marker, and one uniform rule beats a positional
+    // one). First save adds the backslash; bytes are stable from then on.
+    expect(roundTrip('| a |\n| --- |\n| ^^ |\n')).toBe('| a |\n| --- |\n| \\^^ |\n')
   })
 
   it('loose lists (blank line before a nested sub-list) tighten up (not byte-identical)', () => {

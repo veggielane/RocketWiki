@@ -1,5 +1,6 @@
 import { useState, type MouseEvent } from 'react'
 import type { Editor } from '@tiptap/core'
+import { useEditorState } from '@tiptap/react'
 import {
   Box,
   Divider,
@@ -25,6 +26,12 @@ import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
 import CodeOffIcon from '@mui/icons-material/DataObject'
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
 import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined'
+import CallMergeIcon from '@mui/icons-material/CallMerge'
+import CallSplitIcon from '@mui/icons-material/CallSplit'
+import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft'
+import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter'
+import FormatAlignRightIcon from '@mui/icons-material/FormatAlignRight'
+import { currentCellAlign, mergeWouldCrossHeaderBoundary, type TableColumnAlign } from './tableEditing'
 import type { CalloutType } from './nodes/Callout'
 import { CALLOUT_TYPES } from './nodes/Callout'
 import { useGitLabStatusQuery } from '../graphql/generated/graphql'
@@ -44,6 +51,25 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   // the feature is absent, so the whole GitLab menu is hidden, not disabled.
   const [{ data: gitlabStatusData }] = useGitLabStatusQuery()
   const gitlabConfigured = gitlabStatusData?.gitlabStatus.configured === true
+
+  // Contextual table controls. useEditor (v3) doesn't re-render on
+  // transactions, so this subscribes explicitly to exactly the state the
+  // table section needs; null while the selection is outside any table,
+  // which hides the section entirely (absent, not disabled — same posture
+  // as the GitLab menu).
+  const tableState = useEditorState({
+    editor,
+    selector: ({ editor: e }) => {
+      if (!e || !e.isActive('table')) return null
+      return {
+        canMerge: e.can().mergeTableCells(),
+        canSplit: e.can().splitCell(),
+        // Distinguished from plain "can't merge" so the tooltip can say why.
+        mergeCrossesHeader: mergeWouldCrossHeaderBoundary(e.state),
+        align: currentCellAlign(e.state),
+      }
+    },
+  })
 
   if (!editor) {
     return null
@@ -277,6 +303,66 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
           <TableChartOutlinedIcon fontSize="small" />
         </IconButton>
       </Tooltip>
+      {tableState && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }} role="group" aria-label="Table cell controls">
+          <Tooltip
+            title={
+              tableState.mergeCrossesHeader
+                ? 'Header and body cells cannot merge — the merge would not survive saving'
+                : 'Merge cells'
+            }
+          >
+            {/* span: MUI Tooltips need an enabled child to anchor events on */}
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => editor.chain().focus().mergeTableCells().run()}
+                disabled={!tableState.canMerge}
+                aria-label="Merge cells"
+              >
+                <CallMergeIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Split cell">
+            <span>
+              <IconButton
+                size="small"
+                onClick={() => editor.chain().focus().splitCell().run()}
+                disabled={!tableState.canSplit}
+                aria-label="Split cell"
+              >
+                <CallSplitIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={tableState.align ?? ''}
+            onChange={(_e: MouseEvent<HTMLElement>, align: TableColumnAlign | '' | null) => {
+              // Clicking the active toggle yields null — clears back to the
+              // unaligned `---` column.
+              editor
+                .chain()
+                .focus()
+                .setTableColumnAlign(align === '' || align === null ? null : align)
+                .run()
+            }}
+            aria-label="Column alignment"
+          >
+            <ToggleButton value="left" aria-label="Align column left">
+              <FormatAlignLeftIcon fontSize="small" />
+            </ToggleButton>
+            <ToggleButton value="center" aria-label="Align column center">
+              <FormatAlignCenterIcon fontSize="small" />
+            </ToggleButton>
+            <ToggleButton value="right" aria-label="Align column right">
+              <FormatAlignRightIcon fontSize="small" />
+            </ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+      )}
       <Tooltip title="Callout">
         <IconButton
           size="small"

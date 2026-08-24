@@ -4,6 +4,7 @@ import { Editor } from '@tiptap/core'
 import Collaboration from '@tiptap/extension-collaboration'
 import { CollaborationCaret } from '@tiptap/extension-collaboration-caret'
 import { editorExtensions } from '../../extensions'
+import { markdownToJson } from '../../markdown/fromMarkdown'
 import { jsonToMarkdown } from '../../markdown/toMarkdown'
 import { renderCaret } from '../caretRender'
 import { SignalRYjsProvider } from '../SignalRYjsProvider'
@@ -178,6 +179,24 @@ describe('two live editors over the scripted relay (real yjs, real TipTap, fake 
     expect(a.editor.getText()).toContain('And hello back from B')
     // Convergence at the serialization level too — the round-trip rule's
     // collaborative corollary: both members would save identical Markdown.
+    expect(jsonToMarkdown(a.editor.getJSON())).toBe(jsonToMarkdown(b.editor.getJSON()))
+  })
+
+  it('a merged-cell table (colspan + rowspan + alignment) syncs A→B and serializes identically on both', async () => {
+    // Spans are plain node attrs on tableCell/tableHeader, so Yjs syncing
+    // the ProseMirror doc should carry them like any other content — this
+    // smoke pins that assumption for the §4 phase-1 table features.
+    vi.useFakeTimers()
+    const hub = new RelayHub()
+    const a = await joinAsEditor(hub, 'Ada')
+    const b = await joinAsEditor(hub, 'Grace')
+    members.push(a, b)
+
+    const mergedTable = '| Stage | Result | Notes |\n| :--- | :---: | ---: |\n| Coast || **hold** |\n| ^^ || 3 |\n'
+    a.editor.commands.setContent(markdownToJson(mergedTable))
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(jsonToMarkdown(b.editor.getJSON())).toBe(mergedTable)
     expect(jsonToMarkdown(a.editor.getJSON())).toBe(jsonToMarkdown(b.editor.getJSON()))
   })
 
