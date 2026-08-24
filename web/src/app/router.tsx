@@ -108,6 +108,17 @@ export const router = createBrowserRouter([
           return { Component: PageEditPage }
         },
       },
+      // Not gated at all: reading a page's properties needs only canView
+      // (design.md §20.2 — properties carry no restriction of their own), so
+      // the screen itself hides the editing affordances when the page's
+      // `canEdit` is false, exactly as the page view does.
+      {
+        path: 'pages/:pageId/properties',
+        lazy: async () => {
+          const { PagePropertiesPage } = await import('../pages/PagePropertiesPage')
+          return { Component: PagePropertiesPage }
+        },
+      },
       // Also self-gated (page.canManageAccess) rather than router-level —
       // same reasoning as space grants above.
       {
@@ -179,6 +190,15 @@ export const router = createBrowserRouter([
             lazy: async () => {
               const { AdminEmojisPage } = await import('../pages/AdminEmojisPage')
               return { Component: AdminEmojisPage }
+            },
+          },
+          // The page-property key registry (design.md §20.1) — instance
+          // vocabulary, same shape as the emoji registry beside it.
+          {
+            path: 'property-keys',
+            lazy: async () => {
+              const { AdminPropertyKeysPage } = await import('../pages/AdminPropertyKeysPage')
+              return { Component: AdminPropertyKeysPage }
             },
           },
         ],

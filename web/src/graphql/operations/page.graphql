@@ -25,6 +25,17 @@ query PageById($id: UUID!) {
       spaceId
       name
     }
+    # design.md §20: the page view's read-only properties panel. Carried on
+    # this read rather than fetched separately because the values are a
+    # handful of short strings resolved through the same DataLoader batch,
+    # and the panel renders with the header — a second round trip would make
+    # it pop in after the page it belongs to.
+    properties {
+      keyId
+      key
+      value
+      sortOrder
+    }
     parent {
       id
       title

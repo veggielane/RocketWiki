@@ -33,6 +33,8 @@ import { SearchPage } from '../pages/SearchPage'
 import { SettingsPage } from '../pages/SettingsPage'
 import { AskWikiPage } from '../pages/AskWikiPage'
 import { AdminEmojisPage } from '../pages/AdminEmojisPage'
+import { AdminPropertyKeysPage } from '../pages/AdminPropertyKeysPage'
+import { PagePropertiesPage } from '../pages/PagePropertiesPage'
 import { PagePermissionsPage } from '../pages/PagePermissionsPage'
 import { SpaceBrowserPage } from '../pages/SpaceBrowserPage'
 import { TrashPage } from '../pages/TrashPage'
@@ -165,6 +167,11 @@ const page = {
     { id: 'l-1', spaceId: 'space-eng', name: 'anomaly' },
     { id: 'l-2', spaceId: 'space-eng', name: 'propulsion' },
   ],
+  properties: [
+    { keyId: 'k-owner', key: 'Owner', value: 'Ada Lovelace', sortOrder: 0 },
+    { keyId: 'k-review', key: 'Review Date', value: '2026-11-01', sortOrder: 1 },
+    { keyId: 'k-status', key: 'Status', value: 'In review', sortOrder: 2 },
+  ],
   parent: { id: 'page-0', title: 'Static fire campaign', slug: 'static-fire-campaign' },
   children: [
     { id: 'page-2', title: 'Telemetry review notes', slug: 'telemetry-review-notes' },
@@ -256,6 +263,17 @@ function mockClient() {
     if (name === 'SpaceLabelDetails') return { labelDetails: page.labelDetails }
     if (name === 'CustomEmojis')
       return { customEmojis: [{ name: 'rocket', etag: '"r1"' }, { name: 'banana', etag: '"b1"' }] }
+    if (name === 'PagePropertiesForPage')
+      return { page: { id: page.id, title: page.title, spaceKey: page.spaceKey, canEdit: true, properties: page.properties } }
+    if (name === 'PagePropertyKeys')
+      return {
+        pagePropertyKeys: [
+          { id: 'k-owner', key: 'Owner', description: 'Who to ask about this page.', sortOrder: 0 },
+          { id: 'k-review', key: 'Review Date', description: 'When this page is next reviewed.', sortOrder: 1 },
+          { id: 'k-status', key: 'Status', description: null, sortOrder: 2 },
+          { id: 'k-classification', key: 'Classification', description: 'Export-control marking.', sortOrder: 3 },
+        ],
+      }
     if (name === 'GitLabStatus')
       return { gitlabStatus: { configured: true, baseUrl: 'https://gitlab.internal', viewerHasToken: true } }
     if (name === 'SearchPages')
@@ -433,6 +451,18 @@ const SCREENS: Screen[] = [
     },
   },
   { name: 'admin-emojis', render: (mode) => shell(mode, '/admin/emojis', 'admin/emojis', <AdminEmojisPage />) },
+  {
+    // Both property screens render fully from the same staged mock the rest
+    // of this file uses — a table of value fields plus a picker on one, a
+    // DataGrid plus a create form on the other — so they cost one mock entry
+    // each and earn the browser layer's contrast/target-size coverage.
+    name: 'page-properties',
+    render: (mode) => shell(mode, '/pages/page-1/properties', 'pages/:pageId/properties', <PagePropertiesPage />),
+  },
+  {
+    name: 'admin-property-keys',
+    render: (mode) => shell(mode, '/admin/property-keys', 'admin/property-keys', <AdminPropertyKeysPage />),
+  },
   {
     name: 'permissions',
     render: (mode) => shell(mode, '/pages/page-1/permissions', 'pages/:pageId/permissions', <PagePermissionsPage />),

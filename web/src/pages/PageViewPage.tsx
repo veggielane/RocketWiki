@@ -53,6 +53,7 @@ import { AttachmentUploadButton } from '../attachments/AttachmentUploadButton'
 import { Comments } from '../comments/Comments'
 import { LabelEditor } from '../labels/LabelEditor'
 import { computeLabelOps } from '../labels/labelOps'
+import { PagePropertiesPanel } from '../properties/PagePropertiesPanel'
 import { useScrollToHash } from './useScrollToHash'
 import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
@@ -358,6 +359,19 @@ export function PageViewPage() {
               )}
             </Stack>
           )}
+        </Box>
+      )}
+
+      {/* design.md §20: properties are page metadata, so they read beside the
+          page like the label strip above — never inside the content, which is
+          what keeps them out of the Markdown round trip entirely. The link to
+          the editing screen appears only with canEdit (§20.2). */}
+      {(page.properties.length > 0 || page.canEdit) && (
+        <Box sx={{ mb: 2 }}>
+          <PagePropertiesPanel
+            properties={page.properties}
+            editHref={page.canEdit ? `/pages/${page.id}/properties` : undefined}
+          />
         </Box>
       )}
 

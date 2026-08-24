@@ -135,6 +135,11 @@ const page = {
     { id: 'l-1', spaceId: 'space-eng', name: 'anomaly' },
     { id: 'l-2', spaceId: 'space-eng', name: 'propulsion' },
   ],
+  properties: [
+    { keyId: 'k-owner', key: 'Owner', value: 'Ada Lovelace', sortOrder: 0 },
+    { keyId: 'k-review', key: 'Review Date', value: '2026-11-01', sortOrder: 1 },
+    { keyId: 'k-status', key: 'Status', value: 'In review', sortOrder: 2 },
+  ],
   parent: { id: 'page-0', title: 'Static fire campaign', slug: 'static-fire-campaign' },
   children: [
     { id: 'page-2', title: 'Telemetry review notes', slug: 'telemetry-review-notes' },
