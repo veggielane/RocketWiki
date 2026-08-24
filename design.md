@@ -542,12 +542,17 @@ mutations via the domain-event pipeline, with no token material in any row.
   A not-found read is not audited: `success`/`denied` is the complete
   outcome vocabulary, and no access decision exists to record for a subject
   that isn't there.
-- Append-only is enforced at the database: the app's SQL login has
-  INSERT/SELECT only on this table, no UPDATE or DELETE grants.
+- Append-only is enforced at the database: the app's SQL login gets
+  INSERT/SELECT only on this table, no UPDATE or DELETE grants. **Status:
+  designed, not yet built** — the grant DDL will be enforced once the
+  partition/grant migration ships (it is server/security-principal-level DDL
+  outside the EF model; see the TODO in `AuditEventConfiguration`, §14, and
+  §16). Until then append-only holds by application convention only.
 - Sign-in/out events live in Keycloak's own event log; RocketWiki audits
   application actions and correlates by user id.
 - Audit is a **database table** (`AuditEvent`), not a log stream — queryable,
-  partitioned, and grant-protected. Operational telemetry (§15) is a
+  and by design partitioned and grant-protected (partitions/grants: DDL
+  pending, see the status note above). Operational telemetry (§15) is a
   separate concern and deliberately carries no content or identity detail.
 - **Rule changes record full before-and-after state**, not diffs. SQL Server
   temporal tables were rejected because SQLite cannot emulate them and the
@@ -558,8 +563,11 @@ mutations via the domain-event pipeline, with no token material in any row.
 
 ### Volume and access
 
-- Page views dominate volume. The table is date-partitioned and an archival
-  job moves old partitions to cold storage (retention period: open question).
+- Page views dominate volume. The table is designed to be date-partitioned,
+  with an archival job moving old partitions to cold storage (retention
+  period: open question) — but the monthly-partition DDL is not yet built
+  (same status as the grants above; §14/§16 track it). Today the shipped
+  migration creates an ordinary clustered index on `(TimestampUtc, Id)`.
 - Audit log viewer for instance admins: filter by user, action, subject,
   outcome, and date range; CSV export. Viewing the audit log is itself
   audited (`audit.view`).
@@ -1096,24 +1104,41 @@ renames never touch storage; the `Attachment` row owns all meaning.
 
 ## 11. Authentication flow
 
-1. SPA uses `react-oidc-context` (oidc-client-ts) for Authorization Code + PKCE
-   against Keycloak; tokens kept in memory, silent renew via refresh token.
-2. API validates bearer JWTs against Keycloak's JWKS
-   (`AddJwtBearer` with authority = realm URL).
-3. On each authenticated request, middleware upserts the local `User` row from
-   claims (JIT provisioning), including registered attributes (§6.2).
-4. The request principal (groups + attributes) is built from the token and
-   handed to the access-rule evaluator (§6) — the local mirror is never used
-   for authorization decisions.
-5. Keycloak setup required: a `groups` protocol mapper and one mapper per
-   registered attribute (e.g. `nationality`) on the RocketWiki client, so the
-   claims actually appear in access tokens.
+The numbered subsections are the runtime order: a request's identity passes
+through each in turn.
+
+### 11.1 SPA sign-in
+
+SPA uses `react-oidc-context` (oidc-client-ts) for Authorization Code + PKCE
+against Keycloak; tokens kept in memory, silent renew via refresh token.
+
+If token-in-browser is ever deemed unacceptable, the fallback is a BFF with
+cookie auth — noted as an option, not planned.
+
+### 11.2 API token validation
+
+API validates bearer JWTs against Keycloak's JWKS
+(`AddJwtBearer` with authority = realm URL).
 
 MCP clients (§8) authenticate against the same Keycloak realm via OAuth 2.1
 and hit the same bearer-token validation — one auth path for every channel.
 
-If token-in-browser is ever deemed unacceptable, the fallback is a BFF with
-cookie auth — noted as an option, not planned.
+### 11.3 JIT user provisioning
+
+On each authenticated request, middleware upserts the local `User` row from
+claims (JIT provisioning), including registered attributes (§6.2).
+
+### 11.4 The request principal
+
+The request principal (groups + attributes) is built from the token and
+handed to the access-rule evaluator (§6) — the local mirror is never used
+for authorization decisions.
+
+### 11.5 Keycloak realm requirements
+
+Keycloak setup required: a `groups` protocol mapper and one mapper per
+registered attribute (e.g. `nationality`) on the RocketWiki client, so the
+claims actually appear in access tokens.
 
 ---
 
@@ -1365,7 +1390,9 @@ RocketWiki/
 │   ├── RocketWiki.Data.Tests/     EF model against SQLite (constraints, indexes, filters)
 │   ├── RocketWiki.Storage.Tests/  filesystem provider incl. path-traversal cases
 │   ├── RocketWiki.Api.Tests/      integration tests + schema-drift and audit-coverage guards
-│   └── RocketWiki.Data.SqlServer.Tests/   provider-specific (Testcontainers) — not yet built
+│   ├── RocketWiki.Sync.Tests/     bundle export/import CLI
+│   ├── RocketWiki.Importer.Tests/ Confluence import pipeline
+│   └── RocketWiki.SqlServer.Tests/ provider-specific (Testcontainers; CI's `sqlserver` job)
 └── web/                           Vite + React + TS
     ├── src/
     │   ├── editor/                TipTap setup, markdown round-trip, custom nodes
@@ -1400,7 +1427,10 @@ Three tiers, matching how fakeable each dependency is:
    Docker presence is the switch: without a daemon the whole project skips
    visibly and the solution stays green; CI's `sqlserver` job is the tier's
    first-class home and fails if any of its tests skip there. Native
-   `vector` + DiskANN and audit partitioning/grants remain the tier's next
+   `vector` + in-engine `VECTOR_DISTANCE` search landed and are exercised
+   here, including the tripwire tests that detect the engine lifting its
+   DiskANN limits; the DiskANN index itself (deferred, §9.3) and audit
+   partitioning/grants remain the tier's next
    tenants once their DDL exists. This supersedes the earlier intent to
    drive this tier through `Aspire.Hosting.Testing`; the AppHost topology
    itself is still only exercised by `aspire run`.
@@ -1554,6 +1584,18 @@ build rather than shipping. Logs are the one gap: .NET logging isn't
 interceptable the same way, so "no content in log messages" stays a review
 rule.
 
+That review rule rests on a posture worth stating outright: **the backend
+logs almost nothing, by design.** Traces, metrics, and the audit table (§7)
+are the observability story; a log line is the one emission channel the
+hygiene test cannot intercept, so the safest log statement is the one never
+written. `RocketWiki.Core`, `RocketWiki.Storage`, `RocketWiki.Sync`, and the
+Importer contain no log statements at all; the few sites that exist (a
+handful of error/warning paths in the API and Data projects — blob-missing
+500s, embedding failures) carry only identifiers, enum names, and exception
+*type* names — never titles, content, storage paths, query text, or
+principal attributes. Adding a log site gets the same §15 review as adding a
+span tag, and the burden of proof sits on the addition.
+
 The browser is inside that boundary too. The SPA carries the same
 OpenTelemetry story — document load, fetch and XHR, and a span per GraphQL
 operation carrying the operation *name* — exported over OTLP/HTTP to a
@@ -1671,11 +1713,11 @@ caveat below the table.
 | 1 | Editor spike ⚠️ | **done** | TipTap + Markdown round-trip for the full v1 feature set, proven against a real editor instance. Was the highest-risk item; it held. |
 | 2 | Core wiki | **done** | Rule engine, EF model proven on SQLite, domain-event pipeline (audit in the same transaction), page CRUD + subtree delete, permission-filtered reads (incl. §6.7's not-found-vs-denied result with denied-read auditing), GraphQL resolvers + object-level authorization (adversarially tested), access-rule management with replay-provable history, space CRUD |
 | 3 | Content features | **done** | Attachments (S3 + filesystem providers; S3 unverified against a live endpoint), comments, labels — all wired end to end and audited |
-| 4 | Search & polish | **done** (bar real-FTS verification) | `search`/`labels` API matching the shipped UI operations, permission-filtered with section attribution; SQL Server FTS path TODO-flagged until the container tier exists (SQLite LIKE fallback is what tests exercise); trash/restore, space management UI, rule builder + permission inspector, audit log viewer, import report UI |
+| 4 | Search & polish | **done** | `search`/`labels` API matching the shipped UI operations, permission-filtered with section attribution; the SQL Server FTS path (CONTAINSTABLE, inflectional stemming) is CI-verified against a real FTS-enabled engine by the §14 Testcontainers tier on every run — the `sqlserver` job fails if the tier skips — while the SQLite LIKE fallback is what the container-free tiers exercise; trash/restore, space management UI, rule builder + permission inspector, audit log viewer, import report UI |
 | 4b | Notifications & presence | **done** (live hub unexercised) | SignalR hub, watches, delta-based mentions and reply notifications, per-recipient `canView` fan-out (re-checked at read time too), persisted notification list incl. `sync_bundle_landed` rows from the offline import. The SPA now generates its client from the exported `schema.graphql` (placeholder deleted), runs the real SignalR transports by default (fakes only behind `VITE_FAKE_REALTIME`, for tests and backend-less dev), and wires the bell (persisted list + live push, de-duplicated by row id), watch/unwatch on pages and spaces, and the §12 admin sync status page. Per the standing caveat no browser has ever actually connected to the hub |
 | 5 | Migration | not started | Importer against a real Confluence space export; trial runs and fidelity review |
 | 6 | Low/high sync | **done** (baselines are current-state-only) | Outbox journal, `RocketWiki.Sync` export/import CLI with hash chain, baseline snapshots (documented simplification: no revision history), replica read-only enforcement with `originInstanceId` in the error, admin `syncStatus` query |
-| 7 | Semantic search | **done** (fake endpoint; exact-scan vectors) | Heading-boundary chunker over the shared anchor primitives; `PageEmbeddingState`-driven polling background job (covers sync-CLI writes; per-chunk hash re-embed; failure backoff; trash purge); `IEmbeddingGenerator` via Microsoft.Extensions.AI.OpenAI from the Aspire `embeddings` connection string — unconfigured means keyword-only, structurally; hybrid RRF inside the same `search` field (no schema change), canView after fusion, semantic hits deep-link via chunk attribution recomputed post-canView; `rocketwiki.embeddings.*` telemetry with a sentinel hygiene test. Native `vector` + DiskANN remain TODO-flagged (the conversion is deliberately not shipped ahead of the container tier — see the AddPageEmbeddingState migration); the exact-scan cosine fallback runs on both providers until then |
+| 7 | Semantic search | **done** (fake endpoint; exact-scan vectors) | Heading-boundary chunker over the shared anchor primitives; `PageEmbeddingState`-driven polling background job (covers sync-CLI writes; per-chunk hash re-embed; failure backoff; trash purge); `IEmbeddingGenerator` via Microsoft.Extensions.AI.OpenAI from the Aspire `embeddings` connection string — unconfigured means keyword-only, structurally; hybrid RRF inside the same `search` field (no schema change), canView after fusion, semantic hits deep-link via chunk attribution recomputed post-canView; `rocketwiki.embeddings.*` telemetry with a sentinel hygiene test. Native `vector(1536)` shipped (the AlterPageEmbeddingToNativeVector migration) with in-engine `VECTOR_DISTANCE` scoring, CI-verified by the §14 Testcontainers tier; only the DiskANN index remains deferred, with engine-verified, tripwire-tested blockers (§9.3, data-model.md); SQLite maps the column to a blob and keeps the in-memory cosine fallback |
 | 8 | MCP server | **done** (no live Keycloak/OAuth dance yet) | `/mcp` (streamable HTTP, stateless, in-process) via the official C# SDK; RFC 9728 resource-metadata discovery pointing at Keycloak; four read-only tools over the shared service layer; per-call `mcp`-channel audit incl. client name and denied-read reasons; audit-declaration guard extended to tools; `rocketwiki.mcp.*` telemetry |
 | 9 | k3s deployment | **authored, unexercised** | Dockerfiles + Helm chart in-repo (`deploy/`), migration Job via EF bundle, Traefik ingress with WebSocket upgrade, secrets by reference, probes (TCP until health endpoints get a non-Dev config gate), offline image path. `helm lint`/`template` pass; nothing applied to a cluster; restore drill unrun |
 | 10 | Co-editing | **done** (live hub unexercised) | Relay-only Yjs edit sessions over the existing hub: canEdit-gated join with denied-join auditing, seeder designation + reseed protocol, log cap + empty-session GC, rule-change eviction extended to edit groups, PageRevisionContributor attribution wired through updatePageContent (forgery-proof: server-side session data only), session-scoped audit on the new realtime channel, `rocketwiki.coedit.*` telemetry with sentinel hygiene test. SPA phase 2: SignalR Yjs provider over the shared hub connection (join/seed/replay, batched updates, awareness carets, log-cap auto-save-and-reseed, eviction, documented reconnect), collaborative TipTap mode with solo fallback as the default degradation, session-base saves with contributor attribution surfaced on save, presence pointers on the edit route |
@@ -1686,9 +1728,13 @@ Everything above is verified by **tests**, not by running. No container has
 ever started in development: no `aspire run`, no migration applied to real
 SQL Server, no Keycloak realm imported, no token decoded to confirm the
 `groups` and `nationality` claims actually arrive, no S3 call against a live
-bucket. Full-text search, the `vector` type, DiskANN, audit partitioning and
-the append-only grants are all SQL Server features the SQLite tier cannot
-exercise — they remain TODO-flagged in the migration and unproven.
+bucket. Full-text search and the native `vector` type were once part of this
+gap; both now ship in the checked-in migrations and are exercised against a
+real engine by the §14 Testcontainers tier on every CI run. What remains
+SQL-Server-only and unbuilt is narrower: the DiskANN vector index
+(deliberately deferred with engine-verified, tripwire-tested blockers —
+§9.3) and the audit partitioning/append-only grants, whose DDL is not yet
+written (§7, §14).
 
 The SQL Server slice of that gap now closes on every CI run — the §14
 Testcontainers tier applies the real migrations and exercises FTS against a
@@ -1735,15 +1781,23 @@ the highest-value unblocking action available.
 - [ ] Which embedding model does each instance's endpoint serve, and does the
       high network have its own model server? (Dimensions are fixed per
       index; changing model means re-embedding everything.)
-- [ ] Does each network have a container registry mirror for the published
+- [x] Does each network have a container registry mirror for the published
       images (SQL Server, MinIO, nginx, api/web), or must deployment ship
-      image tarballs? (k3s supports both — see §15.)
-- [ ] k3s: does SQL Server run inside the cluster on a PVC, or outside it?
-      (Outside is the lower-risk default; inside needs a deliberate storage
-      class and a tested restore path.)
-- [ ] k3s: one API replica (simplest — no backplane, no migration Job) or
-      scale-out from the start? This decides whether Redis becomes a
-      dependency.
+      image tarballs? — resolved: the deploy package supports both;
+      `deploy/README.md` documents the registry-mirror path and the
+      air-gapped tarball path as Path A / Path B. Which one a given network
+      uses stays a per-network operational choice, not a design question.
+- [x] k3s: does SQL Server run inside the cluster on a PVC, or outside it?
+      — resolved: outside. The Helm chart does not run SQL Server, period
+      (`deploy/helm/rocketwiki/values.yaml` says exactly that); the cluster
+      consumes an external server via the operator-created connection-string
+      Secret.
+- [x] k3s: one API replica (simplest — no backplane, no migration Job) or
+      scale-out from the start? — resolved: one replica, hard-locked.
+      `values.schema.json` caps `api.replicaCount` at exactly 1 and the
+      Deployment template fails the render on anything else; no Redis
+      dependency. Scale-out is a deliberate future chart change (backplane
+      included), not a values tweak.
 - [x] "Ask the wiki" — resolved: both. MCP (§8) stays the path for users'
       own assistants; a built-in `askWiki` field (§9.5) now does RAG
       server-side under the caller's principal against a fail-closed

@@ -31,8 +31,8 @@ public class SpaceConfiguration : IEntityTypeConfiguration<Space>
             .OnDelete(DeleteBehavior.NoAction);
 
         // Space carries the same IsDeleted/DeletedAtUtc/DeletedByUserId columns as
-        // Page/Attachment; applying the same global filter here for consistency even
-        // though data-model.md's soft-delete prose only calls out pages/attachments.
+        // Page/Attachment; data-model.md's soft-delete convention names spaces
+        // alongside pages and attachments, so the same global filter applies here.
         builder.HasQueryFilter(s => !s.IsDeleted);
     }
 }

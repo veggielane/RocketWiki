@@ -253,6 +253,23 @@ if (isMain) {
   const checkOnly = process.argv.includes('--check');
   const { files, report, sectionCount } = buildAll();
   const problems = validate(files);
+  // §-reference hygiene is a build failure, not a footnote. A §N.M with no
+  // matching numbered heading silently linked to the section top, and a §N
+  // naming a section that doesn't exist stayed plain text — both used to be
+  // print-only, which let broken cross-references in the canonical docs pass
+  // --check. Fix the doc (or add the missing numbered heading); don't ship
+  // the fallback.
+  const uniq = (a) => [...new Set(a)];
+  if (report.sectionTopFallbacks.length > 0) {
+    problems.push(
+      `§N.M reference(s) with no matching numbered heading (would link to section top): ${uniq(report.sectionTopFallbacks).join(', ')}`
+    );
+  }
+  if (report.unlinkedRefs.length > 0) {
+    problems.push(
+      `§ reference(s) to nonexistent sections (would stay plain text): ${uniq(report.unlinkedRefs).join(', ')}`
+    );
+  }
   printReport(report, files, sectionCount);
   if (problems.length > 0) {
     for (const p of problems) console.error(`docs-site generate: ERROR: ${p}`);

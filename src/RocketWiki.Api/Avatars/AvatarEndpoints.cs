@@ -47,7 +47,8 @@ namespace RocketWiki.Api.Avatars;
 /// downscale — never an upscale past canonical). On-demand over pre-generated
 /// variants, deliberately: a 512→N downscale of trusted bytes is milliseconds,
 /// consumers pass arbitrary sizes so variants would either miss or sprawl,
-/// derived objects in storage would need their own janitor/invalidation story, and
+/// JANITOR(§10): derived objects in storage would need their own
+/// janitor/invalidation story, and
 /// HTTP caching (strong ETag per (content, size) + max-age) already absorbs the
 /// repeat traffic an in-network consumer generates.</item>
 /// </list>

@@ -4,7 +4,9 @@ Honest before helpful: parts of this project are verified by tests and CI,
 not by having been run. Where a path below has never actually been walked on
 a developer machine, it says so. `design.md` is the constitution — read §14
 (test strategy), §15 (deployment/config), and §16 (milestones + the standing
-caveat) before trusting anything, including this file.
+caveat) before trusting anything, including this file. Every configuration
+key (backend and `VITE_*`), its default, and what unset means is catalogued
+in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Prerequisites
 
@@ -20,8 +22,8 @@ caveat) before trusting anything, including this file.
 ```bash
 # Backend: build + the whole SQLite-tier suite (~900 tests, well under a minute)
 dotnet test RocketWiki.sln
-# The 11 RocketWiki.SqlServer.Tests show as SKIPPED without Docker — visible,
-# deliberate, and green. CI runs them for real (see "Test tiers" below).
+# The RocketWiki.SqlServer.Tests project shows as SKIPPED without Docker —
+# visible, deliberate, and green. CI runs it for real (see "Test tiers" below).
 
 # Frontend
 cd web
@@ -145,11 +147,13 @@ artifact and is gitignored.)
 
 ## CI (`.github/workflows/ci.yml`)
 
-Three jobs on every push: `backend` (Release build + the container-free
+Four jobs on every push: `backend` (Release build + the container-free
 tiers + corpus drift checks), `frontend` (codegen → lint → build → vitest +
 anchor-corpus drift), `sqlserver` (the Testcontainers tier against the
 FTS-enabled image, with a guard that fails the job if the tier skipped and
-uploaded engine logs on failure).
+uploaded engine logs on failure), and `a11y` (the real-Chromium
+Playwright + axe pass over every screen in both themes — see the
+accessibility section above).
 
 ## Optional local extras
 
@@ -167,6 +171,10 @@ uploaded engine logs on failure).
 - **Semantic search**: configure the `embeddings` connection string or the
   `Ai:` section (design.md §9.2); unconfigured means keyword-only,
   structurally.
+- **Ask the wiki**: on top of the semantic-search config above, set
+  `Ai:ChatModel` (or the Aspire `assistant` connection string) to name the
+  chat model (design.md §9.5). Unconfigured means `askWiki` answers
+  `NOT_CONFIGURED`, structurally — no chat client is even registered.
 - **Browser telemetry**: `VITE_OTEL_EXPORTER_OTLP_ENDPOINT` (note the
   Aspire dashboard's OTLP/**HTTP** port is 18890; 18889 is gRPC).
 

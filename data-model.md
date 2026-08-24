@@ -12,8 +12,9 @@ Design altitude stays in `design.md`; this file is the table-level truth.
 - **Primary keys:** GUID **v7** (`Guid.CreateVersion7()`), generated
   app-side — time-ordered so clustered indexes don't fragment, and stable
   across the low→high crossing (design.md §12). Exception: append-only,
-  instance-local tables (`AuditEvent`, `SyncOutboxEvent`, `PageEmbedding`)
-  use `bigint identity` — cheaper, and those rows never cross instances.
+  instance-local tables (`AuditEvent`, `SyncOutboxEvent`, `PageEmbedding`,
+  `Notification`) use `bigint identity` — cheaper, and those rows never
+  cross instances.
 - **Timestamps:** `datetime2(3)`, always UTC, suffixed `Utc`.
 - **Enums:** stored as `tinyint`, defined in C# with explicit values.
 - **Soft delete:** `IsDeleted bit` + `DeletedAtUtc` + `DeletedByUserId` on
@@ -73,7 +74,10 @@ Indexes: unique `Key` (filtered `IsDeleted = 0`).
 
 Indexes: `(SpaceId, ParentPageId, SortOrder)`; unique
 `(SpaceId, ParentPageId, Slug)` filtered `IsDeleted = 0`; `AncestorPath`
-(prefix searches); full-text index over `(Title, CurrentContent)`.
+(prefix searches); `DeleteBatchId` filtered `DeleteBatchId IS NOT NULL`
+(`IX_Pages_DeleteBatchId` — restore looks up every page sharing a cascade
+delete's batch id, and only trashed pages ever have one, so the filtered
+index stays small); full-text index over `(Title, CurrentContent)`.
 
 **Why `AncestorPath`:** restrictions accumulate down the tree (design.md
 §6.4), so every permission check needs the ancestor chain, and the tree UI
@@ -273,11 +277,19 @@ check is withheld entirely.
 | McpClient | nvarchar(128) null | |
 | DetailsJson | nvarchar(max) null | per-action payload (rule before/after, query text, failing restriction) |
 
-Clustered PK `(TimestampUtc, Id)` aligned to **monthly partitions** on
-`TimestampUtc` so archival is partition switch-out, not row deletes.
-Secondary indexes: `(UserId, TimestampUtc)`, `(SubjectId, TimestampUtc)`,
-`(Action, TimestampUtc)`. The app's SQL login has INSERT/SELECT only on
-this table — append-only is enforced by the database, not convention.
+Clustered PK `(TimestampUtc, Id)`, designed to align to **monthly
+partitions** on `TimestampUtc` so archival is partition switch-out, not row
+deletes. Secondary indexes: `(UserId, TimestampUtc)`,
+`(SubjectId, TimestampUtc)`, `(Action, TimestampUtc)`.
+
+**Status: the partition function/scheme and the app-login grants are
+designed, not yet built.** Both are server/security-principal-level DDL
+outside the EF relational model; the shipped migration creates an ordinary
+clustered index on `(TimestampUtc, Id)` and no grant DDL (see the TODO in
+`AuditEventConfiguration`; design.md §14/§16 track it). Once that migration
+ships, the app's SQL login gets INSERT/SELECT only on this table —
+append-only enforced by the database, not convention. Until then it holds by
+application convention only.
 
 ---
 
