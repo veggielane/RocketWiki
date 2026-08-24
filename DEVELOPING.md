@@ -111,6 +111,18 @@ better done through the vitest suites, which mock the urql exchange
    builds the FTS image from `tests/RocketWiki.SqlServer.Tests/mssql-fts/`).
    CI's `sqlserver` job is its first-class home and fails if the tier skips.
 
+**Accessibility (two tiers).** The vitest suite runs axe (WCAG 2.2 AA,
+minus three rules jsdom cannot answer — color-contrast, target-size,
+link-in-text-block) over every page-level test and a whole-screen sweep;
+it's part of the ordinary `npm test`. The browser tier renders every major
+screen in both themes to standalone HTML
+(`PREVIEW_OUT="$PWD/a11y/screens" npx vitest run
+src/preview/a11yScreens.test.tsx`) and runs Playwright + axe in real
+Chromium with the full rule set, contrast and target-size included
+(`cd a11y && npm ci && npx playwright install chromium && npx playwright
+test`). CI runs it as the `a11y` job. Policy and exclusions:
+`docs/ACCESSIBILITY.md`.
+
 Guard tests to know about (they fail the build on drift, deliberately):
 schema drift (`schema.graphql` vs the code-first schema), audit-declaration
 coverage (every GraphQL root field and MCP tool declares `[AuditAction]` or

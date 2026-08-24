@@ -544,6 +544,13 @@ Being explicit about what has and hasn't been checked, rather than letting
   Markdown, so pages sync and export unchanged even where GitLab is
   unreachable. Every GitLab affordance (toolbar menu, chips, settings
   section) vanishes entirely when `GitLab:BaseUrl` is unconfigured.
+- **Accessibility**: WCAG 2.2 AA target, enforced by two automated layers —
+  axe on every component test run, and a real-Chromium axe pass over every
+  screen in both themes in CI. Coverage, exclusions, and the manual-audit
+  scope: [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md). Remediation
+  surfaced a latent dark-mode bug (the app never stamped `data-theme`, so
+  dark mode showed light-variable code blocks) and replaced luck with math
+  for presence-color label contrast.
 - **Tables** support GFM column alignment, merged cells (colspan/rowspan
   via MultiMarkdown syntax), and `<br>` line breaks inside cells — all
   round-tripping byte-identically through the editor. The Confluence
