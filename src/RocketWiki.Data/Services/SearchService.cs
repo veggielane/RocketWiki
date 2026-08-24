@@ -39,14 +39,18 @@ public class SearchService : ISearchService
     private readonly RocketWikiDbContext _db;
     private readonly IEmbeddingGenerator<string, Embedding<float>>? _embeddingGenerator;
     private readonly EmbeddingOptions? _embeddingOptions;
-    private readonly ILogger<SearchService>? _logger;
+    private readonly ILogger<SearchService> _logger;
     private readonly PermissionContextLoader _permissions;
 
+    /// <summary>The logger is required (and second, so it cannot be forgotten behind
+    /// the optional parameters): a nullable one made every call site's degradation
+    /// warning conditional on wiring nobody checked. Tests pass
+    /// <c>NullLogger&lt;SearchService&gt;.Instance</c>; DI supplies the real one.</summary>
     public SearchService(
         RocketWikiDbContext db,
+        ILogger<SearchService> logger,
         IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator = null,
-        EmbeddingOptions? embeddingOptions = null,
-        ILogger<SearchService>? logger = null)
+        EmbeddingOptions? embeddingOptions = null)
     {
         _db = db;
         _embeddingGenerator = embeddingGenerator;
@@ -194,7 +198,7 @@ public class SearchService : ISearchService
         {
             // Exception type only - the query text belongs in the audit row (§7),
             // never in a log message (§15).
-            _logger?.LogWarning(ex,
+            _logger.LogWarning(ex,
                 "Query embedding failed ({ExceptionType}); this search degrades to keyword-only", ex.GetType().Name);
             return [];
         }

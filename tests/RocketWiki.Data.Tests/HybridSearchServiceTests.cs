@@ -75,7 +75,7 @@ public class HybridSearchServiceTests : SqliteTestBase
     }
 
     private SearchService NewSearchService(RocketWikiDbContext db, FakeEmbeddingGenerator generator) =>
-        new(db, generator, Options(), NullLogger<SearchService>.Instance);
+        new(db, NullLogger<SearchService>.Instance, generator, Options());
 
     [Fact]
     public async Task SemanticOnlyMatch_NoKeywordOverlap_IsFound_WithSectionDeepLink()

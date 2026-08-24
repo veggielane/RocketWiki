@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace RocketWiki.Api.Avatars;
 
 /// <summary>
@@ -19,7 +21,9 @@ public sealed class AvatarOptions
 
     /// <summary>Maximum accepted avatar upload in bytes. Exactly this size is
     /// accepted; one byte more is a 413 before any blob or row is written — the same
-    /// layered enforcement as <c>Attachments:MaxSizeBytes</c>.</summary>
+    /// layered enforcement as <c>Attachments:MaxSizeBytes</c>, and the same
+    /// must-be-positive validation at startup.</summary>
+    [Range(1, long.MaxValue, ErrorMessage = "Avatars:MaxSizeBytes must be a positive number of bytes.")]
     public long MaxSizeBytes { get; set; } = DefaultMaxSizeBytes;
 
     /// <summary>

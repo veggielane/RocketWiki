@@ -1,11 +1,13 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.ServiceDiscovery;
 using OpenTelemetry;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 
@@ -32,8 +34,47 @@ public static class Extensions
     /// The route's operational signal is the bounded
     /// <c>rocketwiki.avatars.gravatar_requests</c> counter, plus the ASP.NET Core
     /// http.server metrics, whose route tag is the template, never the path.
+    ///
+    /// <b>Logs are excluded on the same path</b> — see
+    /// <see cref="IsGravatarRequest"/>; tracing alone left the hash in every log
+    /// record's <c>RequestPath</c> scope (<c>IncludeScopes = true</c> below).
     /// </summary>
     private const string GravatarEndpointPath = "/avatar";
+
+    /// <summary>
+    /// Reads the ambient request the same way ASP.NET Core's own accessor does — its
+    /// backing store is a <i>static</i> AsyncLocal, so this instance observes whatever
+    /// the DI-registered one holds. Constructed here rather than injected because a
+    /// logging filter delegate is registered before any container exists.
+    /// </summary>
+    private static readonly IHttpContextAccessor GravatarRequestAccessor = new HttpContextAccessor();
+
+    /// <summary>
+    /// Whether the ambient request is the anonymous Gravatar-protocol route, whose path
+    /// carries an email hash. Exactly the segment match the tracing filter uses: "/avatar"
+    /// and "/avatar/{hash}" only — "/avatars" and "/users/{id}/avatar" carry no hash.
+    ///
+    /// Total by construction. This runs inside <i>every</i> log call routed to the
+    /// OpenTelemetry provider, including calls from background continuations that
+    /// captured a request's execution context and run while (or after) that request is
+    /// torn down — SignalR's long-polling transport does exactly that, and reading a
+    /// half-uninitialized <c>HttpContext</c> throws. An exception here would surface from
+    /// code that was merely writing a log line and fail its request, so the guard degrades
+    /// to "not the gravatar route" instead: with no live request there is no
+    /// <c>RequestPath</c> scope for that record to be carrying either.
+    /// </summary>
+    private static bool IsGravatarRequest()
+    {
+        try
+        {
+            return GravatarRequestAccessor.HttpContext is { } httpContext
+                && httpContext.Request.Path.StartsWithSegments(GravatarEndpointPath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// design.md §15: every RocketWiki project declares its <c>ActivitySource</c> and
@@ -42,8 +83,9 @@ public static class Extensions
     /// any project added later. It has to be a wildcard rather than an explicit list
     /// because this project cannot reference the projects whose names it would list —
     /// every service references ServiceDefaults, so a reference back would be circular.
-    /// A guard test (<c>TelemetrySourceNamingTests</c>) asserts every telemetry class
-    /// actually uses a name this pattern matches, so the indirection can't silently rot.
+    /// A guard test (<c>TelemetryRegistrationTests</c>, with <c>TelemetryNamingTests</c>
+    /// alongside it for instrument and tag names) asserts every telemetry class actually
+    /// uses a name this pattern matches, so the indirection can't silently rot.
     /// </summary>
     public const string RocketWikiMeterAndSourceWildcard = "RocketWiki.*";
 
@@ -132,6 +174,35 @@ public static class Extensions
             logging.IncludeFormattedMessage = true;
             logging.IncludeScopes = true;
         });
+
+        // design.md §15/§19, the logging half of the Gravatar exclusion above.
+        // IncludeScopes puts ASP.NET Core hosting's RequestPath scope on EVERY log
+        // record emitted during a request, so a log line written anywhere under
+        // `GET /avatar/{hash}` exported that hash — the identity-derived value the
+        // tracing filter exists to keep out of telemetry. Hosting's own "Request
+        // starting/finished" records carry it in their message text too.
+        //
+        // Dropped at the ILogger level, scoped to the OpenTelemetry provider: the
+        // record is never created for the exporter, so no processor, exporter or
+        // scope enumeration downstream can leak it, and it still reaches every other
+        // provider (a console/file sink keeps the local diagnostic — e.g. this route's
+        // blob-missing error — where §15's network boundary already applies).
+        //
+        // Why not a BaseProcessor<LogRecord>, the obvious shape: OpenTelemetry .NET
+        // composes processors into a CompositeProcessor that calls every child's
+        // OnEnd unconditionally, so a processor cannot drop a record; and scopes are
+        // reachable only through LogRecord.ForEachScope, with no public setter — so a
+        // redacting processor can blank Attributes/Body and the RequestPath scope
+        // still exports (verified against OpenTelemetry 1.15.3). A filter is the only
+        // mechanism that actually closes this, and being ahead of the pipeline rather
+        // than inside it makes it strictly harder to bypass.
+        //
+        // Load-bearing dependency: the filter reads the ambient HttpContext, which
+        // ASP.NET Core only publishes when IHttpContextAccessor is in DI — registered
+        // here rather than assumed (the API registers it too; TryAdd makes that a
+        // no-op). GravatarLogExclusionTests fails if this stops working.
+        builder.Services.AddHttpContextAccessor();
+        builder.Logging.AddFilter<OpenTelemetryLoggerProvider>((_, _) => !IsGravatarRequest());
 
         builder.Services.AddOpenTelemetry()
             .WithMetrics(metrics =>

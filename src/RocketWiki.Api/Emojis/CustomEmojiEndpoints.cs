@@ -1,15 +1,15 @@
 using System.Text.Json;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.GraphQL;
+using RocketWiki.Api.Http;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Content;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
 using RocketWiki.Data;
-using RocketWiki.Data.Services;
 using RocketWiki.Storage;
 
 namespace RocketWiki.Api.Emojis;
@@ -26,9 +26,12 @@ namespace RocketWiki.Api.Emojis;
 /// unaudited — so GETs write no audit rows, while every mutation (and every refused
 /// mutation) does, via the domain-event pipeline / the explicit denial row below.
 ///
-/// Everything here resolves from services other features already registered
-/// (DbContext, IFileStorage, IInstanceRoleAccessor, IAuditSink) — the feature's whole
-/// Program.cs footprint is the single MapCustomEmojiEndpoints call.
+/// Everything here arrives through DI like every sibling feature: <c>ICustomEmojiService</c>
+/// and <c>IOptions&lt;EmojiOptions&gt;</c> are registered in Program.cs beside the
+/// attachment and avatar wiring. (This used to hand-bind <c>EmojiOptions</c> per request
+/// and <c>new</c> its service inside the handler to keep the feature's Program.cs
+/// footprint to one line; the cost was the one feature in the solution whose options
+/// were never validated at startup and whose service could not be substituted in a test.)
 /// </summary>
 public static class CustomEmojiEndpoints
 {
@@ -45,14 +48,13 @@ public static class CustomEmojiEndpoints
     private static async Task<IResult> CreateAsync(
         string name,
         HttpRequest request,
-        RocketWikiDbContext db,
-        IFileStorage fileStorage,
+        ICustomEmojiService emojiService,
         IInstanceRoleAccessor instanceRoleAccessor,
         ICurrentPrincipalAccessor principalAccessor,
         IActingUserAccessor actingUserAccessor,
         ICurrentAuditContextAccessor auditContextAccessor,
         IAuditSink auditSink,
-        IConfiguration configuration,
+        IOptions<EmojiOptions> emojiOptions,
         CancellationToken cancellationToken)
     {
         var (_, actingUserId, auditContext, unauthenticated) =
@@ -64,17 +66,14 @@ public static class CustomEmojiEndpoints
 
         // Size cap first (Emojis:MaxSizeBytes) - before the body is buffered, and long
         // before any decode. Unaudited, like the attachment 413: a refusal made before
-        // any access decision has no place in §7's success|denied vocabulary.
-        var maxSizeBytes = EmojiOptions.FromConfiguration(configuration).MaxSizeBytes;
-        if (request.ContentLength is { } declaredLength && declaredLength > maxSizeBytes)
+        // any access decision has no place in §7's success|denied vocabulary. Raw body,
+        // not multipart, so the transport bound is the cap itself - no envelope
+        // allowance. Layer 3 (the copy-at-most read) waits until after the admin gate.
+        var maxSizeBytes = emojiOptions.Value.MaxSizeBytes;
+        if (BinaryRoutes.RefuseDeclaredOversize(
+                request, BinaryRoutes.EmojiSubject, maxSizeBytes, transportBound: maxSizeBytes) is { } tooLarge)
         {
-            return PayloadTooLarge(maxSizeBytes);
-        }
-
-        var bodySizeFeature = request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
-        if (bodySizeFeature is { IsReadOnly: false })
-        {
-            bodySizeFeature.MaxRequestBodySize = maxSizeBytes;
+            return tooLarge;
         }
 
         // Grammar next - cheap, content-free, and also unaudited (a malformed name is
@@ -82,7 +81,7 @@ public static class CustomEmojiEndpoints
         // the fail-fast copy.
         if (!EmojiName.IsValid(name))
         {
-            return ErrorResult(new ValidationError(
+            return BinaryRoutes.ErrorResult(new ValidationError(
                 $"Emoji names must match {EmojiName.Pattern} (lowercase letters, digits, '_' and '-'; 1-{EmojiName.MaxLength} characters)."));
         }
 
@@ -96,37 +95,30 @@ public static class CustomEmojiEndpoints
         if (!instanceRoleAccessor.IsInstanceAdmin)
         {
             await AuditAdminDenialAsync(auditSink, "emoji.created", name, cancellationToken);
-            return ErrorResult(new ForbiddenError("instance admin required"));
+            return BinaryRoutes.ErrorResult(new ForbiddenError("instance admin required"));
         }
 
-        // Raw body, not multipart: one file, one route, no envelope needed. Copy is
-        // capped at maxSizeBytes + 1 so a chunked upload with no Content-Length can't
-        // buffer past the limit before being refused.
-        byte[] uploadBytes;
-        using (var buffer = new MemoryStream())
+        // Cap layer 3: the body is copied under a hard bound, so a chunked upload with
+        // no Content-Length can't buffer past the limit before being refused.
+        var (uploadBytes, oversized) = await BinaryRoutes.ReadCappedRawBodyAsync(
+            request, BinaryRoutes.EmojiSubject, maxSizeBytes, cancellationToken);
+        if (oversized is not null)
         {
-            await CopyAtMostAsync(request.Body, buffer, maxSizeBytes + 1, cancellationToken);
-            if (buffer.Length > maxSizeBytes)
-            {
-                return PayloadTooLarge(maxSizeBytes);
-            }
-
-            uploadBytes = buffer.ToArray();
+            return oversized;
         }
 
-        if (uploadBytes.Length == 0)
+        if (uploadBytes!.Length == 0)
         {
-            return ErrorResult(new ValidationError("No image bytes provided. Send the image file as the raw request body."));
+            return BinaryRoutes.ErrorResult(new ValidationError("No image bytes provided. Send the image file as the raw request body."));
         }
 
         var processed = EmojiImageProcessor.Process(uploadBytes, maxSizeBytes);
         if (!processed.IsSuccess)
         {
-            return ErrorResult(new ValidationError(processed.FailureReason!));
+            return BinaryRoutes.ErrorResult(new ValidationError(processed.FailureReason!));
         }
 
-        ICustomEmojiService service = new CustomEmojiService(db, fileStorage);
-        var result = await service.CreateAsync(
+        var result = await emojiService.CreateAsync(
             new CreateCustomEmojiRequest(name, processed.Result!.Bytes, processed.Result.ContentType, processed.Result.PixelSize),
             instanceRoleAccessor.IsInstanceAdmin, actingUserId!.Value, auditContext!, cancellationToken);
 
@@ -134,9 +126,11 @@ public static class CustomEmojiEndpoints
         {
             // Success is audited by the domain-event pipeline inside the service (same
             // transaction); the admin gate already audited the only permission-shaped
-            // refusal above, so what reaches here (NameTaken, Validation) is unaudited
-            // by the same rule as every mutation route.
-            return ErrorResult(result.Error);
+            // refusal above, so what reaches here (NameTaken → 409, Validation → 400)
+            // is unaudited by the same rule as every mutation route. ReadOnlyReplica is
+            // structurally unreachable: the registry is instance-local (§12), never
+            // replicated, so no space's origin can refuse it.
+            return BinaryRoutes.ErrorResult(result.Error);
         }
 
         var emoji = result.Value;
@@ -153,8 +147,7 @@ public static class CustomEmojiEndpoints
     [AuditAction("emoji.deleted")]
     private static async Task<IResult> DeleteAsync(
         string name,
-        RocketWikiDbContext db,
-        IFileStorage fileStorage,
+        ICustomEmojiService emojiService,
         IInstanceRoleAccessor instanceRoleAccessor,
         ICurrentPrincipalAccessor principalAccessor,
         IActingUserAccessor actingUserAccessor,
@@ -172,13 +165,12 @@ public static class CustomEmojiEndpoints
         if (!instanceRoleAccessor.IsInstanceAdmin)
         {
             await AuditAdminDenialAsync(auditSink, "emoji.deleted", name, cancellationToken);
-            return ErrorResult(new ForbiddenError("instance admin required"));
+            return BinaryRoutes.ErrorResult(new ForbiddenError("instance admin required"));
         }
 
-        ICustomEmojiService service = new CustomEmojiService(db, fileStorage);
-        var result = await service.DeleteAsync(name, instanceRoleAccessor.IsInstanceAdmin, actingUserId!.Value, auditContext!, cancellationToken);
+        var result = await emojiService.DeleteAsync(name, instanceRoleAccessor.IsInstanceAdmin, actingUserId!.Value, auditContext!, cancellationToken);
 
-        return result.IsSuccess ? Results.NoContent() : ErrorResult(result.Error);
+        return result.IsSuccess ? Results.NoContent() : BinaryRoutes.ErrorResult(result.Error);
     }
 
     /// <summary>
@@ -287,37 +279,4 @@ public static class CustomEmojiEndpoints
             DetailsJson: JsonSerializer.Serialize(new { reason = "instance admin required", name }),
             DedupKey: name), ct);
 
-    private static IResult ErrorResult(PageMutationError error)
-    {
-        var view = PageMutationErrorView.From(error);
-        return Results.Json(view, statusCode: view.Kind switch
-        {
-            "Forbidden" => StatusCodes.Status403Forbidden,
-            "NotFound" => StatusCodes.Status404NotFound,
-            "NameTaken" => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        });
-    }
-
-    private static IResult PayloadTooLarge(long maxSizeBytes) => Results.Problem(
-        title: "Emoji image too large",
-        detail: $"The uploaded image exceeds the maximum emoji size of {maxSizeBytes} bytes.",
-        statusCode: StatusCodes.Status413PayloadTooLarge,
-        extensions: new Dictionary<string, object?> { ["maxSizeBytes"] = maxSizeBytes });
-
-    private static async Task CopyAtMostAsync(Stream source, MemoryStream destination, long limit, CancellationToken ct)
-    {
-        var rented = new byte[64 * 1024];
-        while (destination.Length < limit)
-        {
-            var toRead = (int)Math.Min(rented.Length, limit - destination.Length);
-            var read = await source.ReadAsync(rented.AsMemory(0, toRead), ct);
-            if (read == 0)
-            {
-                return;
-            }
-
-            destination.Write(rented, 0, read);
-        }
-    }
 }

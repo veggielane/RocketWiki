@@ -63,7 +63,7 @@ public sealed class PresenceRuleChangeNotifier(
         // access record §15 exists to prevent.
         using var activity = ApiTelemetry.ActivitySource.StartActivity(
             ApiTelemetry.PresenceReauthorizeSpan, ActivityKind.Internal);
-        activity?.SetTag("rocketwiki.presence.connection_count", connections.Count);
+        activity?.SetTag(ApiTelemetry.PresenceConnectionCountTag, connections.Count);
 
         // A fresh scope, not the caller's own DbContext: this runs after a GraphQL
         // mutation resolver has already finished its own unit of work, and
@@ -97,7 +97,7 @@ public sealed class PresenceRuleChangeNotifier(
         }
 
         ApiTelemetry.PresenceEvictions.Add(evicted);
-        activity?.SetTag("rocketwiki.presence.evicted_count", evicted);
+        activity?.SetTag(ApiTelemetry.PresenceEvictedCountTag, evicted);
 
         foreach (var pageId in affectedPages)
         {

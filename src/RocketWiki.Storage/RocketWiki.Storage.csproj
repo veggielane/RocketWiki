@@ -10,6 +10,11 @@
   <ItemGroup>
     <PackageReference Include="AWSSDK.S3" Version="4.0.102.3" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.0" />
+    <!-- ValidateDataAnnotations() for FileStorageOptions. The API host gets this
+         assembly free from the ASP.NET Core shared framework; this class library
+         does not, and AddFileStorage is where the validation belongs (every host
+         that registers file storage should get it, not just the API). -->
+    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>

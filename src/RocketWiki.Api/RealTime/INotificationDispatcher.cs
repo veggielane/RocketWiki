@@ -7,6 +7,7 @@ using RocketWiki.Core.Content;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Data;
+using RocketWiki.Data.Telemetry;
 
 namespace RocketWiki.Api.RealTime;
 
@@ -200,7 +201,7 @@ public sealed class NotificationDispatcher(
         // recipient id, which would make this trace a record of who can see what.
         using var activity = ApiTelemetry.ActivitySource.StartActivity(
             ApiTelemetry.NotificationFanOutSpan, ActivityKind.Internal);
-        activity?.SetTag("rocketwiki.page.id", page.Id);
+        activity?.SetTag(DataTelemetry.PageIdTag, page.Id);
 
         var space = await db.Spaces.AsNoTracking().FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         var actor = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == actorUserId, cancellationToken);
@@ -346,9 +347,9 @@ public sealed class NotificationDispatcher(
             ApiTelemetry.RecordNotificationFanOut(skippedType, ApiTelemetry.NotificationSkippedNotViewable, count);
         }
 
-        activity?.SetTag("rocketwiki.notification.candidate_count", recipients.Count);
-        activity?.SetTag("rocketwiki.notification.delivered_count", toPush.Count);
-        activity?.SetTag("rocketwiki.notification.deferred_count", offlineRecipientIds.Count);
+        activity?.SetTag(ApiTelemetry.NotificationCandidateCountTag, recipients.Count);
+        activity?.SetTag(ApiTelemetry.NotificationDeliveredCountTag, toPush.Count);
+        activity?.SetTag(ApiTelemetry.NotificationDeferredCountTag, offlineRecipientIds.Count);
     }
 
     private static void Bump(Dictionary<NotificationType, int> counts, NotificationType type) =>

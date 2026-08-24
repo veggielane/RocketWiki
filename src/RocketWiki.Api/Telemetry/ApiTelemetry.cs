@@ -140,9 +140,12 @@ public static class ApiTelemetry
     /// (hit/miss/disabled). Never the hash, never an email, never a user id — the
     /// request is anonymous, so there is no audit row either, and this counter must
     /// not become the who-fetched-what record §7 deliberately doesn't keep for this
-    /// route. The companion structural guarantee: ServiceDefaults excludes
-    /// <c>/avatar</c> from ASP.NET Core tracing entirely, because the built-in server
-    /// span's <c>url.path</c> would carry the email hash.
+    /// route. The companion structural guarantee covers <b>traces and exported logs
+    /// alike</b>: ServiceDefaults excludes <c>/avatar</c> from ASP.NET Core tracing
+    /// entirely (the built-in server span's <c>url.path</c> would carry the email
+    /// hash), and drops every log record emitted during such a request before it
+    /// reaches the OpenTelemetry provider (with <c>IncludeScopes</c>, hosting's
+    /// <c>RequestPath</c> scope would carry the same hash onto every line).
     /// </summary>
     public static readonly Counter<long> GravatarRequests =
         Meter.CreateCounter<long>("rocketwiki.avatars.gravatar_requests", "{request}",
@@ -162,6 +165,17 @@ public static class ApiTelemetry
     public const string PresenceReasonTag = "rocketwiki.presence.reason";
     public const string NotificationTypeTag = "rocketwiki.notification.type";
     public const string NotificationDispositionTag = "rocketwiki.notification.disposition";
+
+    // Span tags on the fan-out and presence-reauthorization spans. Constants rather than
+    // literals at the SetTag call sites for the same reason as every other key here: §15's
+    // naming rule is enforced by a test that reflects over these classes, and a literal
+    // written at a call site is invisible to it. Counts only - never a recipient id, which
+    // would turn a trace into the who-can-see-what record §7 owns.
+    public const string NotificationCandidateCountTag = "rocketwiki.notification.candidate_count";
+    public const string NotificationDeliveredCountTag = "rocketwiki.notification.delivered_count";
+    public const string NotificationDeferredCountTag = "rocketwiki.notification.deferred_count";
+    public const string PresenceConnectionCountTag = "rocketwiki.presence.connection_count";
+    public const string PresenceEvictedCountTag = "rocketwiki.presence.evicted_count";
 
     public const string JitResultCreated = "created";
     public const string JitResultRefreshed = "refreshed";

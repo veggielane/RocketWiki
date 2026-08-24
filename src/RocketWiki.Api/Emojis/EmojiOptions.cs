@@ -1,11 +1,11 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace RocketWiki.Api.Emojis;
 
 /// <summary>
-/// Custom-emoji upload policy, read from the <c>Emojis</c> configuration section.
-/// Bound on demand (<see cref="FromConfiguration"/>) rather than via
-/// <c>builder.Services.Configure</c> in Program.cs — a deliberate trade so the whole
-/// feature's Program.cs footprint stays one self-contained endpoint-mapping block;
-/// the handlers resolve only services other features already registered.
+/// Custom-emoji upload policy, bound from the <c>Emojis</c> configuration section
+/// (Program.cs, beside the attachment and avatar caps it is a sibling of) and validated
+/// at startup — a misconfigured cap fails the host rather than the first upload.
 /// </summary>
 public sealed class EmojiOptions
 {
@@ -20,12 +20,9 @@ public sealed class EmojiOptions
     /// </summary>
     public const long DefaultMaxSizeBytes = 256 * 1024;
 
+    /// <summary>Maximum accepted emoji upload in bytes. Must be positive: a zero or
+    /// negative cap would refuse every upload with a 413, which is a configuration
+    /// mistake worth failing startup over rather than a policy anyone means.</summary>
+    [Range(1, long.MaxValue, ErrorMessage = "Emojis:MaxSizeBytes must be a positive number of bytes.")]
     public long MaxSizeBytes { get; set; } = DefaultMaxSizeBytes;
-
-    public static EmojiOptions FromConfiguration(IConfiguration configuration)
-    {
-        var options = new EmojiOptions();
-        configuration.GetSection(SectionName).Bind(options);
-        return options;
-    }
 }
