@@ -91,10 +91,13 @@ test('linkifySectionRefs links §N and §N.M, skips code, reports the ambiguous'
   const out = linkifySectionRefs(sections[0].body + '\n' + sections[1].body, index, report);
   assert.match(out, /\[§7\]\(\/RocketWiki\/design\/07-audit-logging\/\)/);
   assert.match(out, /\[§6\.7\]\(\/RocketWiki\/design\/06-access-control\/#67-enforcement-points\)/);
-  // "design.md §6.4.1": section 6 exists but no 6.4.1 heading -> section top + report
+  // "design.md §6.4.1": section 6 exists but no 6.4.1 heading -> section top +
+  // report. lib.mjs still produces the best-effort link; generate.mjs --check
+  // now treats ANY sectionTopFallbacks entry as a hard failure.
   assert.match(out, /\[design\.md §6\.4\.1\]\(\/RocketWiki\/design\/06-access-control\/\)/);
   assert.deepEqual(report.sectionTopFallbacks, ['§6.4.1']);
-  // §42 has no section -> untouched plain text, reported
+  // §42 has no section -> untouched plain text, reported. Same deal: reported
+  // here, a hard --check failure at the generate.mjs level.
   assert.match(out, /§42 \(nonexistent\)/);
   assert.deepEqual(report.unlinkedRefs, ['§42']);
   // fenced content untouched

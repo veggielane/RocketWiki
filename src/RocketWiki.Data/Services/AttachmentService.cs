@@ -76,7 +76,8 @@ public class AttachmentService : IAttachmentService
 
         // design.md §10: write bytes to storage FIRST, then commit the row + audit
         // event in one transaction. If the DB commit below fails, the object this just
-        // wrote is orphaned - a nightly janitor's job to clean up, not this request's.
+        // wrote is orphaned - JANITOR(§10): a nightly janitor's job to clean up, not
+        // this request's.
         await _fileStorage.SaveAsync(attachment.StorageKey, buffer, attachment.ContentType, cancellationToken);
 
         _db.Attachments.Add(attachment);
@@ -120,8 +121,8 @@ public class AttachmentService : IAttachmentService
         }
 
         // Soft delete only (data-model.md) - the blob stays in storage, mirroring
-        // Page's 30-day trash pattern. A future purge job removes bytes for objects
-        // whose row has been gone past retention; not this service's job.
+        // Page's 30-day trash pattern. JANITOR(§10): a future purge job removes bytes
+        // for objects whose row has been gone past retention; not this service's job.
         attachment.IsDeleted = true;
         attachment.DeletedAtUtc = DateTime.UtcNow;
         attachment.DeletedByUserId = actingUserId;

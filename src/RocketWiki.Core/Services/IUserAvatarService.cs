@@ -49,14 +49,15 @@ public interface IUserAvatarService
     /// only the re-encoded bytes are ever stored), writes those bytes to storage
     /// first, then commits the row + audit event in one transaction (design.md §10's
     /// upload order). Undecodable/oversized/unsupported input is a
-    /// <see cref="ValidationError"/>; a replaced image's old object is orphaned for
-    /// the §10 janitor, never deleted in-band.</summary>
+    /// <see cref="ValidationError"/>; JANITOR(§10): a replaced image's old object is
+    /// orphaned for the §10 janitor, never deleted in-band.</summary>
     Task<PageMutationResult<UserAvatarState>> SetAsync(
         SetUserAvatarRequest request, Guid actingUserId, AuditContext auditContext,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Removes the caller's avatar row (the object is the janitor's, as
-    /// above). Clearing when none is set is a <see cref="ValidationError"/>.</summary>
+    /// <summary>Removes the caller's avatar row (JANITOR(§10): the object is the
+    /// janitor's, as above). Clearing when none is set is a
+    /// <see cref="ValidationError"/>.</summary>
     Task<PageMutationResult<UserAvatarState>> ClearAsync(
         Guid actingUserId, AuditContext auditContext,
         CancellationToken cancellationToken = default);

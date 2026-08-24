@@ -29,8 +29,8 @@ public class UserAvatar
     public User? User { get; set; }
 
     /// <summary>Opaque key into IFileStorage (<c>avatars/{yyyy}/{MM}/{guid}</c>).
-    /// Replaced (not overwritten) on re-upload; orphaned objects are the §10
-    /// janitor's job, same as attachments.</summary>
+    /// Replaced (not overwritten) on re-upload; JANITOR(§10): orphaned objects are
+    /// the §10 janitor's job, same as attachments.</summary>
     public string StorageKey { get; set; } = string.Empty;
 
     /// <summary>Always the server-produced canonical form — a 512×512 PNG the upload

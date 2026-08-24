@@ -38,7 +38,9 @@ The source of truth for *why* things are built this way is
 [`design.md`](design.md) (architecture, access control, audit, deployment) and
 [`data-model.md`](data-model.md) (the concrete EF Core / SQL Server schema).
 This file is operational: how to get the code building and running, and what
-has and hasn't actually been verified.
+has and hasn't actually been verified. Every runtime configuration key — its
+default, what *unset* means, and which keys fail closed — is catalogued in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Prerequisites
 
@@ -72,7 +74,11 @@ Runs every test project in the solution: `RocketWiki.Core.Tests` (rule engine,
 domain events), `RocketWiki.Data.Tests` (EF model against SQLite),
 `RocketWiki.Storage.Tests` (`FileSystemFileStorage` round-trip, overwrite, and
 path-traversal safety; DI provider selection), `RocketWiki.Importer.Tests`
-(owned by another agent), and `RocketWiki.Api.Tests` (the GraphQL schema-drift
+(the Confluence import pipeline), `RocketWiki.Sync.Tests` (the low→high
+bundle export/import CLI, design.md §12), `RocketWiki.SqlServer.Tests` (the
+Testcontainers tier — without Docker it shows as SKIPPED, visibly and
+deliberately; CI's `sqlserver` job runs it for real), and
+`RocketWiki.Api.Tests` (the GraphQL schema-drift
 check, the audit-declaration coverage check, and an integration tier that
 exercises the real ASP.NET Core + Hot Chocolate pipeline — GraphQL mutations
 *and* the plain-HTTP attachment routes — against EF Core on SQLite with a fake
@@ -101,6 +107,9 @@ command if `schema.graphql` drifts from the code (design.md §8).
 ```
 cd web
 npm install
+npm run codegen  # REQUIRED first: generates the typed GraphQL client from
+                 # ../schema.graphql (deliberately untracked) — nothing
+                 # compiles without it
 npm run dev      # Vite dev server
 npm run build    # tsc -b && vite build
 npm test         # vitest
@@ -140,21 +149,27 @@ RocketWiki/
 │   ├── RocketWiki.Storage/        IFileStorage: FileSystem + S3 providers
 │   ├── RocketWiki.Core/           domain model, rule engine, domain events
 │   ├── RocketWiki.Data/           EF Core, migrations, SQL Server specifics
-│   └── RocketWiki.Importer/       Confluence space import pipeline (another
-│                                  agent's project — not consumed by the API)
+│   ├── RocketWiki.Sync/           low→high sync bundle export/import CLI
+│   │                              (design.md §12)
+│   └── RocketWiki.Importer/       Confluence space import pipeline (a
+│                                  console tool — not consumed by the API)
 ├── tests/
 │   ├── RocketWiki.Api.Tests/      schema-drift + audit-coverage checks, plus
 │   │                              a SQLite-backed integration tier (§14)
 │   ├── RocketWiki.Storage.Tests/  filesystem provider + DI wiring
 │   ├── RocketWiki.Core.Tests/     rule engine, domain events (unit)
 │   ├── RocketWiki.Data.Tests/     EF model against SQLite (integration)
-│   └── RocketWiki.Importer.Tests/ (another agent's project)
+│   ├── RocketWiki.Sync.Tests/     bundle export/import CLI
+│   ├── RocketWiki.Importer.Tests/ Confluence import pipeline
+│   └── RocketWiki.SqlServer.Tests/ Testcontainers tier against real SQL
+│                                  Server (skips without Docker; CI's
+│                                  `sqlserver` job is its first-class home)
 └── web/                           Vite + React + TypeScript SPA
 ```
 
-All twelve .NET projects above are in `RocketWiki.sln`; `RocketWiki.Api`
+All fifteen .NET projects above are in `RocketWiki.sln`; `RocketWiki.Api`
 references `RocketWiki.Core`, `RocketWiki.Data`, and `RocketWiki.Storage`.
-The application service layer another agent built
+The application service layer
 (`RocketWiki.Core/Services/` — `IPageService`, `IPageReadService`,
 `ICommentService`, `ILabelService`, `IAttachmentService`,
 `IAttachmentReadService`) is now fully consumed: every GraphQL resolver and
@@ -173,11 +188,12 @@ Being explicit about what has and hasn't been checked, rather than letting
   agents working in parallel, a transient break in one project (most recently,
   `RocketWiki.Importer`) is expected and not a signal the rest is broken. What's
   independently verified, per project this file's author owns: `RocketWiki.Api`
-  and `RocketWiki.Api.Tests` build clean and 39/39 tests pass;
-  `RocketWiki.Storage` and `RocketWiki.Storage.Tests` build clean and 26/26
-  pass. Run each project's own `dotnet test <path>.csproj` rather than trust a
-  number written here — it drifts, and a solution-wide run can fail for a
-  reason that has nothing to do with the project you actually care about.
+  / `RocketWiki.Api.Tests` and `RocketWiki.Storage` /
+  `RocketWiki.Storage.Tests` build clean and their suites pass. No counts are
+  written here on purpose: run each project's own `dotnet test <path>.csproj`
+  rather than trust a number in a README — numbers drift, and a solution-wide
+  run can fail for a reason that has nothing to do with the project you
+  actually care about.
 - **Request-scoped audit context and JIT user provisioning are real and
   tested**, not just declared: `ICurrentAuditContextAccessor` derives the
   audit channel from the actual request path (unit-tested per path), and
@@ -366,58 +382,15 @@ Being explicit about what has and hasn't been checked, rather than letting
   those endpoints get a config gate for production. `deploy/README.md` has
   the build/offline-install/restore-drill procedures and its own, longer
   "what has never been verified" list.
-- `RocketWiki.Core.Tests` and `RocketWiki.Data.Tests` (owned by another
-  agent) have passed as part of a solution-wide run in the past — not
+- `RocketWiki.Core.Tests` and `RocketWiki.Data.Tests` have passed as part of
+  a solution-wide run in the past — not
   independently reverified by this file's author this round (see the
   solution-wide build/test caveat above); the EF model runs against SQLite in
   that suite too, independently of the API-level integration tier above.
 
-**Explicitly unverified — no container runtime was available:**
-- **The entire Aspire container topology.** SQL Server, MinIO, and Keycloak
-  have never actually been started by `aspire run`. Resource wiring
-  (`WithReference`, service discovery, connection string injection) is
-  correct by inspection and compiles, but has not been observed working at
-  runtime. (The migrations themselves and `MigrateOnStartup`'s happy path
-  are no longer in this list — CI's `sqlserver` job now proves them against
-  a real engine; see the CI-verified bullet above. What remains unverified
-  here is the Aspire wiring itself.)
-- **The Keycloak dev realm import**
-  (`src/RocketWiki.AppHost/keycloak/rocketwiki-realm.json`). The JSON is
-  syntactically valid and was checked by decompiling the Aspire Keycloak
-  hosting package to confirm exactly how `--import-realm` and the bind mount
-  work, but no realm has actually been imported, no user has logged in, and
-  no token has been decoded to confirm the `groups`/`nationality`/`aud`
-  claims land as designed. Targets Keycloak `26.6.1` (the hosting package's
-  default image tag) — see that folder's own `README.md` for the full detail
-  and what production Keycloak needs to reproduce instead.
-- **`RocketWiki.Storage`'s S3 provider** against a real S3-compatible
-  endpoint. Only its DI/config wiring is tested; `PutObjectAsync`,
-  `GetObjectAsync`, etc. have never run against MinIO or anything else.
-- **That any of the OpenTelemetry above has ever left the process.** No OTLP
-  endpoint and no Aspire dashboard has ever received a single span or metric
-  from RocketWiki — the exporter only activates when
-  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, which requires `aspire run`, which
-  requires the container runtime this environment doesn't have. The tests
-  prove the instruments emit and that §15 holds at the `ActivitySource` /
-  `Meter` boundary; they say nothing about serialization, the OTLP exporter,
-  sampling under load, or what a dashboard actually renders. Two specific
-  things to check on the first real run: that ServiceDefaults' `RocketWiki.*`
-  wildcard actually picks the custom sources up (`AddSource`/`AddMeter`
-  wildcard subscription is documented by OpenTelemetry .NET, and a guard test
-  asserts every source and meter is named to match the pattern, but the two
-  halves have never been exercised together against a live SDK), and that
-  span volume is sane — GraphQL scopes are set to everything except per-field
-  resolvers, which is a judgement call made without ever having seen the
-  trace count.
-- **That any browser span has ever been exported to a real OTLP endpoint.**
-  The exporter's transport is mocked in the web tests; the only evidence the
-  export leg does anything at all is an early draft that let it run for real
-  and produced `ECONNREFUSED` against a dashboard that wasn't running. The
-  Aspire AppHost still doesn't run the Vite dev server (a commented-out TODO
-  in `AppHost.cs`), so nothing injects the endpoint automatically yet —
-  `web/.env.example` documents the variables for standalone `vite dev`,
-  including the easily-missed detail that the dashboard's OTLP/HTTP port is
-  18890, not the gRPC 18889.
+**Verified by tests and CI** (the standing caveat — design.md §16 —
+applies: test-proven, never yet run against live infrastructure; each
+bullet keeps its own sharper caveat where one exists):
 - **The SPA is fully wired to the reconciled schema**: server-computed
   permissions shape every affordance (edit/move/delete/comment/permissions),
   page restrictions and the effectivePermission inspector are live, replica
@@ -430,23 +403,6 @@ Being explicit about what has and hasn't been checked, rather than letting
   and an `effectivePermission` inspector with per-rule pass/fail — all
   fail-closed, all audited (`permission.inspect`). The SPA's already-built
   permission components wire up in the un-stub round.
-- **CI-verified against real SQL Server (never yet on a developer
-  machine):** the checked-in migrations apply from zero to a real,
-  FTS-enabled SQL Server 2025 container — including the FULLTEXT
-  catalog/index DDL, filtered indexes, CHECK constraints, and the
-  AuditEvents IDENTITY — and `Database:MigrateOnStartup`'s happy path boots
-  the real API host, migrates, and answers `/graphql`. Keyword search's
-  CONTAINSTABLE branch is exercised for real (stemming-only matches, FTS
-  ranking, permission filtering on that branch), as are outbox sequence
-  gap-freedom, audit-transaction rollback, and declared-length enforcement.
-  Building this tier surfaced two real bugs before any engine ever ran the
-  code: the FULLTEXT DDL could never have applied inside EF's migration
-  transaction (now `suppressTransaction: true`), and raw user queries were
-  CONTAINS-grammar syntax errors (now a quoted `FORMSOF(INFLECTIONAL, …)`
-  builder, unit-tested). All of this runs only in CI's `sqlserver` job
-  (`tests/RocketWiki.SqlServer.Tests`); on machines without Docker the tier
-  skips visibly and these claims are only as fresh as the last green CI
-  run.
 - **Collaborative editor (SPA, design.md §8)** — the TipTap editor now
   co-edits over the existing hub connection: a hand-rolled SignalR Yjs
   provider (no y-websocket) joins the relay session, seeds or replays per
@@ -575,6 +531,85 @@ Being explicit about what has and hasn't been checked, rather than letting
   mocked hub connection builder. The generated client is deliberately
   untracked; CI runs `npm run codegen` from the committed `schema.graphql`
   before building.
+
+**CI-verified against real SQL Server (never yet on a developer machine):**
+- The checked-in migrations apply from zero to a real,
+  FTS-enabled SQL Server 2025 container — including the FULLTEXT
+  catalog/index DDL, filtered indexes, CHECK constraints, and the
+  AuditEvents IDENTITY — and `Database:MigrateOnStartup`'s happy path boots
+  the real API host, migrates, and answers `/graphql`. Keyword search's
+  CONTAINSTABLE branch is exercised for real (stemming-only matches, FTS
+  ranking, permission filtering on that branch), as are outbox sequence
+  gap-freedom, audit-transaction rollback, and declared-length enforcement.
+  Building this tier surfaced two real bugs before any engine ever ran the
+  code: the FULLTEXT DDL could never have applied inside EF's migration
+  transaction (now `suppressTransaction: true`), and raw user queries were
+  CONTAINS-grammar syntax errors (now a quoted `FORMSOF(INFLECTIONAL, …)`
+  builder, unit-tested). All of this runs only in CI's `sqlserver` job
+  (`tests/RocketWiki.SqlServer.Tests`); on machines without Docker the tier
+  skips visibly and these claims are only as fresh as the last green CI
+  run.
+
+**Not built:**
+- **The design.md §10 storage janitor does not exist.** §10 promises "a
+  nightly janitor deletes storage objects with no matching row" — that job
+  has never been written, and this ledger previously didn't say so. What
+  that means in practice: object storage grows monotonically. Every
+  failed-commit upload path (attachments, avatars, emojis), every replaced
+  avatar, and every best-effort emoji blob delete deliberately leaves an
+  orphaned object *for* the janitor — the code sites carry a greppable
+  `JANITOR(§10)` comment tag — so those orphans currently accumulate
+  forever. Building it is also not just "write the job": `IFileStorage`
+  has no enumeration primitive (Save/OpenRead/Delete/Exists only), so a
+  janitor that finds unreferenced objects requires an interface change
+  across both providers first.
+
+**Explicitly unverified — needs a container runtime / live infra:**
+- **The entire Aspire container topology.** SQL Server, MinIO, and Keycloak
+  have never actually been started by `aspire run`. Resource wiring
+  (`WithReference`, service discovery, connection string injection) is
+  correct by inspection and compiles, but has not been observed working at
+  runtime. (The migrations themselves and `MigrateOnStartup`'s happy path
+  are no longer in this list — CI's `sqlserver` job now proves them against
+  a real engine; see the CI-verified section above. What remains unverified
+  here is the Aspire wiring itself.)
+- **The Keycloak dev realm import**
+  (`src/RocketWiki.AppHost/keycloak/rocketwiki-realm.json`). The JSON is
+  syntactically valid and was checked by decompiling the Aspire Keycloak
+  hosting package to confirm exactly how `--import-realm` and the bind mount
+  work, but no realm has actually been imported, no user has logged in, and
+  no token has been decoded to confirm the `groups`/`nationality`/`aud`
+  claims land as designed. Targets Keycloak `26.6.1` (the hosting package's
+  default image tag) — see that folder's own `README.md` for the full detail
+  and what production Keycloak needs to reproduce instead.
+- **`RocketWiki.Storage`'s S3 provider** against a real S3-compatible
+  endpoint. Only its DI/config wiring is tested; `PutObjectAsync`,
+  `GetObjectAsync`, etc. have never run against MinIO or anything else.
+- **That any of the OpenTelemetry above has ever left the process.** No OTLP
+  endpoint and no Aspire dashboard has ever received a single span or metric
+  from RocketWiki — the exporter only activates when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, which requires `aspire run`, which
+  requires the container runtime this environment doesn't have. The tests
+  prove the instruments emit and that §15 holds at the `ActivitySource` /
+  `Meter` boundary; they say nothing about serialization, the OTLP exporter,
+  sampling under load, or what a dashboard actually renders. Two specific
+  things to check on the first real run: that ServiceDefaults' `RocketWiki.*`
+  wildcard actually picks the custom sources up (`AddSource`/`AddMeter`
+  wildcard subscription is documented by OpenTelemetry .NET, and a guard test
+  asserts every source and meter is named to match the pattern, but the two
+  halves have never been exercised together against a live SDK), and that
+  span volume is sane — GraphQL scopes are set to everything except per-field
+  resolvers, which is a judgement call made without ever having seen the
+  trace count.
+- **That any browser span has ever been exported to a real OTLP endpoint.**
+  The exporter's transport is mocked in the web tests; the only evidence the
+  export leg does anything at all is an early draft that let it run for real
+  and produced `ECONNREFUSED` against a dashboard that wasn't running. The
+  Aspire AppHost still doesn't run the Vite dev server (a commented-out TODO
+  in `AppHost.cs`), so nothing injects the endpoint automatically yet —
+  `web/.env.example` documents the variables for standalone `vite dev`,
+  including the easily-missed detail that the dashboard's OTLP/HTTP port is
+  18890, not the gRPC 18889.
 - Real login, real page CRUD, real search, real anything involving SQL
   Server or Keycloak issuing a token — none of it exists yet at more than a
   placeholder level (see design.md §16's milestone list for what's next).

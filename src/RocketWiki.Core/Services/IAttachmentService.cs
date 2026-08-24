@@ -12,8 +12,9 @@ namespace RocketWiki.Core.Services;
 /// Upload order is specified, not a judgement call: write bytes to storage FIRST, then
 /// commit the Attachment row and its audit event in one transaction. If the DB commit
 /// fails after a successful storage write, the row is never created and the object is
-/// orphaned - design.md §10 assigns cleaning that up to a nightly janitor job, not this
-/// service, so no compensating delete is attempted here.
+/// orphaned - JANITOR(§10): design.md §10 assigns cleaning that up to a nightly
+/// janitor job (not yet built), not this service, so no compensating delete is
+/// attempted here.
 ///
 /// This interface has no dependency on IFileStorage itself (that lives in
 /// RocketWiki.Storage) - Core stays free of it; the concrete implementation in

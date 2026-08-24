@@ -61,8 +61,9 @@ public class CustomEmojiService : ICustomEmojiService
         };
 
         // design.md §10: bytes to storage FIRST, then the row + audit event in one DB
-        // transaction. A failed commit orphans the object - the janitor's problem, not
-        // this request's; the reverse order could commit a row whose bytes never landed.
+        // transaction. A failed commit orphans the object - JANITOR(§10): the janitor's
+        // problem, not this request's; the reverse order could commit a row whose bytes
+        // never landed.
         using var content = new MemoryStream(request.ImageBytes, writable: false);
         await _fileStorage.SaveAsync(emoji.StorageKey, content, emoji.ContentType, cancellationToken);
 
@@ -104,7 +105,7 @@ public class CustomEmojiService : ICustomEmojiService
 
         // Blob cleanup AFTER the commit, best-effort: the row (and its audit record)
         // must not be held hostage to storage availability, and a failed delete just
-        // leaves an orphaned object for the §10 janitor - the same terminal state as
+        // leaves an orphaned object - JANITOR(§10): the same terminal state as
         // a failed upload's orphan.
         try
         {
@@ -112,9 +113,10 @@ public class CustomEmojiService : ICustomEmojiService
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Orphaned object; janitor territory (design.md §10). Provider exception
-            // types differ (IOException vs AmazonS3Exception), hence the broad catch -
-            // cancellation still propagates, everything else is the janitor's problem.
+            // Orphaned object; JANITOR(§10): janitor territory (design.md §10).
+            // Provider exception types differ (IOException vs AmazonS3Exception),
+            // hence the broad catch - cancellation still propagates, everything else
+            // is the janitor's problem.
         }
 
         return PageMutationResult<CustomEmoji>.Success(emoji);

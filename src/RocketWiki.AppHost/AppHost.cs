@@ -66,11 +66,13 @@ var api = builder.AddProject<Projects.RocketWiki_Api>("api")
     .WithReference(embeddings)
     .WithReference(assistant);
 
-// TODO(frontend agent / milestone 0): wire the Vite app once web/ has a working
-// dev server script. Uncomment once confirmed:
+// TODO(milestone 0): the Vite app is not wired into the AppHost yet — it runs
+// standalone via `npm run dev` (see DEVELOPING.md). Uncomment once confirmed
+// working under the AppHost:
 //
 //   builder.AddViteApp("web", "../../web").WithReference(api);
 //
-// Requires the Aspire.Hosting.JavaScript package (already referenced above).
+// Requires the Aspire.Hosting.JavaScript package (referenced in
+// RocketWiki.AppHost.csproj).
 
 builder.Build().Run();

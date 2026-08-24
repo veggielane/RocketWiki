@@ -13,7 +13,8 @@ namespace RocketWiki.Data.Services;
 /// reason <see cref="AttachmentService"/> does: it needs both RocketWikiDbContext and
 /// IFileStorage. Mirrors the attachment pipeline's storage discipline exactly
 /// (design.md §10): bytes to storage FIRST, then row + audit event in one DB
-/// transaction; a failed commit orphans the object for the nightly janitor, and a row
+/// transaction; JANITOR(§10): a failed commit orphans the object for the nightly
+/// janitor, and a row
 /// whose object is missing surfaces as <see cref="UserAvatarReadResult.BlobMissing"/>,
 /// not an unhandled 500. No replica check anywhere: an avatar is instance-local user
 /// metadata, like a Watch row — not a write into any space's synced content.
@@ -54,9 +55,9 @@ public sealed class UserAvatarService(
         var storageKey = $"avatars/{now:yyyy'/'MM}/{Guid.CreateVersion7()}";
 
         // design.md §10 upload order: storage first, then the row + audit commit
-        // together. On re-upload the row points at the NEW key; the old object is
-        // orphaned for the janitor rather than deleted in-band, so a failed commit
-        // can never leave a row pointing at deleted bytes.
+        // together. On re-upload the row points at the NEW key; JANITOR(§10): the old
+        // object is orphaned for the janitor rather than deleted in-band, so a failed
+        // commit can never leave a row pointing at deleted bytes.
         using (var buffer = new MemoryStream(canonicalPng, writable: false))
         {
             await fileStorage.SaveAsync(storageKey, buffer, "image/png", cancellationToken);

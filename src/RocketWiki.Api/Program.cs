@@ -315,7 +315,7 @@ var app = builder.Build();
 // production sets it false via Database__MigrateOnStartup and applies
 // migrations through a separate entrypoint instead.
 //
-// Also skipped for `dotnet run -- schema export` (and any other HotChocolate
+// Also skipped for `dotnet run schema export` (and any other HotChocolate
 // CLI command): RunWithGraphQLCommandsAsync below decides server-vs-command
 // mode from the same `args`, but only *after* everything above it in this file
 // has already run — without this guard, exporting the schema would try to
@@ -366,7 +366,7 @@ app.MapRocketWikiMcp();
 // page-scoped presence (see NotificationsHub's own doc for why one hub, not two).
 app.MapHub<NotificationsHub>("/hubs/notifications");
 
-// Also enables `dotnet run -- schema export --output schema.graphql` (design.md §8:
+// Also enables `dotnet run schema export --output schema.graphql` (design.md §8:
 // SDL is checked in and code/file drift is a later CI gate).
 await app.RunWithGraphQLCommandsAsync(args);
 
