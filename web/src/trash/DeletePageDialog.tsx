@@ -1,5 +1,5 @@
 import { Alert, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle } from '@mui/material'
-import { describeDeleteOutcome } from '../trash/describeDeleteOutcome'
+import { describeDeleteOutcome } from './describeDeleteOutcome'
 
 export interface DeletePageDialogProps {
   open: boolean

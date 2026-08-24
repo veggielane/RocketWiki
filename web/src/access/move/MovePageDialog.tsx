@@ -16,8 +16,8 @@ import {
   computeVisibilityChange,
   type MoveTargetOption,
   type RestrictionSummary,
-} from '../access/move/visibilityChange'
-import { RuleExpressionOrUnreadable } from '../access/RuleExpressionSummary'
+} from './visibilityChange'
+import { RuleExpressionOrUnreadable } from '../RuleExpressionSummary'
 
 export type { MoveTargetOption }
 

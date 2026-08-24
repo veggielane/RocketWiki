@@ -18,6 +18,7 @@ import {
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import { DataGrid, type GridColDef } from '@mui/x-data-grid'
 import { useCustomEmojisQuery, type CustomEmojisQuery } from '../graphql/generated/graphql'
+import { describeLoadFailure } from '../feedback/unavailableCopy'
 import { EMOJI_NAME_MAX_LENGTH, isValidEmojiName } from '../emoji/grammar'
 import { EMOJI_ACCEPTED_TYPES, EmojiMutationFailure, deleteEmoji, uploadEmoji } from '../emoji/emojiApi'
 import { EmojiImg } from '../emoji/EmojiImg'
@@ -204,7 +205,7 @@ export function AdminEmojisPage() {
         </Stack>
       </Paper>
 
-      {error && <Alert severity="info">Couldn't load the emoji registry.</Alert>}
+      {error && <Alert severity="info">{describeLoadFailure('EMOJI_REGISTRY').summary}</Alert>}
       {!error && rows.length === 0 && !fetching && (
         <Typography color="text.secondary">
           No custom emojis yet — upload one above to make it available as :name: everywhere.

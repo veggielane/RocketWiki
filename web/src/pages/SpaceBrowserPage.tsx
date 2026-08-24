@@ -37,9 +37,10 @@ import {
   useUnwatchSpaceMutation,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
-import { REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { filterTreeByLabel } from '../labels/filterTreeByLabel'
-import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
+import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
+import { RenameSpaceDialog } from '../spaces/RenameSpaceDialog'
 
 /**
  * The generated query type only nests as deep as the `.graphql` operation
@@ -139,7 +140,7 @@ export function SpaceBrowserPage() {
   }
 
   if (error || !data?.space) {
-    return <Alert severity="info">Couldn't load this space.</Alert>
+    return <Alert severity="info">{describeLoadFailure('SPACE').summary}</Alert>
   }
 
   const space = data.space
@@ -294,39 +295,26 @@ export function SpaceBrowserPage() {
         </Box>
       )}
 
-      <Dialog open={renameOpen} onClose={() => setRenameOpen(false)}>
-        <DialogTitle>Rename "{space.name}"</DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus
-            label="Name"
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            fullWidth
-            sx={{ mt: 1 }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setRenameOpen(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            disabled={renameValue.trim().length === 0}
-            onClick={async () => {
-              const result = await renameSpace({
-                // Description passed through unchanged — the input replaces
-                // it wholesale, so omitting it would clear it.
-                input: { spaceId: space.id, name: renameValue.trim(), description: space.description },
-              })
-              setRenameOpen(false)
-              if (!surfaceError(result.data?.renameSpace.error)) {
-                refetch({ requestPolicy: 'network-only' })
-              }
-            }}
-          >
-            Rename
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <RenameSpaceDialog
+        open={renameOpen}
+        spaceName={space.name}
+        value={renameValue}
+        onValueChange={setRenameValue}
+        onCancel={() => setRenameOpen(false)}
+        onConfirm={() => {
+          void (async () => {
+            const result = await renameSpace({
+              // Description passed through unchanged — the input replaces
+              // it wholesale, so omitting it would clear it.
+              input: { spaceId: space.id, name: renameValue.trim(), description: space.description },
+            })
+            setRenameOpen(false)
+            if (!surfaceError(result.data?.renameSpace.error)) {
+              refetch({ requestPolicy: 'network-only' })
+            }
+          })()
+        }}
+      />
 
       <Dialog open={archiveOpen} onClose={() => setArchiveOpen(false)}>
         <DialogTitle>Archive "{space.name}"?</DialogTitle>

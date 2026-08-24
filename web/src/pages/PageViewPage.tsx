@@ -41,11 +41,11 @@ import {
   useDetachLabelMutation,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, blockedPageCount, describeMutationError } from '../graphql/mutationError'
-import { REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { RichTextEditor } from '../editor/RichTextEditor'
-import { MovePageDialog } from './MovePageDialog'
-import { DeletePageDialog } from './DeletePageDialog'
-import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
+import { MovePageDialog } from '../access/move/MovePageDialog'
+import { DeletePageDialog } from '../trash/DeletePageDialog'
+import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { ancestorRestrictionsOf, flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
 import { PermissionInspectorPanel } from '../access/permission/PermissionInspectorPanel'
 import { AttachmentList } from '../attachments/AttachmentList'
@@ -194,7 +194,7 @@ export function PageViewPage() {
   if (error || !data?.page) {
     // Same message for "doesn't exist", "not viewable" and "API down" —
     // design.md §6.7's absent-not-forbidden applies client-side too.
-    return <Alert severity="info">Couldn't load this page.</Alert>
+    return <Alert severity="info">{describeLoadFailure('PAGE').summary}</Alert>
   }
 
   const page = data.page

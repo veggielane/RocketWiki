@@ -1,6 +1,8 @@
 import { Alert, Box, Chip, Paper, Stack, Typography } from '@mui/material'
 import { DataGrid, type GridColDef } from '@mui/x-data-grid'
 import { useSyncStatusQuery, type SyncStatusQuery } from '../graphql/generated/graphql'
+import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { formatTimestamp } from '../format/dateTime'
 
 type ExportedRow = SyncStatusQuery['syncStatus']['exportedSpaces'][number]
 type Origin = SyncStatusQuery['syncStatus']['origins'][number]
@@ -41,7 +43,7 @@ function OriginCard({ origin }: { origin: Origin }) {
         <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', flexWrap: 'wrap' }}>
           <Typography variant="h6">Origin: {origin.originInstanceId}</Typography>
           <Typography variant="body2" color="text.secondary">
-            last bundle #{origin.lastBundleNumber} · imported {new Date(origin.lastImportAtUtc).toLocaleString()}
+            last bundle #{origin.lastBundleNumber} · imported {formatTimestamp(origin.lastImportAtUtc)}
           </Typography>
         </Stack>
         <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>
@@ -76,7 +78,7 @@ export function SyncStatusPage() {
   const [{ data, fetching, error }] = useSyncStatusQuery()
 
   if (error) {
-    return <Alert severity="info">Couldn't load sync status.</Alert>
+    return <Alert severity="info">{describeLoadFailure('SYNC_STATUS').summary}</Alert>
   }
 
   const status = data?.syncStatus

@@ -4,14 +4,14 @@ import { EditorContent, useEditor } from '@tiptap/react'
 import type { EditorView } from '@tiptap/pm/view'
 import type * as Y from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
-import { Alert, Box, Paper, Snackbar } from '@mui/material'
+import { Alert, Box, Paper } from '@mui/material'
 import { richTextExtensions } from './richTextExtensions'
 import { EmojiSuggestionPopup } from './emoji/EmojiSuggestionPopup'
 import { markdownToJson } from './markdown/fromMarkdown'
 import { jsonToMarkdown } from './markdown/toMarkdown'
 import { EditorToolbar } from './EditorToolbar'
 import { uploadAttachment } from '../attachments/attachmentApi'
-import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { describeAttachmentUnavailable } from '../feedback/unavailableCopy'
 import { computeHeadingAnchors, type HeadingInfo } from './headingAnchors'
 import './editor-content.css'
 
@@ -235,15 +235,22 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   return (
     <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
       {editable && showToolbar && <EditorToolbar editor={editor} />}
+      {/* Inline, not a snackbar (web/README.md's feedback rule): a failed
+          upload is a state the author has to act on — the image they
+          dropped is NOT in the document — and an auto-hiding toast can
+          expire while they are still typing and never be read. Sits above
+          the content, next to the toolbar, so it is on screen regardless of
+          how far down the drop landed; re-dropping the file is the retry,
+          which is why the message keeps naming it. */}
+      {uploadError && (
+        <Alert severity="error" square onClose={() => setUploadError(null)}>
+          {uploadError}
+        </Alert>
+      )}
       <Box sx={{ p: 2 }}>
         <EditorContent editor={editor} />
       </Box>
       {editable && editor && <EmojiSuggestionPopup editor={editor} />}
-      <Snackbar open={Boolean(uploadError)} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setUploadError(null)}>
-        <Alert severity="error" onClose={() => setUploadError(null)}>
-          {uploadError}
-        </Alert>
-      </Snackbar>
     </Paper>
   )
 })
@@ -274,6 +281,6 @@ async function uploadAndInsert(
     const node = imageType.create({ src: `attachment://${attachment.id}`, alt: file.name })
     view.dispatch(view.state.tr.insert(pos, node))
   } catch {
-    onError(`Couldn't upload "${file.name}" — there's no live API in this environment yet.`)
+    onError(describeAttachmentUnavailable({ kind: 'UPLOAD_FAILED', fileName: file.name }).summary)
   }
 }

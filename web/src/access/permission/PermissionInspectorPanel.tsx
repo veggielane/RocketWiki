@@ -18,6 +18,7 @@ import { useEffectivePermissionQuery, type InspectedPrincipalInput } from '../..
 import { useIsInstanceAdmin } from '../../auth/useIsInstanceAdmin'
 import { toEffectivePermissionDetail } from './mapEffectivePermission'
 import { PermissionInspector } from './PermissionInspector'
+import { describeLoadFailure } from '../../feedback/unavailableCopy'
 
 interface AttributeRowDraft {
   key: string
@@ -169,7 +170,9 @@ export function PermissionInspectorPanel({ pageId, allowSubjectInput = false }: 
         // Null covers "page not viewable to you" exactly like "no page" —
         // absent, not forbidden (design.md §6.7) — and the audited refusal
         // of a foreign subject from a non-admin.
-        <Alert severity="info">Couldn't inspect permissions{subject ? ' for that principal' : ''} on this page.</Alert>
+        <Alert severity="info">
+          {describeLoadFailure({ kind: 'PERMISSION_INSPECTION', forPrincipal: subject !== null }).summary}
+        </Alert>
       )}
 
       {!fetching && detail && (
