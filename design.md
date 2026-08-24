@@ -1668,7 +1668,8 @@ below works. What is genuinely impossible is filtering *inside* the
 OpenTelemetry pipeline: processors compose into a `CompositeProcessor` whose
 `OnEnd` calls every child unconditionally, so a processor cannot drop a
 record, and scopes are readable only through `ForEachScope` with no setter,
-so it cannot de-scope one either (verified against OpenTelemetry 1.15.3 — a
+so it cannot de-scope one either (established against OpenTelemetry 1.15.3
+and still true on 1.18.0, where the guard test below keeps passing — a
 processor that blanked attributes, body, and formatted message still exported
 the `RequestPath` scope). Filtering therefore has to happen **ahead of the
 provider**, via `AddFilter<OpenTelemetryLoggerProvider>`. So: content in log
