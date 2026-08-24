@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { PageViewPage } from '../PageViewPage'
@@ -28,6 +28,10 @@ const basePage = {
   viewerIsWatching: false,
   labels: ['ops'],
   labelDetails: [{ id: 'l-ops', spaceId: 'space-1', name: 'ops' }],
+  properties: [
+    { keyId: 'k-owner', key: 'Owner', value: 'Propulsion team', sortOrder: 0 },
+    { keyId: 'k-status', key: 'Status', value: 'Draft', sortOrder: 1 },
+  ],
   parent: null,
   children: [],
   comments: [
@@ -168,6 +172,40 @@ describe('PageViewPage server-resolved read state', () => {
     renderPage({ pageOverrides: { canComment: true }, localUserId: 'user-not-ada' })
     await screen.findByText('Ada Lovelace')
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+  })
+})
+
+describe('PageViewPage properties panel (design.md §20)', () => {
+  it('reads properties as a definition list, not free text, for any viewer', async () => {
+    renderPage()
+    const owner = await screen.findByText('Owner')
+    expect(owner.tagName).toBe('DT')
+    expect(screen.getByText('Propulsion team').tagName).toBe('DD')
+    expect(screen.getByText('Status').tagName).toBe('DT')
+    expect(screen.getByText('Draft').tagName).toBe('DD')
+  })
+
+  it('offers the properties screen only with canEdit', async () => {
+    renderPage()
+    await screen.findByText('Owner')
+    expect(screen.queryByRole('link', { name: /properties/i })).not.toBeInTheDocument()
+  })
+
+  it('links an editor through to the properties screen', async () => {
+    renderPage({ pageOverrides: { canEdit: true } })
+    expect(await screen.findByRole('link', { name: 'Edit properties' })).toHaveAttribute(
+      'href',
+      '/pages/page-1/properties',
+    )
+  })
+
+  it('offers an editor the screen even with no properties yet, and shows a viewer nothing', async () => {
+    renderPage({ pageOverrides: { canEdit: true, properties: [] } })
+    expect(await screen.findByRole('link', { name: 'Add properties' })).toBeInTheDocument()
+    cleanup()
+    renderPage({ pageOverrides: { properties: [] } })
+    await screen.findByRole('heading', { name: 'Runbook' })
+    expect(screen.queryByRole('heading', { name: 'Properties' })).not.toBeInTheDocument()
   })
 })
 

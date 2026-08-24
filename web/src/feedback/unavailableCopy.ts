@@ -119,6 +119,8 @@ export type LoadFailureReason =
   | 'ARCHIVED_SPACES'
   | 'AUDIT_EVENTS'
   | 'EMOJI_REGISTRY'
+  /** The page-property key registry (design.md §20.1) — instance vocabulary, so it can name itself. */
+  | 'PROPERTY_KEY_REGISTRY'
   | 'SYNC_STATUS'
   | 'SEARCH'
   /** The what-if inspector: `forPrincipal` distinguishes "your own view" from a staged subject. */
@@ -146,10 +148,31 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       return { summary: "Couldn't load audit events.", pointsToSettings: false }
     case 'EMOJI_REGISTRY':
       return { summary: "Couldn't load the emoji registry.", pointsToSettings: false }
+    case 'PROPERTY_KEY_REGISTRY':
+      return { summary: "Couldn't load the property key registry.", pointsToSettings: false }
     case 'SYNC_STATUS':
       return { summary: "Couldn't load sync status.", pointsToSettings: false }
     case 'SEARCH':
       return { summary: "Couldn't search — there's no live API in this environment yet.", pointsToSettings: false }
+  }
+}
+
+/**
+ * Writes whose response never arrived — the request failed at the transport,
+ * so the client genuinely does not know whether the server acted. Kept apart
+ * from `LoadFailureReason` because that describes *reads*, and apart from the
+ * typed mutation errors (graphql/mutationError.ts) because those are the
+ * server's considered refusals with their own designed UX. All of these say
+ * what didn't happen, since "try again" is the only useful next step.
+ */
+export type WriteFailureReason = 'PAGE_PROPERTY' | 'PROPERTY_KEY'
+
+export function describeWriteFailure(reason: WriteFailureReason): UnavailableCopy {
+  switch (reason) {
+    case 'PAGE_PROPERTY':
+      return { summary: "Couldn't reach the API — that property change wasn't saved.", pointsToSettings: false }
+    case 'PROPERTY_KEY':
+      return { summary: "Couldn't reach the API — that registry change wasn't saved.", pointsToSettings: false }
   }
 }
 

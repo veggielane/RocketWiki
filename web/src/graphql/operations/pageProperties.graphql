@@ -1,0 +1,91 @@
+# design.md §20: admin-defined key/value metadata shown *beside* a page
+# rather than written into it, so none of this touches the Markdown pipeline
+# (§4's round trip has no property node to lose). Reading a page's values
+# needs only canView — properties carry no restriction of their own (§20.2)
+# — while setting or removing one needs canEdit on that page, which is why
+# the screen re-reads `canEdit` here instead of trusting the route it was
+# reached from.
+#
+# Deliberately its own document rather than more fields on PageById: the
+# properties screen has no use for the page's content, comments or
+# attachments, and PageById is the heaviest read in the app.
+query PagePropertiesForPage($id: UUID!) {
+  page(id: $id) {
+    id
+    title
+    spaceKey
+    canEdit
+    properties {
+      keyId
+      key
+      value
+      sortOrder
+    }
+  }
+}
+
+# The instance-wide key registry (design.md §20.1): the vocabulary editors
+# pick from, readable by any authenticated user because a key's existence
+# says nothing about which pages carry it. One document behind both the
+# properties screen's key picker and the admin registry screen.
+query PagePropertyKeys {
+  pagePropertyKeys {
+    id
+    key
+    description
+    sortOrder
+  }
+}
+
+# Upsert, keyed by (pageId, pagePropertyKeyId). An empty or whitespace-only
+# value is REFUSED here rather than treated as a delete (design.md §20 — one
+# mutation, one meaning), so a cleared field is translated to
+# RemovePageProperty client-side; see properties/propertyEdit.ts.
+mutation SetPageProperty($input: SetPagePropertyRequestInput!) {
+  setPageProperty(input: $input) {
+    property {
+      keyId
+      key
+      value
+      sortOrder
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
+mutation RemovePageProperty($input: RemovePagePropertyRequestInput!) {
+  removePageProperty(input: $input) {
+    removedPropertyKeyId
+    error {
+      ...MutationError
+    }
+  }
+}
+
+# Registry writes are instance-admin only (design.md §20.2); deleting a key
+# pages still use is refused with a ValidationError naming the count, never
+# cascaded into their values.
+mutation CreatePagePropertyKey($input: CreatePagePropertyKeyRequestInput!) {
+  createPagePropertyKey(input: $input) {
+    propertyKey {
+      id
+      key
+      description
+      sortOrder
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
+mutation DeletePagePropertyKey($keyId: UUID!) {
+  deletePagePropertyKey(keyId: $keyId) {
+    deletedPropertyKeyId
+    error {
+      ...MutationError
+    }
+  }
+}

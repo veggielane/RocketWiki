@@ -17,6 +17,11 @@ const LIVE_SECTIONS = [
     description: 'Curate the :name: registry every signed-in user can render (§19).',
     to: '/admin/emojis',
   },
+  {
+    title: 'Page property keys',
+    description: "Define the key vocabulary editors pick from on a page's properties screen (§20).",
+    to: '/admin/property-keys',
+  },
 ]
 
 const PLACEHOLDER_SECTIONS = [
