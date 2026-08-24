@@ -527,8 +527,15 @@ mutations via the domain-event pipeline, with no token material in any row.
   build if one ships without a declaration — same enforcement style as the
   Markdown round-trip rule. Nested reads are covered too: resolving a page's
   content emits `page.view` wherever it appears in a query (§8). The
-  attachment routes and MCP tools carry the same declarations through their
-  own pipelines — every channel lands in the same audit table.
+  declaration guard covers all four channels, not just GraphQL roots: every
+  MCP tool, every client-invokable hub method, and every minimal-API route
+  handler on the `*Endpoints` classes must carry exactly one of
+  `[AuditAction]`/`[NoAudit(reason)]`, enforced by AuditCoverageTests (route
+  handlers are named static methods returning `Task<IResult>` by convention —
+  the sweep fails a class whose handlers become unsweepable lambdas).
+  Deliberate non-audits — the avatar and emoji image GETs, the anonymous
+  Gravatar endpoint — are machine-checkable declarations with their reasons
+  inline, not prose. Every channel lands in the same audit table.
 - Mutations write their audit event **in the same transaction** as the change —
   an edit cannot exist without its audit record.
 - Reads are audited synchronously too: if the audit insert fails, the request
@@ -1072,7 +1079,19 @@ renames never touch storage; the `Attachment` row owns all meaning.
 
 - **No presigned URLs.** Downloads always stream through the API: a presigned
   URL would bypass both page restrictions (`canView`) and the audit log. The
-  perf cost is acceptable at wiki scale.
+  perf cost is acceptable at wiki scale. The rule is enforced by a tripwire
+  test that pins `IFileStorage` to its four streaming members and fails on any
+  member whose name suggests minting a URL.
+- **Download-response hardening.** The attachment download carries
+  `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment`, and
+  `Cache-Control: private, no-cache` with a strong ETag (the attachment id —
+  blobs are immutable per id). `no-cache` rather than a freshness window is
+  deliberate: every reuse revalidates through the API, so `canView` runs and
+  the §7 row is written even for a 304; a `max-age` would create unaudited
+  reads. Both storage providers validate every key before any I/O via a shared
+  helper (rejecting separators, rooted forms, and dot segments) — defense in
+  depth, since keys are system-generated — and the filesystem provider
+  additionally proves the resolved path stays under its root.
 - **Consequence for image rendering:** an `<img src>` cannot carry an
   `Authorization` header, so inline images can't point at the API directly.
   The client fetches the bytes through the authenticated API and renders them

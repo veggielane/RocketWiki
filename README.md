@@ -391,6 +391,13 @@ Being explicit about what has and hasn't been checked, rather than letting
 **Verified by tests and CI** (the standing caveat — design.md §16 —
 applies: test-proven, never yet run against live infrastructure; each
 bullet keeps its own sharper caveat where one exists):
+- **Hardening round (from the consistency reviews)**: attachment downloads
+  carry nosniff/no-cache/ETag-304 semantics without weakening per-read
+  auditing (a 304 still runs `canView` and writes its audit row — tested);
+  storage-key validation is shared by both `IFileStorage` providers (S3
+  previously passed keys unvalidated); the "no presigned URLs" invariant and
+  the audit-declaration rule for REST routes both gained build-time tripwire
+  tests; denial audit rows use one `{"reason": ...}` shape everywhere.
 - **The SPA is fully wired to the reconciled schema**: server-computed
   permissions shape every affordance (edit/move/delete/comment/permissions),
   page restrictions and the effectivePermission inspector are live, replica

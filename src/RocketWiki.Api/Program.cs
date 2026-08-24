@@ -156,7 +156,7 @@ builder.Services.AddScoped<IAccessRuleService, AccessRuleService>();
 // --- Search (design.md §9.1/§9.3, milestones 4 + 7) ---
 // One implementation, self-detecting provider: SQL Server FTS in production, the
 // LIKE fallback everywhere else (which is what the SQLite test tier exercises —
-// the FTS path stays TODO-flagged/unverified until the Testcontainers tier exists).
+// the FTS path is CI-verified by the Testcontainers tier, design.md §14 tier 3).
 // Hybrid keyword+vector RRF when the embedding pipeline below is configured; the
 // generator/options parameters default to null otherwise and search is keyword-only.
 builder.Services.AddScoped<ISearchService, SearchService>();
