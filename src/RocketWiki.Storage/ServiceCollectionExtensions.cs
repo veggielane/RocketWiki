@@ -13,11 +13,19 @@ public static class ServiceCollectionExtensions
     /// <c>FileStorage:Provider</c>. Unset/empty means "FileSystem" (the local-dev
     /// default); any other unrecognized value fails fast at startup rather than
     /// silently picking a provider nobody asked for.
+    ///
+    /// The options are bound with <c>ValidateDataAnnotations().ValidateOnStart()</c>,
+    /// the same shape every other RocketWiki options family uses: a malformed value
+    /// (an S3 endpoint with no scheme, say) fails the host at boot instead of the
+    /// first upload. Nothing is required — an empty section stays a supported state.
     /// </summary>
     public static IServiceCollection AddFileStorage(this IServiceCollection services, IConfiguration configuration)
     {
         var section = configuration.GetSection(FileStorageOptions.SectionName);
-        services.Configure<FileStorageOptions>(section);
+        services.AddOptions<FileStorageOptions>()
+            .Bind(section)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
 
         var provider = section["Provider"];
 

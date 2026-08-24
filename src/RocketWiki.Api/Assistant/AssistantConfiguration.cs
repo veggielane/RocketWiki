@@ -1,8 +1,8 @@
 using System.ClientModel;
 using System.ClientModel.Primitives;
-using System.Data.Common;
 using Microsoft.Extensions.AI;
 using OpenAI;
+using RocketWiki.Api.Ai;
 
 namespace RocketWiki.Api.Assistant;
 
@@ -57,7 +57,12 @@ public static class AssistantConfiguration
         // same DI pattern SearchService uses for the optional embedding generator).
         builder.Services.AddScoped<AskWikiService>();
 
-        var (endpoint, key, model) = ResolveConfiguration(builder.Configuration);
+        // Connection string first, Ai section as per-value fallback — the shared rule
+        // (AiConnectionStringParser); the keys this feature reads are the class doc's
+        // list: Ai:BaseUrl / Ai:ApiKey (shared with the embedding endpoint, since one
+        // gateway serving both models is the expected deployment) and Ai:ChatModel.
+        var (endpoint, key, model, _) = AiConnectionStringParser.Resolve(
+            builder.Configuration, connectionName: "assistant", modelConfigKey: "Ai:ChatModel");
         if (endpoint is null || model is null)
         {
             return; // Not configured: feature absent, fail closed. See class doc.
@@ -90,35 +95,4 @@ public static class AssistantConfiguration
                 .AsIChatClient());
     }
 
-    /// <summary>Connection string first, Ai section as per-value fallback — the exact
-    /// precedence EmbeddingPipelineConfiguration.ResolveConfiguration established.</summary>
-    private static (string? Endpoint, string? Key, string? Model) ResolveConfiguration(IConfiguration configuration)
-    {
-        string? endpoint = null, key = null, model = null;
-
-        var connectionString = configuration.GetConnectionString("assistant");
-        if (!string.IsNullOrWhiteSpace(connectionString))
-        {
-            if (connectionString.Contains('=', StringComparison.Ordinal))
-            {
-                var csb = new DbConnectionStringBuilder { ConnectionString = connectionString };
-                endpoint = ValueOrNull(csb, "Endpoint");
-                key = ValueOrNull(csb, "Key");
-                model = ValueOrNull(csb, "Model");
-            }
-            else
-            {
-                endpoint = connectionString.Trim(); // bare URL
-            }
-        }
-
-        endpoint ??= configuration["Ai:BaseUrl"];
-        key ??= configuration["Ai:ApiKey"];
-        model ??= configuration["Ai:ChatModel"];
-
-        return (endpoint, key, model);
-    }
-
-    private static string? ValueOrNull(DbConnectionStringBuilder builder, string keyword) =>
-        builder.TryGetValue(keyword, out var value) && value is string s && s.Length > 0 ? s : null;
 }

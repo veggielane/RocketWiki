@@ -116,7 +116,11 @@ public static class DataTelemetry
     public const string BundleNumberTag = "rocketwiki.sync.bundle_number";
     public const string BundleEntryCountTag = "rocketwiki.sync.entry_count";
     public const string BundleDuplicateTag = "rocketwiki.sync.was_duplicate";
-    public const string OutcomeTag = "rocketwiki.outcome";
+    /// <summary>design.md §15 names tags <c>rocketwiki.&lt;area&gt;.&lt;tag&gt;</c>. This
+    /// was the one area-less key in the codebase (<c>rocketwiki.outcome</c>); the constant
+    /// name is unchanged, only the wire key — dashboards filtering on the old key need the
+    /// one-word edit. TelemetryNamingTests now fails the build on any recurrence.</summary>
+    public const string OutcomeTag = "rocketwiki.data.outcome";
 
     public const string SubtreeDeleteSpan = "rocketwiki.page.delete_subtree";
     public const string SubtreeRestoreSpan = "rocketwiki.page.restore_subtree";

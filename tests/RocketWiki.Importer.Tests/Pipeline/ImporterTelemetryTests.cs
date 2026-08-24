@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
@@ -142,10 +144,48 @@ public class ImporterTelemetryTests
     [Fact]
     public void TheImporterSourceIsNamedForTheServiceDefaultsWildcardToFind()
     {
-        // Mirrors TelemetrySourceNaming coverage in RocketWiki.Api.Tests: the CLI wires no
+        // Mirrors TelemetryRegistrationTests in RocketWiki.Api.Tests: the CLI wires no
         // exporter of its own, but an in-process host with ServiceDefaults subscribes by
         // the RocketWiki.* pattern, so the name has to match the convention.
         Assert.StartsWith("RocketWiki.", ImporterTelemetry.ActivitySource.Name, StringComparison.Ordinal);
         Assert.Equal(ImporterTelemetry.SourceName, ImporterTelemetry.ActivitySource.Name);
+    }
+
+    /// <summary>
+    /// The Importer's half of TelemetryNamingTests (RocketWiki.Api.Tests): design.md §15
+    /// names tags <c>rocketwiki.&lt;area&gt;.&lt;tag&gt;</c>. Asserted here rather than
+    /// there for the same reason as the source-name check above — this project is
+    /// deliberately outside the API's reference graph. The Importer declares no meter, so
+    /// tag constants are the whole surface.
+    /// </summary>
+    [Fact]
+    public void EveryTagKeyFollowsTheSectionFifteenNamingConvention()
+    {
+        var pattern = new Regex(@"^rocketwiki\.[a-z0-9_]+\.[a-z0-9_.]+$");
+        var violations = new List<string>();
+        var tagKeys = new List<string>();
+
+        foreach (var field in typeof(ImporterTelemetry).GetFields(BindingFlags.Public | BindingFlags.Static))
+        {
+            if (field is not { IsLiteral: true, IsInitOnly: false }
+                || field.FieldType != typeof(string)
+                || !field.Name.EndsWith("Tag", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var key = (string)field.GetRawConstantValue()!;
+            tagKeys.Add(key);
+
+            if (!pattern.IsMatch(key))
+            {
+                violations.Add($"tag ImporterTelemetry.{field.Name} is keyed '{key}'");
+            }
+        }
+
+        Assert.NotEmpty(tagKeys);
+        Assert.True(violations.Count == 0,
+            "design.md §15: tags must be keyed 'rocketwiki.<area>.<tag>'. Offenders:\n"
+            + string.Join('\n', violations.Select(v => "  - " + v)));
     }
 }

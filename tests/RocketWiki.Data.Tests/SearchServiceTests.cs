@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
@@ -56,7 +57,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewerGrant(space.Id));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("combustion", null, null), ViewerPrincipal(), maxResults: 10);
 
         Assert.Single(result);
@@ -77,7 +78,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewerGrant(space.Id));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("zzz-nonexistent-term", null, null), ViewerPrincipal(), maxResults: 10);
 
         Assert.Empty(result);
@@ -87,7 +88,7 @@ public class SearchServiceTests : SqliteTestBase
     public async Task Search_EmptyQuery_ReturnsEmpty_NoWastedQuery()
     {
         using var context = CreateContext();
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
 
         var result = await service.SearchAsync(new SearchRequest("   ", null, null), ViewerPrincipal(), maxResults: 10);
 
@@ -111,7 +112,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewerGrant(spaceB.Id));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("shared-keyword", "ENG", null), ViewerPrincipal(), maxResults: 10);
 
         Assert.Single(result);
@@ -140,7 +141,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewerGrant(space.Id));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(
             new SearchRequest("keyword", null, new[] { "how-to", "reference" }), ViewerPrincipal(), maxResults: 10);
 
@@ -167,7 +168,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewRestriction(restrictedPage.Id, """{ "group": "top-secret" }"""));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("keyword", null, null), ViewerPrincipal(), maxResults: 10);
 
         Assert.Single(result);
@@ -199,7 +200,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewRestriction(restrictedNewest.Id, """{ "group": "top-secret" }"""));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         // Ask for just 1 result - without over-fetching, a naive "take 1 then filter"
         // implementation would filter the single restricted candidate down to nothing.
         var result = await service.SearchAsync(new SearchRequest("keyword", null, null), ViewerPrincipal(), maxResults: 1);
@@ -225,7 +226,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewerGrant(space.Id));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("keyword", null, null), ViewerPrincipal(), maxResults: 2);
 
         Assert.Equal(2, result.Count);
@@ -244,7 +245,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewerGrant(space.Id));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("impeller-cavitation", null, null), ViewerPrincipal(), maxResults: 10);
 
         var hit = Assert.Single(result);
@@ -267,7 +268,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewerGrant(space.Id));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("Cryogenic-Loading", null, null), ViewerPrincipal(), maxResults: 10);
 
         var hit = Assert.Single(result);
@@ -290,7 +291,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewerGrant(space.Id));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("hydrazine-loading", null, null), ViewerPrincipal(), maxResults: 10);
 
         var hit = Assert.Single(result);
@@ -320,7 +321,7 @@ public class SearchServiceTests : SqliteTestBase
         context.AccessRules.Add(ViewRestriction(restricted.Id, """{ "group": "top-secret" }"""));
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("shared-term", null, null), ViewerPrincipal(), maxResults: 10);
 
         var hit = Assert.Single(result);
@@ -344,7 +345,7 @@ public class SearchServiceTests : SqliteTestBase
         // No AccessRule grant at all for this space.
         context.SaveChanges();
 
-        var service = new SearchService(context);
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
         var result = await service.SearchAsync(new SearchRequest("keyword", null, null), ViewerPrincipal(), maxResults: 10);
 
         Assert.Empty(result);

@@ -128,6 +128,85 @@ public sealed class AttachmentSizeLimitTests : IClassFixture<RocketWikiApiFactor
         Assert.Equal(auditRowsBefore, await TotalAuditRowsAsync());
     }
 
+    /// <summary>
+    /// The layer that had no test and, under TestServer, no working backstop: a body that
+    /// declares no Content-Length. Layer 1 (the declared-length refusal) cannot fire, and
+    /// layer 2 (Kestrel's IHttpMaxRequestBodySizeFeature) does not exist here — so what
+    /// refuses this is the in-handler read bound BinaryRoutes gives all three binary
+    /// routes. It answers with the same structured 413 as every other over-limit upload;
+    /// before the consolidation the multipart reader's own exception escaped the handler
+    /// instead. The avatar route runs the identical helper.
+    /// </summary>
+    [Fact]
+    public async Task Upload_WithNoDeclaredContentLength_IsStillARefusal_NotAnUnhandledFailure()
+    {
+        var pageId = await SeedEditablePageAsync();
+        var client = _host.CreateClient();
+        client.SetTestUser(sub: $"uploader-{Guid.NewGuid()}");
+        var blobsBefore = CountStoredBlobs();
+        var auditRowsBefore = await TotalAuditRowsAsync();
+
+        // Big enough to pass the multipart envelope allowance too, so the reader's bound
+        // is what stops it rather than the file-length check afterwards.
+        var oversize = new byte[ConfiguredLimitBytes + RocketWiki.Api.Http.BinaryRoutes.MultipartEnvelopeAllowanceBytes + 1];
+        var form = new MultipartFormDataContent();
+        var fileContent = new StreamContent(new UnknownLengthStream(oversize));
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(fileContent, "file", "no-content-length.bin");
+
+        // The premise, pinned: an unknown-length part means the whole body has no
+        // computable Content-Length, so the up-front refusal genuinely cannot apply.
+        Assert.Null(form.Headers.ContentLength);
+
+        var response = await client.PostAsync($"/attachments/{pageId}", form);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal("Attachment too large", problem.GetProperty("title").GetString());
+        Assert.Equal(ConfiguredLimitBytes, problem.GetProperty("maxSizeBytes").GetInt64());
+
+        using var scope = _host.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        Assert.False(await db.Attachments.AnyAsync(a => a.PageId == pageId));
+        Assert.Equal(blobsBefore, CountStoredBlobs());
+        Assert.Equal(auditRowsBefore, await TotalAuditRowsAsync());
+    }
+
+    /// <summary>Forward-only, length-unknown stream: <see cref="StreamContent"/> cannot
+    /// compute a length for a non-seekable stream, which is what makes the multipart body
+    /// above arrive without a Content-Length.</summary>
+    private sealed class UnknownLengthStream(byte[] bytes) : Stream
+    {
+        private readonly MemoryStream _inner = new(bytes);
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     [Fact]
     public async Task Upload_ExactlyAtTheLimit_IsAccepted_AndRoundTrips()
     {

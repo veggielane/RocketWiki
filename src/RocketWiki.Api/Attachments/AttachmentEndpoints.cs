@@ -1,8 +1,8 @@
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.GraphQL;
+using RocketWiki.Api.Http;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -109,15 +109,6 @@ public static class AttachmentEndpoints
         }
     }
 
-    /// <summary>
-    /// Room for the multipart envelope (boundary lines + part headers) around a file
-    /// of exactly <c>MaxSizeBytes</c>, so the transport-level caps below don't refuse
-    /// an at-limit upload the file-length check would accept. The generous 64 KiB
-    /// keeps the transport bound coarse on purpose: the byte-precise, binding check
-    /// is <c>file.Length &gt; MaxSizeBytes</c> in the handler.
-    /// </summary>
-    private const long MultipartEnvelopeAllowanceBytes = 64 * 1024;
-
     [AuditAction("attachment.upload")]
     private static async Task<IResult> UploadAsync(
         Guid pageId,
@@ -140,59 +131,23 @@ public static class AttachmentEndpoints
         // --- Size limit (Attachments:MaxSizeBytes, the system's one declared cap;
         // see AttachmentOptions for why it exists and where its default comes from).
         // Enforced HERE, before the form is read - so before any blob write, DB row,
-        // or even page lookup. Three layers derive from the same number:
-        //   1. A declared Content-Length over the bound is refused up front, before
-        //      the body is read at all - the common case, and the one that produces
-        //      this route's structured 413.
-        //   2. Kestrel's per-request body cap is re-pointed from its unrelated 30 MB
-        //      global default to the same bound - the transport backstop for chunked
-        //      requests that declare no Content-Length (its own 413 is bare, which is
-        //      honest: nothing structured survives an aborted request body). Absent
-        //      under TestServer, hence the null-conditional.
-        //   3. The file part's actual length is the byte-precise, binding check
-        //      below: > MaxSizeBytes refuses, == MaxSizeBytes is accepted.
+        // or even page lookup. All three layers (declared Content-Length, the
+        // transport backstop, the byte-precise in-handler bound) derive from this one
+        // number inside BinaryRoutes, which the avatar route shares verbatim.
         // Refusing a too-big upload writes NO audit row, same as the NotFound and
         // Validation refusals on this route (MutationAuthHelper's doc: only
         // permission-shaped failures are denials; §7's success|denied vocabulary has
         // no place for a request refused before any access decision was made - the
         // 413 fires identically for everyone, before the page is even loaded).
         var maxSizeBytes = attachmentOptions.Value.MaxSizeBytes;
-        var transportBound = maxSizeBytes + MultipartEnvelopeAllowanceBytes;
-
-        if (request.ContentLength is { } declaredLength && declaredLength > transportBound)
+        var (file, refusal) = await BinaryRoutes.ReadCappedMultipartFileAsync(
+            request, BinaryRoutes.AttachmentSubject, maxSizeBytes, cancellationToken);
+        if (refusal is not null)
         {
-            return PayloadTooLarge(maxSizeBytes);
+            return refusal;
         }
 
-        var bodySizeFeature = request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
-        if (bodySizeFeature is { IsReadOnly: false })
-        {
-            bodySizeFeature.MaxRequestBodySize = transportBound;
-        }
-
-        if (!request.HasFormContentType)
-        {
-            return Results.BadRequest(new { message = "Expected multipart/form-data with a single file field." });
-        }
-
-        // Per-request FormOptions so the multipart reader's own section limit (a
-        // global 128 MB default otherwise) also derives from the declared cap -
-        // without this, an operator raising MaxSizeBytes past 128 MB would get an
-        // unrelated 400 instead of the limit they configured.
-        var form = await request.ReadFormAsync(
-            new FormOptions { MultipartBodyLengthLimit = transportBound }, cancellationToken);
-        var file = form.Files.Count > 0 ? form.Files[0] : null;
-        if (file is null || file.Length == 0)
-        {
-            return Results.BadRequest(new { message = "No file provided." });
-        }
-
-        if (file.Length > maxSizeBytes)
-        {
-            return PayloadTooLarge(maxSizeBytes);
-        }
-
-        await using var content = file.OpenReadStream();
+        await using var content = file!.OpenReadStream();
         var uploadRequest = new UploadAttachmentRequest(pageId, file.FileName, file.ContentType, content);
         var result = await attachmentService.UploadAsync(uploadRequest, principal!, actingUserId!.Value, auditContext!, cancellationToken);
 
@@ -203,8 +158,13 @@ public static class AttachmentEndpoints
             // needs auditing explicitly here, same split as every GraphQL mutation.
             await MutationAuthHelper.AuditDenialIfApplicableAsync(
                 auditSink, "attachment.upload", result.Error, AuditSubjectType.Attachment, subjectId: null, cancellationToken);
-            var errorView = PageMutationErrorView.From(result.Error);
-            return Results.Json(errorView, statusCode: MapErrorStatusCode(errorView.Kind));
+
+            // Reachable kinds here are NotFound (404), ReadOnlyReplica (403),
+            // Forbidden (403) and Validation (400) - see AttachmentService.UploadAsync.
+            // NameTaken, StaleRevision and SubtreeOperationForbidden are structurally
+            // unreachable on this route; BinaryRoutes maps them anyway so the three
+            // binary routes cannot drift apart again.
+            return BinaryRoutes.ErrorResult(result.Error);
         }
 
         var attachment = result.Value;
@@ -217,23 +177,4 @@ public static class AttachmentEndpoints
             attachment.CreatedAtUtc,
         });
     }
-
-    /// <summary>Structured 413 (RFC 9110 "Content Too Large") as ProblemDetails.
-    /// The configured limit rides along in an extension so a client can show the
-    /// actual cap - it's deployment configuration, not content, so echoing it leaks
-    /// nothing (§6.7/§15 concerns don't apply to a number every caller gets).</summary>
-    private static IResult PayloadTooLarge(long maxSizeBytes) => Results.Problem(
-        title: "Attachment too large",
-        detail: $"The uploaded file exceeds the maximum attachment size of {maxSizeBytes} bytes.",
-        statusCode: StatusCodes.Status413PayloadTooLarge,
-        extensions: new Dictionary<string, object?> { ["maxSizeBytes"] = maxSizeBytes });
-
-    private static int MapErrorStatusCode(string kind) => kind switch
-    {
-        "Forbidden" => StatusCodes.Status403Forbidden,
-        "ReadOnlyReplica" => StatusCodes.Status403Forbidden,
-        "NotFound" => StatusCodes.Status404NotFound,
-        "Validation" => StatusCodes.Status400BadRequest,
-        _ => StatusCodes.Status400BadRequest,
-    };
 }

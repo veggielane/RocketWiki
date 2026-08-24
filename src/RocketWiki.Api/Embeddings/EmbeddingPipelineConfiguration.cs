@@ -1,7 +1,7 @@
 using System.ClientModel;
-using System.Data.Common;
 using Microsoft.Extensions.AI;
 using OpenAI;
+using RocketWiki.Api.Ai;
 using RocketWiki.Core.Search;
 using RocketWiki.Data.Services;
 
@@ -35,7 +35,11 @@ public static class EmbeddingPipelineConfiguration
 {
     public static void AddRocketWikiEmbeddings(this WebApplicationBuilder builder)
     {
-        var (endpoint, key, model, dimensions) = ResolveConfiguration(builder.Configuration);
+        // Connection string first, Ai section as per-value fallback — the shared rule
+        // (AiConnectionStringParser); the keys this feature reads are the class doc's
+        // list: Ai:BaseUrl / Ai:ApiKey / Ai:EmbeddingModel / Ai:Dimensions.
+        var (endpoint, key, model, dimensions) = AiConnectionStringParser.Resolve(
+            builder.Configuration, connectionName: "embeddings", modelConfigKey: "Ai:EmbeddingModel");
 
         if (endpoint is null || model is null)
         {
@@ -71,40 +75,6 @@ public static class EmbeddingPipelineConfiguration
         builder.Services.AddHostedService<EmbeddingDimensionsStartupCheck>();
         builder.Services.AddHostedService<EmbeddingBackgroundService>();
     }
-
-    private static (string? Endpoint, string? Key, string? Model, int? Dimensions) ResolveConfiguration(
-        IConfiguration configuration)
-    {
-        string? endpoint = null, key = null, model = null;
-        int? dimensions = null;
-
-        var connectionString = configuration.GetConnectionString("embeddings");
-        if (!string.IsNullOrWhiteSpace(connectionString))
-        {
-            if (connectionString.Contains('=', StringComparison.Ordinal))
-            {
-                var csb = new DbConnectionStringBuilder { ConnectionString = connectionString };
-                endpoint = ValueOrNull(csb, "Endpoint");
-                key = ValueOrNull(csb, "Key");
-                model = ValueOrNull(csb, "Model");
-                dimensions = int.TryParse(ValueOrNull(csb, "Dimensions"), out var d) ? d : null;
-            }
-            else
-            {
-                endpoint = connectionString.Trim(); // bare URL
-            }
-        }
-
-        endpoint ??= configuration["Ai:BaseUrl"];
-        key ??= configuration["Ai:ApiKey"];
-        model ??= configuration["Ai:EmbeddingModel"];
-        dimensions ??= configuration.GetValue<int?>("Ai:Dimensions");
-
-        return (endpoint, key, model, dimensions);
-    }
-
-    private static string? ValueOrNull(DbConnectionStringBuilder builder, string keyword) =>
-        builder.TryGetValue(keyword, out var value) && value is string s && s.Length > 0 ? s : null;
 
     private static TimeSpan? SecondsOrNull(IConfiguration configuration, string configKey)
     {

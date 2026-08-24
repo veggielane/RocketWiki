@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
@@ -92,7 +93,7 @@ public sealed class FullTextSearchTests : SqlServerTestBase
             ViewerPrincipal(), user.Id, AuditCtx);
         Assert.True(weak.IsSuccess);
 
-        var searchService = new SearchService(context);
+        var searchService = new SearchService(context, NullLogger<SearchService>.Instance);
         var hits = await SearchUntilAsync(
             searchService, new SearchRequest("running", null, null), ViewerPrincipal(),
             maxResults: 10, ready: h => h.Count >= 2);
@@ -145,7 +146,7 @@ public sealed class FullTextSearchTests : SqlServerTestBase
         // simply hadn't populated it yet.
         await WaitForRawFtsHitsAsync(context, [visible.Value.Id, restricted.Value.Id]);
 
-        var searchService = new SearchService(context);
+        var searchService = new SearchService(context, NullLogger<SearchService>.Instance);
         var hits = await searchService.SearchAsync(
             new SearchRequest("running", null, null), ViewerPrincipal(), maxResults: 10);
 

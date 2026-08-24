@@ -43,19 +43,39 @@ builder.AddSqlServerDbContext<RocketWikiDbContext>("rocketwiki",
 // --- File storage (design.md §10) ---
 builder.Services.AddFileStorage(builder.Configuration);
 
+// --- Binary-upload caps (design.md §10/§19) ---
+// Three sibling options families for the three binary routes, all bound and validated
+// the same way: AddOptions().Bind().ValidateDataAnnotations().ValidateOnStart(), so a
+// misconfigured cap (zero, negative, unparseable) fails the host at boot rather than
+// every upload at runtime. Every default satisfies its own annotations, which is what
+// keeps "no configuration at all" a working state (the API test factory boots on
+// nothing but a connection string and proves it).
+//
 // The one declared attachment size limit (Attachments:MaxSizeBytes, default 100 MiB
 // to match the nginx cap in front of the API) — enforced by the upload route before
 // any blob or row is written; see AttachmentOptions/AttachmentEndpoints. Kestrel's
 // global 30 MB request-body default stays for every other route (GraphQL bodies are
 // small); the upload route alone re-derives its per-request cap from this value.
-builder.Services.Configure<AttachmentOptions>(
-    builder.Configuration.GetSection(AttachmentOptions.SectionName));
+builder.Services.AddOptions<AttachmentOptions>()
+    .Bind(builder.Configuration.GetSection(AttachmentOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
 
-// Profile pictures: Avatars:MaxSizeBytes (512 KiB default) and the fail-closed
+// Profile pictures: Avatars:MaxSizeBytes (5 MiB default) and the fail-closed
 // Avatars:GravatarEndpointEnabled flag (default false — see AvatarOptions for why
 // an unauthenticated endpoint must be an operator's explicit opt-in).
-builder.Services.Configure<AvatarOptions>(
-    builder.Configuration.GetSection(AvatarOptions.SectionName));
+builder.Services.AddOptions<AvatarOptions>()
+    .Bind(builder.Configuration.GetSection(AvatarOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+// Custom emojis: Emojis:MaxSizeBytes (256 KiB default), bound here beside its two
+// siblings rather than hand-bound per request inside the handler.
+builder.Services.AddOptions<EmojiOptions>()
+    .Bind(builder.Configuration.GetSection(EmojiOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 // Singleton: stateless, and it owns the process-wide capped MemoryAllocator that
 // bounds what decoding untrusted uploads can cost (ImageSharpAvatarProcessor).
 builder.Services.AddSingleton<IAvatarImageProcessor, ImageSharpAvatarProcessor>();
@@ -144,6 +164,11 @@ builder.Services.AddScoped<IPageService>(sp => new PageService(sp.GetRequiredSer
 builder.Services.AddScoped<ICommentService>(sp => new CommentService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<ILabelService>(sp => new LabelService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 
+// --- Custom emojis (design.md §19) — the admin-curated :name: registry over the same
+// DbContext + IFileStorage as attachments. Instance-local, never synced, so no
+// InstanceId is needed and the plain type registration suffices.
+builder.Services.AddScoped<ICustomEmojiService, CustomEmojiService>();
+
 // --- Attachments (design.md §10) — metadata + IFileStorage (already registered above) ---
 builder.Services.AddScoped<IAttachmentReadService, AttachmentReadService>();
 builder.Services.AddScoped<IAttachmentService>(sp =>
@@ -204,7 +229,9 @@ builder.AddRocketWikiAssistant();
 // the default in-memory backplane is correct and this is a real decision to revisit at
 // deployment time, not a gap in this wiring.
 // Bound here (not via IOptions) because the hub's transport limit below must be
-// derived from the same values before the container is built.
+// derived from the same values before the container is built. The IOptions
+// registration further down is what validates them: a bad cap fails the host at
+// start, so a transport limit derived from one never survives to serve traffic.
 var coEditCaps = builder.Configuration.GetSection(CoEditOptions.SectionName).Get<CoEditOptions>() ?? new CoEditOptions();
 builder.Services
     .AddSignalR(o =>
@@ -234,7 +261,10 @@ builder.Services.AddSingleton<IPresenceRuleChangeNotifier, PresenceRuleChangeNot
 // write stays updatePageContent). See NotificationsHub.EditSessions.cs for the full
 // decision note. Options carry the sanity caps; TimeProvider makes the empty-session
 // grace sweep deterministic in tests.
-builder.Services.Configure<CoEditOptions>(builder.Configuration.GetSection(CoEditOptions.SectionName));
+builder.Services.AddOptions<CoEditOptions>()
+    .Bind(builder.Configuration.GetSection(CoEditOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
 builder.Services.TryAddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<IEditSessionRegistry, EditSessionRegistry>();
 builder.Services.AddScoped<INotificationDispatcher>(sp =>
@@ -351,11 +381,10 @@ app.MapAttachmentEndpoints();
 app.MapAvatarEndpoints();
 // --- Custom emojis: admin-curated :name: registry, instance-local (never synced) ---
 // Binary routes on the attachment pattern (admin-only POST/DELETE, authenticated GET
-// with ETag/304; emoji.created/.deleted audited via the domain-event pipeline). This
-// single call is the feature's entire Program.cs footprint on purpose: options
-// binding, image normalization (SixLabors.ImageSharp, decode-limited + re-encoded),
-// and service construction all live behind it, resolving only services other
-// features already registered - see CustomEmojiEndpoints.
+// with ETag/304; emoji.created/.deleted audited via the domain-event pipeline). Its
+// options and service are registered above with the other features' — image
+// normalization (SixLabors.ImageSharp, decode-limited + re-encoded) stays behind this
+// call. See CustomEmojiEndpoints.
 app.MapCustomEmojiEndpoints();
 
 // design.md §8: MCP at /mcp — anonymous requests are rejected by the endpoint's

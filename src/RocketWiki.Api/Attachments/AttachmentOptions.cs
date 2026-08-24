@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace RocketWiki.Api.Attachments;
 
 /// <summary>
@@ -23,6 +25,9 @@ public sealed class AttachmentOptions
 
     /// <summary>Maximum accepted attachment size in bytes. A file of exactly this
     /// size is accepted; one byte more is refused with 413 before any blob or row is
-    /// written.</summary>
+    /// written. Must be positive — a zero or negative cap refuses every upload, which
+    /// is a configuration mistake worth failing startup over (validated on start,
+    /// Program.cs).</summary>
+    [Range(1, long.MaxValue, ErrorMessage = "Attachments:MaxSizeBytes must be a positive number of bytes.")]
     public long MaxSizeBytes { get; set; } = DefaultMaxSizeBytes;
 }

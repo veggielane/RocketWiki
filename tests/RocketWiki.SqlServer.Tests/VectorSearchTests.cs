@@ -150,7 +150,7 @@ public sealed class VectorSearchTests : SqlServerTestBase
         var run = await indexer.RunOnceAsync();
         Assert.Equal(0, run.PagesFailed); // fixture sanity: the page embedded into the vector column
 
-        var searchService = new SearchService(context, generator, Options(), NullLogger<SearchService>.Instance);
+        var searchService = new SearchService(context, NullLogger<SearchService>.Instance, generator, Options());
         var hits = await searchService.SearchAsync(
             new SearchRequest("thermal", null, null), Viewer(), maxResults: 10);
 
@@ -208,7 +208,7 @@ public sealed class VectorSearchTests : SqlServerTestBase
         // restricted page's absence below can only be the permission filter.
         Assert.Equal(2, await context.PageEmbeddings.Select(e => e.PageId).Distinct().CountAsync());
 
-        var searchService = new SearchService(context, generator, Options(), NullLogger<SearchService>.Instance);
+        var searchService = new SearchService(context, NullLogger<SearchService>.Instance, generator, Options());
         var hits = await searchService.SearchAsync(
             new SearchRequest("thermal", null, null), Viewer(), maxResults: 10);
 
@@ -282,7 +282,7 @@ public sealed class VectorSearchTests : SqlServerTestBase
         // …then search with a misconfigured 8-dimensional query pipeline.
         var wrongDims = new FakeEmbeddingGenerator(_ => new float[] { 1f, 0f, 0f, 0f, 0f, 0f, 0f, 0.5f });
         var searchService = new SearchService(
-            context, wrongDims, Options(dimensions: 8), NullLogger<SearchService>.Instance);
+            context, NullLogger<SearchService>.Instance, wrongDims, Options(dimensions: 8));
 
         await Assert.ThrowsAnyAsync<Exception>(() =>
             searchService.SearchAsync(new SearchRequest("thermal", null, null), Viewer(), maxResults: 10));

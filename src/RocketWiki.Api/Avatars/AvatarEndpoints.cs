@@ -1,8 +1,8 @@
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 using Microsoft.Net.Http.Headers;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.GraphQL;
+using RocketWiki.Api.Http;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Content;
@@ -77,11 +77,6 @@ public static class AvatarEndpoints
         return app;
     }
 
-    /// <summary>Same purpose and value as the attachment route's allowance: room for
-    /// the multipart envelope around a file of exactly MaxSizeBytes, with the
-    /// byte-precise check being the file length itself.</summary>
-    private const long MultipartEnvelopeAllowanceBytes = 64 * 1024;
-
     [AuditAction("settings.avatar.set")]
     private static async Task<IResult> SetAsync(
         HttpRequest request,
@@ -99,47 +94,24 @@ public static class AvatarEndpoints
             return Results.Json(unauthenticated, statusCode: StatusCodes.Status403Forbidden);
         }
 
-        // Size cap: the same three-layer derivation as attachment uploads (declared
+        // Size cap: the same layered enforcement as attachment uploads (declared
         // Content-Length up front, transport body cap, byte-precise file length),
-        // from Avatars:MaxSizeBytes instead. A refused-too-big upload writes no audit
-        // row - no access decision was made (design.md §7's outcome vocabulary).
+        // from Avatars:MaxSizeBytes instead - one shared implementation in
+        // BinaryRoutes. A refused-too-big upload writes no audit row: no access
+        // decision was made (design.md §7's outcome vocabulary).
         var maxSizeBytes = avatarOptions.Value.MaxSizeBytes;
-        var transportBound = maxSizeBytes + MultipartEnvelopeAllowanceBytes;
-
-        if (request.ContentLength is { } declaredLength && declaredLength > transportBound)
+        var (file, refusal) = await BinaryRoutes.ReadCappedMultipartFileAsync(
+            request, BinaryRoutes.AvatarSubject, maxSizeBytes, cancellationToken);
+        if (refusal is not null)
         {
-            return PayloadTooLarge(maxSizeBytes);
-        }
-
-        var bodySizeFeature = request.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
-        if (bodySizeFeature is { IsReadOnly: false })
-        {
-            bodySizeFeature.MaxRequestBodySize = transportBound;
-        }
-
-        if (!request.HasFormContentType)
-        {
-            return Results.BadRequest(new { message = "Expected multipart/form-data with a single file field." });
-        }
-
-        var form = await request.ReadFormAsync(
-            new FormOptions { MultipartBodyLengthLimit = transportBound }, cancellationToken);
-        var file = form.Files.Count > 0 ? form.Files[0] : null;
-        if (file is null || file.Length == 0)
-        {
-            return Results.BadRequest(new { message = "No file provided." });
-        }
-
-        if (file.Length > maxSizeBytes)
-        {
-            return PayloadTooLarge(maxSizeBytes);
+            return refusal;
         }
 
         // Fully buffered on purpose: the cap above bounds this (5 MiB default), and
         // decoding + content hashing need the whole payload. The processor's own
         // dimension/memory limits bound what decoding this buffer can cost.
         byte[] bytes;
-        await using (var content = file.OpenReadStream())
+        await using (var content = file!.OpenReadStream())
         using (var buffer = new MemoryStream((int)file.Length))
         {
             await content.CopyToAsync(buffer, cancellationToken);
@@ -152,10 +124,13 @@ public static class AvatarEndpoints
         // The only failure shape is Validation (self-only by construction leaves no
         // permission to deny), which §7 excludes from audit - same as the GitLab
         // settings mutations. Success is audited by the domain-event pipeline inside
-        // the service, in the same transaction as the row.
+        // the service, in the same transaction as the row. Every other kind the shared
+        // map covers - Forbidden, ReadOnlyReplica, NotFound, NameTaken - is
+        // structurally unreachable here: these routes take no target user and no
+        // space, so there is no grant to fail and no replica to refuse.
         return result.IsSuccess
             ? Results.Ok(new { hasAvatar = true })
-            : ErrorResult(result.Error);
+            : BinaryRoutes.ErrorResult(result.Error);
     }
 
     [AuditAction("settings.avatar.cleared")]
@@ -176,7 +151,7 @@ public static class AvatarEndpoints
         var result = await avatarService.ClearAsync(actingUserId!.Value, auditContext!, cancellationToken);
         return result.IsSuccess
             ? Results.Ok(new { hasAvatar = false })
-            : ErrorResult(result.Error);
+            : BinaryRoutes.ErrorResult(result.Error);
     }
 
     [NoAudit("Display data, same as the display-name resolution comment bylines use (design.md §8's nested-field rule): rendering an avatar is not a content read, and there is no per-avatar access rule whose decision a §7 row could record — see the class doc.")]
@@ -290,6 +265,11 @@ public static class AvatarEndpoints
                 // Unlike the authenticated route's structured 500: this protocol's
                 // consumers treat any non-200 as "use your fallback", so 404 is the
                 // honest wire answer - but the fault is still logged for operators.
+                // Local logs only: ServiceDefaults drops every log record emitted under
+                // this route from the OpenTelemetry pipeline, because the RequestPath
+                // scope on it would export the email hash (§15/§19). The exported
+                // signal for this route is the bounded gravatar counter; the same fault
+                // on the authenticated route above IS exported, with a user id.
                 httpContext.RequestServices.GetRequiredService<ILoggerFactory>()
                     .CreateLogger("RocketWiki.Api.Avatars")
                     .LogError("Avatar for user {UserId} exists but has no matching object in storage (gravatar route).", blobMissing.UserId);
@@ -334,20 +314,4 @@ public static class AvatarEndpoints
         return Results.Stream(found.Content, "image/png", fileDownloadName: null, lastModified: null, entityTag: etag);
     }
 
-    private static IResult ErrorResult(PageMutationError error)
-    {
-        var errorView = PageMutationErrorView.From(error);
-        return Results.Json(errorView, statusCode: errorView.Kind switch
-        {
-            "Forbidden" => StatusCodes.Status403Forbidden,
-            "NotFound" => StatusCodes.Status404NotFound,
-            _ => StatusCodes.Status400BadRequest,
-        });
-    }
-
-    private static IResult PayloadTooLarge(long maxSizeBytes) => Results.Problem(
-        title: "Avatar too large",
-        detail: $"The uploaded file exceeds the maximum avatar size of {maxSizeBytes} bytes.",
-        statusCode: StatusCodes.Status413PayloadTooLarge,
-        extensions: new Dictionary<string, object?> { ["maxSizeBytes"] = maxSizeBytes });
 }
