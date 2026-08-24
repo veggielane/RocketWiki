@@ -127,6 +127,88 @@ public class DomainEventAuditMapperTests
         Assert.Equal(Timestamp, auditEvent.TimestampUtc);
     }
 
+    // --- Page properties (design.md §20) ---------------------------------------------
+    // All four mappings are covered here deliberately: DomainEventAuditMapper.Describe's
+    // fall-through THROWS, so a missing case is a runtime failure on the mutation path
+    // rather than a compile error - these are the tests that catch it at build time.
+
+    [Fact]
+    public void PagePropertySetEvent_MapsToPagePropertySet_SubjectIsThePage_AndDetailsCarryKeyAndValue()
+    {
+        var pageId = Guid.NewGuid();
+        var keyId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+        var domainEvent = new PagePropertySetEvent(pageId, Guid.NewGuid(), "ENG", actorId, keyId, "Owner", "Ada Lovelace");
+
+        var auditEvent = DomainEventAuditMapper.ToAuditEvent(domainEvent, Context, Timestamp);
+
+        Assert.Equal("page.property.set", auditEvent.Action);
+        // No AuditSubjectType.Property exists (the list is page/space/attachment/
+        // comment/rule) - a value change is audited against the page whose metadata
+        // changed, the same judgement call the label mappings make.
+        Assert.Equal(AuditSubjectType.Page, auditEvent.SubjectType);
+        Assert.Equal(pageId, auditEvent.SubjectId);
+        Assert.Equal("ENG", auditEvent.SpaceKey);
+        Assert.Equal(actorId, auditEvent.UserId);
+
+        // The value belongs in the audit row: §7's record is of what changed, and the
+        // audit table is not telemetry (§15's rule is about traces and logs).
+        Assert.Contains("\"key\":\"Owner\"", auditEvent.DetailsJson);
+        Assert.Contains("\"value\":\"Ada Lovelace\"", auditEvent.DetailsJson);
+    }
+
+    [Fact]
+    public void PagePropertyRemovedEvent_MapsToPagePropertyRemove_WithKeyOnly()
+    {
+        var pageId = Guid.NewGuid();
+        var domainEvent = new PagePropertyRemovedEvent(pageId, Guid.NewGuid(), "ENG", Guid.NewGuid(), Guid.NewGuid(), "Owner");
+
+        var auditEvent = DomainEventAuditMapper.ToAuditEvent(domainEvent, Context, Timestamp);
+
+        Assert.Equal("page.property.remove", auditEvent.Action);
+        Assert.Equal(AuditSubjectType.Page, auditEvent.SubjectType);
+        Assert.Equal(pageId, auditEvent.SubjectId);
+        Assert.Contains("\"key\":\"Owner\"", auditEvent.DetailsJson);
+        // No value: the row is gone, and what it used to say is already in the earlier
+        // page.property.set row.
+        Assert.DoesNotContain("value", auditEvent.DetailsJson);
+    }
+
+    [Fact]
+    public void PagePropertyKeyCreatedEvent_MapsToPropertyKeyCreate_WithNoSubject_AndTheKeyInDetails()
+    {
+        var keyId = Guid.NewGuid();
+        var actorId = Guid.NewGuid();
+        var domainEvent = new PagePropertyKeyCreatedEvent(keyId, "Review Date", actorId);
+
+        var auditEvent = DomainEventAuditMapper.ToAuditEvent(domainEvent, Context, Timestamp);
+
+        Assert.Equal("property_key.create", auditEvent.Action);
+        // Registry vocabulary fits no AuditSubjectType - the custom-emoji precedent:
+        // subject null, the id in DetailsJson.
+        Assert.Null(auditEvent.SubjectType);
+        Assert.Null(auditEvent.SubjectId);
+        Assert.Null(auditEvent.SpaceKey);
+        Assert.Equal(actorId, auditEvent.UserId);
+        Assert.Contains("\"key\":\"Review Date\"", auditEvent.DetailsJson);
+        Assert.Contains(keyId.ToString(), auditEvent.DetailsJson);
+    }
+
+    [Fact]
+    public void PagePropertyKeyDeletedEvent_MapsToPropertyKeyDelete_WithNoSubject_AndTheKeyInDetails()
+    {
+        var keyId = Guid.NewGuid();
+        var domainEvent = new PagePropertyKeyDeletedEvent(keyId, "Obsolete", Guid.NewGuid());
+
+        var auditEvent = DomainEventAuditMapper.ToAuditEvent(domainEvent, Context, Timestamp);
+
+        Assert.Equal("property_key.delete", auditEvent.Action);
+        Assert.Null(auditEvent.SubjectType);
+        Assert.Null(auditEvent.SubjectId);
+        Assert.Contains("\"key\":\"Obsolete\"", auditEvent.DetailsJson);
+        Assert.Contains(keyId.ToString(), auditEvent.DetailsJson);
+    }
+
     [Fact]
     public void SyncImportRefusedEvent_MapsToItsOwnAction_NeverSyncImportPlusDenied()
     {

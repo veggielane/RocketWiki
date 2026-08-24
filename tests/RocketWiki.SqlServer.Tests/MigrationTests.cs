@@ -39,7 +39,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260823134425_AddCustomEmojis", applied);
         Assert.Contains("20260823173233_AddPageRevisionContributors", applied);
         Assert.Contains("20260823180135_AlterPageEmbeddingToNativeVector", applied);
-        Assert.Equal(7, applied.Count);
+        Assert.Contains("20260824185208_AddPageProperties", applied);
+        Assert.Equal(8, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -164,6 +165,43 @@ public sealed class MigrationTests : SqlServerTestBase
             SELECT COUNT(*)
             FROM sys.foreign_keys
             WHERE parent_object_id = OBJECT_ID('dbo.PageRevisionContributors')
+              AND delete_referential_action_desc = 'NO_ACTION'
+            """));
+
+        // AddPageProperties (design.md §20): uniqueness lives on KeyNormalized, NOT on
+        // Key. That is the whole reason the normalized column exists — SQL Server's
+        // default collation is case-insensitive and SQLite's is not, so a unique index
+        // on the raw key would enforce a different rule on each provider. This tier is
+        // the only one that can prove the index landed unique on the real engine, and
+        // the negative assertion (no unique index on Key) is what would catch someone
+        // "simplifying" the model back onto the collation.
+        Assert.Equal(1, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_PagePropertyKeys_KeyNormalized' AND is_unique = 1"));
+        Assert.Equal(0, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.indexes i
+            INNER JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            INNER JOIN sys.columns col ON col.object_id = ic.object_id AND col.column_id = ic.column_id
+            WHERE i.object_id = OBJECT_ID('dbo.PagePropertyKeys') AND i.is_unique = 1 AND col.name = 'Key'
+            """));
+
+        // Composite PK (PageId, PagePropertyKeyId) - one value per key per page, so
+        // "set" is an upsert - and all three FKs NO ACTION like every other FK.
+        var pagePropertyPkColumns = await ExecuteColumnAsync("""
+            SELECT col.name
+            FROM sys.indexes i
+            INNER JOIN sys.index_columns ic
+                ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            INNER JOIN sys.columns col
+                ON col.object_id = ic.object_id AND col.column_id = ic.column_id
+            WHERE i.object_id = OBJECT_ID('dbo.PageProperties') AND i.is_primary_key = 1
+            ORDER BY ic.key_ordinal
+            """);
+        Assert.Equal(["PageId", "PagePropertyKeyId"], pagePropertyPkColumns);
+        Assert.Equal(3, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.foreign_keys
+            WHERE parent_object_id = OBJECT_ID('dbo.PageProperties')
               AND delete_referential_action_desc = 'NO_ACTION'
             """));
 

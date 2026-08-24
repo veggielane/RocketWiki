@@ -16,7 +16,7 @@ namespace RocketWiki.Data;
 /// stay local to each instance, and there's no SyncEventType for space metadata at
 /// all). Everything else this instance models a domain event for - page
 /// upserts/moves/deletes/restores, comments, page-restriction changes, label
-/// attach/detach, attachment add/delete - does.
+/// attach/detach, page-property set/remove, attachment add/delete - does.
 ///
 /// Payloads are built from entities already tracked in THIS unit of work, not from the
 /// domain event itself - domain events stay lean/audit-focused (see
@@ -161,6 +161,12 @@ internal static class SyncOutboxWriter
         // Label row by name from an attach event's payload, so nothing is lost.
         LabelAttachedEvent => SyncEventType.Labels,
         LabelDetachedEvent => SyncEventType.Labels,
+        // Page properties travel with content (design.md §20). PagePropertyKeyCreated/
+        // Deleted are deliberately absent, for the same reason LabelCreatedEvent is: the
+        // registry is instance-local vocabulary with no space to journal against, and the
+        // import side materializes whatever key a value event names.
+        PagePropertySetEvent => SyncEventType.PageProperties,
+        PagePropertyRemovedEvent => SyncEventType.PageProperties,
         AttachmentAddedEvent => SyncEventType.Attachment,
         AttachmentDeletedEvent => SyncEventType.Attachment,
         _ => null,
@@ -182,6 +188,8 @@ internal static class SyncOutboxWriter
         AccessRuleChangedEvent e => e.SpaceKey,
         LabelAttachedEvent e => e.SpaceKey,
         LabelDetachedEvent e => e.SpaceKey,
+        PagePropertySetEvent e => e.SpaceKey,
+        PagePropertyRemovedEvent e => e.SpaceKey,
         AttachmentAddedEvent e => e.SpaceKey,
         AttachmentDeletedEvent e => e.SpaceKey,
         _ => null,
@@ -221,6 +229,18 @@ internal static class SyncOutboxWriter
             new { pageId = e.PageId, labelName = e.LabelName, action = "attach" }, PayloadOptions),
         LabelDetachedEvent e => JsonSerializer.Serialize(
             new { pageId = e.PageId, labelName = e.LabelName, action = "detach" }, PayloadOptions),
+
+        // The key's NAME crosses, never this instance's registry row id: the registry is
+        // instance-local (design.md §20), so the receiving instance may have never seen
+        // this key and has no row to point at. On import it finds-or-creates the key by
+        // normalized name before applying the value - exactly how ApplyLabelAsync matches
+        // labels. Sending the id instead would leave the property referencing nothing.
+        // pageId stays top-level so CollectAffectedPageIds can reindex/notify the page
+        // the same way it does for a label or comment event.
+        PagePropertySetEvent e => JsonSerializer.Serialize(
+            new { pageId = e.PageId, key = e.Key, value = e.Value, action = "set" }, PayloadOptions),
+        PagePropertyRemovedEvent e => JsonSerializer.Serialize(
+            new { pageId = e.PageId, key = e.Key, value = (string?)null, action = "remove" }, PayloadOptions),
 
         AttachmentAddedEvent e => SerializeAttachment(RequireTrackedAttachment(db, e.AttachmentId)),
         AttachmentDeletedEvent e => SerializeAttachment(RequireTrackedAttachment(db, e.AttachmentId)),

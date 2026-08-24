@@ -24,6 +24,11 @@ public sealed class PageType : ObjectType<Page>
         descriptor.Ignore(p => p.ParentPage);
         descriptor.Ignore(p => p.ChildPages);
         descriptor.Ignore(p => p.PageLabels);
+        // Same reasoning as PageLabels: the raw join rows carry Page/PagePropertyKey
+        // navigations, and the field below re-exposes them as a flat projection instead
+        // (its camelCase name `pageProperties` doesn't collide with `properties`, so
+        // ignoring it first is harmless).
+        descriptor.Ignore(p => p.PageProperties);
         // Not a leak (ancestor ids of an already-viewable page aren't sensitive) - just
         // an unintended inference from the public GetAncestorIds() method that's tidier
         // left off an intentionally hand-curated schema.
@@ -72,6 +77,14 @@ public sealed class PageType : ObjectType<Page>
         descriptor.Field("labelDetails")
             .Type<NonNullType<ListType<NonNullType<ObjectType<LabelRef>>>>>()
             .ResolveWith<PageFieldResolvers>(r => r.GetLabelDetailsAsync(default!, default!, default));
+
+        // Structured key/value metadata (design.md §20). Visible to anyone who can view
+        // the page — properties carry no restriction of their own, same as labels
+        // (§6.4.2) — and batched through a grouped DataLoader so a list of pages costs
+        // one PageProperties query.
+        descriptor.Field("properties")
+            .Type<NonNullType<ListType<NonNullType<ObjectType<PagePropertyValue>>>>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetPropertiesAsync(default!, default!, default));
 
         // Viewer-relative watch state (design.md §8's known-deltas list); display of
         // the caller's own Watch row, no audit of its own - see the resolver's doc.

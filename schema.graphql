@@ -41,6 +41,7 @@ type Query {
   labels(spaceKey: String): [String!]! @cost(weight: "10")
   labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
+  pagePropertyKeys: [PagePropertyKeyRef!]! @cost(weight: "10")
   groups: [String!]! @cost(weight: "10")
   attributeRegistry: [AttributeDefinition!]! @cost(weight: "10")
   search(query: String!, spaceKey: String, labels: [String!], after: String): SearchConnection!
@@ -86,6 +87,14 @@ type Mutation {
   detachLabel(input: DetachLabelRequestInput!): DetachLabelPayload!
     @cost(weight: "10")
   markNotificationRead(input: MarkNotificationReadInput!): MarkNotificationReadPayload!
+    @cost(weight: "10")
+  setPageProperty(input: SetPagePropertyRequestInput!): SetPagePropertyPayload!
+    @cost(weight: "10")
+  removePageProperty(input: RemovePagePropertyRequestInput!): RemovePagePropertyPayload!
+    @cost(weight: "10")
+  createPagePropertyKey(input: CreatePagePropertyKeyRequestInput!): CreatePagePropertyKeyPayload!
+    @cost(weight: "10")
+  deletePagePropertyKey(keyId: UUID!): DeletePagePropertyKeyPayload!
     @cost(weight: "10")
   createSpace(
     input: CreateSpaceRequestInput!
@@ -246,6 +255,11 @@ type CreatePagePayload {
   error: PageMutationErrorView
 }
 
+type CreatePagePropertyKeyPayload {
+  propertyKey: PagePropertyKeyRef
+  error: PageMutationErrorView
+}
+
 type CreateSpacePayload {
   space: Space
   error: PageMutationErrorView
@@ -284,6 +298,11 @@ type DeleteCommentPayload {
 
 type DeletePagePayload {
   summary: PageDeleteSummary
+  error: PageMutationErrorView
+}
+
+type DeletePagePropertyKeyPayload {
+  deletedPropertyKeyId: UUID
   error: PageMutationErrorView
 }
 
@@ -421,6 +440,7 @@ type Page {
   attachments: [Attachment!]! @cost(weight: "10")
   labels: [String!]! @cost(weight: "10")
   labelDetails: [LabelRef!]! @cost(weight: "10")
+  properties: [PagePropertyValue!]! @cost(weight: "10")
   viewerIsWatching: Boolean! @cost(weight: "10")
   deletedBy: UserRef @cost(weight: "10")
   spaceKey: String! @cost(weight: "10")
@@ -482,6 +502,20 @@ type PageMutationErrorView {
   notFoundId: UUID
 }
 
+type PagePropertyKeyRef {
+  id: UUID!
+  key: String!
+  description: String
+  sortOrder: Int!
+}
+
+type PagePropertyValue {
+  keyId: UUID!
+  key: String!
+  value: String!
+  sortOrder: Int!
+}
+
 type PageRestoreSummary {
   rootPageId: UUID!
   restoredPageCount: Int!
@@ -525,6 +559,11 @@ type PageTreeNode {
 type PageTreeRestriction {
   ruleId: UUID!
   expressionJson: String!
+}
+
+type RemovePagePropertyPayload {
+  removedPropertyKeyId: UUID
+  error: PageMutationErrorView
 }
 
 type RenameSpacePayload {
@@ -581,6 +620,11 @@ type SearchPageInfo {
 
 type SetGitLabTokenPayload {
   tokenState: GitLabTokenState
+  error: PageMutationErrorView
+}
+
+type SetPagePropertyPayload {
+  property: PagePropertyValue
   error: PageMutationErrorView
 }
 
@@ -706,6 +750,11 @@ input CreateLabelRequestInput {
   name: String!
 }
 
+input CreatePagePropertyKeyRequestInput {
+  key: String!
+  description: String
+}
+
 input CreatePageRequestInput {
   spaceId: UUID!
   parentPageId: UUID
@@ -781,6 +830,11 @@ input MovePageRequestInput {
   newSortOrder: Int!
 }
 
+input RemovePagePropertyRequestInput {
+  pageId: UUID!
+  pagePropertyKeyId: UUID!
+}
+
 input RenameSpaceRequestInput {
   spaceId: UUID!
   name: String!
@@ -803,6 +857,12 @@ input RestoreSpaceRequestInput {
 
 input SetGitLabTokenRequestInput {
   token: String!
+}
+
+input SetPagePropertyRequestInput {
+  pageId: UUID!
+  pagePropertyKeyId: UUID!
+  value: String!
 }
 
 input UnwatchPageRequestInput {

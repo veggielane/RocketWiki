@@ -39,6 +39,9 @@ public class Page
     public ICollection<Comment> Comments { get; set; } = new List<Comment>();
     public ICollection<PageLabel> PageLabels { get; set; } = new List<PageLabel>();
 
+    /// <summary>Structured key/value metadata (design.md §20) — never page content, never in the Markdown.</summary>
+    public ICollection<PageProperty> PageProperties { get; set; } = new List<PageProperty>();
+
     /// <summary>Page-restriction AccessRules attached directly to this page (not ancestors).</summary>
     public ICollection<AccessRule> Restrictions { get; set; } = new List<AccessRule>();
 
