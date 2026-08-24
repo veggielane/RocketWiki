@@ -92,12 +92,84 @@ public static class ConversionCorpus
             """),
 
         new CorpusFixture(
-            "table-merged-cells-degraded",
+            "table-merged-cells",
             """
             <table>
               <tbody>
                 <tr><th>A</th><th>B</th><th>C</th></tr>
                 <tr><td colspan="2">Merged AB</td><td>c1</td></tr>
+              </tbody>
+            </table>
+            """),
+
+        new CorpusFixture(
+            "table-rowspan",
+            """
+            <table>
+              <tbody>
+                <tr><th>Stage</th><th>Result</th></tr>
+                <tr><td rowspan="2">Boost</td><td>go</td></tr>
+                <tr><td>hold</td></tr>
+              </tbody>
+            </table>
+            """),
+
+        new CorpusFixture(
+            "table-combined-spans",
+            """
+            <table>
+              <tbody>
+                <tr><th>Stage</th><th>Result</th><th>Notes</th></tr>
+                <tr><td colspan="2" rowspan="2">Coast</td><td>n1</td></tr>
+                <tr><td>n2</td></tr>
+              </tbody>
+            </table>
+            """),
+
+        new CorpusFixture(
+            "table-alignment",
+            """
+            <table>
+              <tbody>
+                <tr><th style="text-align: left;">Left</th><th style="text-align: center;">Center</th><th style="text-align: right;">Right</th><th>Default</th></tr>
+                <tr><td>1</td><td>2</td><td>3</td><td>4</td></tr>
+              </tbody>
+            </table>
+            """),
+
+        new CorpusFixture(
+            "table-cell-line-breaks",
+            """
+            <table>
+              <tbody>
+                <tr><th>Step</th><th>Detail</th></tr>
+                <tr><td><p>first</p><p>second</p></td><td>go<br/>go</td></tr>
+              </tbody>
+            </table>
+            """),
+
+        new CorpusFixture(
+            "table-escapes",
+            """
+            <table>
+              <tbody>
+                <tr><th>Expr</th><th>Marker</th></tr>
+                <tr><td>a | b</td><td>^^</td></tr>
+              </tbody>
+            </table>
+            """),
+
+        // The one merged-cell shape that still degrades: a rowspan crossing the
+        // header/body boundary (design.md §4 forbids it). Split on conversion — the
+        // header keeps the content, the covered body cell is a real empty — and the
+        // degraded output must itself round-trip, which is why it stays in the corpus.
+        new CorpusFixture(
+            "table-header-boundary-rowspan-degraded",
+            """
+            <table>
+              <tbody>
+                <tr><th rowspan="2">Metric</th><th>Q1</th></tr>
+                <tr><td>42</td></tr>
               </tbody>
             </table>
             """),

@@ -66,12 +66,15 @@ public class DocumentTests : ConverterTestBase
 
         var result = Convert(xhtml);
 
-        // Underline, no-header-row, merged-cells, and unsupported-macro should each be reported.
-        Assert.Equal(4, result.Report.Issues.Count);
+        // Underline, no-header-row, and unsupported-macro should each be reported. The
+        // merged cell is NOT an issue any more — colspans convert faithfully to the §4
+        // adjacent-pipe syntax (see TableTests), so reporting one would be a false alarm.
+        Assert.Equal(3, result.Report.Issues.Count);
         Assert.Contains(result.Report.Issues, i => i.Message.Contains("Underline"));
         Assert.Contains(result.Report.Issues, i => i.Message.Contains("no header row"));
-        Assert.Contains(result.Report.Issues, i => i.Message.Contains("merged cells", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.Report.Issues, i => i.Category == IssueCategory.UnsupportedMacro);
+        Assert.DoesNotContain(result.Report.Issues, i => i.Message.Contains("merged", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("| Header-less merged table ||\n", result.Markdown);
         Assert.True(result.Report.HasLossyIssues);
     }
 }

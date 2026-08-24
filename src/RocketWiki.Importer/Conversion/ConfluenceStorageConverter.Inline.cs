@@ -60,7 +60,9 @@ public sealed partial class ConfluenceStorageConverter
             case "code":
                 return WrapCode(MarkdownText.NormalizeWhitespace(element.Value));
             case "br":
-                return "  \n";
+                // Inside a table cell a newline would end the row, so §4 defines the
+                // in-cell line break as a literal lowercase <br>.
+                return state.InTableCell ? "<br>" : "  \n";
             case "a":
                 return RenderAnchor(element, state);
             case "img":

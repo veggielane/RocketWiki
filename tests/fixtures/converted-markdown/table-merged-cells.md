@@ -1,3 +1,3 @@
 | A | B | C |
 | --- | --- | --- |
-| Merged AB |  | c1 |
+| Merged AB || c1 |

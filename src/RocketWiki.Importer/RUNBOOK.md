@@ -59,8 +59,10 @@ the whole point of the report existing.
    usually means that target wasn't part of this export, or was migrated in a different
    batch. Cross-space links will always show up here; that's expected, not a bug.
 5. **Individual "pages needing review" entries**, read for real. This is where lossy
-   conversions (merged table cells, underline, panel titles, remapped `tip` macros — see
-   design.md §4 and the converter's own report categories) and skipped pages/comments with
+   conversions (underline, panel titles, remapped `tip` macros, table merges split at the
+   header/body boundary — merged cells, column alignment, and in-cell line breaks now
+   convert faithfully and no longer appear here; see design.md §4 and the converter's own
+   report categories) and skipped pages/comments with
    their specific reasons live. The dry run includes a converted-Markdown preview for
    exactly this reason — you're meant to read what the page will actually look like, not
    just that something about it is imperfect.

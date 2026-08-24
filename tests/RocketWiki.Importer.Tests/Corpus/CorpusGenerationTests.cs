@@ -59,13 +59,17 @@ public class CorpusGenerationTests
         Assert.True(stale.Count == 0, $"Stale corpus file(s) with no matching fixture (delete or rename the fixture that used to produce them): {string.Join(", ", stale)}");
     }
 
-    /// <summary>Every pipe-table row in the document should have the same number of '|' separators as the first — a cheap structural sanity check independent of the converter's own table tests.</summary>
+    /// <summary>Every pipe-table row in the document should have the same number of '|' separators as
+    /// the first — a cheap structural sanity check independent of the converter's own table tests.
+    /// Escaped pipes ("\|") are cell text, not separators, so they are stripped before counting; the
+    /// count stays consistent under colspan merges too, because an adjacent-pipe merge contributes
+    /// exactly as many pipes as the cells it replaces.</summary>
     private static void AssertConsistentTableColumnCounts(string fixtureName, string markdown)
     {
         var pipeRowPipeCounts = markdown
             .Split('\n')
             .Where(line => line.StartsWith('|'))
-            .Select(line => line.Count(c => c == '|'))
+            .Select(line => line.Replace("\\|", string.Empty).Count(c => c == '|'))
             .ToList();
 
         if (pipeRowPipeCounts.Count == 0)

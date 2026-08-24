@@ -16,6 +16,13 @@ internal sealed class RenderState
     /// <summary>Titles of the headings currently in scope, index 0 = the current h1 ancestor.</summary>
     public List<string> HeadingPath { get; } = [];
 
+    /// <summary>
+    /// True while rendering table-cell content, where a line break must be the literal
+    /// <c>&lt;br&gt;</c> of design.md §4 (a real newline would end the table row) instead
+    /// of GFM's trailing-two-spaces hard break. Set and restored by the table renderer.
+    /// </summary>
+    public bool InTableCell { get; set; }
+
     public string? CurrentLocation => HeadingPath.Count == 0 ? null : string.Join(" > ", HeadingPath);
 
     /// <summary>Updates the heading path when a heading of the given level (1-6) is rendered.</summary>
