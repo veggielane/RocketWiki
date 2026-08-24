@@ -1,0 +1,14 @@
+{
+  "name": "rocketwiki-a11y",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Browser-layer accessibility checks: Playwright + @axe-core/playwright over the rendered capture set (see docs/ACCESSIBILITY.md). A separate package so Playwright and its browser downloads stay out of the SPA's dependency tree — web/'s npm ci and vitest run never pay for them.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1"
+  }
+}

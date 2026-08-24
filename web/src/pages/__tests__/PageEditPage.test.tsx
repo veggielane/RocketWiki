@@ -8,6 +8,7 @@ import { yDocToProsemirrorJSON } from '@tiptap/y-tiptap'
 import { PageEditPage } from '../PageEditPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { jsonToMarkdown } from '../../editor/markdown/toMarkdown'
+import { expectNoAxeViolations } from '../../test/axe'
 import { FakePresenceTransport } from '../../realtime/FakePresenceTransport'
 import type { MutationErrorFragment } from '../../graphql/generated/graphql'
 
@@ -120,6 +121,15 @@ function renderEditPage(updateError: MutationErrorFragment | null, options: Rend
  * its default `null` (refused) here, so all of these exercise the SOLO
  * path — which must behave exactly as before co-editing existed.
  */
+describe('PageEditPage accessibility', () => {
+  it('has no axe violations with the editor and formatting toolbar mounted', async () => {
+    renderEditPage(null)
+    await screen.findByRole('toolbar', { name: 'Formatting' })
+    await screen.findByRole('button', { name: 'Save' })
+    await expectNoAxeViolations()
+  })
+})
+
 describe('PageEditPage typed mutation errors', () => {
   it('ReadOnlyReplica opens the replica dialog with originInstanceId carried through — never a raw error', async () => {
     renderEditPage(mutationError({ kind: 'ReadOnlyReplica', spaceId: 'space-1', originInstanceId: 'LOW' }))

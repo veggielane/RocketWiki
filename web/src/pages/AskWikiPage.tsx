@@ -8,6 +8,7 @@ import {
   CircularProgress,
   Link,
   List,
+  ListItem,
   ListItemButton,
   ListItemText,
   Paper,
@@ -208,21 +209,24 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
               </Typography>
               <List dense disablePadding>
                 {result.citations.map((citation, i) => (
-                  <ListItemButton
-                    key={i}
-                    component={RouterLink}
-                    to={citationHref(citation)}
-                    sx={{ borderRadius: 1, alignItems: 'baseline', gap: 1 }}
-                  >
-                    <Typography variant="caption" color="primary" sx={{ fontWeight: 700, flexShrink: 0 }}>
-                      S{i + 1}
-                    </Typography>
-                    <ListItemText
-                      primary={citation.title}
-                      secondary={citation.headingPath.length > 0 ? citation.headingPath.join(' › ') : undefined}
-                      sx={{ my: 0 }}
-                    />
-                  </ListItemButton>
+                  // ListItem (an <li>) wraps the link — a bare <a> as a direct
+                  // <ul> child is invalid list markup (WCAG 1.3.1 / axe "list").
+                  <ListItem key={i} disablePadding>
+                    <ListItemButton
+                      component={RouterLink}
+                      to={citationHref(citation)}
+                      sx={{ borderRadius: 1, alignItems: 'baseline', gap: 1 }}
+                    >
+                      <Typography variant="caption" color="primary" sx={{ fontWeight: 700, flexShrink: 0 }}>
+                        S{i + 1}
+                      </Typography>
+                      <ListItemText
+                        primary={citation.title}
+                        secondary={citation.headingPath.length > 0 ? citation.headingPath.join(' › ') : undefined}
+                        sx={{ my: 0 }}
+                      />
+                    </ListItemButton>
+                  </ListItem>
                 ))}
               </List>
             </Box>

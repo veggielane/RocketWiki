@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { PagePermissionsPage } from '../PagePermissionsPage'
 import { createMockUrqlClient, type MockClient } from '../../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../../test/axe'
 
 type Restriction = {
   ruleId: string
@@ -100,6 +101,12 @@ describe('PagePermissionsPage', () => {
     renderPage({ canManageAccess: false })
     expect(await screen.findByText(/doesn't exist, or you don't have access/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save restrictions' })).not.toBeInTheDocument()
+  })
+
+  it('has no axe violations with own + inherited restrictions listed', async () => {
+    renderPage({ restrictions: [inheritedRestriction, ownRestriction] })
+    await screen.findByText('Inherited from Restricted Parent')
+    await expectNoAxeViolations()
   })
 
   it('lists inherited restrictions flagged with their source page, read-only with an edit-at-source link', async () => {

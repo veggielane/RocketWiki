@@ -1,14 +1,12 @@
 import '@testing-library/jest-dom/vitest'
-// Type augmentation only (adds `.toHaveNoViolations()` to Vitest's Assertion
-// type) — the runtime matcher is registered explicitly below, per
-// vitest-axe's own docs, since this file is imported for its side effect on
-// types rather than to get the matcher itself.
-import 'vitest-axe/extend-expect'
-import * as axeMatchers from 'vitest-axe/matchers'
-import { afterEach, expect } from 'vitest'
+// Accessibility assertions: no matcher registration here. vitest-axe's
+// `toHaveNoViolations` augmentation targeted the pre-Vitest-4 assertion
+// interface (registered but untyped), so it was replaced with a plain
+// helper — import { expectNoAxeViolations } from '../test/axe' — which
+// also centralizes the WCAG 2.2 AA tag set and the documented jsdom rule
+// exclusions in one place. See docs/ACCESSIBILITY.md.
+import { afterEach } from 'vitest'
 import { cleanup } from '@testing-library/react'
-
-expect.extend(axeMatchers)
 
 // `@testing-library/react`'s auto-cleanup only self-registers when it finds
 // a *global* `afterEach` (Jest-style). This project runs Vitest with

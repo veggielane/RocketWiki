@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { RuleBuilder } from '../RuleBuilder'
 import { allOf, group, user } from '../ruleTypes'
 import { serializeRuleNode } from '../ruleSerializer'
+import { expectNoAxeViolations } from '../../test/axe'
 import type { ValidationResult } from '../builderState'
 
 /**
@@ -36,6 +37,19 @@ describe('RuleBuilder', () => {
     const last = onChange.mock.calls.at(-1)![0]
     expect(last.valid).toBe(true)
     if (last.valid) expect(last.node).toEqual(user('sub-42'))
+  })
+
+  it('has no axe violations with a nested AND/OR group rendered', async () => {
+    render(
+      <RuleBuilder
+        initialValue={allOf([group('engineering'), user('sub-1')])}
+        onChange={() => {}}
+        groups={['engineering']}
+        attributes={[]}
+      />,
+    )
+    screen.getByLabelText('User ID')
+    await expectNoAxeViolations()
   })
 
   it('disables removing the only child of a group, and enables it once a sibling is added', async () => {

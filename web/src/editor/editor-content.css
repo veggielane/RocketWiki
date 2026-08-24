@@ -156,6 +156,65 @@
   gap: 0.4em;
 }
 
+/* Task checkboxes: the native 13×13 checkbox fails WCAG 2.5.8 Target Size
+   (24×24 minimum — flagged by the browser a11y layer). Custom-drawn: the
+   INPUT is the full 24×24 target, the visible 16×16 box + checkmark are
+   pseudo-elements centered inside it. appearance:none removes the native
+   focus ring, so :focus-visible restores one (WCAG 2.4.7). */
+.rw-editor-content ul[data-type='taskList'] li > label {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.rw-editor-content ul[data-type='taskList'] li > label > input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-content: center;
+  cursor: pointer;
+}
+
+.rw-editor-content ul[data-type='taskList'] li > label > input[type='checkbox']::before {
+  content: '';
+  grid-area: 1 / 1;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid var(--rw-muted, #5b6270);
+  border-radius: 3px;
+}
+
+.rw-editor-content ul[data-type='taskList'] li[data-checked='true'] > label > input[type='checkbox']::before {
+  border-color: var(--rw-link, #1a56db);
+  background: var(--rw-link, #1a56db);
+}
+
+.rw-editor-content ul[data-type='taskList'] li[data-checked='true'] > label > input[type='checkbox']::after {
+  content: '';
+  grid-area: 1 / 1;
+  place-self: center;
+  width: 4px;
+  height: 9px;
+  margin-top: -2px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.rw-editor-content ul[data-type='taskList'] li > label > input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--rw-link, #1a56db);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+.rw-editor-content ul[data-type='taskList'] li > div {
+  /* Keep the line's text vertically centered against the 24px box. */
+  padding-top: 2px;
+}
+
 /* --- Diagrams (mermaid preview + draw.io) ------------------------------- */
 
 .rw-mermaid-block {

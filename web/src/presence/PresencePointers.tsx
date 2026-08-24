@@ -1,4 +1,5 @@
 import { Box } from '@mui/material'
+import { readableTextOn } from './readableTextOn'
 import type { PointerPosition } from '../realtime/types'
 
 export interface PresencePointersProps {
@@ -18,6 +19,13 @@ export interface PresencePointersProps {
  * intercept the real viewer's own mouse/click events.
  */
 export function PresencePointers({ pointers }: PresencePointersProps) {
+  // No overlay when nobody's pointing: a full-bleed positioned layer over
+  // the page (even an empty, pointer-events:none one) also makes axe unable
+  // to compute the background of everything underneath it, silently turning
+  // the whole page's contrast checks into abstentions.
+  if (pointers.size === 0) {
+    return null
+  }
   return (
     <Box sx={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 10 }}>
       {[...pointers.entries()].map(([userId, position]) => (
@@ -41,7 +49,10 @@ export function PresencePointers({ pointers }: PresencePointersProps) {
               px: 0.5,
               borderRadius: 0.5,
               fontSize: '0.7rem',
-              color: '#fff',
+              // Server-assigned colour, arbitrary hue: label text must adapt
+              // (black or white, whichever clears WCAG 1.4.3's 4.5:1) —
+              // fixed white fails on light hues. See readableTextOn.ts.
+              color: readableTextOn(position.colour),
               bgcolor: position.colour,
               whiteSpace: 'nowrap',
             }}

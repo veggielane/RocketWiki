@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useState } from 'react'
 import { Avatar, type AvatarProps } from '@mui/material'
 import { colourForUser } from '../presence/colourForUser'
+import { readableTextOn } from '../presence/readableTextOn'
 import { getAvatarUrl, peekAvatarUrl } from './avatarCache'
 
 export interface UserAvatarProps extends Omit<AvatarProps, 'src' | 'children'> {
@@ -68,10 +69,28 @@ export const UserAvatar = forwardRef<HTMLDivElement, UserAvatarProps>(function U
   const outerSx = Array.isArray(sx) ? sx : [sx]
 
   if (url) {
-    return <Avatar ref={ref} src={url} alt={displayName} sx={[sizeSx, ...outerSx]} {...rest} />
+    // role="img" + aria-label on the ROOT: MUI renders <div><img/></div>,
+    // and when a Tooltip wraps this avatar it injects aria-label onto that
+    // outer div — prohibited on a generic div (axe aria-prohibited-attr,
+    // WCAG 4.1.2). Naming the root makes the injected label unnecessary and
+    // valid; the inner img keeps its alt for direct-image semantics.
+    return (
+      <Avatar ref={ref} role="img" aria-label={displayName} src={url} alt={displayName} sx={[sizeSx, ...outerSx]} {...rest} />
+    )
   }
   return (
-    <Avatar ref={ref} alt={displayName} sx={[{ bgcolor: initialsColour }, sizeSx, ...outerSx]} {...rest}>
+    // Initials colour is derived/server-assigned and can land on a light
+    // hue — the initial adapts to black/white for WCAG 1.4.3 contrast.
+    // role="img": the initials div is an identity graphic; a generic div
+    // may not carry aria-label (WCAG 4.1.2 — and MUI's Tooltip injects one
+    // when this avatar is its child, flagged by axe aria-prohibited-attr).
+    <Avatar
+      ref={ref}
+      role="img"
+      aria-label={displayName}
+      sx={[{ bgcolor: initialsColour, color: readableTextOn(initialsColour) }, sizeSx, ...outerSx]}
+      {...rest}
+    >
       {(displayName || '?').slice(0, 1).toUpperCase()}
     </Avatar>
   )

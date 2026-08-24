@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { PageViewPage } from '../PageViewPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../../test/axe'
 
 // The page view joins presence on mount; tests must never construct a real
 // SignalR connection (design.md §8 — and jsdom has no hub to reach).
@@ -94,6 +95,15 @@ function renderPage({
  * canEdit/canComment/canManageAccess fields decide what's offered, so the
  * page never offers what the server would refuse.
  */
+describe('PageViewPage accessibility', () => {
+  it('has no axe violations with full edit affordances, comments, and attachments', async () => {
+    renderPage({ pageOverrides: { canEdit: true, canComment: true, canManageAccess: true } })
+    await screen.findByRole('heading', { name: 'Runbook' })
+    await screen.findByRole('button', { name: 'Move' })
+    await expectNoAxeViolations()
+  })
+})
+
 describe('PageViewPage permission-driven affordances', () => {
   it('hides Move/Edit/Delete/Permissions and the composer from a viewer-only user', async () => {
     renderPage()

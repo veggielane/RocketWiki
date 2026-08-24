@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Provider as UrqlProvider } from 'urql'
 import { AdminEmojisPage } from '../AdminEmojisPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../../test/axe'
 import { resetEmojiBlobCache } from '../../emoji/emojiBlobCache'
 
 /**
@@ -70,6 +71,18 @@ describe('AdminEmojisPage — list', () => {
     expect((await screen.findAllByText(':rocket:')).length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: 'Delete :rocket:' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Delete :tada:' })).toBeInTheDocument()
+  })
+})
+
+describe('AdminEmojisPage — accessibility', () => {
+  it('has no axe violations, including with the delete confirmation open', async () => {
+    stubMutationFetch(() => new Response(null, { status: 204 }))
+    renderPage()
+    await screen.findAllByText(':rocket:')
+    await expectNoAxeViolations()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete :rocket:' }))
+    await screen.findByText('Delete :rocket:?')
+    await expectNoAxeViolations()
   })
 })
 

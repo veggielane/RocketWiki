@@ -11,6 +11,7 @@ import {
   DialogContentText,
   DialogTitle,
   List,
+  ListItem,
   ListItemButton,
   ListItemText,
   Skeleton,
@@ -271,12 +272,16 @@ export function SpaceBrowserPage() {
           ) : (
             <List dense disablePadding>
               {labelMatches.map((match) => (
-                <ListItemButton key={match.id} component={RouterLink} to={`/pages/${match.id}`}>
-                  <ListItemText
-                    primary={match.title}
-                    secondary={match.path.length > 0 ? match.path.join(' / ') : undefined}
-                  />
-                </ListItemButton>
+                // ListItem (an <li>) wraps the link — a bare <a> as a direct
+                // <ul> child is invalid list markup (WCAG 1.3.1 / axe "list").
+                <ListItem key={match.id} disablePadding>
+                  <ListItemButton component={RouterLink} to={`/pages/${match.id}`}>
+                    <ListItemText
+                      primary={match.title}
+                      secondary={match.path.length > 0 ? match.path.join(' / ') : undefined}
+                    />
+                  </ListItemButton>
+                </ListItem>
               ))}
             </List>
           )}

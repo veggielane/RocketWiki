@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import type { Editor } from '@tiptap/core'
 import { MenuItem, MenuList, Paper, Popper } from '@mui/material'
 import { getEmojiRegistry } from '../../emoji/registry'
@@ -14,6 +14,7 @@ import { acceptEmojiSuggestion, type EmojiSuggestionState } from './EmojiSuggest
  */
 export function EmojiSuggestionPopup({ editor }: { editor: Editor }) {
   const [, setTick] = useState(0)
+  const listboxId = useId()
 
   useEffect(() => {
     const repaint = () => setTick((t) => t + 1)
@@ -22,13 +23,37 @@ export function EmojiSuggestionPopup({ editor }: { editor: Editor }) {
     editor.on('blur', repaint)
     return () => {
       editor.off('transaction', repaint)
-      editor.off('focus', repaint)
       editor.off('blur', repaint)
+      editor.off('focus', repaint)
     }
   }, [editor])
 
   const state = editor.storage.rwEmojiSuggestion as EmojiSuggestionState | undefined
-  if (!state?.active || state.items.length === 0 || editor.isDestroyed || !editor.isFocused) {
+  const open = Boolean(state?.active && state.items.length > 0 && !editor.isDestroyed && editor.isFocused)
+  const activeIndex = state?.index ?? 0
+
+  // WCAG 4.1.2 (combobox pattern): DOM focus stays in the contenteditable
+  // (role="textbox") while arrow keys move the highlight, so the textbox
+  // must point a screen reader at the active option via
+  // aria-activedescendant, and at the listbox via aria-controls. Synced as
+  // attributes on the ProseMirror DOM — the popup owns them only while open.
+  useEffect(() => {
+    const dom: HTMLElement | undefined = editor.isDestroyed ? undefined : editor.view.dom
+    if (!dom) return
+    if (open) {
+      dom.setAttribute('aria-controls', listboxId)
+      dom.setAttribute('aria-activedescendant', `${listboxId}-option-${activeIndex}`)
+    } else {
+      dom.removeAttribute('aria-controls')
+      dom.removeAttribute('aria-activedescendant')
+    }
+    return () => {
+      dom.removeAttribute('aria-controls')
+      dom.removeAttribute('aria-activedescendant')
+    }
+  }, [editor, open, activeIndex, listboxId])
+
+  if (!open || !state) {
     return null
   }
 
@@ -50,10 +75,11 @@ export function EmojiSuggestionPopup({ editor }: { editor: Editor }) {
       sx={{ zIndex: (theme) => theme.zIndex.modal }}
     >
       <Paper elevation={4}>
-        <MenuList dense role="listbox" aria-label="Emoji suggestions">
+        <MenuList dense role="listbox" id={listboxId} aria-label="Emoji suggestions">
           {state.items.map((name, i) => (
             <MenuItem
               key={name}
+              id={`${listboxId}-option-${i}`}
               role="option"
               aria-selected={i === state.index}
               selected={i === state.index}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { axe } from 'vitest-axe'
+import { expectNoAxeViolations } from '../../test/axe'
 import { StaleRevisionDialog, type StaleRevisionDialogProps } from '../StaleRevisionDialog'
 
 function renderDialog(overrides: Partial<StaleRevisionDialogProps> = {}) {
@@ -91,11 +91,8 @@ describe('StaleRevisionDialog', () => {
 
   it('has no axe violations with the diff open', async () => {
     renderDialog({ theirTitle: 'Runbook v2' })
-    // color-contrast needs real rendering, which jsdom doesn't do. Asserting
-    // on `violations` directly (rather than the toHaveNoViolations matcher,
-    // whose type augmentation predates Vitest 4) prints the offending rules
-    // on failure.
-    const results = await axe(document.body, { rules: { 'color-contrast': { enabled: false } } })
-    expect(results.violations).toEqual([])
+    // Shared WCAG 2.2 AA policy + documented jsdom exclusions (test/axe.ts);
+    // the browser layer (web/a11y) re-checks this dialog with contrast on.
+    await expectNoAxeViolations()
   })
 })

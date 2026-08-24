@@ -6,6 +6,7 @@ import {
   Breadcrumbs,
   Button,
   List,
+  ListItem,
   ListItemButton,
   ListItemText,
   Skeleton,
@@ -105,29 +106,32 @@ export function SearchPage() {
           </Typography>
           <List disablePadding>
             {edges.map(({ node, cursor }) => (
-              <ListItemButton
-                key={cursor}
-                component={RouterLink}
-                to={`/pages/${node.page.id}#${node.anchorId}`}
-                sx={{ display: 'block', py: 1.5 }}
-              >
-                {node.headingPath.length > 0 && (
-                  <Breadcrumbs separator="›" sx={{ fontSize: '0.75rem', mb: 0.5 }}>
-                    <Typography variant="caption" color="text.secondary">
-                      {node.page.title}
-                    </Typography>
-                    {node.headingPath.map((heading, i) => (
-                      <Typography key={i} variant="caption" color="text.secondary">
-                        {heading}
+              // ListItem (an <li>) wraps the link — a bare <a> as a direct
+              // <ul> child is invalid list markup (WCAG 1.3.1 / axe "list").
+              <ListItem key={cursor} disablePadding>
+                <ListItemButton
+                  component={RouterLink}
+                  to={`/pages/${node.page.id}#${node.anchorId}`}
+                  sx={{ display: 'block', py: 1.5 }}
+                >
+                  {node.headingPath.length > 0 && (
+                    <Breadcrumbs separator="›" sx={{ fontSize: '0.75rem', mb: 0.5 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        {node.page.title}
                       </Typography>
-                    ))}
-                  </Breadcrumbs>
-                )}
-                <ListItemText
-                  primary={node.headingPath.length > 0 ? node.headingPath[node.headingPath.length - 1] : node.page.title}
-                  secondary={node.snippet}
-                />
-              </ListItemButton>
+                      {node.headingPath.map((heading, i) => (
+                        <Typography key={i} variant="caption" color="text.secondary">
+                          {heading}
+                        </Typography>
+                      ))}
+                    </Breadcrumbs>
+                  )}
+                  <ListItemText
+                    primary={node.headingPath.length > 0 ? node.headingPath[node.headingPath.length - 1] : node.page.title}
+                    secondary={node.snippet}
+                  />
+                </ListItemButton>
+              </ListItem>
             ))}
           </List>
           {edges.length === 0 && <Typography color="text.secondary">No results for "{query}".</Typography>}

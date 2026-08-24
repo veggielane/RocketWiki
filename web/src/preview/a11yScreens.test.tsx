@@ -1,0 +1,554 @@
+// The accessibility capture set — the browser a11y layer's input (see
+// docs/ACCESSIBILITY.md and web/a11y/). A deliberately more comprehensive
+// sibling of captureScreens.test.tsx: every major screen plus the portal
+// surfaces (notification popover, move dialog, stale-revision dialog), each
+// rendered in BOTH themes — dark-mode contrast is where audits usually
+// bleed — with real components, real staged data, and the repo's real
+// stylesheets embedded.
+//
+// Two jobs in one file, by design:
+//  1. Always (every `npm test`): each LIGHT screen gets the shared jsdom axe
+//     pass (test/axe.ts — WCAG 2.2 AA tags minus the documented jsdom
+//     exclusions). This is the component layer's whole-page sweep, covering
+//     pages that have no dedicated test file (search, trash, audit log...).
+//     Dark variants render but skip the jsdom axe run: axe-core sees the
+//     same DOM structure in both themes and everything theme-dependent
+//     (color-contrast) is excluded in jsdom anyway — the browser layer
+//     checks BOTH theme variants with contrast on.
+//  2. With PREVIEW_OUT=<dir>: writes one self-contained HTML file per
+//     screen+theme for web/a11y's Playwright + axe run (real Chromium, real
+//     CSS, color-contrast and target-size enforced there).
+//
+// Staged data only — no backend. Avatars/emojis are inline SVG data URIs.
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { afterAll, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { createMemoryRouter, RouterProvider } from 'react-router-dom'
+import { Provider as UrqlProvider } from 'urql'
+import { AppShell } from '../app/AppShell'
+import { PageViewPage } from '../pages/PageViewPage'
+import { PageEditPage } from '../pages/PageEditPage'
+import { SearchPage } from '../pages/SearchPage'
+import { SettingsPage } from '../pages/SettingsPage'
+import { AskWikiPage } from '../pages/AskWikiPage'
+import { AdminEmojisPage } from '../pages/AdminEmojisPage'
+import { PagePermissionsPage } from '../pages/PagePermissionsPage'
+import { SpaceBrowserPage } from '../pages/SpaceBrowserPage'
+import { TrashPage } from '../pages/TrashPage'
+import { AuditLogPage } from '../pages/AuditLogPage'
+import { MovePageDialog } from '../pages/MovePageDialog'
+import { StaleRevisionDialog } from '../pages/StaleRevisionDialog'
+import { ColorModeProvider } from '../theme/ColorModeProvider'
+import { createMockUrqlClient } from '../test/mockUrqlClient'
+import { expectNoAxeViolations } from '../test/axe'
+import { setEmojiRegistry } from '../emoji/registry'
+import { group } from '../access/ruleTypes'
+import type { FakePresenceTransport } from '../realtime/FakePresenceTransport'
+
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  addListener: () => {},
+  removeListener: () => {},
+  onchange: null,
+  dispatchEvent: () => false,
+})) as never
+
+const face = (bg: string, letter: string) =>
+  `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" rx="64" fill="${bg}"/><text x="64" y="86" font-family="Arial" font-size="64" fill="#fff" text-anchor="middle">${letter}</text></svg>`,
+  )}`
+
+const emojiImg = (bg: string, glyph: string) =>
+  `data:image/svg+xml;utf8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="14" fill="${bg}"/><text x="32" y="46" font-size="40" text-anchor="middle">${glyph}</text></svg>`,
+  )}`
+
+vi.mock('react-oidc-context', () => ({
+  useAuth: () => ({
+    isAuthenticated: true,
+    isLoading: false,
+    user: { profile: { name: 'Chris', preferred_username: 'chris', email: 'chris@rocketwiki.dev' } },
+    signinRedirect: () => Promise.resolve(),
+    signoutRedirect: () => Promise.resolve(),
+    removeUser: () => Promise.resolve(),
+  }),
+}))
+
+// A handle onto the presence fake so the page-view screen can stage live
+// viewers + pointers (the presence-label contrast surface).
+const realtime = vi.hoisted(() => ({ presence: undefined as unknown }))
+vi.mock('../realtime/transports', async () => {
+  const { FakePresenceTransport } = await import('../realtime/FakePresenceTransport')
+  const { FakeNotificationsTransport } = await import('../realtime/FakeNotificationsTransport')
+  const presence = new FakePresenceTransport()
+  realtime.presence = presence
+  const notifications = new FakeNotificationsTransport()
+  return {
+    getDefaultPresenceTransport: () => presence,
+    getDefaultCoEditTransport: () => presence,
+    getDefaultNotificationsTransport: () => notifications,
+    createPresenceTransport: () => presence,
+    createNotificationsTransport: () => notifications,
+  }
+})
+
+const faceFor = (userId: string) =>
+  userId === 'user-ada' ? face('#7b1fa2', 'A') : userId === 'user-grace' ? face('#00695c', 'G') : face('#1565c0', 'C')
+const emojiFor = (name: string) => (name === 'rocket' ? emojiImg('#263238', '🚀') : emojiImg('#f9a825', '🍌'))
+
+vi.mock('../avatars/avatarCache', () => ({
+  getAvatarUrl: (userId: string) => Promise.resolve(faceFor(userId)),
+  peekAvatarUrl: (userId: string) => faceFor(userId),
+  invalidateAvatar: () => {},
+  resetAvatarCache: () => {},
+}))
+
+vi.mock('../emoji/emojiBlobCache', () => ({
+  getEmojiUrl: (name: string) => Promise.resolve(emojiFor(name)),
+  peekEmojiUrl: (name: string) => emojiFor(name),
+  resetEmojiBlobCache: () => {},
+}))
+
+const pageContent = [
+  '# Stage two ignition anomaly review :rocket:',
+  '',
+  'The 14 August static fire showed a **270 ms ignition delay** on the stage',
+  'two vacuum engine. This page tracks the investigation — see `PT-201` for',
+  'the inlet pressure channel.',
+  '',
+  '## Findings so far',
+  '',
+  '- Turbopump inlet pressure sagged during chill-in :banana:',
+  '- Igniter feed line showed a transient the telemetry filter smoothed over',
+  '',
+  '## Corrective actions',
+  '',
+  '- [x] Re-run chill-in with extended pre-press hold',
+  '- [ ] Add an unfiltered channel for igniter feed pressure',
+  '',
+  ':::info',
+  'Full telemetry lives on the test-stand share; ask in #prop-test before',
+  'the Friday review.',
+  ':::',
+  '',
+  '```python',
+  'redline = 24.1  # bar',
+  'if pt201 < redline:',
+  '    hold_prepress()',
+  '```',
+  '',
+  '| Sensor | Nominal | Observed |',
+  '| --- | --- | --- |',
+  '| PT-201 | 24.1 bar | 21.8 bar |',
+  '| TT-118 | 90.4 K | 92.5 K |',
+  '',
+].join('\n')
+
+const page = {
+  id: 'page-1',
+  spaceId: 'space-eng',
+  spaceKey: 'PROP',
+  title: 'Stage two ignition anomaly review',
+  slug: 'stage-two-ignition-anomaly',
+  content: pageContent,
+  currentRevisionNumber: 7,
+  canEdit: true,
+  canComment: true,
+  canManageAccess: true,
+  viewerIsWatching: true,
+  labels: ['anomaly', 'propulsion'],
+  labelDetails: [
+    { id: 'l-1', spaceId: 'space-eng', name: 'anomaly' },
+    { id: 'l-2', spaceId: 'space-eng', name: 'propulsion' },
+  ],
+  parent: { id: 'page-0', title: 'Static fire campaign', slug: 'static-fire-campaign' },
+  children: [
+    { id: 'page-2', title: 'Telemetry review notes', slug: 'telemetry-review-notes' },
+    { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3' },
+  ],
+  comments: [
+    {
+      id: 'c1',
+      parentCommentId: null,
+      body: 'The PT-201 sag matches the qual stand in March — pulling those runs for comparison :rocket:',
+      isDeleted: false,
+      authorUserId: 'user-ada',
+      author: { id: 'user-ada', displayName: 'Ada Lovelace', hasAvatar: true },
+      createdAtUtc: '2026-08-21T09:14:00Z',
+      editedAtUtc: null,
+    },
+    {
+      id: 'c2',
+      parentCommentId: 'c1',
+      body: 'Pulled them — same signature, smaller amplitude. Linked on the child page.',
+      isDeleted: false,
+      authorUserId: 'user-grace',
+      author: { id: 'user-grace', displayName: 'Grace Hopper', hasAvatar: true },
+      createdAtUtc: '2026-08-21T11:02:00Z',
+      editedAtUtc: null,
+    },
+  ],
+  attachments: [
+    {
+      id: 'att-1',
+      fileName: 'static-fire-14aug-summary.pdf',
+      contentType: 'application/pdf',
+      sizeBytes: 1_834_022,
+      uploadedBy: { id: 'user-ada', displayName: 'Ada Lovelace', hasAvatar: true },
+    },
+  ],
+}
+
+const spaces = [
+  { id: 'space-eng', key: 'PROP', name: 'Propulsion', description: 'Engines, test stands, anomalies', isReplica: false, originInstanceId: 'LOW' },
+  { id: 'space-av', key: 'AV', name: 'Avionics', description: 'Flight computers and harnessing', isReplica: false, originInstanceId: 'LOW' },
+  { id: 'space-mirror', key: 'RANGE', name: 'Range Safety (mirror)', description: null, isReplica: true, originInstanceId: 'RANGE-LOW' },
+]
+
+const spaceTreeNodes = [
+  {
+    id: 'page-1',
+    title: 'Stage two ignition anomaly review',
+    slug: 'stage-two-ignition-anomaly',
+    sortOrder: 0,
+    hasRestrictions: false,
+    labels: ['anomaly'],
+    children: [
+      {
+        id: 'page-4',
+        title: 'Export-controlled test data',
+        slug: 'export-controlled-test-data',
+        sortOrder: 0,
+        hasRestrictions: true,
+        labels: [],
+        children: [],
+      },
+    ],
+  },
+  { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', sortOrder: 1, hasRestrictions: false, labels: [], children: [] },
+]
+
+function mockClient() {
+  return createMockUrqlClient((name) => {
+    if (name === 'PageById') return { page }
+    if (name === 'CurrentUser')
+      return {
+        me: {
+          id: 'sub-chris', email: 'chris@rocketwiki.dev', name: 'Chris', groups: ['propulsion'],
+          isAuthenticated: true, isInstanceAdmin: true, localUserId: 'user-chris', hasAvatar: true,
+        },
+      }
+    if (name === 'SpaceReplicaBanner')
+      return { space: { id: 'space-eng', key: 'PROP', isReplica: false, originInstanceId: 'LOW' } }
+    if (name === 'SpaceList') return { spaces }
+    if (name === 'PersistedNotifications')
+      return {
+        notifications: [
+          { id: 'n1', type: 'mention', pageId: 'page-1', spaceKey: 'PROP', pageTitle: 'Stage two ignition anomaly review', actorDisplayName: 'Ada Lovelace', createdAtUtc: '2026-08-23T08:30:00Z', readAtUtc: null },
+          { id: 'n2', type: 'page_watched_changed', pageId: 'page-2', spaceKey: 'PROP', pageTitle: 'Telemetry review notes', actorDisplayName: 'Grace Hopper', createdAtUtc: '2026-08-22T15:04:00Z', readAtUtc: '2026-08-22T16:00:00Z' },
+        ],
+      }
+    if (name === 'SpaceTreeForMove') return { pageTree: [] }
+    if (name === 'SpaceLabelDetails') return { labelDetails: page.labelDetails }
+    if (name === 'CustomEmojis')
+      return { customEmojis: [{ name: 'rocket', etag: '"r1"' }, { name: 'banana', etag: '"b1"' }] }
+    if (name === 'GitLabStatus')
+      return { gitlabStatus: { configured: true, baseUrl: 'https://gitlab.internal', viewerHasToken: true } }
+    if (name === 'SearchPages')
+      return {
+        search: {
+          totalCount: 12,
+          pageInfo: { hasNextPage: true, endCursor: 'c10' },
+          edges: [
+            { cursor: 'c1', node: { snippet: '…showed a 270 ms ignition delay on the stage two vacuum engine…', headingPath: ['Stage two ignition anomaly review'], anchorId: 'stage-two-ignition-anomaly-review', page: { id: 'page-1', title: 'Stage two ignition anomaly review', spaceKey: 'PROP' } } },
+            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP' } } },
+            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP' } } },
+          ],
+        },
+      }
+    if (name === 'SearchFacets')
+      return { spaces: spaces.map((s) => ({ key: s.key, name: s.name })), labels: ['anomaly', 'propulsion', 'ops'] }
+    if (name === 'AskWiki')
+      return {
+        askWiki: {
+          answer:
+            'The 270 ms delay traces to turbopump inlet pressure sagging below the chill-in redline [S1]. ' +
+            'The igniter feed transient was masked by the telemetry filter — the unfiltered channel confirms it [S2].',
+          citations: [
+            { pageId: 'page-1', title: 'Stage two ignition anomaly review', headingPath: ['Findings so far'], anchorId: 'findings-so-far' },
+            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed' },
+          ],
+          unavailable: null,
+        },
+      }
+    if (name === 'SpaceTree')
+      return {
+        space: {
+          id: 'space-eng', key: 'PROP', name: 'Propulsion', description: 'Engines, test stands, anomalies',
+          homepageId: null, isReplica: false, originInstanceId: 'LOW', viewerIsWatching: true, grants: [{ id: 'g1' }],
+        },
+      }
+    if (name === 'SpacePageTree') return { pageTree: spaceTreeNodes }
+    if (name === 'SpaceTrash')
+      return {
+        space: {
+          id: 'space-eng',
+          key: 'PROP',
+          name: 'Propulsion',
+          trashedPages: [
+            { id: 'page-9', title: 'Legacy igniter notes', parentPageId: null, ancestorPath: [], deleteBatchId: 'batch-1', deletedAtUtc: '2026-08-10T09:00:00Z', deletedBy: { id: 'user-ada', displayName: 'Ada Lovelace', hasAvatar: true } },
+            { id: 'page-10', title: 'Legacy igniter appendix', parentPageId: 'page-9', ancestorPath: ['page-9'], deleteBatchId: 'batch-1', deletedAtUtc: '2026-08-10T09:00:00Z', deletedBy: { id: 'user-ada', displayName: 'Ada Lovelace', hasAvatar: true } },
+            { id: 'page-11', title: 'Old chill-in checklist', parentPageId: null, ancestorPath: [], deleteBatchId: 'batch-2', deletedAtUtc: '2026-08-18T14:30:00Z', deletedBy: { id: 'user-grace', displayName: 'Grace Hopper', hasAvatar: true } },
+          ],
+        },
+      }
+    if (name === 'AuditEvents')
+      return {
+        auditEvents: {
+          totalCount: 3,
+          pageInfo: { hasNextPage: false, endCursor: null },
+          nodes: [
+            { id: 'a1', timestampUtc: '2026-08-23T10:14:00Z', userId: 'user-ada', userDisplayName: 'Ada Lovelace', action: 'page.view', subjectType: 'PAGE', subjectId: 'page-1', spaceKey: 'PROP', outcome: 'SUCCESS', channel: 'WEB', mcpClient: null, detailsJson: null },
+            { id: 'a2', timestampUtc: '2026-08-23T10:15:20Z', userId: 'user-grace', userDisplayName: 'Grace Hopper', action: 'page.view', subjectType: 'PAGE', subjectId: 'page-4', spaceKey: 'PROP', outcome: 'DENIED', channel: 'WEB', mcpClient: null, detailsJson: null },
+            { id: 'a3', timestampUtc: '2026-08-23T11:02:11Z', userId: null, userDisplayName: null, action: 'space.sync', subjectType: 'SPACE', subjectId: 'space-mirror', spaceKey: 'RANGE', outcome: 'SUCCESS', channel: 'SYNC', mcpClient: null, detailsJson: null },
+          ],
+        },
+      }
+    if (name === 'PagePermissions')
+      return {
+        page: {
+          id: 'page-1',
+          title: 'Stage two ignition anomaly review',
+          spaceKey: 'PROP',
+          canManageAccess: true,
+          restrictions: [
+            { ruleId: 'rule-own', pageId: 'page-1', pageTitle: 'Stage two ignition anomaly review', inherited: false, action: 'VIEW', expressionJson: '{"group":"export-cleared"}', createdAtUtc: '2026-08-01T00:00:00Z', updatedAtUtc: '2026-08-01T00:00:00Z', updatedByDisplayName: 'Ada Lovelace' },
+            { ruleId: 'rule-inh', pageId: 'page-0', pageTitle: 'Static fire campaign', inherited: true, action: 'VIEW', expressionJson: '{"group":"propulsion"}', createdAtUtc: '2026-07-01T00:00:00Z', updatedAtUtc: '2026-07-01T00:00:00Z', updatedByDisplayName: null },
+          ],
+        },
+      }
+    if (name === 'RuleVocabulary')
+      return {
+        groups: ['propulsion', 'export-cleared'],
+        attributeRegistry: [{ key: 'clearance', displayName: 'Clearance', allowedValues: ['itar', 'public'] }],
+      }
+    if (name === 'EffectivePermission')
+      return {
+        effectivePermission: {
+          userId: 'sub-chris', userDisplayName: 'Chris', spaceRole: 'SPACE_ADMIN', isReplicaSpace: false,
+          canView: true, canEdit: true, viewDenialReason: null, editDenialReason: null,
+          viewRestrictions: [], editRestrictions: [],
+        },
+      }
+    return undefined
+  })
+}
+
+type Mode = 'light' | 'dark'
+
+function shell(mode: Mode, initialPath: string, routePath: string, element: React.ReactElement) {
+  window.localStorage.setItem('rocketwiki:color-mode', mode)
+  const router = createMemoryRouter(
+    [{ path: '/', element: <AppShell />, children: [{ path: routePath, element }] }],
+    { initialEntries: [initialPath] },
+  )
+  return (
+    <ColorModeProvider>
+      <UrqlProvider value={mockClient().client}>
+        <RouterProvider router={router} />
+      </UrqlProvider>
+    </ColorModeProvider>
+  )
+}
+
+function standalone(mode: Mode, element: React.ReactElement) {
+  window.localStorage.setItem('rocketwiki:color-mode', mode)
+  return <ColorModeProvider>{element}</ColorModeProvider>
+}
+
+const settle = () => new Promise((r) => setTimeout(r, 400))
+
+interface Screen {
+  /** File stem — becomes `<stem>--<mode>.html`. */
+  name: string
+  render: (mode: Mode) => React.ReactElement
+  /** Post-render staging (open menus, type questions, emit presence…). */
+  stage?: () => Promise<void> | void
+}
+
+const restrictedRule = {
+  ruleId: 'export-control',
+  pageId: 'restricted-parent',
+  pageTitle: 'Export-Controlled Docs',
+  action: 'view' as const,
+  expression: group('export-cleared'),
+}
+
+const SCREENS: Screen[] = [
+  {
+    name: 'page-view',
+    render: (mode) => shell(mode, '/pages/page-1', 'pages/:pageId', <PageViewPage />),
+    stage: async () => {
+      // Live presence viewers (the header avatar strip). Deliberately NO
+      // staged pointers: the pointer overlay is a full-bleed positioned
+      // layer, and anything axe sees overlapping text makes it ABSTAIN from
+      // contrast checks for the whole page underneath — one staged pointer
+      // would silently blind 1.4.3 coverage of the entire capture. Pointer
+      // LABEL contrast is guaranteed by construction instead:
+      // presence/readableTextOn.ts + its exhaustive contrast tests.
+      const presence = realtime.presence as FakePresenceTransport
+      act(() => {
+        presence.emitViewers([
+          { userId: 'user-ada', displayName: 'Ada Lovelace', colour: 'hsl(60, 70%, 45%)' },
+          { userId: 'user-grace', displayName: 'Grace Hopper', colour: 'hsl(174, 70%, 45%)' },
+          { userId: 'user-chris', displayName: 'Chris', colour: 'hsl(240, 70%, 45%)' },
+        ])
+      })
+      await settle()
+    },
+  },
+  {
+    // The full editor surface: formatting toolbar (icon buttons, toggle
+    // groups), TipTap content with tables/callouts/code, and the save bar —
+    // the browser layer's contrast + target-size coverage for the editor.
+    name: 'page-edit',
+    render: (mode) => shell(mode, '/pages/page-1/edit', 'pages/:pageId/edit', <PageEditPage />),
+  },
+  { name: 'search', render: (mode) => shell(mode, '/search?q=ignition', 'search', <SearchPage />) },
+  { name: 'settings', render: (mode) => shell(mode, '/settings', 'settings', <SettingsPage />) },
+  {
+    name: 'ask',
+    render: (mode) => shell(mode, '/ask', 'ask', <AskWikiPage />),
+    stage: async () => {
+      const box = document.querySelector('textarea:not([aria-hidden])')
+      if (box) {
+        fireEvent.change(box, { target: { value: 'Why did the stage two ignition delay?' } })
+        fireEvent.keyDown(box, { key: 'Enter', code: 'Enter' })
+      }
+      await settle()
+    },
+  },
+  { name: 'admin-emojis', render: (mode) => shell(mode, '/admin/emojis', 'admin/emojis', <AdminEmojisPage />) },
+  {
+    name: 'permissions',
+    render: (mode) => shell(mode, '/pages/page-1/permissions', 'pages/:pageId/permissions', <PagePermissionsPage />),
+  },
+  { name: 'space-browser', render: (mode) => shell(mode, '/spaces/PROP', 'spaces/:spaceKey', <SpaceBrowserPage />) },
+  { name: 'trash', render: (mode) => shell(mode, '/spaces/PROP/trash', 'spaces/:spaceKey/trash', <TrashPage />) },
+  { name: 'audit-log', render: (mode) => shell(mode, '/admin/audit', 'admin/audit', <AuditLogPage />) },
+  {
+    name: 'notification-bell-open',
+    render: (mode) => shell(mode, '/pages/page-1', 'pages/:pageId', <PageViewPage />),
+    stage: async () => {
+      fireEvent.click(await screen.findByRole('button', { name: /^Notifications \(/ }))
+      await settle()
+    },
+  },
+  {
+    name: 'move-dialog',
+    render: (mode) =>
+      standalone(
+        mode,
+        <MovePageDialog
+          open
+          onClose={() => {}}
+          pageTitle="Stage two ignition anomaly review"
+          currentAncestorRestrictions={[]}
+          targetOptions={[
+            { id: 'open-parent', title: 'Open Parent', ancestorRestrictions: [] },
+            { id: 'restricted-parent', title: 'Export-Controlled Docs', ancestorRestrictions: [restrictedRule] },
+          ]}
+          onConfirm={() => {}}
+        />,
+      ),
+    stage: async () => {
+      // Select the restricted target so the visibility-change warning shows.
+      const input = screen.getByLabelText('New parent')
+      fireEvent.mouseDown(input)
+      fireEvent.change(input, { target: { value: 'Export-Controlled' } })
+      fireEvent.click(screen.getByText('Export-Controlled Docs'))
+      await settle()
+    },
+  },
+  {
+    name: 'stale-revision-dialog',
+    render: (mode) =>
+      standalone(
+        mode,
+        <StaleRevisionDialog
+          open
+          currentRevisionNumber={7}
+          yourTitle="Stage two ignition anomaly review"
+          yourDraft={'shared context line\nmy corrective action\n'}
+          theirTitle="Stage two ignition anomaly review (v2)"
+          theirContent={'shared context line\ntheir corrective action\n'}
+          onOverwriteAnyway={() => {}}
+          onCopyAndCancel={() => {}}
+          onKeepEditing={() => {}}
+        />,
+      ),
+  },
+]
+
+const captured: { file: string; html: string; styles: string }[] = []
+
+for (const mode of ['light', 'dark'] as const) {
+  for (const spec of SCREENS) {
+    it(
+      `${spec.name} (${mode})${mode === 'light' ? ' — jsdom axe pass' : ''}`,
+      async () => {
+        setEmojiRegistry([
+          { name: 'rocket', etag: '"r1"' },
+          { name: 'banana', etag: '"b1"' },
+        ])
+        render(spec.render(mode))
+        await settle()
+        await spec.stage?.()
+
+        // Snapshot BOTH the DOM and the Emotion styles while mounted —
+        // MUI's CssBaseline globals (body background/color per theme) are
+        // removed on unmount, so a post-cleanup snapshot would strip the
+        // dark theme's page background.
+        captured.push({
+          file: `${spec.name}--${mode}.html`,
+          html: document.body.innerHTML, // body, not container: portals (menus/dialogs) live beside the root
+          styles: Array.from(document.head.querySelectorAll('style'))
+            .map((s) => s.outerHTML)
+            .join('\n'),
+        })
+
+        if (mode === 'light') {
+          await expectNoAxeViolations(document.body)
+        }
+        cleanup()
+      },
+      30_000,
+    )
+  }
+}
+
+afterAll(() => {
+  const outDir = process.env.PREVIEW_OUT
+  if (!outDir) return
+
+  // Plain-CSS imports (Vite) don't run under vitest — embed the repo's real
+  // stylesheets explicitly, same as captureScreens.test.tsx.
+  const cssFiles = ['../index.css', '../editor/editor-content.css'].map((rel) =>
+    readFileSync(new URL(rel, import.meta.url), 'utf8'),
+  )
+  mkdirSync(outDir, { recursive: true })
+  for (const s of captured) {
+    // data-theme mirrors what ColorModeProvider stamps on the live
+    // documentElement — editor-content.css themes on it, and the attribute
+    // lives OUTSIDE body.innerHTML, so the template must carry it.
+    const mode = s.file.endsWith('--dark.html') ? 'dark' : 'light'
+    writeFileSync(
+      join(outDir, s.file),
+      `<!doctype html><html lang="en" data-theme="${mode}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>RocketWiki — ${s.file.replace('.html', '')}</title><style>${cssFiles.join('\n')}</style>${s.styles}</head><body>${s.html}</body></html>`,
+    )
+  }
+})
