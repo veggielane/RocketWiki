@@ -17,6 +17,12 @@ in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 | Docker | any recent | the full Aspire stack **and** the SQL Server test tier — both optional; everything else works without it |
 | Helm | 4.x | only if you touch `deploy/helm` (`helm lint --strict`) |
 
+The first two are pinned in-repo rather than left to convention: `global.json`
+accepts any 10.0 feature band and refuses anything else (a 9.x SDK fails with
+a message naming the requirement instead of a confusing build error), and
+`.nvmrc` is the single source of truth for the Node major — CI reads it via
+`node-version-file` rather than repeating "24" per job.
+
 ## The 90-second loop (no Docker required)
 
 ```bash
@@ -154,6 +160,14 @@ FTS-enabled image, with a guard that fails the job if the tier skipped and
 uploaded engine logs on failure), and `a11y` (the real-Chromium
 Playwright + axe pass over every screen in both themes — see the
 accessibility section above).
+
+All jobs are read-only (`permissions: contents: read`), bounded by
+`timeout-minutes` so a hang fails in tens of minutes rather than the
+six-hour default, and superseded runs cancel — the `sqlserver` job boots a
+real database per run, so stacked runs on rapid pushes are the expensive
+kind of waste. Action versions are kept current by `.github/dependabot.yml`
+(grouped weekly); before it existed, `ci.yml` sat three majors behind
+`docs.yml` on the actions they share.
 
 ## Optional local extras
 

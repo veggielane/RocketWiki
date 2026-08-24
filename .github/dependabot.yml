@@ -1,0 +1,49 @@
+# Why this file exists: ci.yml sat three major versions behind docs.yml on
+# every shared action (checkout/setup-node v4 vs v7) because nothing watched
+# them. Grouped updates keep that from recurring without one PR per package.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dotnet:
+        patterns: ['*']
+    ignore:
+      # ImageSharp 4.x requires a build-time license key (design.md §19); the
+      # 3.1.x pin is deliberate, not stale. Revisit only with a licence in hand.
+      - dependency-name: SixLabors.ImageSharp
+        update-types: ['version-update:semver-major']
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    groups:
+      web:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /web/a11y
+    schedule:
+      interval: weekly
+    groups:
+      a11y:
+        patterns: ['*']
+
+  - package-ecosystem: npm
+    directory: /docs-site
+    schedule:
+      interval: weekly
+    groups:
+      docs-site:
+        patterns: ['*']

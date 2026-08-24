@@ -4,12 +4,29 @@ on:
   push:
   pull_request:
 
+# Least privilege: every job here only reads the repo. Nothing publishes,
+# comments, or writes releases — so no job needs more than this, and a
+# compromised action in the graph can't use the token to change anything.
+permissions:
+  contents: read
+
+# A push that supersedes an in-flight run cancels it. The sqlserver job pulls
+# and boots a real SQL Server per run, so stacking runs on rapid pushes is the
+# expensive kind of waste. (Docs deploys deliberately queue instead — see
+# docs.yml, where cancelling a half-finished Pages deploy would be worse.)
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # Generous vs the ~4 min this takes, tight vs the 6-hour default: the
+    # failure mode worth bounding is a hang, not a slow run.
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - run: dotnet build RocketWiki.sln --configuration Release
@@ -47,9 +64,12 @@ jobs:
     # pool is the isolation experiment; revisit when the mssql-docker 2025 boot
     # issues settle (see microsoft/mssql-docker#936/#940 for the genre).
     runs-on: ubuntu-22.04
+    # The longest job by far (image build + engine boot + migrations); the
+    # engine-boot crashes documented above hang rather than fail fast.
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
@@ -64,9 +84,9 @@ jobs:
       # daemon, where the ROCKETWIKI_MSSQL_FTS_IMAGE env below hands it to the
       # tests. If either the env or this step were ever lost, the fixture would
       # build the same Dockerfile itself - slower, never silently skipped.
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build FTS-enabled SQL Server image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: tests/RocketWiki.SqlServer.Tests/mssql-fts
           tags: rocketwiki-mssql-fts:ci
@@ -112,7 +132,7 @@ jobs:
       # population or engine-boot failure after the container is gone.
       - name: Upload SQL Server container logs and test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sqlserver-tier-diagnostics
           path: |
@@ -122,14 +142,17 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          # .nvmrc is the single source of truth for the Node major (it was
+          # previously repeated in three workflow blocks and nowhere else).
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
@@ -167,11 +190,12 @@ jobs:
   # report is uploaded as an artifact on failure.
   a11y:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             web/package-lock.json
@@ -194,7 +218,7 @@ jobs:
         working-directory: web/a11y
       - name: Cache Playwright Chromium
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
@@ -214,7 +238,7 @@ jobs:
         working-directory: web/a11y
       - name: Upload violations report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: a11y-violations-report
           path: |
