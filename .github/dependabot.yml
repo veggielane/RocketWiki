@@ -1,6 +1,13 @@
 # Why this file exists: ci.yml sat three major versions behind docs.yml on
 # every shared action (checkout/setup-node v4 vs v7) because nothing watched
 # them. Grouped updates keep that from recurring without one PR per package.
+#
+# Every group is minor+patch ONLY, deliberately. The first run grouped four
+# major bumps into a single web PR (typescript 6→7, graphql 16→17, jsdom
+# 29→30, @types/node 24→26) — exactly the changes that need to be read one at
+# a time, hidden behind a batch title. Majors are excluded from the groups so
+# dependabot raises each on its own branch, where CI failure points at one
+# package instead of four.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -10,6 +17,7 @@ updates:
     groups:
       actions:
         patterns: ['*']
+        update-types: ['minor', 'patch']
 
   - package-ecosystem: nuget
     directory: /
@@ -18,6 +26,7 @@ updates:
     groups:
       dotnet:
         patterns: ['*']
+        update-types: ['minor', 'patch']
     ignore:
       # ImageSharp 4.x requires a build-time license key (design.md §19); the
       # 3.1.x pin is deliberate, not stale. Revisit only with a licence in hand.
@@ -31,6 +40,7 @@ updates:
     groups:
       web:
         patterns: ['*']
+        update-types: ['minor', 'patch']
 
   - package-ecosystem: npm
     directory: /web/a11y
@@ -39,6 +49,7 @@ updates:
     groups:
       a11y:
         patterns: ['*']
+        update-types: ['minor', 'patch']
 
   - package-ecosystem: npm
     directory: /docs-site
@@ -47,3 +58,4 @@ updates:
     groups:
       docs-site:
         patterns: ['*']
+        update-types: ['minor', 'patch']
