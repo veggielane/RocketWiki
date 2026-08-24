@@ -172,14 +172,14 @@ describe('PageViewPage server-resolved read state', () => {
 })
 
 describe('PageViewPage replica banner (design.md §12)', () => {
-  it('proactively shows "mirrored from {origin} — read-only" on a replica space', async () => {
+  it('proactively shows "Replica of {origin} — read-only" on a replica space', async () => {
     renderPage({ isReplica: true })
-    expect(await screen.findByText(/Mirrored from LOW — read-only/)).toBeInTheDocument()
+    expect(await screen.findByText(/Replica of LOW — read-only/)).toBeInTheDocument()
   })
 
   it('shows no banner on a local space', async () => {
     renderPage()
     await screen.findByRole('heading', { name: 'Runbook' })
-    expect(screen.queryByText(/Mirrored from/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Replica of/)).not.toBeInTheDocument()
   })
 })

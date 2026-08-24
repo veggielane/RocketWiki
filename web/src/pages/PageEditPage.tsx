@@ -10,6 +10,7 @@ import {
   type MutationErrorFragment,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, asStaleRevision, describeMutationError, type StaleRevision } from '../graphql/mutationError'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { RichTextEditor, type RichTextEditorHandle, type CollabBinding } from '../editor/RichTextEditor'
 import { useCoEditSession } from '../editor/coedit/useCoEditSession'
 import { usePresence } from '../presence/usePresence'
@@ -92,6 +93,9 @@ export function PageEditPage() {
 
   const collabBinding = useMemo<CollabBinding | undefined>(() => {
     if ((session.status !== 'collaborating' && session.status !== 'evicted') || !session.provider) return undefined
+    // Loaded before the join resolved (same Promise.all as the provider) —
+    // this is belt-and-braces narrowing, not an extra wait state.
+    if (!session.extensionsModule) return undefined
     const userId = meData?.me.localUserId ?? undefined
     return {
       doc: session.provider.doc,
@@ -101,8 +105,9 @@ export function PageEditPage() {
         color: colourForUser(userId ?? meData?.me.id ?? ''),
         userId,
       },
+      extensionsModule: session.extensionsModule,
     }
-  }, [session.status, session.provider, meData])
+  }, [session.status, session.provider, session.extensionsModule, meData])
 
   const save = async (expectedRevisionNumber: number, options?: { auto?: boolean }) => {
     if (!page || !editorRef.current) return
@@ -301,7 +306,7 @@ export function PageEditPage() {
         </Button>
       </Stack>
 
-      <Snackbar open={sessionSaved !== null} autoHideDuration={6000} onClose={() => setSessionSaved(null)}>
+      <Snackbar open={sessionSaved !== null} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setSessionSaved(null)}>
         <Alert severity="success" onClose={() => setSessionSaved(null)}>
           {sessionSaved?.auto ? 'Autosaved' : 'Saved'} revision {sessionSaved?.revisionNumber}
           {sessionSaved && sessionSaved.contributors.length > 0

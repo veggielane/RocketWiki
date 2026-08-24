@@ -1,7 +1,7 @@
 import { MarkViewContent } from '@tiptap/react'
 import type { MarkViewProps } from '@tiptap/core'
 import { useGitLabIssueQuery, useGitLabStatusQuery } from '../../graphql/generated/graphql'
-import { describeUnavailable } from '../../gitlab/unavailableCopy'
+import { describeGitLabUnavailable } from '../../feedback/unavailableCopy'
 
 /**
  * Live rendering for the gitlabIssueLink mark (design.md §18). Page view
@@ -68,7 +68,7 @@ export function GitLabIssueLinkView({ mark, editor }: MarkViewProps) {
   }
 
   if (unavailable) {
-    const copy = describeUnavailable(unavailable.reason)
+    const copy = describeGitLabUnavailable(unavailable.reason)
     const message = copy.pointsToSettings ? `${copy.summary} (Settings → GitLab)` : copy.summary
     return (
       <span className="rw-gitlab-issue-link rw-gitlab-issue-degraded" title={message}>

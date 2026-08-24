@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
 import { useRestorePageMutation, useSpaceTrashQuery } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
+import { REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { groupTrashBatches } from '../trash/groupTrashBatches'
 import { describeExpiry } from '../trash/trashCountdown'
 import { UserAvatar } from '../avatars/UserAvatar'
@@ -51,7 +52,7 @@ export function TrashPage() {
     if (replica) {
       setMessage({
         severity: 'warning',
-        text: `This space is mirrored from ${replica.originInstanceId ?? 'its origin instance'} and is read-only here.`,
+        text: `${replicaBadgeLabel(replica.originInstanceId)}. ${REPLICA_EXPLANATION}`,
       })
       return
     }
@@ -84,7 +85,9 @@ export function TrashPage() {
       {message && <Alert severity={message.severity}>{message.text}</Alert>}
 
       {batches.length === 0 ? (
-        <Typography color="text.secondary">Trash is empty.</Typography>
+        <Typography color="text.secondary">
+          Trash is empty — deleted pages land here and can be restored for 30 days.
+        </Typography>
       ) : (
         <List>
           {batches.map((batch) => (

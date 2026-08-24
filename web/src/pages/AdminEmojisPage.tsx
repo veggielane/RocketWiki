@@ -206,7 +206,9 @@ export function AdminEmojisPage() {
 
       {error && <Alert severity="info">Couldn't load the emoji registry.</Alert>}
       {!error && rows.length === 0 && !fetching && (
-        <Typography color="text.secondary">No custom emojis yet.</Typography>
+        <Typography color="text.secondary">
+          No custom emojis yet — upload one above to make it available as :name: everywhere.
+        </Typography>
       )}
       {rows.length > 0 && (
         <Box sx={{ height: 52 + 40 * rows.length, maxWidth: 640 }}>

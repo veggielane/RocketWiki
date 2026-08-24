@@ -77,7 +77,7 @@ export function NotificationBell({ transport }: NotificationBellProps = {}) {
       >
         {notifications.length === 0 ? (
           <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1.5 }}>
-            No notifications.
+            No notifications — watch a page or space to hear when it changes.
           </Typography>
         ) : (
           <List dense aria-label="Notifications" sx={{ minWidth: 320, maxWidth: 400 }}>

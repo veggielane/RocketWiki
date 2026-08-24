@@ -56,7 +56,7 @@ describe('asStaleRevision', () => {
 })
 
 describe('asReadOnlyReplica', () => {
-  it('carries originInstanceId through — the replica dialog needs it for "mirrored from <origin>" (design.md §12)', () => {
+  it('carries originInstanceId through — the replica dialog needs it for "Replica of <origin> — read-only" (design.md §12)', () => {
     const result = asReadOnlyReplica(error({ kind: 'ReadOnlyReplica', spaceId: 'space-1', originInstanceId: 'LOW' }))
     expect(result).toEqual({ spaceId: 'space-1', originInstanceId: 'LOW' })
   })

@@ -17,6 +17,18 @@ describe('drawio diagram node — page view (read mode)', () => {
     expect(container.querySelector('object')).toBeNull()
   })
 
+  it('an author-supplied alt (the fence body alt: line) becomes the accessible name; the generic string is only the fallback', () => {
+    render(
+      <RichTextEditor
+        initialMarkdown={`\`\`\`drawio\nalt: Feed system overview\n${PAYLOAD}\n\`\`\`\n`}
+        editable={false}
+        showToolbar={false}
+      />,
+    )
+    expect(screen.getByRole('img', { name: 'Feed system overview' })).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'draw.io diagram' })).not.toBeInTheDocument()
+  })
+
   it('read mode offers no edit affordance', () => {
     render(<RichTextEditor initialMarkdown={DRAWIO_MD} editable={false} showToolbar={false} />)
     expect(screen.queryByRole('button', { name: 'Edit diagram' })).not.toBeInTheDocument()

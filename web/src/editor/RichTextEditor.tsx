@@ -1,50 +1,19 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { Extension, type AnyExtension } from '@tiptap/core'
 import { EditorContent, useEditor } from '@tiptap/react'
-import Image from '@tiptap/extension-image'
-import Collaboration from '@tiptap/extension-collaboration'
-import { CollaborationCaret } from '@tiptap/extension-collaboration-caret'
 import type { EditorView } from '@tiptap/pm/view'
 import type * as Y from 'yjs'
 import type { Awareness } from 'y-protocols/awareness'
 import { Alert, Box, Paper, Snackbar } from '@mui/material'
-import { codeBlockExtension, editorExtensions } from './extensions'
-import { AttachmentImage } from './nodes/AttachmentImage'
-import { MermaidCodeBlock } from './nodes/MermaidCodeBlock'
-import { DrawioDiagram } from './nodes/DrawioDiagram'
-import { DrawioDiagramWithView } from './nodes/DrawioDiagramWithView'
-import { GitLabIssueLink } from './marks/GitLabIssueLink'
-import { GitLabIssueLinkWithView } from './marks/GitLabIssueLinkWithView'
-import { renderCaret } from './coedit/caretRender'
-import { EmojiDecorations } from './emoji/EmojiDecorations'
-import { EmojiSuggestion } from './emoji/EmojiSuggestion'
+import { richTextExtensions } from './richTextExtensions'
 import { EmojiSuggestionPopup } from './emoji/EmojiSuggestionPopup'
 import { markdownToJson } from './markdown/fromMarkdown'
 import { jsonToMarkdown } from './markdown/toMarkdown'
 import { EditorToolbar } from './EditorToolbar'
 import { uploadAttachment } from '../attachments/attachmentApi'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { computeHeadingAnchors, type HeadingInfo } from './headingAnchors'
 import './editor-content.css'
-
-// Same node names/attrs/schema as the plain extensions used by
-// `editorExtensions` (see extensions.ts's comment) — only the rendering
-// differs, so these swaps never affect what gets serialized.
-//
-// The two emoji extensions appended at the end are schema-free (a
-// decoration renderer and the `:` autocomplete — see editor/emoji/): they
-// belong here with the other network-touching render concerns, not in the
-// shared `editorExtensions` list the round-trip suite validates, precisely
-// because they can never affect what gets serialized.
-const richTextExtensions = [
-  ...editorExtensions.map((ext) => {
-    if (ext === Image) return AttachmentImage
-    if (ext === codeBlockExtension) return MermaidCodeBlock
-    if (ext === DrawioDiagram) return DrawioDiagramWithView
-    if (ext === GitLabIssueLink) return GitLabIssueLinkWithView
-    return ext
-  }),
-  EmojiDecorations,
-  EmojiSuggestion,
-]
 
 export interface RichTextEditorHandle {
   /** Current document, serialized back to Markdown for saving. */
@@ -57,11 +26,27 @@ export interface RichTextEditorHandle {
  * structurally because all CollaborationCaret reads from it is
  * `.awareness`. `user` is this client's caret identity (see
  * coedit/caretRender.ts for what may and may not ride awareness).
+ *
+ * `extensionsModule` is the dynamically-loaded coedit/collabExtensions.ts:
+ * the CRDT machinery must never be statically reachable from this file
+ * (the one-renderer rule means every read-only page VIEW mounts this
+ * component, and a static Collaboration import dragged yjs/y-prosemirror —
+ * a multi-hundred-KB chunk — into the view path where it can never run;
+ * same air-gap splitting rationale as app/router.tsx). Whoever produces a
+ * binding has necessarily already loaded the module — useCoEditSession
+ * fetches it alongside the provider, before the join that yields the
+ * binding resolves — so the editor still mounts synchronously.
  */
 export interface CollabBinding {
   doc: Y.Doc
   provider: { awareness: Awareness }
   user: { name: string; color: string; userId?: string }
+  extensionsModule: CollabExtensionsModule
+}
+
+/** Shape of `import('./coedit/collabExtensions')` — carried on the binding, see above. */
+export interface CollabExtensionsModule {
+  buildCollabExtensions: (collab: CollabBinding) => AnyExtension[]
 }
 
 export interface RichTextEditorProps {
@@ -88,22 +73,23 @@ export interface RichTextEditorProps {
    * session change remounts rather than rebinds.
    */
   collab?: CollabBinding
-}
-
-/**
- * Collaborative variant of the extension list: same schema (the swap rule
- * above — schema is `editorExtensions`' alone), plus the Yjs binding.
- * `undoRedo: false` because Collaboration replaces prosemirror-history
- * with the Yjs undo manager — two undo stacks over one document would
- * fight (and Collaboration provides its own undo/redo commands +
- * keybindings, so the editor keeps working undo).
- */
-function buildCollabExtensions(collab: CollabBinding) {
-  return [
-    ...richTextExtensions.map((ext) => (ext.name === 'starterKit' ? ext.configure({ undoRedo: false }) : ext)),
-    Collaboration.configure({ document: collab.doc }),
-    CollaborationCaret.configure({ provider: collab.provider, user: collab.user, render: renderCaret }),
-  ]
+  /**
+   * Composer mode (comments): fired on Ctrl/Cmd+Enter. Registered as a
+   * TipTap keyboard shortcut, not a DOM listener on a wrapper — StarterKit's
+   * HardBreak already binds Mod-Enter, so anything outside the keymap would
+   * fire *after* a hard break was inserted into the document. Must be
+   * accompanied by visible helper text saying the shortcut exists.
+   */
+  onSubmitShortcut?: () => void
+  /** Accessible name for the editable region. Defaults to 'Page content'. */
+  ariaLabel?: string
+  /**
+   * id of an element describing the editor (e.g. the composer's
+   * keyboard-hint helper text) — contenteditable regions get no automatic
+   * label/description association the way TextField wires helperText, so
+   * the caller passes the wiring in explicitly.
+   */
+  ariaDescribedBy?: string
 }
 
 /**
@@ -112,13 +98,45 @@ function buildCollabExtensions(collab: CollabBinding) {
  * so there is never a second Markdown rendering path to drift out of sync).
  */
 export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(function RichTextEditor(
-  { initialMarkdown, editable = true, onChange, showToolbar = true, pageId, collab },
+  { initialMarkdown, editable = true, onChange, showToolbar = true, pageId, collab, onSubmitShortcut, ariaLabel, ariaDescribedBy },
   ref,
 ) {
   const [uploadError, setUploadError] = useState<string | null>(null)
 
+  // The shortcut extension is created once (useEditor's extension list is
+  // fixed at mount) — the ref keeps the latest callback reachable without
+  // rebuilding the editor, same latest-value-in-a-ref pattern as
+  // useCoEditSession's seedMarkdownRef (updated in an effect, not during
+  // render).
+  const submitShortcutRef = useRef(onSubmitShortcut)
+  useEffect(() => {
+    submitShortcutRef.current = onSubmitShortcut
+  })
+
+  // The collab extension builder rides the binding (see CollabBinding's
+  // comment) so this file never statically imports the CRDT chunk.
+  const baseExtensions = collab ? collab.extensionsModule.buildCollabExtensions(collab) : richTextExtensions
   const editor = useEditor({
-    extensions: collab ? buildCollabExtensions(collab) : richTextExtensions,
+    extensions: onSubmitShortcut
+      ? [
+          ...baseExtensions,
+          // priority above StarterKit's HardBreak ('Mod-Enter' inserts a
+          // hard break) and CodeBlock ('Mod-Enter' exits the block) — in a
+          // composer, submit wins everywhere, matching Ask and search.
+          Extension.create({
+            name: 'composerSubmitShortcut',
+            priority: 1000,
+            addKeyboardShortcuts() {
+              return {
+                'Mod-Enter': () => {
+                  submitShortcutRef.current?.()
+                  return true
+                },
+              }
+            },
+          }),
+        ]
+      : baseExtensions,
     // Collaborative mode: content comes from the Y.Doc fragment, never
     // from here — a second content source would duplicate the document.
     ...(collab ? {} : { content: markdownToJson(initialMarkdown) }),
@@ -128,7 +146,8 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
         class: 'rw-editor-content',
         role: 'textbox',
         'aria-multiline': 'true',
-        'aria-label': 'Page content',
+        'aria-label': ariaLabel ?? 'Page content',
+        ...(ariaDescribedBy ? { 'aria-describedby': ariaDescribedBy } : {}),
       },
       handleDrop: (view, event, _slice, moved) => {
         if (moved || !pageId) return false
@@ -220,7 +239,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
         <EditorContent editor={editor} />
       </Box>
       {editable && editor && <EmojiSuggestionPopup editor={editor} />}
-      <Snackbar open={Boolean(uploadError)} autoHideDuration={5000} onClose={() => setUploadError(null)}>
+      <Snackbar open={Boolean(uploadError)} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setUploadError(null)}>
         <Alert severity="error" onClose={() => setUploadError(null)}>
           {uploadError}
         </Alert>

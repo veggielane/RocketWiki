@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CoEditTransport } from '../../realtime/types'
-import { SignalRYjsProvider, type CoEditStatus } from './SignalRYjsProvider'
-import { seedDocFromMarkdown } from './seedDoc'
+// Type-only — the runtime modules are dynamic-imported in the effect below
+// so the CRDT machinery (yjs, y-tiptap, the provider) never rides a
+// statically-reachable chunk. See the effect's comment.
+import type { CoEditStatus, SignalRYjsProvider } from './SignalRYjsProvider'
+import type { CollabExtensionsModule } from '../RichTextEditor'
 
 export interface UseCoEditSessionResult {
   status: CoEditStatus
   /** Set once the join resolves into a session; null while connecting and in solo mode. */
   provider: SignalRYjsProvider | null
+  /**
+   * The loaded coedit/collabExtensions.ts — non-null before `provider` ever
+   * is (fetched in the same Promise.all, ahead of the join). The page puts
+   * it on the CollabBinding so RichTextEditor can build the collab
+   * extension list without a static CRDT import.
+   */
+  extensionsModule: CollabExtensionsModule | null
   /** The session's `expectedRevisionNumber` for the next save — from the join, advanced by saves/reseeds. */
   baseRevisionNumber: number | null
   /**
@@ -27,6 +37,7 @@ export interface UseCoEditSessionResult {
 interface SessionState {
   status: CoEditStatus
   provider: SignalRYjsProvider | null
+  extensionsModule: CollabExtensionsModule | null
   baseRevisionNumber: number | null
   reseedDemand: number | null
   oversizedUpdate: boolean
@@ -35,6 +46,7 @@ interface SessionState {
 const initialState = (key: string): SessionState => ({
   status: key === '' ? 'solo' : 'connecting',
   provider: null,
+  extensionsModule: null,
   baseRevisionNumber: null,
   reseedDemand: null,
   oversizedUpdate: false,
@@ -82,28 +94,43 @@ export function useCoEditSession(
     if (key === '') return
 
     let cancelled = false
+    let provider: SignalRYjsProvider | null = null
     const guarded = (update: (previous: SessionState) => SessionState) => {
       if (!cancelled) setState(update)
     }
 
-    const provider = new SignalRYjsProvider({
-      pageId: key,
-      transport,
-      seed: (doc, origin) => seedDocFromMarkdown(doc, seedMarkdownRef.current, origin),
-      // All of these fire asynchronously (after the join resolves or on
-      // later hub events), so none of them set state during the effect.
-      onStatusChange: (status) => guarded((previous) => ({ ...previous, status, provider })),
-      onBaseRevisionChange: (baseRevisionNumber) => guarded((previous) => ({ ...previous, baseRevisionNumber })),
-      onSaveAndReseedRequired: (base) => guarded((previous) => ({ ...previous, reseedDemand: base })),
-      onOversizedUpdate: () => guarded((previous) => ({ ...previous, oversizedUpdate: true })),
-    })
-    providerRef.current = provider
-    void provider.connect()
+    // The CRDT machinery (yjs, y-tiptap via seedDoc, the provider) loads on
+    // demand — the same air-gap-motivated splitting rationale as
+    // app/router.tsx's per-route `lazy`: page VIEW routes must never
+    // download the co-edit chunk, so nothing statically reachable from
+    // RichTextEditor or this hook's import may pull it in. The fetch runs
+    // before (and typically well within) the hub join it precedes; the
+    // 'connecting' state already covers this window in the UI.
+    void Promise.all([import('./SignalRYjsProvider'), import('./seedDoc'), import('./collabExtensions')]).then(
+      ([providerModule, seedModule, extensionsModule]) => {
+        if (cancelled) return
+        guarded((previous) => ({ ...previous, extensionsModule }))
+        const created = new providerModule.SignalRYjsProvider({
+          pageId: key,
+          transport,
+          seed: (doc, origin) => seedModule.seedDocFromMarkdown(doc, seedMarkdownRef.current, origin),
+          // All of these fire asynchronously (after the join resolves or on
+          // later hub events), so none of them set state during the effect.
+          onStatusChange: (status) => guarded((previous) => ({ ...previous, status, provider: created })),
+          onBaseRevisionChange: (baseRevisionNumber) => guarded((previous) => ({ ...previous, baseRevisionNumber })),
+          onSaveAndReseedRequired: (base) => guarded((previous) => ({ ...previous, reseedDemand: base })),
+          onOversizedUpdate: () => guarded((previous) => ({ ...previous, oversizedUpdate: true })),
+        })
+        provider = created
+        providerRef.current = created
+        void created.connect()
+      },
+    )
 
     return () => {
       cancelled = true
       providerRef.current = null
-      provider.dispose()
+      provider?.dispose()
     }
   }, [key, transport])
 
@@ -123,6 +150,7 @@ export function useCoEditSession(
   return {
     status: state.status,
     provider: state.provider,
+    extensionsModule: state.extensionsModule,
     baseRevisionNumber: state.baseRevisionNumber,
     reseedDemand: state.reseedDemand,
     oversizedUpdate: state.oversizedUpdate,

@@ -17,6 +17,7 @@ import {
   Typography,
 } from '@mui/material'
 import SendIcon from '@mui/icons-material/Send'
+import { visuallyHidden } from '@mui/utils'
 import { useClient } from 'urql'
 import {
   AskWikiDocument,
@@ -27,6 +28,7 @@ import {
 import { citationHref, type AskCitation } from '../ask/answerSegments'
 import { AnswerBody } from '../ask/AnswerBody'
 import { isAskWikiMarkedNotConfigured, markAskWikiNotConfigured, useAskWikiPossiblyAvailable } from '../ask/askAvailability'
+import { describeAskUnavailable } from '../feedback/unavailableCopy'
 
 /**
  * "Ask the wiki" (design.md §9.5) — single-question RAG over pages the
@@ -73,6 +75,11 @@ export function AskWikiPage() {
   const possiblyAvailable = useAskWikiPossiblyAvailable()
 
   const busy = entries.some((e) => e.result.state === 'pending')
+  // What the persistent live region below announces. The failure states
+  // need no entry here: they render as role="alert" Alerts, which announce
+  // themselves.
+  const lastEntry = entries[entries.length - 1]
+  const liveMessage = busy ? 'Looking for an answer…' : lastEntry?.result.state === 'answered' ? 'Answer ready.' : ''
 
   const runAsk = async (id: number, question: string) => {
     // Imperative query with the *generated* document + types: the generated
@@ -112,6 +119,15 @@ export function AskWikiPage() {
           Answers draw only on wiki pages you can view. Nothing here is saved — the conversation disappears when you
           leave this page.
         </Typography>
+      </Box>
+
+      {/* Persistent polite live region for the multi-second wait: it must
+          exist BEFORE the wait begins — a live region inserted together
+          with its content is routinely not announced (announcement is
+          about mutations inside an existing region). Visually hidden; the
+          pending row in the transcript carries the visible spinner+copy. */}
+      <Box role="status" sx={visuallyHidden}>
+        {liveMessage}
       </Box>
 
       {entries.length > 0 && (
@@ -190,8 +206,11 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
   const { result, question } = entry
   switch (result.state) {
     case 'pending':
+      // No role="status" here: this row mounts WITH its content, which live
+      // regions don't reliably announce — the page-level persistent region
+      // above owns the announcement; this row is the visible counterpart.
       return (
-        <Stack direction="row" spacing={1.5} role="status" sx={{ pl: 0.5, alignItems: 'center' }}>
+        <Stack direction="row" spacing={1.5} sx={{ pl: 0.5, alignItems: 'center' }}>
           <CircularProgress size={18} aria-hidden />
           <Typography variant="body2" color="text.secondary">
             Searching the wiki and composing an answer — this can take several seconds.
@@ -234,11 +253,14 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
         </Stack>
       )
     case 'unavailable':
+      // Summaries come from the shared degradation vocabulary
+      // (feedback/unavailableCopy.ts); this switch only owns the per-reason
+      // affordances — the search escape hatch, the retry button.
       switch (result.reason) {
         case 'NO_RESULTS':
           return (
             <Stack spacing={0.5}>
-              <Typography>Nothing in the wiki you can view answers this.</Typography>
+              <Typography>{describeAskUnavailable('NO_RESULTS').summary}</Typography>
               <Typography variant="body2" color="text.secondary">
                 It may not be written down — or it's on pages you don't have access to. Try a{' '}
                 <Link component={RouterLink} to={`/search?q=${encodeURIComponent(question)}`}>
@@ -258,15 +280,13 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
                 </Button>
               }
             >
-              The assistant endpoint couldn't be reached, so this question wasn't answered. The wiki itself is fine.
+              {describeAskUnavailable('UNREACHABLE').summary}
             </Alert>
           )
         case 'NOT_CONFIGURED':
           // The page-level alert (rendered where the composer was) carries
           // the full explanation; this keeps the transcript honest.
-          return (
-            <Typography color="text.secondary">The wiki assistant isn't configured on this instance.</Typography>
-          )
+          return <Typography color="text.secondary">{describeAskUnavailable('NOT_CONFIGURED').summary}</Typography>
       }
       break
     case 'failed':
@@ -279,7 +299,7 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
             </Button>
           }
         >
-          Couldn't reach the wiki API to ask this. Check your connection and retry.
+          {describeAskUnavailable('REQUEST_FAILED').summary}
         </Alert>
       )
   }

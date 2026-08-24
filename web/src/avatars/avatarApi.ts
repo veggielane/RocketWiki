@@ -1,4 +1,4 @@
-import { getAccessToken } from '../graphql/authToken'
+import { authHeaders, maxSizeBytesOf, readFailureBody } from '../http/authedFetch'
 
 /**
  * Profile-picture routes (design.md §19) — plain HTTP binary, exactly the
@@ -13,11 +13,6 @@ import { getAccessToken } from '../graphql/authToken'
  * stripped), so any client-side cropping is preview sugar: we always send
  * the user's original file.
  */
-
-function authHeaders(): HeadersInit {
-  const token = getAccessToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
 
 /** Formats and codes the server accepts for upload (§19); checked client-side only to fail fast with designed copy. */
 export const AVATAR_ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
@@ -40,15 +35,9 @@ export class AvatarUploadFailure extends Error {
 }
 
 async function parseFailure(response: Response): Promise<AvatarUploadFailure> {
-  let body: Record<string, unknown> | null = null
-  try {
-    body = (await response.json()) as Record<string, unknown>
-  } catch {
-    body = null
-  }
+  const body = await readFailureBody(response)
   if (response.status === 413) {
-    const max = typeof body?.maxSizeBytes === 'number' ? body.maxSizeBytes : null
-    return new AvatarUploadFailure({ kind: 'tooLarge', maxSizeBytes: max })
+    return new AvatarUploadFailure({ kind: 'tooLarge', maxSizeBytes: maxSizeBytesOf(body) })
   }
   const message = typeof body?.message === 'string' ? body.message : null
   return new AvatarUploadFailure({ kind: 'refused', message })

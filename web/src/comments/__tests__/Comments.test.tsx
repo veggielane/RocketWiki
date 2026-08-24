@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { Comments } from '../Comments'
 import type { FlatComment } from '../buildCommentTree'
 
@@ -118,6 +118,49 @@ describe('Comments — delete authorization', () => {
     )
     expect(screen.queryByRole('button', { name: 'Post comment' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reply' })).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * The composer's keyboard path (Ctrl/Cmd+Enter — the shortcut mechanics
+ * live in editor/__tests__/composerSubmitShortcut.test.tsx). What this
+ * block pins is the announcement: the helper text is visible AND
+ * programmatically associated (aria-describedby), the same pattern as
+ * Ask's "Enter to ask" hint — an unannounced shortcut is no keyboard path.
+ */
+describe('Comments — composer keyboard submit hint', () => {
+  it('the new-comment composer is described by the visible shortcut hint', () => {
+    render(
+      <Comments
+        pageId="page-1"
+        comments={[]}
+        canComment
+        currentUserId="me"
+        canManageAccess={false}
+        onAdd={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    )
+    const composer = screen.getByRole('textbox', { name: 'New comment' })
+    expect(composer).toHaveAccessibleDescription(/Enter to post/)
+    expect(screen.getByText(/Enter to post/)).toBeVisible()
+  })
+
+  it('the reply composer gets the same treatment', () => {
+    render(
+      <Comments
+        pageId="page-1"
+        comments={[comment({ id: 'c1' })]}
+        canComment
+        currentUserId="me"
+        canManageAccess={false}
+        onAdd={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    const composer = screen.getByRole('textbox', { name: 'Reply to Ada' })
+    expect(composer).toHaveAccessibleDescription(/Enter to post/)
   })
 })
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Box } from '@mui/material'
 import { getEmojiUrl, peekEmojiUrl } from './emojiBlobCache'
 
 export interface EmojiImgProps {
@@ -15,9 +16,23 @@ export interface EmojiImgProps {
  * directly. Both share the same (name, etag) blob cache. While the blob
  * loads (or if it can't), the literal `:name:` text renders instead — the
  * same degrade-to-text rule as content.
+ *
+ * MUI Box, not a raw styled <img>: this is app chrome, so it follows the
+ * MUI-first rule (the plain-CSS boundary is editor internals only).
  */
 export function EmojiImg({ name, etag, size = 20 }: EmojiImgProps) {
-  const [url, setUrl] = useState<string | null>(() => peekEmojiUrl(name, etag) ?? null)
+  const peek = () => peekEmojiUrl(name, etag) ?? null
+  const [url, setUrl] = useState<string | null>(peek)
+  // Render-time reset when the identity props change (React's documented
+  // "adjusting state when a prop changes" pattern — same as UserAvatar and
+  // useAttachmentBlobUrl). Without it, a reused mount showed the PREVIOUS
+  // emoji's image for a frame after `name` changed, until the effect below
+  // caught up.
+  const [tracked, setTracked] = useState({ name, etag })
+  if (tracked.name !== name || tracked.etag !== etag) {
+    setTracked({ name, etag })
+    setUrl(peek())
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -32,5 +47,13 @@ export function EmojiImg({ name, etag, size = 20 }: EmojiImgProps) {
   if (!url) {
     return <span>{`:${name}:`}</span>
   }
-  return <img src={url} alt={`:${name}:`} title={`:${name}:`} style={{ height: size, verticalAlign: 'middle' }} />
+  return (
+    <Box
+      component="img"
+      src={url}
+      alt={`:${name}:`}
+      title={`:${name}:`}
+      sx={{ height: size, verticalAlign: 'middle' }}
+    />
+  )
 }

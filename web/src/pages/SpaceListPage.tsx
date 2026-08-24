@@ -4,10 +4,11 @@ import AddIcon from '@mui/icons-material/Add'
 import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined'
 import { useSpaceListQuery } from '../graphql/generated/graphql'
 import { useIsInstanceAdmin } from '../auth/useIsInstanceAdmin'
+import { replicaBadgeLabel } from '../feedback/unavailableCopy'
 
 /**
  * Space directory. Replica spaces (design.md §12) carry a proactive
- * "mirrored from {origin}" chip via `Space.isReplica`/`originInstanceId`.
+ * "Replica of {origin}" chip via `Space.isReplica`/`originInstanceId`.
  */
 export function SpaceListPage() {
   const [{ data, fetching, error }] = useSpaceListQuery()
@@ -38,6 +39,17 @@ export function SpaceListPage() {
 
       {(error || (!fetching && !data)) && <Alert severity="info">No spaces loaded.</Alert>}
 
+      {/* True empty (loaded, zero spaces) — distinct from the load failure
+          above. The consequence differs by who's looking: only instance
+          admins can create a space (design.md §6.5.1). */}
+      {data?.spaces.length === 0 && (
+        <Typography color="text.secondary">
+          {isInstanceAdmin
+            ? 'No spaces yet — create one to start writing.'
+            : 'No spaces yet — an instance admin can create the first one.'}
+        </Typography>
+      )}
+
       {data?.spaces.map((space) => (
         <Card key={space.key} variant="outlined">
           <CardActionArea component={RouterLink} to={`/spaces/${space.key}`}>
@@ -48,7 +60,7 @@ export function SpaceListPage() {
                   <Chip
                     size="small"
                     icon={<CloudSyncOutlinedIcon />}
-                    label={`Mirrored from ${space.originInstanceId} — read-only`}
+                    label={replicaBadgeLabel(space.originInstanceId)}
                   />
                 )}
               </Stack>

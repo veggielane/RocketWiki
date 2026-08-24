@@ -134,7 +134,11 @@ export function SearchPage() {
               </ListItem>
             ))}
           </List>
-          {edges.length === 0 && <Typography color="text.secondary">No results for "{query}".</Typography>}
+          {edges.length === 0 && (
+            <Typography color="text.secondary">
+              No results for "{query}" — check the spelling or try different words.
+            </Typography>
+          )}
           {/* Prefills /ask with this query; hides itself for the session
               once the assistant is known NOT_CONFIGURED. */}
           <AskWikiSearchNudge query={query} />

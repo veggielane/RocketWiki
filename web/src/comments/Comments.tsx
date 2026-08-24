@@ -20,6 +20,16 @@ export interface CommentsProps {
  * `RichTextEditor` for composing, not a plain textarea — "one renderer"
  * (design.md §4) covers comment bodies too, not just page content.
  */
+
+/**
+ * Label only — the shortcut itself is TipTap's 'Mod-Enter', which already
+ * maps to Cmd on macOS and Ctrl elsewhere. Same visible-helper-text pattern
+ * as Ask's "Enter to ask · Shift+Enter for a new line": a keyboard path
+ * that exists but is never announced may as well not exist.
+ */
+const SUBMIT_KEY_LABEL = /Mac|iPhone|iPad|iPod/.test(typeof navigator === 'undefined' ? '' : navigator.userAgent)
+  ? 'Cmd+Enter'
+  : 'Ctrl+Enter'
 export function Comments({ pageId, comments, canComment, currentUserId, canManageAccess, onAdd, onDelete }: CommentsProps) {
   const tree = buildCommentTree(comments)
   const [replyingToId, setReplyingToId] = useState<string | null>(null)
@@ -27,6 +37,9 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
   const newCommentRef = useRef<RichTextEditorHandle>(null)
 
   const handleAdd = async (parentCommentId: string | null, ref: React.RefObject<RichTextEditorHandle | null>) => {
+    // `submitting` guards the keyboard path the same way it disables the
+    // button — Ctrl/Cmd+Enter held down must not double-post.
+    if (submitting) return
     const body = ref.current?.getMarkdown().trim()
     if (!body) return
     setSubmitting(true)
@@ -42,9 +55,11 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
     <Stack spacing={2}>
       <Typography variant="h5">Comments</Typography>
 
+      {/* Empty-state voice (web/README.md): fact + consequence — but only
+          promise the consequence to users who can actually comment. */}
       {tree.length === 0 && (
         <Typography variant="body2" color="text.secondary">
-          No comments yet.
+          {canComment ? 'No comments yet — start the discussion below.' : 'No comments yet.'}
         </Typography>
       )}
 
@@ -68,16 +83,28 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
 
       {canComment && (
         <Box>
-          <RichTextEditor ref={newCommentRef} initialMarkdown="" showToolbar={false} pageId={pageId} />
-          <Button
-            variant="contained"
-            size="small"
-            sx={{ mt: 1 }}
-            disabled={submitting}
-            onClick={() => void handleAdd(null, newCommentRef)}
-          >
-            Post comment
-          </Button>
+          <RichTextEditor
+            ref={newCommentRef}
+            initialMarkdown=""
+            showToolbar={false}
+            pageId={pageId}
+            ariaLabel="New comment"
+            ariaDescribedBy="comment-composer-hint"
+            onSubmitShortcut={() => void handleAdd(null, newCommentRef)}
+          />
+          <Stack direction="row" spacing={1.5} sx={{ mt: 1, alignItems: 'center' }}>
+            <Button
+              variant="contained"
+              size="small"
+              disabled={submitting}
+              onClick={() => void handleAdd(null, newCommentRef)}
+            >
+              Post comment
+            </Button>
+            <Typography id="comment-composer-hint" variant="caption" color="text.secondary">
+              {SUBMIT_KEY_LABEL} to post · Enter for a new paragraph
+            </Typography>
+          </Stack>
         </Box>
       )}
     </Stack>
@@ -168,14 +195,24 @@ function CommentItem({
 
         {isReplying && (
           <Box sx={{ mt: 1 }}>
-            <RichTextEditor ref={replyRef} initialMarkdown="" showToolbar={false} />
-            <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+            <RichTextEditor
+              ref={replyRef}
+              initialMarkdown=""
+              showToolbar={false}
+              ariaLabel={`Reply to ${node.authorDisplayName}`}
+              ariaDescribedBy={`comment-reply-hint-${node.id}`}
+              onSubmitShortcut={() => onSubmitReply(node.id, replyRef)}
+            />
+            <Stack direction="row" spacing={1} sx={{ mt: 1, alignItems: 'center' }}>
               <Button size="small" variant="contained" disabled={submitting} onClick={() => onSubmitReply(node.id, replyRef)}>
                 Post reply
               </Button>
               <Button size="small" onClick={onCancelReply}>
                 Cancel
               </Button>
+              <Typography id={`comment-reply-hint-${node.id}`} variant="caption" color="text.secondary">
+                {SUBMIT_KEY_LABEL} to post
+              </Typography>
             </Stack>
           </Box>
         )}

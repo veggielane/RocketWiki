@@ -5,6 +5,7 @@ import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined'
 import { fetchAttachmentBlob } from './attachmentApi'
 import { formatBytes } from './formatBytes'
 import { UserAvatar } from '../avatars/UserAvatar'
+import { describeAttachmentUnavailable } from '../feedback/unavailableCopy'
 
 export interface AttachmentSummary {
   id: string
@@ -46,7 +47,7 @@ export function AttachmentList({ attachments }: { attachments: AttachmentSummary
     } catch {
       // Same message regardless of whether it's missing or just not
       // viewable to this user — design.md §6.7 applies here too.
-      setError(`Couldn't download "${attachment.fileName}".`)
+      setError(describeAttachmentUnavailable({ kind: 'DOWNLOAD_FAILED', fileName: attachment.fileName }).summary)
     }
   }
 

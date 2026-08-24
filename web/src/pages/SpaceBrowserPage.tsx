@@ -37,6 +37,7 @@ import {
   useUnwatchSpaceMutation,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
+import { REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { filterTreeByLabel } from '../labels/filterTreeByLabel'
 import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
 
@@ -243,8 +244,7 @@ export function SpaceBrowserPage() {
           dialog after a refused write. */}
       {space.isReplica && (
         <Alert severity="info">
-          Mirrored from {space.originInstanceId} — read-only. Content arrives via one-way sync; editing happens on
-          the origin instance (design.md §12).
+          {replicaBadgeLabel(space.originInstanceId)}. {REPLICA_EXPLANATION}
         </Alert>
       )}
 
@@ -268,7 +268,9 @@ export function SpaceBrowserPage() {
       {labelFilter ? (
         <Box role="region" aria-label={`Pages labelled ${labelFilter}`}>
           {labelMatches.length === 0 ? (
-            <Typography color="text.secondary">No pages carry this label.</Typography>
+            <Typography color="text.secondary">
+              No pages carry this label — clear the filter to see every page.
+            </Typography>
           ) : (
             <List dense disablePadding>
               {labelMatches.map((match) => (

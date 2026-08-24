@@ -2,6 +2,7 @@ import { List, ListItemButton, ListItemIcon, ListItemText, Skeleton, Typography,
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { useSpaceListQuery } from '../graphql/generated/graphql'
+import { replicaBadgeLabel } from '../feedback/unavailableCopy'
 
 /**
  * Space list in the nav drawer — server-filtered to spaces the caller can
@@ -41,7 +42,7 @@ export function SpaceTreeNav() {
           </ListItemIcon>
           <ListItemText
             primary={space.name}
-            secondary={space.isReplica ? `Mirrored from ${space.originInstanceId} — read-only` : undefined}
+            secondary={space.isReplica ? replicaBadgeLabel(space.originInstanceId) : undefined}
           />
         </ListItemButton>
       ))}

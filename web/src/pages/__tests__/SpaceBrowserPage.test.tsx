@@ -80,7 +80,7 @@ describe('SpaceBrowserPage', () => {
 
   it('proactively shows the replica banner from Space.isReplica (design.md §12)', async () => {
     renderPage({ spaceOverrides: { isReplica: true, originInstanceId: 'LOW' } })
-    expect(await screen.findByText(/Mirrored from LOW — read-only/)).toBeInTheDocument()
+    expect(await screen.findByText(/Replica of LOW — read-only/)).toBeInTheDocument()
   })
 
   it('initializes the watch toggle from Space.viewerIsWatching', async () => {
