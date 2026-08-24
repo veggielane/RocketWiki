@@ -391,6 +391,18 @@ Being explicit about what has and hasn't been checked, rather than letting
 **Verified by tests and CI** (the standing caveat — design.md §16 —
 applies: test-proven, never yet run against live infrastructure; each
 bullet keeps its own sharper caveat where one exists):
+- **Page properties** (design.md §20): pages carry admin-defined key/value
+  metadata — `Owner`, `Review Date`, `Status` — edited on a dedicated
+  properties screen, never inside the page body. Keys come from an
+  instance-level registry only instance admins can change; page editors
+  pick a key and supply plain text. Reading needs `canView`, writing needs
+  `canEdit`, replicas are read-only, and deleting a registry key that pages
+  still use is refused with the count. Being structured data rather than
+  content is the point: properties never enter the Markdown round-trip, the
+  co-editing document, or the Confluence importer — which also means they
+  are **not searchable** and are **absent from a Markdown export**. Sync
+  carries the key by name so a replica can materialise a key it has never
+  seen.
 - **SQL Server blob storage** (`FileStorage:Provider=SqlServer`), a third
   `IFileStorage` alongside filesystem and S3 — deliberately **not** the
   recommended default (transaction-log churn, backup size, buffer-pool
@@ -595,6 +607,14 @@ bullet keeps its own sharper caveat where one exists):
   run.
 
 **Not built:**
+- **Cross-page property reporting.** There is no "every page in this space
+  with `Status: Draft`" query and no property facet in search — the data
+  model supports one without a migration, but the query surface does not
+  exist (design.md §20.5). Related smaller gaps in the same feature:
+  registry keys can be created and deleted but not renamed or reordered, a
+  *baseline* sync bundle carries no properties (only incremental events do
+  — the same simplification labels have), and a local property change
+  dispatches no watcher notification while a synced one does.
 - **The design.md §10 storage janitor does not exist.** §10 promises "a
   nightly janitor deletes storage objects with no matching row" — that job
   has never been written, and this ledger previously didn't say so. What

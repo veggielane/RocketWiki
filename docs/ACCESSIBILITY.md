@@ -56,14 +56,15 @@ data (same mock seams as the test suite) into one self-contained HTML file
 per screen **per theme** — dark-mode contrast is where audits usually
 bleed, so every screen exists as `--light` and `--dark`, with the
 `data-theme` attribute stamped exactly as `ColorModeProvider` stamps it in
-the live app. Captured screens (13 × 2 themes):
+the live app. Captured screens (15 × 2 themes):
 
 page view (with presence viewers), page edit (full editor + formatting
 toolbar), search, settings, ask (answered, citations + sources), admin
-emojis, page permissions, space browser (tree + lock badge + replica
-banner), trash, audit log (DataGrid), notification popover **open**, move
-dialog **open with the visibility-change warning**, stale-revision dialog
-**with the diff**.
+emojis, admin property keys (create form + DataGrid), page properties
+(editable table of text fields + key picker), page permissions, space
+browser (tree + lock badge + replica banner), trash, audit log (DataGrid),
+notification popover **open**, move dialog **open with the
+visibility-change warning**, stale-revision dialog **with the diff**.
 
 `web/a11y/` (its own package, so Playwright and its browser downloads stay
 out of the SPA's dependency tree) loads each file in Chromium and runs axe
