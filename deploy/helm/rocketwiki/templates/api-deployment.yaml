@@ -106,10 +106,21 @@ spec:
             - name: FileStorage__S3__Region
               value: {{ . | quote }}
             {{- end }}
-            {{- else }}
+            {{- else if eq .Values.api.fileStorage.provider "FileSystem" }}
             - name: FileStorage__FileSystem__Root
               value: {{ .Values.api.fileStorage.fileSystem.mountPath | quote }}
             {{- end }}
+            {{- /*
+              provider=SqlServer needs no env from this chart: with no
+              FileStorage__SqlServer__ConnectionString the provider shares
+              ConnectionStrings__rocketwiki, which api.existingSecret already
+              carries — that sharing is the reason to pick it (design.md §10).
+              An operator wanting blobs in a SEPARATE database adds that key to
+              the same Secret; it is credential material, so it arrives by
+              reference like every other connection string and is never
+              templated here. This branch is explicit rather than an `else`
+              so a fourth provider can't silently inherit FileSystem's env.
+            */}}
             {{- if .Values.api.otel.enabled }}
             # design.md §15 "Telemetry is not audit": presence of this
             # variable is the ONLY thing that enables an exporter

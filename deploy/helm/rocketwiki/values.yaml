@@ -65,6 +65,13 @@ api:
   #   FileStorage__S3__SecretKey      S3/MinIO secret key
   #   ConnectionStrings__embeddings   (later, milestone 7 — §9's external endpoint)
   #
+  # Optional, only with api.fileStorage.provider=SqlServer:
+  #   FileStorage__SqlServer__ConnectionString
+  #                                   blobs in a SEPARATE database. Omit it and
+  #                                   they share ConnectionStrings__rocketwiki,
+  #                                   which is the usual reason to pick that
+  #                                   provider (one backup covers both).
+  #
   # Authority/audience are identifiers rather than credentials, but they live
   # here with the credentials so one Secret fully pins "which environment is
   # this", and a values file can be shared between networks without editing.
@@ -126,7 +133,19 @@ api:
       memory: 1Gi
 
   fileStorage:
-    # "S3" (default) or "FileSystem" (design.md §10).
+    # "S3" (default), "FileSystem", or "SqlServer" (design.md §10).
+    #
+    # SqlServer keeps attachment bytes in the database. It is deliberately not
+    # the default — every upload lands in the transaction log, backups grow
+    # with attachments, and large reads evict pages from the buffer pool — but
+    # it is the only provider where one database backup covers content AND
+    # attachments at a single point in time, and it needs no object store and
+    # no PVC. On a single-node k3s that can be the whole reason to choose it:
+    # nothing below is required, because with no
+    # FileStorage__SqlServer__ConnectionString in api.existingSecret the
+    # provider shares ConnectionStrings__rocketwiki. Add that key to the same
+    # Secret to put blobs in a separate database instead (wiser when blob
+    # churn shouldn't share a transaction log with page edits).
     provider: S3
     s3:
       # S3-compatible endpoint (MinIO/Ceph/...). Outside the cluster, or a

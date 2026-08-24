@@ -122,9 +122,16 @@ Deliberately (design.md §15/§17 — external services stay external):
 2. **Keycloak** with a production-configured `rocketwiki` realm (the dev
    realm's mappers documented in `src/RocketWiki.AppHost/keycloak/README.md`
    are the spec to reproduce). Inside the network boundary, behind TLS.
-3. **An S3-compatible object store** (MinIO/Ceph/…) with a bucket — or, for
-   `FileStorage.provider=FileSystem`, a deliberately-created PVC the chart
-   will mount but never create.
+3. **Somewhere for attachment bytes**, which is a real choice, not a default:
+   an **S3-compatible object store** (MinIO/Ceph/…) with a bucket; or, for
+   `api.fileStorage.provider=FileSystem`, a deliberately-created PVC the
+   chart will mount but never create; or `provider=SqlServer`, which needs
+   **neither** — blobs go in the database you already have. That last option
+   is not recommended in general (transaction-log churn, backups that grow
+   with attachments, buffer-pool pressure, no CDN path) but is the only one
+   where a single backup covers content and attachments consistently, which
+   on a single-node air-gapped k3s is sometimes worth more than all of it.
+   See design.md §10 and docs/CONFIGURATION.md.
 4. **The configuration Secret** (next section).
 
 ### Create the configuration Secret
@@ -144,6 +151,20 @@ kubectl -n rocketwiki create secret generic rocketwiki-api \
   --from-literal=FileStorage__S3__AccessKey='CHANGE-ME' \
   --from-literal=FileStorage__S3__SecretKey='CHANGE-ME'
 ```
+
+The two `FileStorage__S3__*` keys are only needed with `provider=S3`; drop
+them for `FileSystem`. With `provider=SqlServer` you add nothing — blobs
+share `ConnectionStrings__rocketwiki` — unless you want them in a separate
+database, which is one more key in this same Secret:
+
+```sh
+  --from-literal=FileStorage__SqlServer__ConnectionString='Server=sql.internal;Database=RocketWikiBlobs;User Id=rocketwiki;Password=CHANGE-ME;Encrypt=True;TrustServerCertificate=False'
+```
+
+That account needs `CREATE TABLE` on first use, because the blob table is
+created on demand and sits outside the EF migration chain (design.md §10).
+A locked-down deployment can pre-create it from the DDL in
+docs/CONFIGURATION.md and grant only DML.
 
 Without it, the migration Job fails config validation and the install stops
 before anything rolls — that's fail-closed, not a bug.

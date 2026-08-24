@@ -153,13 +153,16 @@ artifact and is gitignored.)
 
 ## CI (`.github/workflows/ci.yml`)
 
-Four jobs on every push: `backend` (Release build + the container-free
+Five jobs on every push: `backend` (Release build + the container-free
 tiers + corpus drift checks), `frontend` (codegen → lint → build → vitest +
 anchor-corpus drift), `sqlserver` (the Testcontainers tier against the
 FTS-enabled image, with a guard that fails the job if the tier skipped and
-uploaded engine logs on failure), and `a11y` (the real-Chromium
-Playwright + axe pass over every screen in both themes — see the
-accessibility section above).
+uploaded engine logs on failure), `a11y` (the real-Chromium Playwright + axe
+pass over every screen in both themes — see the accessibility section
+above), and `helm` (`helm lint --strict` plus a render of every
+`FileStorage` provider and both failure modes the chart promises — the
+render half exists because lint passes a template that emits the wrong env
+var, which is exactly the bug adding a third provider uncovered).
 
 All jobs are read-only (`permissions: contents: read`), bounded by
 `timeout-minutes` so a hang fails in tens of minutes rather than the

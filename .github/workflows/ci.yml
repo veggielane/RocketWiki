@@ -180,6 +180,64 @@ jobs:
             exit 1
           fi
 
+  # The Helm chart (deploy/helm/rocketwiki). DEVELOPING.md has told people to
+  # run `helm lint --strict` after touching the chart since it was written;
+  # nothing enforced it, and a chart is exactly the artifact whose breakage
+  # surfaces at 3am on a cluster rather than in a test. Lint alone is not
+  # enough either: adding a third FileStorage provider exposed an `else` that
+  # had been treating "not S3" as "FileSystem", which lints clean and renders
+  # the wrong env var — so this job also RENDERS every provider and asserts
+  # what each one emits, plus the two failure modes the chart promises.
+  helm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v5
+      - name: Lint (strict)
+        run: helm lint --strict deploy/helm/rocketwiki
+
+      - name: Render every storage provider
+        run: |
+          set -euo pipefail
+          chart=deploy/helm/rocketwiki
+
+          s3=$(helm template rw "$chart" --set api.fileStorage.provider=S3)
+          grep -q 'FileStorage__S3__Bucket' <<<"$s3"
+          ! grep -q 'FileStorage__FileSystem__Root' <<<"$s3"
+
+          fs=$(helm template rw "$chart" --set api.fileStorage.provider=FileSystem \
+                 --set api.fileStorage.fileSystem.existingClaim=ci-pvc)
+          grep -q 'FileStorage__FileSystem__Root' <<<"$fs"
+          grep -q 'claimName: "ci-pvc"' <<<"$fs"
+
+          # Blobs in the database: no S3 env, no FileSystem env, and no volume
+          # at all — needing neither an object store nor a PVC is the point.
+          sql=$(helm template rw "$chart" --set api.fileStorage.provider=SqlServer)
+          grep -q 'value: "SqlServer"' <<<"$sql"
+          ! grep -q 'FileStorage__S3__' <<<"$sql"
+          ! grep -q 'FileStorage__FileSystem__Root' <<<"$sql"
+          ! grep -q 'persistentVolumeClaim' <<<"$sql"
+
+      - name: The chart's promised failures must actually fail
+        run: |
+          set -euo pipefail
+          chart=deploy/helm/rocketwiki
+
+          # FileSystem without a PVC: the chart refuses rather than creating
+          # storage for state (design.md §15).
+          if helm template rw "$chart" --set api.fileStorage.provider=FileSystem >/dev/null 2>&1; then
+            echo "::error::provider=FileSystem with no existingClaim should have failed to render."
+            exit 1
+          fi
+
+          # values.schema.json must reject an unknown provider, matching
+          # AddFileStorage's fail-closed switch.
+          if helm template rw "$chart" --set api.fileStorage.provider=Nonsense >/dev/null 2>&1; then
+            echo "::error::An unrecognized FileStorage provider should have failed schema validation."
+            exit 1
+          fi
+
   # The browser accessibility tier (docs/ACCESSIBILITY.md). The `frontend`
   # job's vitest run already includes the jsdom axe layer (fast, structural,
   # contrast excluded); THIS job is the layer that needs a real browser:

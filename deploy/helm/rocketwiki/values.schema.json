@@ -31,8 +31,8 @@
           "type": "object",
           "properties": {
             "provider": {
-              "enum": ["S3", "FileSystem"],
-              "description": "Matches RocketWiki.Storage's AddFileStorage, which fails closed on anything else."
+              "enum": ["S3", "FileSystem", "SqlServer"],
+              "description": "Matches RocketWiki.Storage's AddFileStorage, which fails closed on anything else. SqlServer stores blobs in the database — see values.yaml for why it is not the default."
             }
           }
         },
