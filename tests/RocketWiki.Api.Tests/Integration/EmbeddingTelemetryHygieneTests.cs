@@ -96,11 +96,18 @@ public sealed class EmbeddingTelemetryHygieneTests(EmbeddingApiFixture fixture) 
 
         meterListener.Dispose();
 
-        Assert.NotEmpty(captured);
-        Assert.NotEmpty(metricTags);
-        Assert.Contains(metricTags, t => t.StartsWith("rocketwiki.embeddings.", StringComparison.Ordinal));
+        // Spans can still be stopping while this test asserts — enumerate a snapshot
+        // taken under the callbacks' own locks, not the live lists.
+        Activity[] capturedSnapshot;
+        string[] metricTagsSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        lock (metricTags) { metricTagsSnapshot = [.. metricTags]; }
 
-        AssertNoSentinels(captured, metricTags);
+        Assert.NotEmpty(capturedSnapshot);
+        Assert.NotEmpty(metricTagsSnapshot);
+        Assert.Contains(metricTagsSnapshot, t => t.StartsWith("rocketwiki.embeddings.", StringComparison.Ordinal));
+
+        AssertNoSentinels(capturedSnapshot, metricTagsSnapshot);
     }
 
     private async Task<string> SeedSentinelPageAsync()
@@ -156,7 +163,7 @@ public sealed class EmbeddingTelemetryHygieneTests(EmbeddingApiFixture fixture) 
         return space.Key;
     }
 
-    private static void AssertNoSentinels(List<Activity> captured, List<string> metricTags)
+    private static void AssertNoSentinels(IReadOnlyList<Activity> captured, IReadOnlyList<string> metricTags)
     {
         var violations = new List<string>();
 

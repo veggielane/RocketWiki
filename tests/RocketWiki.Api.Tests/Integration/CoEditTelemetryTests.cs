@@ -175,13 +175,27 @@ public sealed class CoEditTelemetryTests(RocketWikiApiFactory factory) : IClassF
 
         meterListener.Dispose();
 
-        Assert.NotEmpty(captured);
-        Assert.NotEmpty(metricTags);
-        Assert.True(relayMeasurements >= 2, "relay_bytes must have measured the update and the awareness payload");
+        // Spans can still be stopping (SignalR connection teardown) while this test
+        // asserts — enumerate snapshots taken under the callbacks' own locks.
+        Activity[] capturedSnapshot;
+        string[] metricTagsSnapshot;
+        Dictionary<string, string[]> coEditTagValuesSnapshot;
+        long relayMeasurementsSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        lock (metricTags)
+        {
+            metricTagsSnapshot = [.. metricTags];
+            coEditTagValuesSnapshot = coEditTagValues.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray());
+            relayMeasurementsSnapshot = relayMeasurements;
+        }
+
+        Assert.NotEmpty(capturedSnapshot);
+        Assert.NotEmpty(metricTagsSnapshot);
+        Assert.True(relayMeasurementsSnapshot >= 2, "relay_bytes must have measured the update and the awareness payload");
 
         // §15 half: no sentinel, in either encoding, anywhere in trace or metric data.
         var violations = new List<string>();
-        foreach (var activity in captured)
+        foreach (var activity in capturedSnapshot)
         {
             Check(violations, forbidden, $"span '{activity.DisplayName}' (source '{activity.Source.Name}')", activity.DisplayName);
             Check(violations, forbidden, $"span operation '{activity.OperationName}'", activity.OperationName);
@@ -206,7 +220,7 @@ public sealed class CoEditTelemetryTests(RocketWikiApiFactory factory) : IClassF
             }
         }
 
-        foreach (var tag in metricTags)
+        foreach (var tag in metricTagsSnapshot)
         {
             Check(violations, forbidden, "metric instrument name or tag", tag);
         }
@@ -223,7 +237,7 @@ public sealed class CoEditTelemetryTests(RocketWikiApiFactory factory) : IClassF
             ["rocketwiki.coedit.outcome"] = ["joined", "no_principal", "no_local_user", "not_found", "denied"],
             ["rocketwiki.coedit.reset_reason"] = ["cap_reseed", "expired"],
         };
-        foreach (var (tagKey, values) in coEditTagValues)
+        foreach (var (tagKey, values) in coEditTagValuesSnapshot)
         {
             Assert.True(allowed.TryGetValue(tagKey, out var allowedValues),
                 $"Unexpected coedit metric tag '{tagKey}' - extend the bounded vocabulary deliberately or remove the tag.");

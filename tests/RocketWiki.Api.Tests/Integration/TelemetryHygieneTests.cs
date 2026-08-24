@@ -186,12 +186,20 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
 
         meterListener.Dispose();
 
+        // Spans can still be stopping (background work, connection teardown) while this
+        // test asserts, so enumerate a snapshot taken under the callbacks' own locks —
+        // not the live lists.
+        Activity[] capturedSnapshot;
+        string[] metricTagsSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        lock (metricTags) { metricTagsSnapshot = [.. metricTags]; }
+
         // Sanity: if nothing was captured, the assertions below would pass vacuously and
         // this test would be worthless. Both listeners must have seen real traffic.
-        Assert.NotEmpty(captured);
-        Assert.NotEmpty(metricTags);
+        Assert.NotEmpty(capturedSnapshot);
+        Assert.NotEmpty(metricTagsSnapshot);
 
-        AssertNoSentinels(captured, metricTags);
+        AssertNoSentinels(capturedSnapshot, metricTagsSnapshot);
     }
 
     /// <summary>
@@ -282,7 +290,7 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         Assert.Equal(SentinelAttachmentBytes, await download.Content.ReadAsStringAsync());
     }
 
-    private static void AssertNoSentinels(List<Activity> captured, List<string> metricTags)
+    private static void AssertNoSentinels(IReadOnlyList<Activity> captured, IReadOnlyList<string> metricTags)
     {
         var violations = new List<string>();
 

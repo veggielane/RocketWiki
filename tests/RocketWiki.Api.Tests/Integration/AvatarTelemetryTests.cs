@@ -116,20 +116,32 @@ public sealed class AvatarTelemetryTests(RocketWikiApiFactory factory) : IClassF
 
         meterListener.Dispose();
 
+        // Spans can still be stopping while this test asserts — enumerate snapshots
+        // taken under the callbacks' own locks, not the live lists.
+        Activity[] capturedSnapshot;
+        string[] metricRecordsSnapshot;
+        string[] outcomeTagValuesSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        lock (metricRecords)
+        {
+            metricRecordsSnapshot = [.. metricRecords];
+            outcomeTagValuesSnapshot = [.. outcomeTagValues];
+        }
+
         // Non-vacuous, and the counter's vocabulary is exactly the bounded set.
-        Assert.Contains("hit", outcomeTagValues);
-        Assert.Contains("miss", outcomeTagValues);
-        Assert.Contains("disabled", outcomeTagValues);
-        Assert.All(outcomeTagValues, v => Assert.Contains(v, new[] { "hit", "miss", "disabled" }));
+        Assert.Contains("hit", outcomeTagValuesSnapshot);
+        Assert.Contains("miss", outcomeTagValuesSnapshot);
+        Assert.Contains("disabled", outcomeTagValuesSnapshot);
+        Assert.All(outcomeTagValuesSnapshot, v => Assert.Contains(v, new[] { "hit", "miss", "disabled" }));
 
         var violations = new List<string>();
 
-        foreach (var record in metricRecords)
+        foreach (var record in metricRecordsSnapshot)
         {
             Check(violations, sentinels, "metric instrument name or tag", record);
         }
 
-        foreach (var activity in captured)
+        foreach (var activity in capturedSnapshot)
         {
             Check(violations, sentinels, $"span '{activity.DisplayName}' name", activity.DisplayName);
             foreach (var (key, value) in activity.Tags)

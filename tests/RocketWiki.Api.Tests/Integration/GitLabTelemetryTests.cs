@@ -108,17 +108,24 @@ public sealed class GitLabTelemetryTests(GitLabApiFixture fixture) : IClassFixtu
 
         meterListener.Dispose();
 
+        // Spans can still be stopping while this test asserts — enumerate a snapshot
+        // taken under the callbacks' own locks, not the live lists.
+        Activity[] capturedSnapshot;
+        string[] metricTagsSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        lock (metricTags) { metricTagsSnapshot = [.. metricTags]; }
+
         // Non-vacuous on both channels — and specifically the replacement span this
         // integration emits instead of the suppressed built-in one, with its bounded
         // operation tag present.
-        Assert.NotEmpty(captured);
-        Assert.NotEmpty(metricTags);
-        Assert.Contains(captured, a => a.OperationName == ApiTelemetry.GitLabFetchSpan
+        Assert.NotEmpty(capturedSnapshot);
+        Assert.NotEmpty(metricTagsSnapshot);
+        Assert.Contains(capturedSnapshot, a => a.OperationName == ApiTelemetry.GitLabFetchSpan
             && a.Tags.Any(t => t.Key == ApiTelemetry.GitLabOperationTag));
-        Assert.Contains(metricTags, t => t.StartsWith("rocketwiki.gitlab.", StringComparison.Ordinal));
+        Assert.Contains(metricTagsSnapshot, t => t.StartsWith("rocketwiki.gitlab.", StringComparison.Ordinal));
 
         var violations = new List<string>();
-        foreach (var activity in captured)
+        foreach (var activity in capturedSnapshot)
         {
             Check(violations, $"span '{activity.DisplayName}' (source '{activity.Source.Name}') name", activity.DisplayName);
             Check(violations, $"span '{activity.DisplayName}' operation name", activity.OperationName);
@@ -143,7 +150,7 @@ public sealed class GitLabTelemetryTests(GitLabApiFixture fixture) : IClassFixtu
             }
         }
 
-        foreach (var tag in metricTags)
+        foreach (var tag in metricTagsSnapshot)
         {
             Check(violations, "metric instrument name or tag", tag);
         }

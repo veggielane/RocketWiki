@@ -231,11 +231,19 @@ public sealed class McpTelemetryTests(RocketWikiApiFactory factory) : IClassFixt
 
         meterListener.Dispose();
 
-        Assert.NotEmpty(captured);
-        Assert.NotEmpty(metricTags);
+        // The MCP session's server side keeps tearing down — and stopping spans — after
+        // the client is disposed, so ActivityStopped can still be appending while this
+        // test asserts. Enumerate a snapshot taken under the callback's own lock.
+        Activity[] capturedSnapshot;
+        string[] metricTagsSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        lock (metricTags) { metricTagsSnapshot = [.. metricTags]; }
+
+        Assert.NotEmpty(capturedSnapshot);
+        Assert.NotEmpty(metricTagsSnapshot);
 
         var violations = new List<string>();
-        foreach (var activity in captured)
+        foreach (var activity in capturedSnapshot)
         {
             Check(violations, $"span display name on source '{activity.Source.Name}'", activity.DisplayName);
             Check(violations, $"span operation name on source '{activity.Source.Name}'", activity.OperationName);
@@ -264,14 +272,14 @@ public sealed class McpTelemetryTests(RocketWikiApiFactory factory) : IClassFixt
             }
         }
 
-        foreach (var tag in metricTags)
+        foreach (var tag in metricTagsSnapshot)
         {
             Check(violations, "metric instrument name or tag", tag);
         }
 
         Assert.True(violations.Count == 0,
             "design.md §15 forbids page content, search text, and principal attribute values in telemetry — " +
-            $"including via the MCP channel. Found {violations.Count} violation(s) across {captured.Count} " +
+            $"including via the MCP channel. Found {violations.Count} violation(s) across {capturedSnapshot.Length} " +
             "captured activities:\n  " + string.Join("\n  ", violations));
     }
 

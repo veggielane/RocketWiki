@@ -115,13 +115,20 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
 
         meterListener.Dispose();
 
-        Assert.NotEmpty(captured);
-        Assert.NotEmpty(metricTags);
-        // Non-vacuous for this feature specifically: the assistant instruments fired.
-        Assert.Contains(metricTags, t => t.StartsWith("rocketwiki.assistant.", StringComparison.Ordinal));
-        Assert.Contains(captured, a => a.OperationName == "rocketwiki.assistant.ask");
+        // Spans can still be stopping while this test asserts — enumerate a snapshot
+        // taken under the callbacks' own locks, not the live lists.
+        Activity[] capturedSnapshot;
+        string[] metricTagsSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        lock (metricTags) { metricTagsSnapshot = [.. metricTags]; }
 
-        AssertNoSentinels(captured, metricTags);
+        Assert.NotEmpty(capturedSnapshot);
+        Assert.NotEmpty(metricTagsSnapshot);
+        // Non-vacuous for this feature specifically: the assistant instruments fired.
+        Assert.Contains(metricTagsSnapshot, t => t.StartsWith("rocketwiki.assistant.", StringComparison.Ordinal));
+        Assert.Contains(capturedSnapshot, a => a.OperationName == "rocketwiki.assistant.ask");
+
+        AssertNoSentinels(capturedSnapshot, metricTagsSnapshot);
     }
 
     private async Task SeedSentinelPageAsync()
@@ -177,7 +184,7 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
         await db.SaveChangesAsync();
     }
 
-    private static void AssertNoSentinels(List<Activity> captured, List<string> metricTags)
+    private static void AssertNoSentinels(IReadOnlyList<Activity> captured, IReadOnlyList<string> metricTags)
     {
         var violations = new List<string>();
 
