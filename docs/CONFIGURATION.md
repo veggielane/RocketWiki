@@ -43,7 +43,7 @@ configuration binding.
 
 | Key | Default | Unset means | Read at | design.md |
 |---|---|---|---|---|
-| `FileStorage:Provider` | `FileSystem` (unset/empty selects it) | Filesystem provider. Any value other than `FileSystem`/`S3` **fails startup** — no silent fallback | `Storage/ServiceCollectionExtensions.cs` | §10 |
+| `FileStorage:Provider` | `FileSystem` (unset/empty selects it) | Filesystem provider. Any value other than `FileSystem`/`S3`/`SqlServer` **fails startup** — no silent fallback | `Storage/ServiceCollectionExtensions.cs` | §10 |
 | `FileStorage:FileSystem:Root` | *(none)* | With the FileSystem provider selected: `InvalidOperationException` when the provider is constructed — the root must be configured. Directory is created on first use | `Storage/FileSystemFileStorage.cs` | §10 |
 | `FileStorage:S3:ServiceUrl` | *(none)* | AWS SDK default endpoint resolution (i.e. real AWS S3). Set it for MinIO/Ceph/any S3-compatible endpoint. **When set** it must be an absolute URL including scheme, or startup fails | `Storage/ServiceCollectionExtensions.cs` | §10 |
 | `FileStorage:S3:Bucket` | *(none)* | No bucket — S3 operations fail | `Storage/S3FileStorage.cs` | §10 |
@@ -51,6 +51,41 @@ configuration binding.
 | `FileStorage:S3:AccessKey` / `SecretKey` | *(none)* | AWS SDK default credential chain | `Storage/ServiceCollectionExtensions.cs` | §10 |
 | `FileStorage:S3:Region` | *(none)* | No auth region set; only meaningful against real AWS S3 / SigV4-validating providers | `Storage/ServiceCollectionExtensions.cs` | §10 |
 | *(missing)* `FileStorage:S3` section with `Provider=S3` | — | `InvalidOperationException` at startup | `Storage/ServiceCollectionExtensions.cs` | §10 |
+| `FileStorage:SqlServer:ConnectionString` | *(none)* | With the SqlServer provider selected: falls back to `ConnectionStrings:rocketwiki` — blobs share the application database, which is the reason to pick this provider. With neither set, `InvalidOperationException` at construction naming both keys. Set it to keep blob churn out of the application's transaction log | `Storage/SqlServerFileStorage.cs` | §10 |
+| *(schema)* `dbo.FileStorageBlobs` | — | Created on first use, idempotently, **outside the EF migration chain**. The application account needs `CREATE TABLE` once; a locked-down deployment can pre-create it from the DDL below and grant DML only | `Storage/SqlServerFileStorage.cs` | §10 |
+
+### `FileStorage:Provider=SqlServer` — why this is not the default
+
+Blobs in the database cost you: transaction-log churn on every upload (a
+100 MiB attachment is 100 MiB of log), backups that grow with attachments
+rather than with content, buffer-pool pressure as large reads evict hot
+pages, per-GB licensing and storage at database rates, and no CDN or offload
+path — every byte is served by the API from the engine.
+
+Choose it anyway when a single consistent backup is worth more than all of
+that: air-gapped or single-container installs, dev/test environments that
+shouldn't need a MinIO or a volume, and restore drills you want to be one
+restore rather than two with a reconciliation step in the middle. Attachment
+behaviour is otherwise identical — the same `canView` check, the same §7
+audit row, the same streaming download; no presigned URLs exist on any
+provider.
+
+Pre-creating the table (optional):
+
+```sql
+CREATE TABLE dbo.FileStorageBlobs
+(
+    [Key] nvarchar(200) COLLATE Latin1_General_100_BIN2 NOT NULL,
+    [Content] varbinary(max) NOT NULL,
+    [ContentType] nvarchar(127) NULL,
+    [ByteLength] bigint NOT NULL,
+    [CreatedAtUtc] datetime2(3) NOT NULL,
+    CONSTRAINT [PK_FileStorageBlobs] PRIMARY KEY CLUSTERED ([Key])
+);
+```
+
+The binary collation is required, not cosmetic: without it a case-insensitive
+database would treat two distinct storage keys as one row.
 
 ## Upload limits (binary HTTP surface)
 

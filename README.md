@@ -391,6 +391,16 @@ Being explicit about what has and hasn't been checked, rather than letting
 **Verified by tests and CI** (the standing caveat — design.md §16 —
 applies: test-proven, never yet run against live infrastructure; each
 bullet keeps its own sharper caveat where one exists):
+- **SQL Server blob storage** (`FileStorage:Provider=SqlServer`), a third
+  `IFileStorage` alongside filesystem and S3 — deliberately **not** the
+  recommended default (transaction-log churn, backup size, buffer-pool
+  pressure, no CDN path), but the one option where a single database backup
+  covers content *and* attachments at one point in time: useful for
+  air-gapped or single-container installs, dev/test without a MinIO, and
+  one-step restore drills. Reads stream via a sequential-access reader and
+  uploads append in chunks, both pinned by allocation tripwires; the table
+  is created on first use, outside the EF migration chain. Behaviour is
+  verified against a real engine in the Testcontainers tier.
 - **Backend consistency round (from the consistency reviews)**: the three
   binary routes share one error-status map, 413 shape and upload-cap guard
   (they had drifted into three partial maps); the options families now

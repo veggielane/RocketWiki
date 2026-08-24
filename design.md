@@ -1079,12 +1079,45 @@ public interface IFileStorage
 }
 ```
 
-Two providers, selected by configuration:
+Three providers, selected by configuration:
 
 - **`S3FileStorage`** — `AWSSDK.S3` with a configurable `ServiceURL` and
   path-style addressing, so any S3-compatible endpoint works, not just AWS.
 - **`FileSystemFileStorage`** — a directory on disk. Used by local dev and
   integration tests; also fine for the simplest single-box deployments.
+- **`SqlServerFileStorage`** — blob bytes as `varbinary(max)` rows. **Not the
+  production default and not recommended as one**, for reasons worth stating
+  rather than implying: every byte written passes through the transaction
+  log, every backup carries the blobs, large reads evict pages from the
+  buffer pool, per-GB database storage is the most expensive storage in the
+  deployment, and there is no CDN or offload path in front of it. It exists
+  because some deployments want exactly those costs in exchange for one
+  property the other two cannot offer: content and blobs in a single backup
+  at a single point in time. That buys a genuinely simpler air-gapped or
+  single-container install, a dev/test environment with no MinIO and no
+  mounted volume, and a restore drill that is one restore instead of two —
+  with no window in which the database and the object store disagree about
+  which attachments exist.
+
+The SqlServer provider's table is created on first use and sits **outside the
+EF Core migration chain**, deliberately: `RocketWiki.Storage` references
+neither EF Core nor `RocketWiki.Data` (the dependency runs the other way), an
+opt-in provider must not add a table to every deployment that will never
+select it, and the checked-in migration set is asserted by `MigrationTests`.
+Its connection string defaults to the application's own
+(`ConnectionStrings:rocketwiki`) — sharing one database is the point — but
+pointing it at a *separate* database is supported and is often wiser, since
+blob churn then lands in its own transaction log rather than the one carrying
+page edits. The key column carries a binary collation so that "same key"
+means the same thing here as on S3 and on a case-sensitive filesystem.
+
+Reads and writes both stream: a sequential-access reader hands back the blob
+without materializing the row, and uploads append in chunks rather than
+buffering the attachment. One consequence has no equivalent on S3: an
+interrupted upload leaves a *truncated* object rather than none, because each
+chunk commits on its own — the same exposure `FileSystemFileStorage` has with
+`FileMode.Create`, and the alternative (one transaction spanning a 100 MiB
+upload) is precisely what this provider exists to avoid.
 
 Storage keys are opaque (`attachments/{yyyy}/{MM}/{guid}`) — page moves and
 renames never touch storage; the `Attachment` row owns all meaning.
@@ -1110,10 +1143,10 @@ renames never touch storage; the `Attachment` row owns all meaning.
   blobs are immutable per id). `no-cache` rather than a freshness window is
   deliberate: every reuse revalidates through the API, so `canView` runs and
   the §7 row is written even for a 304; a `max-age` would create unaudited
-  reads. Both storage providers validate every key before any I/O via a shared
-  helper (rejecting separators, rooted forms, and dot segments) — defense in
-  depth, since keys are system-generated — and the filesystem provider
-  additionally proves the resolved path stays under its root.
+  reads. All three storage providers validate every key before any I/O via a
+  shared helper (rejecting separators, rooted forms, and dot segments) —
+  defense in depth, since keys are system-generated — and the filesystem
+  provider additionally proves the resolved path stays under its root.
 - **Consequence for image rendering:** an `<img src>` cannot carry an
   `Authorization` header, so inline images can't point at the API directly.
   The client fetches the bytes through the authenticated API and renders them
@@ -1134,10 +1167,11 @@ renames never touch storage; the `Attachment` row owns all meaning.
 
 ```json
 "FileStorage": {
-  "Provider": "S3",                          // or "FileSystem"
+  "Provider": "S3",                          // or "FileSystem", or "SqlServer"
   "S3": { "ServiceUrl": "http://minio:9000",
           "Bucket": "rocketwiki", "ForcePathStyle": true },
-  "FileSystem": { "Root": "/data/attachments" }
+  "FileSystem": { "Root": "/data/attachments" },
+  "SqlServer": { "ConnectionString": null }   // null: share ConnectionStrings:rocketwiki
 }
 ```
 
