@@ -4,6 +4,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
 
@@ -23,10 +24,14 @@ public class NotificationReadModelService : INotificationReadModelService
     private readonly RocketWikiDbContext _db;
     private readonly string _localInstanceId;
 
+    /// <summary>No-tracking, like every other query in this read model.</summary>
+    private readonly PermissionContextLoader _permissions;
+
     public NotificationReadModelService(RocketWikiDbContext db, string localInstanceId)
     {
         _db = db;
         _localInstanceId = localInstanceId;
+        _permissions = new PermissionContextLoader(db, noTracking: true);
     }
 
     public async Task<IReadOnlyList<NotificationListItem>> GetNotificationsAsync(
@@ -65,26 +70,17 @@ public class NotificationReadModelService : INotificationReadModelService
             .Where(u => actorIds.Contains(u.Id))
             .ToDictionaryAsync(u => u.Id, cancellationToken);
 
+        // Two queries for every page-scoped row's canView, however many rows came back.
         // Space-scoped existence-gated rows (null TitleSnapshot, no page id - the
         // space-scoped SyncImported shape) need their space's grants too (for the
-        // any-space-role check below), not only the spaces of page-scoped rows.
-        var involvedSpaceIds = pages.Values.Select(p => p.SpaceId)
-            .Concat(rows.Where(n => n.TitleSnapshot == null && n.SpaceId != null).Select(n => n.SpaceId!.Value))
+        // any-space-role check below), not only the spaces of page-scoped rows: hence
+        // the extra space ids, still inside the same grants query.
+        var extraSpaceIds = rows
+            .Where(n => n.TitleSnapshot == null && n.SpaceId != null)
+            .Select(n => n.SpaceId!.Value)
             .Distinct().ToArray();
-        var grantsBySpace = (await _db.AccessRules.AsNoTracking()
-                .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId != null && involvedSpaceIds.Contains(r.SpaceId.Value))
-                .ToListAsync(cancellationToken))
-            .GroupBy(r => r.SpaceId!.Value)
-            .ToDictionary(g => g.Key, g => g.ToList());
-
-        var restrictionPageIds = pages.Values
-            .SelectMany(p => p.GetAncestorIds().Append(p.Id))
-            .Distinct().ToArray();
-        var allRestrictions = restrictionPageIds.Length == 0
-            ? new List<AccessRule>()
-            : await _db.AccessRules.AsNoTracking()
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && restrictionPageIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken);
+        var permissions = await _permissions.LoadBatchAsync(
+            pages.Values.Select(PermissionSubject.For).ToList(), extraSpaceIds, cancellationToken);
 
         var viewablePageIds = new HashSet<Guid>();
         foreach (var page in pages.Values)
@@ -94,11 +90,9 @@ public class NotificationReadModelService : INotificationReadModelService
                 continue; // fail closed: no resolvable space, no title
             }
 
-            var applicable = new HashSet<Guid>(page.GetAncestorIds()) { page.Id };
-            var restrictions = allRestrictions.Where(r => applicable.Contains(r.PageId!.Value)).ToList();
-            var grants = grantsBySpace.TryGetValue(page.SpaceId, out var g) ? g : new List<AccessRule>();
-            var permission = EffectivePermissionCalculator.Compute(
-                grants, restrictions, space.IsReplicaOf(_localInstanceId), principal);
+            var permission = permissions
+                .For(PermissionSubject.For(page), space.IsReplicaOf(_localInstanceId))
+                .Compute(principal);
             if (permission.CanView)
             {
                 viewablePageIds.Add(page.Id);
@@ -106,7 +100,7 @@ public class NotificationReadModelService : INotificationReadModelService
         }
 
         return rows
-            .Where(n => SurvivesReadTimeCheck(n, viewablePageIds, grantsBySpace, principal))
+            .Where(n => SurvivesReadTimeCheck(n, viewablePageIds, permissions, principal))
             .Select(n => ToListItem(n, viewablePageIds, spaces, actors, pages))
             .ToList();
     }
@@ -134,7 +128,7 @@ public class NotificationReadModelService : INotificationReadModelService
     /// legitimately learned to preserve.
     /// </summary>
     private static bool SurvivesReadTimeCheck(
-        Notification row, HashSet<Guid> viewablePageIds, Dictionary<Guid, List<AccessRule>> grantsBySpace, Principal principal)
+        Notification row, HashSet<Guid> viewablePageIds, PermissionContextBatch permissions, Principal principal)
     {
         if (row.TitleSnapshot is not null)
         {
@@ -146,9 +140,9 @@ public class NotificationReadModelService : INotificationReadModelService
             return viewablePageIds.Contains(pageId);
         }
 
+        // A space with no grants yields an empty list here, and no role, which denies.
         return row.SpaceId is { } spaceId
-            && grantsBySpace.TryGetValue(spaceId, out var grants)
-            && EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is not null;
+            && EffectivePermissionCalculator.ComputeSpaceRole(permissions.GrantsFor(spaceId), principal) is not null;
     }
 
     public async Task<PageMutationResult<NotificationListItem>> MarkNotificationReadAsync(
@@ -242,23 +236,13 @@ public class NotificationReadModelService : INotificationReadModelService
                 return false;
             }
 
-            var grants = await _db.AccessRules.AsNoTracking()
-                .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == page.SpaceId)
-                .ToListAsync(cancellationToken);
-            var ancestorIds = page.GetAncestorIds();
-            var restrictions = await _db.AccessRules.AsNoTracking()
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null
-                    && (r.PageId == page.Id || ancestorIds.Contains(r.PageId.Value)))
-                .ToListAsync(cancellationToken);
-            return EffectivePermissionCalculator.Compute(
-                grants, restrictions, space.IsReplicaOf(_localInstanceId), principal).CanView;
+            var context = await _permissions.LoadAsync(page, space.IsReplicaOf(_localInstanceId), cancellationToken);
+            return context.Compute(principal).CanView;
         }
 
         if (row.SpaceId is { } spaceId)
         {
-            var grants = await _db.AccessRules.AsNoTracking()
-                .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
-                .ToListAsync(cancellationToken);
+            var grants = await _permissions.LoadSpaceGrantsAsync(spaceId, cancellationToken);
             return grants.Count > 0 && EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is not null;
         }
 

@@ -2,9 +2,9 @@ using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
-using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 using RocketWiki.Storage;
 
 namespace RocketWiki.Data.Services;
@@ -19,12 +19,14 @@ public class AttachmentService : IAttachmentService
     private readonly RocketWikiDbContext _db;
     private readonly IFileStorage _fileStorage;
     private readonly string _localInstanceId;
+    private readonly PermissionContextLoader _permissions;
 
     public AttachmentService(RocketWikiDbContext db, IFileStorage fileStorage, string localInstanceId)
     {
         _db = db;
         _fileStorage = fileStorage;
         _localInstanceId = localInstanceId;
+        _permissions = new PermissionContextLoader(db);
     }
 
     public async Task<PageMutationResult<Attachment>> UploadAsync(
@@ -136,18 +138,7 @@ public class AttachmentService : IAttachmentService
 
     private async Task<bool> ComputeCanEditAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
     {
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
-            .ToListAsync(cancellationToken);
-
-        var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
-        var restrictions = restrictionIds.Length == 0
-            ? new List<AccessRule>()
-            : await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && restrictionIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken);
-
-        var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, space.IsReplicaOf(_localInstanceId), principal);
-        return permission.CanEdit;
+        var context = await _permissions.LoadAsync(page, space.IsReplicaOf(_localInstanceId), cancellationToken);
+        return context.Compute(principal).CanEdit;
     }
 }

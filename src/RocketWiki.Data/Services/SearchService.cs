@@ -3,9 +3,9 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
-using RocketWiki.Core.Enums;
 using RocketWiki.Core.Search;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
 
@@ -40,6 +40,7 @@ public class SearchService : ISearchService
     private readonly IEmbeddingGenerator<string, Embedding<float>>? _embeddingGenerator;
     private readonly EmbeddingOptions? _embeddingOptions;
     private readonly ILogger<SearchService>? _logger;
+    private readonly PermissionContextLoader _permissions;
 
     public SearchService(
         RocketWikiDbContext db,
@@ -51,6 +52,7 @@ public class SearchService : ISearchService
         _embeddingGenerator = embeddingGenerator;
         _embeddingOptions = embeddingOptions;
         _logger = logger;
+        _permissions = new PermissionContextLoader(db);
     }
 
     public async Task<IReadOnlyList<SearchHit>> SearchAsync(
@@ -383,20 +385,9 @@ public class SearchService : ISearchService
         List<SearchCandidate> candidates, Dictionary<Guid, int> chunkHints, string query,
         Principal principal, int maxResults, CancellationToken cancellationToken)
     {
-        var spaceIds = candidates.Select(c => c.SpaceId).Distinct().ToArray();
-        var spaceGrantsBySpace = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && spaceIds.Contains(r.SpaceId!.Value))
-            .ToListAsync(cancellationToken);
-
-        var relevantRestrictionPageIds = candidates
-            .SelectMany(c => ParseAncestorIds(c.AncestorPath).Append(c.PageId))
-            .Distinct()
-            .ToArray();
-        var restrictions = relevantRestrictionPageIds.Length == 0
-            ? new List<AccessRule>()
-            : await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && relevantRestrictionPageIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken);
+        // Two queries for the whole candidate set regardless of its size; the per-hit
+        // check below is pure in-memory rule evaluation.
+        var batch = await _permissions.LoadBatchAsync(candidates.Select(Subject).ToList(), cancellationToken);
 
         var hits = new List<SearchHit>();
         foreach (var candidate in candidates)
@@ -406,11 +397,8 @@ public class SearchService : ISearchService
                 break;
             }
 
-            var spaceGrants = spaceGrantsBySpace.Where(r => r.SpaceId == candidate.SpaceId).ToList();
-            var ancestorIds = new HashSet<Guid>(ParseAncestorIds(candidate.AncestorPath)) { candidate.PageId };
-            var applicableRestrictions = restrictions.Where(r => ancestorIds.Contains(r.PageId!.Value)).ToList();
-
-            var permission = EffectivePermissionCalculator.Compute(spaceGrants, applicableRestrictions, isReplicaSpace: false, principal);
+            // Replica status is irrelevant to canView (design.md §6.4).
+            var permission = batch.For(Subject(candidate), isReplicaSpace: false).Compute(principal);
             if (permission.CanView)
             {
                 // Snippet/heading/anchor are computed HERE, strictly after canView passed
@@ -486,10 +474,10 @@ public class SearchService : ISearchService
         return new SearchHit(candidate.PageId, candidate.Title, candidate.SpaceKey, snippet, headingPath, anchorId);
     }
 
-    private static IEnumerable<Guid> ParseAncestorIds(string ancestorPath) =>
-        string.IsNullOrEmpty(ancestorPath) || ancestorPath == "/"
-            ? Array.Empty<Guid>()
-            : ancestorPath.Split('/', StringSplitOptions.RemoveEmptyEntries).Select(Guid.Parse);
+    /// <summary>A candidate row's authorization key — the search projection never
+    /// materializes a Page entity, so the chain comes from its AncestorPath.</summary>
+    private static PermissionSubject Subject(SearchCandidate candidate) =>
+        new(candidate.PageId, candidate.SpaceId, candidate.AncestorPath);
 
     private sealed record SearchCandidate(Guid PageId, string Title, Guid SpaceId, string SpaceKey, string CurrentContent, string AncestorPath);
 

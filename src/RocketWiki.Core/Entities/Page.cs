@@ -46,14 +46,22 @@ public class Page
     /// Ancestor ids parsed from <see cref="AncestorPath"/>, root-most first. Does not
     /// include this page's own id. Restrictions accumulate down this chain (design.md §6.4).
     /// </summary>
-    public IReadOnlyList<Guid> GetAncestorIds()
+    public IReadOnlyList<Guid> GetAncestorIds() => ParseAncestorIds(AncestorPath);
+
+    /// <summary>
+    /// <see cref="GetAncestorIds"/> for callers holding a materialized path without the
+    /// entity — a page projected straight from SQL. The single parse of the "/id1/id2/"
+    /// format lives here; re-deriving it elsewhere is how two call sites end up
+    /// disagreeing about a page's restriction chain.
+    /// </summary>
+    public static IReadOnlyList<Guid> ParseAncestorIds(string ancestorPath)
     {
-        if (string.IsNullOrEmpty(AncestorPath) || AncestorPath == "/")
+        if (string.IsNullOrEmpty(ancestorPath) || ancestorPath == "/")
         {
             return Array.Empty<Guid>();
         }
 
-        return AncestorPath
+        return ancestorPath
             .Split('/', StringSplitOptions.RemoveEmptyEntries)
             .Select(Guid.Parse)
             .ToArray();
