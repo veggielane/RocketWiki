@@ -8,7 +8,9 @@ namespace RocketWiki.Storage;
 /// database, object storage has no built-in instrumentation reaching this process — the
 /// AWS SDK's own tracing isn't wired up and the filesystem provider has none by
 /// definition — so without these spans an attachment upload is a hole in the trace
-/// between the HTTP span and the audit row.
+/// between the HTTP span and the audit row. The SqlServer provider is the one exception
+/// (SqlClient's instrumentation sees its commands), and it is still wrapped here so a
+/// storage dashboard reads the same whichever provider is configured.
 ///
 /// **Storage keys are never tagged.** They are opaque
 /// (<c>attachments/{yyyy}/{MM}/{guid}</c>) and therefore not content, but nothing on a
@@ -44,6 +46,7 @@ public static class StorageTelemetry
 
     public const string FileSystemProvider = "filesystem";
     public const string S3Provider = "s3";
+    public const string SqlServerProvider = "sqlserver";
 
     public const string SaveOperation = "save";
     public const string OpenReadOperation = "open_read";

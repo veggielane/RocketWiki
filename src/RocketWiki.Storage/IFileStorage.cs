@@ -1,10 +1,13 @@
 namespace RocketWiki.Storage;
 
 /// <summary>
-/// Abstraction over attachment blob storage (design.md §10). Two providers ship
+/// Abstraction over attachment blob storage (design.md §10). Three providers ship
 /// behind this interface: <see cref="FileSystemFileStorage"/> for dev, tests, and
-/// simple single-box installs, and <see cref="S3FileStorage"/> for any
-/// S3-compatible object store (MinIO, Ceph, R2, AWS S3) in production.
+/// simple single-box installs, <see cref="S3FileStorage"/> for any S3-compatible
+/// object store (MinIO, Ceph, R2, AWS S3) in production, and
+/// <see cref="SqlServerFileStorage"/> — not recommended for production, but useful
+/// where one database backup covering content and blobs together is worth more than
+/// keeping large binaries out of the transaction log.
 ///
 /// Storage keys are opaque strings (e.g. <c>attachments/{yyyy}/{MM}/{guid}</c>) —
 /// callers never derive them from page titles, file names, or anything else that

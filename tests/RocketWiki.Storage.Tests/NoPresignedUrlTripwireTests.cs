@@ -15,7 +15,7 @@ namespace RocketWiki.Storage.Tests;
 /// </summary>
 public sealed class NoPresignedUrlTripwireTests
 {
-    /// <summary>The interface AND both implementations: an implementation-only
+    /// <summary>The interface AND every implementation: an implementation-only
     /// public method (not on IFileStorage) would still be reachable by anyone
     /// holding the concrete type, so the sweep must not stop at the contract.</summary>
     private static readonly Type[] StorageSurface =
@@ -23,6 +23,7 @@ public sealed class NoPresignedUrlTripwireTests
         typeof(IFileStorage),
         typeof(FileSystemFileStorage),
         typeof(S3FileStorage),
+        typeof(SqlServerFileStorage),
     ];
 
     private static readonly string[] ForbiddenNameFragments = ["url", "uri", "presign", "signedlink"];

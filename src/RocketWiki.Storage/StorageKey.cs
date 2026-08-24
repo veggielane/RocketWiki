@@ -1,8 +1,9 @@
 namespace RocketWiki.Storage;
 
 /// <summary>
-/// Provider-independent storage-key validation, run by BOTH <see cref="IFileStorage"/>
-/// implementations before any I/O — filesystem path resolution or S3 SDK call.
+/// Provider-independent storage-key validation, run by EVERY <see cref="IFileStorage"/>
+/// implementation before any I/O — filesystem path resolution, S3 SDK call, or opening a
+/// SQL connection.
 /// Keys are system-generated today (<c>attachments/{yyyy}/{MM}/{guid}</c> and
 /// friends — design.md §10: opaque, never derived from titles, file names, or
 /// anything else a user types), so every rejection here is defense-in-depth
@@ -20,6 +21,10 @@ namespace RocketWiki.Storage;
 /// (console, gateway, mounted filesystem) would resolve them to a different
 /// object than the row names.</item>
 /// </list>
+/// <see cref="SqlServerFileStorage"/> stores keys as primary-key values, where none of
+/// the above is dangerous by itself — it applies the same rules so that a key which
+/// round-trips on one provider round-trips on all three, and a deployment can change
+/// providers without discovering that its keys were only ever legal on the old one.
 /// <see cref="FileSystemFileStorage"/> keeps its own rooted-path and
 /// resolved-path-stays-under-root checks on top — the containment proof only
 /// that provider can make.
