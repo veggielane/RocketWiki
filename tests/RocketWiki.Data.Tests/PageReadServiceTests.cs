@@ -100,6 +100,64 @@ public class PageReadServiceTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task GetPage_SeveralFailingRestrictionsInTheChain_AlwaysReportsTheRootMostOne()
+    {
+        // The denial-reason contract (design.md §6.7, and the input-order requirement on
+        // EffectivePermissionCalculator): the page+ancestor chain is evaluated root-most
+        // ancestor first, so the reported "first failing restriction" is the OUTERMOST
+        // boundary the caller failed, identically on every request. Both branches below
+        // seed the same two failing rules in opposite insert order - and therefore, very
+        // likely, opposite raw table order - and must produce the same reason. The
+        // verdict itself (denied) never depended on order; only which rule is named did.
+        using var context = CreateContext();
+        var space = TestData.NewSpace();
+        context.Spaces.Add(space);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+
+        var chains = new[]
+        {
+            SeedFailingChain(context, space, childRuleFirst: true),
+            SeedFailingChain(context, space, childRuleFirst: false),
+        };
+        context.SaveChanges();
+
+        var service = new PageReadService(context);
+
+        foreach (var chain in chains)
+        {
+            var denied = Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(chain.Child.Id, MakePrincipal()));
+            Assert.Equal($"restriction:{chain.Parent.Id}:{chain.ParentRule.Id}", denied.Reason);
+        }
+    }
+
+    private sealed record FailingChain(Page Parent, Page Child, AccessRule ParentRule);
+
+    /// <summary>Parent and child each carry a view restriction the test principal fails;
+    /// <paramref name="childRuleFirst"/> controls only the order the two rules are
+    /// inserted in.</summary>
+    private static FailingChain SeedFailingChain(
+        RocketWikiDbContext context, Space space, bool childRuleFirst)
+    {
+        var suffix = childRuleFirst ? "a" : "b";
+        var parent = TestData.NewPage(space, $"parent-{suffix}");
+        var child = TestData.NewPage(space, $"child-{suffix}", parent);
+        context.Pages.AddRange(parent, child);
+
+        var parentRule = ViewRestriction(parent.Id, """{ "group": "parent-only" }""");
+        var childRule = ViewRestriction(child.Id, """{ "group": "child-only" }""");
+        if (childRuleFirst)
+        {
+            context.AccessRules.AddRange(childRule, parentRule);
+        }
+        else
+        {
+            context.AccessRules.AddRange(parentRule, childRule);
+        }
+
+        return new FailingChain(parent, child, parentRule);
+    }
+
+    [Fact]
     public async Task GetPage_NoSpaceRoleAtAll_IsDeniedWithNoSpaceRoleReason()
     {
         var space = TestData.NewSpace();

@@ -3,6 +3,7 @@ using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
 
@@ -22,11 +23,13 @@ public class PagePermissionReadService : IPagePermissionReadService
 {
     private readonly RocketWikiDbContext _db;
     private readonly string _localInstanceId;
+    private readonly PermissionContextLoader _permissions;
 
     public PagePermissionReadService(RocketWikiDbContext db, string localInstanceId)
     {
         _db = db;
         _localInstanceId = localInstanceId;
+        _permissions = new PermissionContextLoader(db);
     }
 
     public async Task<IReadOnlyDictionary<Guid, PagePermissionFacts>> GetPermissionFactsAsync(
@@ -39,8 +42,9 @@ public class PagePermissionReadService : IPagePermissionReadService
         }
 
         // Four queries per batch, independent of page count: the pages, their spaces,
-        // those spaces' grants, and every restriction attached to any page-or-ancestor
-        // in the batch. The per-page work below is pure in-memory rule evaluation.
+        // then the loader's two (those spaces' grants, and every restriction attached to
+        // any page-or-ancestor in the batch). The per-page work below is pure in-memory
+        // rule evaluation.
         var ids = pageIds.Distinct().ToArray();
         var pages = await _db.Pages.Where(p => ids.Contains(p.Id)).ToListAsync(cancellationToken);
         if (pages.Count == 0)
@@ -53,21 +57,8 @@ public class PagePermissionReadService : IPagePermissionReadService
             .Where(s => spaceIds.Contains(s.Id))
             .ToDictionaryAsync(s => s.Id, cancellationToken);
 
-        var grantsBySpaceId = (await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId != null && spaceIds.Contains(r.SpaceId.Value))
-                .ToListAsync(cancellationToken))
-            .GroupBy(r => r.SpaceId!.Value)
-            .ToDictionary(g => g.Key, g => (IReadOnlyList<AccessRule>)g.ToList());
-
-        var chainIds = pages
-            .SelectMany(p => p.GetAncestorIds().Append(p.Id))
-            .Distinct()
-            .ToArray();
-        var restrictionsByPageId = (await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && chainIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken))
-            .GroupBy(r => r.PageId!.Value)
-            .ToDictionary(g => g.Key, g => (IReadOnlyList<AccessRule>)g.ToList());
+        var permissions = await _permissions.LoadBatchAsync(
+            pages.Select(PermissionSubject.For).ToList(), cancellationToken);
 
         foreach (var page in pages)
         {
@@ -84,12 +75,9 @@ public class PagePermissionReadService : IPagePermissionReadService
             // already recorded this page's canView once), and counting the derived
             // canEdit/canComment facts again would double every page view in it.
             // Explain's verdict is pinned by test to be identical to Compute's.
-            var grants = grantsBySpaceId.GetValueOrDefault(page.SpaceId, []);
-            var explanation = EffectivePermissionCalculator.Explain(
-                grants,
-                OrderedChainRestrictions(page, restrictionsByPageId),
-                space.IsReplicaOf(_localInstanceId),
-                principal);
+            var explanation = permissions
+                .For(PermissionSubject.For(page), space.IsReplicaOf(_localInstanceId))
+                .Explain(principal);
 
             result[page.Id] = new PagePermissionFacts(
                 explanation.Permission,
@@ -115,12 +103,8 @@ public class PagePermissionReadService : IPagePermissionReadService
             return new ReadResult<PagePermissionExplanation>.NotFound();
         }
 
-        var grants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
-            .ToListAsync(cancellationToken);
-        var chain = await LoadChainAsync(page, cancellationToken);
-        var restrictions = OrderedChainRestrictions(page, chain.RestrictionsByPageId);
-        var isReplica = space.IsReplicaOf(_localInstanceId);
+        var context = await _permissions.LoadAsync(page, space.IsReplicaOf(_localInstanceId), cancellationToken);
+        var titlesByPageId = await LoadChainTitlesAsync(page, cancellationToken);
 
         // The CALLER's gate first, via the enforcement path (Compute, not Explain):
         // an inspector the caller can point at a page they cannot view would be the
@@ -128,13 +112,13 @@ public class PagePermissionReadService : IPagePermissionReadService
         // hand over its rules and ancestor titles. Denied travels out with the
         // caller's own failing reason for the audit row (§6.7/§7) and collapses to
         // null at the resolver, exactly like a denied page read.
-        var callerPermission = EffectivePermissionCalculator.Compute(grants, restrictions, isReplica, caller);
+        var callerPermission = context.Compute(caller);
         if (!callerPermission.CanView)
         {
             return new ReadResult<PagePermissionExplanation>.Denied(callerPermission.ViewDenialReason ?? "no-space-role");
         }
 
-        var explanation = EffectivePermissionCalculator.Explain(grants, restrictions, isReplica, subject);
+        var explanation = context.Explain(subject);
 
         // Display only, never a decision input (design.md §6.1): the local mirror row
         // for the subject, when one exists. A what-if principal an admin typed in has
@@ -150,8 +134,8 @@ public class PagePermissionReadService : IPagePermissionReadService
             explanation.SpaceRole,
             explanation.IsReplicaSpace,
             explanation.Permission,
-            WithTitles(explanation.ViewRestrictions, chain.TitlesByPageId),
-            WithTitles(explanation.EditRestrictions, chain.TitlesByPageId)));
+            WithTitles(explanation.ViewRestrictions, titlesByPageId),
+            WithTitles(explanation.EditRestrictions, titlesByPageId)));
     }
 
     public async Task<IReadOnlyList<PageRestrictionDetail>> GetRestrictionsAsync(
@@ -163,9 +147,7 @@ public class PagePermissionReadService : IPagePermissionReadService
             return [];
         }
 
-        var grants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == page.SpaceId)
-            .ToListAsync(cancellationToken);
+        var grants = await _permissions.LoadSpaceGrantsAsync(page.SpaceId, cancellationToken);
 
         // design.md §6.5.2 via the shared gate — the exact check AccessRuleService's
         // create/update/delete enforce, not a re-derivation. Non-managers get the
@@ -177,8 +159,9 @@ public class PagePermissionReadService : IPagePermissionReadService
             return [];
         }
 
-        var chain = await LoadChainAsync(page, cancellationToken);
-        var rules = OrderedChainRestrictions(page, chain.RestrictionsByPageId);
+        var rules = await _permissions.LoadOrderedRestrictionsAsync(
+            PermissionSubject.For(page).ChainPageIds(), cancellationToken);
+        var titlesByPageId = await LoadChainTitlesAsync(page, cancellationToken);
 
         var editorIds = rules.Select(r => r.UpdatedByUserId).Distinct().ToArray();
         var editorNames = await _db.Users
@@ -189,7 +172,7 @@ public class PagePermissionReadService : IPagePermissionReadService
             .Select(r => new PageRestrictionDetail(
                 r.Id,
                 r.PageId!.Value,
-                chain.TitlesByPageId.GetValueOrDefault(r.PageId.Value, string.Empty),
+                titlesByPageId.GetValueOrDefault(r.PageId.Value, string.Empty),
                 Inherited: r.PageId.Value != page.Id,
                 r.Action!.Value,
                 r.ExpressionJson,
@@ -207,47 +190,15 @@ public class PagePermissionReadService : IPagePermissionReadService
                 c.Action, c.ExpressionJson, c.Passed))
             .ToList();
 
-    private sealed record ChainData(
-        IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> RestrictionsByPageId,
-        IReadOnlyDictionary<Guid, string> TitlesByPageId);
-
-    /// <summary>Every restriction on the page + its ancestors, plus chain titles, in
-    /// two queries. Titles include soft-deleted ancestors' (IgnoreQueryFilters) so a
-    /// rule row is never rendered with a blank owner just because its page is in the
-    /// trash — restriction accumulation itself only ever runs over live pages.</summary>
-    private async Task<ChainData> LoadChainAsync(Page page, CancellationToken cancellationToken)
+    /// <summary>Titles for the page + its ancestors, one query. Includes soft-deleted
+    /// ancestors' (IgnoreQueryFilters) so a rule row is never rendered with a blank
+    /// owner just because its page is in the trash — restriction accumulation itself
+    /// only ever runs over live pages.</summary>
+    private async Task<IReadOnlyDictionary<Guid, string>> LoadChainTitlesAsync(Page page, CancellationToken cancellationToken)
     {
-        var chainIds = page.GetAncestorIds().Append(page.Id).ToArray();
-        var restrictions = (await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && chainIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken))
-            .GroupBy(r => r.PageId!.Value)
-            .ToDictionary(g => g.Key, g => (IReadOnlyList<AccessRule>)g.ToList());
-        var titles = await _db.Pages.IgnoreQueryFilters()
+        var chainIds = PermissionSubject.For(page).ChainPageIds().ToArray();
+        return await _db.Pages.IgnoreQueryFilters()
             .Where(p => chainIds.Contains(p.Id))
             .ToDictionaryAsync(p => p.Id, p => p.Title, cancellationToken);
-        return new ChainData(restrictions, titles);
-    }
-
-    /// <summary>
-    /// The page-plus-ancestors restriction list in deterministic order: root-most
-    /// ancestor first, the page's own rules last, CreatedAtUtc then Id within one
-    /// page. The calculator's "first failing restriction" reason — which lands in
-    /// audit rows and the inspector alike — is thereby stable instead of database
-    /// enumeration-order luck, and root-most-first reads naturally in the inspector.
-    /// </summary>
-    private static List<AccessRule> OrderedChainRestrictions(
-        Page page, IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> restrictionsByPageId)
-    {
-        var ordered = new List<AccessRule>();
-        foreach (var chainPageId in page.GetAncestorIds().Append(page.Id))
-        {
-            if (restrictionsByPageId.TryGetValue(chainPageId, out var rules))
-            {
-                ordered.AddRange(rules.OrderBy(r => r.CreatedAtUtc).ThenBy(r => r.Id));
-            }
-        }
-
-        return ordered;
     }
 }

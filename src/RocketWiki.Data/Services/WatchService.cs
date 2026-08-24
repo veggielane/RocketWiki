@@ -4,6 +4,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
 
@@ -16,11 +17,13 @@ public class WatchService : IWatchService
 {
     private readonly RocketWikiDbContext _db;
     private readonly string _localInstanceId;
+    private readonly PermissionContextLoader _permissions;
 
     public WatchService(RocketWikiDbContext db, string localInstanceId)
     {
         _db = db;
         _localInstanceId = localInstanceId;
+        _permissions = new PermissionContextLoader(db);
     }
 
     public async Task<PageMutationResult<Watch>> WatchPageAsync(
@@ -163,17 +166,7 @@ public class WatchService : IWatchService
 
     private async Task<bool> ComputeCanViewAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
     {
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
-            .ToListAsync(cancellationToken);
-
-        var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
-        var restrictions = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && restrictionIds.Contains(r.PageId.Value))
-            .ToListAsync(cancellationToken);
-
-        return EffectivePermissionCalculator
-            .Compute(spaceGrants, restrictions, space.IsReplicaOf(_localInstanceId), principal)
-            .CanView;
+        var context = await _permissions.LoadAsync(page, space.IsReplicaOf(_localInstanceId), cancellationToken);
+        return context.Compute(principal).CanView;
     }
 }

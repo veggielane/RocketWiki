@@ -3,6 +3,7 @@ using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
 
@@ -22,10 +23,12 @@ namespace RocketWiki.Data.Services;
 public class PageReadService : IPageReadService
 {
     private readonly RocketWikiDbContext _db;
+    private readonly PermissionContextLoader _permissions;
 
     public PageReadService(RocketWikiDbContext db)
     {
         _db = db;
+        _permissions = new PermissionContextLoader(db);
     }
 
     public async Task<ReadResult<Page>> GetPageAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default)
@@ -36,13 +39,15 @@ public class PageReadService : IPageReadService
             return new ReadResult<Page>.NotFound();
         }
 
+        // Fail closed on an unresolvable space even though the permission computation
+        // below no longer needs the row: no space, no grants to hold a role under.
         var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         if (space is null)
         {
             return new ReadResult<Page>.NotFound();
         }
 
-        var permission = await ComputePermissionAsync(space, page, principal, cancellationToken);
+        var permission = await ComputePermissionAsync(page, principal, cancellationToken);
         return permission.CanView
             ? new ReadResult<Page>.Found(page)
             : new ReadResult<Page>.Denied(permission.ViewDenialReason ?? "no-space-role");
@@ -182,25 +187,17 @@ public class PageReadService : IPageReadService
         return new PageTreeNode(page.Id, page.Title, page.Slug, page.SortOrder, hasRestrictions, ownViewRestrictions, children);
     }
 
-    private async Task<EffectivePermission> ComputePermissionAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
+    /// <summary>
+    /// Replica status is irrelevant to canView (design.md §6.4: it only ever affects
+    /// canEdit), so this is always false here regardless of the space's origin.
+    /// The permission-check counter (rocketwiki.access.permission_checks) and its
+    /// bounded denial-category tag are emitted inside Compute itself (design.md §15)
+    /// - unchanged by the richer ReadResult return, which carries the *specific*
+    /// reason to the audit row only.
+    /// </summary>
+    private async Task<EffectivePermission> ComputePermissionAsync(Page page, Principal principal, CancellationToken cancellationToken)
     {
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
-            .ToListAsync(cancellationToken);
-
-        var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
-        var restrictions = restrictionIds.Length == 0
-            ? new List<AccessRule>()
-            : await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && restrictionIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken);
-
-        // Replica status is irrelevant to canView (design.md §6.4: it only ever affects
-        // canEdit), so this is always false here regardless of the space's origin.
-        // The permission-check counter (rocketwiki.access.permission_checks) and its
-        // bounded denial-category tag are emitted inside Compute itself (design.md §15)
-        // - unchanged by the richer ReadResult return, which carries the *specific*
-        // reason to the audit row only.
-        return EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplicaSpace: false, principal);
+        var context = await _permissions.LoadAsync(page, isReplicaSpace: false, cancellationToken);
+        return context.Compute(principal);
     }
 }

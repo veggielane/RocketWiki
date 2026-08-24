@@ -4,6 +4,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
 
@@ -15,11 +16,13 @@ public class LabelService : ILabelService
 {
     private readonly RocketWikiDbContext _db;
     private readonly string _localInstanceId;
+    private readonly PermissionContextLoader _permissions;
 
     public LabelService(RocketWikiDbContext db, string localInstanceId)
     {
         _db = db;
         _localInstanceId = localInstanceId;
+        _permissions = new PermissionContextLoader(db);
     }
 
     public async Task<PageMutationResult<Label>> CreateLabelAsync(
@@ -168,9 +171,7 @@ public class LabelService : ILabelService
             return Array.Empty<Page>();
         }
 
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
-            .ToListAsync(cancellationToken);
+        var spaceGrants = await _permissions.LoadSpaceGrantsAsync(spaceId, cancellationToken);
         if (EffectivePermissionCalculator.ComputeSpaceRole(spaceGrants, principal) is null)
         {
             return Array.Empty<Page>(); // no space role at all - nothing is visible (design.md §6.7)
@@ -185,24 +186,19 @@ public class LabelService : ILabelService
             return Array.Empty<Page>();
         }
 
-        var relevantRestrictionPageIds = candidatePages
-            .SelectMany(p => p.GetAncestorIds().Append(p.Id))
-            .Distinct()
-            .ToArray();
-        var restrictions = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && relevantRestrictionPageIds.Contains(r.PageId.Value))
-            .ToListAsync(cancellationToken);
-
         // design.md §6.7: a label listing must not reveal a restricted page's existence
         // by any means, including by omission-implied count - each candidate is
         // filtered individually against its own ancestor chain, exactly like the page tree.
+        // Batched: one restrictions query for the whole candidate set (the space's
+        // grants are already in hand from the role gate above), then in-memory evaluation.
+        var subjects = candidatePages.Select(PermissionSubject.For).ToList();
+        var batch = await _permissions.LoadBatchAsync(subjects, spaceId, spaceGrants, cancellationToken);
+
         var visiblePages = new List<Page>();
         foreach (var page in candidatePages)
         {
-            var applicableIds = new HashSet<Guid>(page.GetAncestorIds()) { page.Id };
-            var applicableRestrictions = restrictions.Where(r => applicableIds.Contains(r.PageId!.Value)).ToList();
-            var permission = EffectivePermissionCalculator.Compute(spaceGrants, applicableRestrictions, isReplicaSpace: false, principal);
-            if (permission.CanView)
+            // Replica status is irrelevant to canView (design.md §6.4).
+            if (batch.For(PermissionSubject.For(page), isReplicaSpace: false).Compute(principal).CanView)
             {
                 visiblePages.Add(page);
             }
@@ -213,18 +209,7 @@ public class LabelService : ILabelService
 
     private async Task<bool> ComputeCanEditAsync(Space space, Page page, Principal principal, CancellationToken cancellationToken)
     {
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
-            .ToListAsync(cancellationToken);
-
-        var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
-        var restrictions = restrictionIds.Length == 0
-            ? new List<AccessRule>()
-            : await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && restrictionIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken);
-
-        var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, space.IsReplicaOf(_localInstanceId), principal);
-        return permission.CanEdit;
+        var context = await _permissions.LoadAsync(page, space.IsReplicaOf(_localInstanceId), cancellationToken);
+        return context.Compute(principal).CanEdit;
     }
 }

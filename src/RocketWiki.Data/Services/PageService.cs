@@ -2,9 +2,9 @@ using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
-using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 using RocketWiki.Data.Telemetry;
 
 namespace RocketWiki.Data.Services;
@@ -21,11 +21,13 @@ public class PageService : IPageService
 {
     private readonly RocketWikiDbContext _db;
     private readonly string _localInstanceId;
+    private readonly PermissionContextLoader _permissions;
 
     public PageService(RocketWikiDbContext db, string localInstanceId)
     {
         _db = db;
         _localInstanceId = localInstanceId;
+        _permissions = new PermissionContextLoader(db);
     }
 
     public async Task<PageMutationResult<Page>> CreatePageAsync(
@@ -126,8 +128,7 @@ public class PageService : IPageService
             return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
-        var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
-        var permission = await ComputeEffectivePermissionAsync(space, restrictionIds, principal, cancellationToken);
+        var permission = await ComputeEffectivePermissionAsync(space, page, principal, cancellationToken);
         if (!permission.CanEdit)
         {
             return PageMutationResult<Page>.Failure(new ForbiddenError(permission.EditDenialReason ?? "forbidden"));
@@ -247,8 +248,7 @@ public class PageService : IPageService
         // page's current restrictions, and under the restrictions it would inherit at
         // the destination - otherwise "move" would be a way to relocate a page across a
         // restriction boundary the mover doesn't actually have edit rights on.
-        var oldRestrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
-        var oldPermission = await ComputeEffectivePermissionAsync(space, oldRestrictionIds, principal, cancellationToken);
+        var oldPermission = await ComputeEffectivePermissionAsync(space, page, principal, cancellationToken);
         if (!oldPermission.CanEdit)
         {
             return PageMutationResult<Page>.Failure(new ForbiddenError(oldPermission.EditDenialReason ?? "forbidden"));
@@ -450,27 +450,18 @@ public class PageService : IPageService
     private async Task<int> CountPagesFailingCanEditAsync(
         Space space, IReadOnlyCollection<Page> subtreePages, Principal principal, CancellationToken cancellationToken)
     {
-        var rootAncestorIds = subtreePages.Count == 0 ? Array.Empty<Guid>() : subtreePages.First().GetAncestorIds();
-        var subtreePageIds = subtreePages.Select(p => p.Id);
-        var relevantRestrictionPageIds = rootAncestorIds.Concat(subtreePageIds).Distinct().ToArray();
+        var subjects = subtreePages.Select(PermissionSubject.For).ToList();
+        var batch = await _permissions.LoadBatchAsync(subjects, cancellationToken);
 
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
-            .ToListAsync(cancellationToken);
-
-        var allRelevantRestrictions = relevantRestrictionPageIds.Length == 0
-            ? new List<AccessRule>()
-            : await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && relevantRestrictionPageIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken);
+        // The space's real replica flag, like every other canEdit computation: both
+        // callers refuse a replica with ReadOnlyReplicaError before reaching here, so
+        // this is a guard held rather than a condition relied on (design.md §6.4/§12).
+        var isReplicaSpace = space.IsReplicaOf(_localInstanceId);
 
         var blockedCount = 0;
-        foreach (var subtreePage in subtreePages)
+        foreach (var subject in subjects)
         {
-            var applicablePageIds = new HashSet<Guid>(subtreePage.GetAncestorIds()) { subtreePage.Id };
-            var applicableRestrictions = allRelevantRestrictions.Where(r => applicablePageIds.Contains(r.PageId!.Value)).ToList();
-            var permission = EffectivePermissionCalculator.Compute(spaceGrants, applicableRestrictions, isReplicaSpace: false, principal);
-            if (!permission.CanEdit)
+            if (!batch.For(subject, isReplicaSpace).Compute(principal).CanEdit)
             {
                 blockedCount++;
             }
@@ -509,8 +500,7 @@ public class PageService : IPageService
             return PageMutationResult<Page>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
-        var restrictionIds = page.GetAncestorIds().Append(page.Id).ToArray();
-        var permission = await ComputeEffectivePermissionAsync(space, restrictionIds, principal, cancellationToken);
+        var permission = await ComputeEffectivePermissionAsync(space, page, principal, cancellationToken);
         if (!permission.CanEdit)
         {
             return PageMutationResult<Page>.Failure(new ForbiddenError(permission.EditDenialReason ?? "forbidden"));
@@ -557,18 +547,22 @@ public class PageService : IPageService
     }
 
     private async Task<EffectivePermission> ComputeEffectivePermissionAsync(
-        Space space, IReadOnlyCollection<Guid> restrictionPageIds, Principal principal, CancellationToken cancellationToken)
+        Space space, Page page, Principal principal, CancellationToken cancellationToken)
     {
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
-            .ToListAsync(cancellationToken);
+        var context = await _permissions.LoadAsync(page, space.IsReplicaOf(_localInstanceId), cancellationToken);
+        return context.Compute(principal);
+    }
 
-        var restrictions = restrictionPageIds.Count == 0
-            ? new List<AccessRule>()
-            : await _db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && restrictionPageIds.Contains(r.PageId.Value))
-                .ToListAsync(cancellationToken);
-
-        return EffectivePermissionCalculator.Compute(spaceGrants, restrictions, space.IsReplicaOf(_localInstanceId), principal);
+    /// <summary>
+    /// <paramref name="restrictionPageIds"/> is a restriction chain: root-most ancestor
+    /// first, the page acted on last. For operations that land under a chain which is
+    /// not the page's own - a create under a parent, a move's destination.
+    /// </summary>
+    private async Task<EffectivePermission> ComputeEffectivePermissionAsync(
+        Space space, IReadOnlyList<Guid> restrictionPageIds, Principal principal, CancellationToken cancellationToken)
+    {
+        var context = await _permissions.LoadAsync(
+            space.Id, restrictionPageIds, space.IsReplicaOf(_localInstanceId), cancellationToken);
+        return context.Compute(principal);
     }
 }
