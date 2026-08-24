@@ -27,8 +27,10 @@
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.11" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
     <!-- Direct override: EFCore.Sqlite pulls in SQLitePCLRaw 2.1.11, which NU1903 flags
-         for a known high-severity advisory. Pin to a patched version (matches
-         RocketWiki.Data.Tests). -->
+         for a known high-severity advisory. Held a major ahead of that transitive
+         version deliberately; the SQLite-backed tiers are what prove the native
+         bundle still loads. Keep in step with RocketWiki.Data.Tests and
+         RocketWiki.Sync.Tests, which pin it for the same reason. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
   </ItemGroup>
 

@@ -19,7 +19,9 @@
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
     <!-- Direct override: EFCore.Sqlite pulls in SQLitePCLRaw 2.1.11, which NU1903 flags
-         for a known high-severity advisory. Pin to a patched version. -->
+         for a known high-severity advisory. Held a major ahead of that transitive
+         version deliberately; the SQLite-backed tiers are what prove the native
+         bundle still loads. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
   </ItemGroup>
 
