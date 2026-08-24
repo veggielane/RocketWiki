@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Audit;
@@ -52,7 +53,13 @@ public partial class Query
     {
         if (!instanceRoleAccessor.IsInstanceAdmin)
         {
-            await auditSink.RecordAsync(new AuditRecord("audit.view", AuditOutcome.Denied), cancellationToken);
+            // Same {"reason": ...} details shape as every other denial row (§7), so
+            // the audit log viewer reads one format for all denials (ReadDenialAudit).
+            await auditSink.RecordAsync(
+                new AuditRecord(
+                    "audit.view", AuditOutcome.Denied,
+                    DetailsJson: JsonSerializer.Serialize(new { reason = "instance admin required" })),
+                cancellationToken);
             throw new GraphQLException("Instance admin required to view the audit log.");
         }
 

@@ -129,16 +129,14 @@ public sealed class FileSystemFileStorage : IFileStorage
     /// </summary>
     private string ResolvePath(string key)
     {
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            throw new ArgumentException("Storage key must not be null or empty.", nameof(key));
-        }
+        // Provider-independent rejections shared with S3FileStorage; see StorageKey.
+        StorageKey.Validate(key);
 
-        // Keys are forward-slash-separated (attachments/{yyyy}/{MM}/{guid}).
-        // Reject backslashes and absolute/rooted paths outright — on Windows a
-        // rooted path can also start with a drive letter or UNC prefix, none of
-        // which a legitimate key ever contains.
-        if (key.Contains('\\') || Path.IsPathRooted(key))
+        // On top of the shared checks: rooted forms only a filesystem sees — on
+        // Windows a rooted path can also start with a drive letter or UNC prefix
+        // (with forward slashes, so the shared backslash check can't catch it),
+        // none of which a legitimate key ever contains.
+        if (Path.IsPathRooted(key))
         {
             throw new ArgumentException(
                 $"Storage key '{key}' must be a relative, forward-slash-separated path.", nameof(key));

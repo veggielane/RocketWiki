@@ -41,6 +41,7 @@ public static class CustomEmojiEndpoints
         return app;
     }
 
+    [AuditAction("emoji.created")]
     private static async Task<IResult> CreateAsync(
         string name,
         HttpRequest request,
@@ -149,6 +150,7 @@ public static class CustomEmojiEndpoints
         });
     }
 
+    [AuditAction("emoji.deleted")]
     private static async Task<IResult> DeleteAsync(
         string name,
         RocketWikiDbContext db,
@@ -189,6 +191,7 @@ public static class CustomEmojiEndpoints
     /// `nosniff` on every response: the bytes are admin-supplied and re-encoded, but
     /// declaring "this is exactly image/png|gif, believe nothing else" costs one header.
     /// </summary>
+    [NoAudit("Display asset every signed-in renderer needs (design.md §7/§19): reading avatar or emoji images is deliberately unaudited on every path, same reasoning as display-name resolution — see the class doc.")]
     private static async Task<IResult> ServeAsync(
         string name,
         RocketWikiDbContext db,

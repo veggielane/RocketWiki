@@ -27,7 +27,7 @@ public class SpaceService : ISpaceService
     {
         if (!isInstanceAdmin)
         {
-            return PageMutationResult<Space>.Failure(new ForbiddenError("instance-admin required"));
+            return PageMutationResult<Space>.Failure(new ForbiddenError("instance admin required"));
         }
 
         if (!RuleExpressionSerializer.TryParse(initialGrant.ExpressionJson, out _, out var parseError))
@@ -95,7 +95,7 @@ public class SpaceService : ISpaceService
 
         if (!isInstanceAdmin && !await IsSpaceAdminAsync(space.Id, principal, cancellationToken))
         {
-            return PageMutationResult<Space>.Failure(new ForbiddenError("instance-admin or space-admin required"));
+            return PageMutationResult<Space>.Failure(new ForbiddenError("instance admin or space admin required"));
         }
 
         var oldName = space.Name;
@@ -120,7 +120,7 @@ public class SpaceService : ISpaceService
 
         if (!isInstanceAdmin && !await IsSpaceAdminAsync(space.Id, principal, cancellationToken))
         {
-            return PageMutationResult<Space>.Failure(new ForbiddenError("instance-admin or space-admin required"));
+            return PageMutationResult<Space>.Failure(new ForbiddenError("instance admin or space admin required"));
         }
 
         // design.md §6.5.1: archives the Space row only - does not cascade to its
@@ -148,7 +148,7 @@ public class SpaceService : ISpaceService
 
         if (!isInstanceAdmin && !await IsSpaceAdminAsync(space.Id, principal, cancellationToken))
         {
-            return PageMutationResult<Space>.Failure(new ForbiddenError("instance-admin or space-admin required"));
+            return PageMutationResult<Space>.Failure(new ForbiddenError("instance admin or space admin required"));
         }
 
         space.IsDeleted = false;

@@ -181,6 +181,58 @@ public sealed class AttachmentEndpointTests(RocketWikiApiFactory factory) : ICla
     }
 
     [Fact]
+    public async Task Download_SetsNosniffCacheControlAndETag_AndConditionalRequestGets304()
+    {
+        var (_, pageId, _) = await SeedPageAsync();
+        var client = ClientAs(factory, $"uploader-{Guid.NewGuid()}");
+        var uploadResponse = await client.PostAsync(
+            $"/attachments/{pageId}", BuildUpload(Encoding.UTF8.GetBytes("cacheable bytes"), "notes.txt", "text/plain"));
+        Assert.Equal(HttpStatusCode.Created, uploadResponse.StatusCode);
+        var attachmentId = JsonDocument.Parse(await uploadResponse.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetGuid();
+
+        var downloadResponse = await client.GetAsync($"/attachments/{attachmentId}");
+        Assert.Equal(HttpStatusCode.OK, downloadResponse.StatusCode);
+
+        // Uploader-supplied bytes under an uploader-supplied content type: the
+        // browser must not sniff its way to something more dangerous, and the
+        // deliberate Content-Disposition: attachment must survive (it keeps the
+        // payload from rendering in-page).
+        Assert.Equal("nosniff", Assert.Single(downloadResponse.Headers.GetValues("X-Content-Type-Options")));
+        Assert.Equal("attachment", downloadResponse.Content.Headers.ContentDisposition?.DispositionType);
+
+        // no-cache, not a max-age: every reuse must revalidate through the API so
+        // canView and the §7 audit row still happen (see the handler's comment).
+        var cacheControl = downloadResponse.Headers.CacheControl;
+        Assert.NotNull(cacheControl);
+        Assert.True(cacheControl!.Private);
+        Assert.True(cacheControl.NoCache);
+
+        var etag = downloadResponse.Headers.ETag;
+        Assert.NotNull(etag);
+        Assert.False(etag!.IsWeak);
+
+        // Conditional request with the returned ETag: framework-handled 304, no
+        // body - and STILL an audit row, which is the whole point of no-cache.
+        using var verifyScope = factory.Services.CreateScope();
+        var verifyDb = verifyScope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        var rowsBefore = await verifyDb.AuditEvents.CountAsync(e =>
+            e.Action == "attachment.download" && e.Outcome == AuditOutcome.Success && e.SubjectId == attachmentId);
+
+        var conditionalRequest = new HttpRequestMessage(HttpMethod.Get, $"/attachments/{attachmentId}");
+        conditionalRequest.Headers.IfNoneMatch.Add(new System.Net.Http.Headers.EntityTagHeaderValue(etag.Tag));
+        var conditionalResponse = await client.SendAsync(conditionalRequest);
+
+        Assert.Equal(HttpStatusCode.NotModified, conditionalResponse.StatusCode);
+        Assert.Empty(await conditionalResponse.Content.ReadAsByteArrayAsync());
+        Assert.Equal("nosniff", Assert.Single(conditionalResponse.Headers.GetValues("X-Content-Type-Options")));
+
+        var rowsAfter = await verifyDb.AuditEvents.CountAsync(e =>
+            e.Action == "attachment.download" && e.Outcome == AuditOutcome.Success && e.SubjectId == attachmentId);
+        Assert.Equal(rowsBefore + 1, rowsAfter);
+    }
+
+    [Fact]
     public async Task Download_OfNonexistentAttachment_ReturnsNotFound()
     {
         var client = ClientAs(factory, $"someone-{Guid.NewGuid()}");
