@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
 import { useArchivedSpacesQuery, useRestoreSpaceMutation } from '../graphql/generated/graphql'
+import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { formatTimestamp } from '../format/dateTime'
 import { describeMutationError } from '../graphql/mutationError'
 
 /**
@@ -44,7 +46,7 @@ export function ArchivedSpacesPage() {
 
       {fetching && <Skeleton variant="rectangular" height={200} />}
 
-      {!fetching && error && <Alert severity="info">Couldn't load archived spaces.</Alert>}
+      {!fetching && error && <Alert severity="info">{describeLoadFailure('ARCHIVED_SPACES').summary}</Alert>}
 
       {!fetching && !error && (data?.archivedSpaces.length ?? 0) === 0 && (
         <Typography color="text.secondary">No archived spaces you can restore.</Typography>
@@ -68,7 +70,7 @@ export function ArchivedSpacesPage() {
             >
               <ListItemText
                 primary={`${space.name} (${space.key})`}
-                secondary={`Archived ${new Date(space.archivedAtUtc).toLocaleString()}`}
+                secondary={`Archived ${formatTimestamp(space.archivedAtUtc)}`}
               />
             </ListItem>
           ))}

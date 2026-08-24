@@ -9,7 +9,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
-import { MarkdownDiffView } from '../diff/MarkdownDiffView'
+import { MarkdownDiffView } from './MarkdownDiffView'
 
 export interface StaleRevisionDialogProps {
   open: boolean

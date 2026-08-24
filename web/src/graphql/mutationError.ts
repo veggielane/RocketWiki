@@ -1,4 +1,5 @@
 import type { MutationErrorFragment } from './generated/graphql'
+import { describeBlockedSubtree } from '../feedback/blockedSubtreeCopy'
 
 /**
  * The API flattens all typed mutation errors into one PageMutationErrorView
@@ -64,10 +65,14 @@ export function describeMutationError(error: MutationErrorFragment | null | unde
       return 'Not found.'
     case 'Validation':
       return error.message ?? 'Invalid input.'
-    case 'SubtreeOperationForbidden': {
-      const count = error.blockedPageCount ?? 0
-      return `${count} page${count === 1 ? '' : 's'} in this subtree couldn't be included (you don't have permission).`
-    }
+    case 'SubtreeOperationForbidden':
+      // A zero/absent count still owes the caller a sentence here (this is
+      // describeMutationError's job — say *something* rather than fall
+      // through to null), so the shared formatter's null is backstopped.
+      return (
+        describeBlockedSubtree(error.blockedPageCount, 'included') ??
+        "Some pages in this subtree couldn't be included (you don't have permission)."
+      )
     case 'StaleRevision':
       return 'Someone else saved changes first.'
     case 'ReadOnlyReplica':

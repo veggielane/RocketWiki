@@ -17,6 +17,7 @@ import { describeNotification } from './describeNotification'
 import { getDefaultNotificationsTransport } from '../realtime/transports'
 import { useMarkNotificationReadMutation, usePersistedNotificationsQuery } from '../graphql/generated/graphql'
 import type { NotificationPayload, NotificationsTransport } from '../realtime/types'
+import { formatTimestamp } from '../format/dateTime'
 
 export interface NotificationBellProps {
   /**
@@ -106,7 +107,7 @@ export function NotificationBell({ transport }: NotificationBellProps = {}) {
                         multiplies below the WCAG 1.4.3 contrast floor. */}
                     <ListItemText
                       primary={headline}
-                      secondary={new Date(n.timestampUtc).toLocaleString()}
+                      secondary={formatTimestamp(n.timestampUtc)}
                       slotProps={{
                         primary: {
                           sx: { fontWeight: isUnread ? 600 : 400, color: isUnread ? 'text.primary' : 'text.secondary' },

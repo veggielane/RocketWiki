@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
 import { useRestorePageMutation, useSpaceTrashQuery } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
-import { REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { groupTrashBatches } from '../trash/groupTrashBatches'
 import { describeExpiry } from '../trash/trashCountdown'
 import { UserAvatar } from '../avatars/UserAvatar'
@@ -73,7 +73,7 @@ export function TrashPage() {
   }
 
   if (error || !data?.space) {
-    return <Alert severity="info">Couldn't load trash — the space may not exist, or the API isn't reachable.</Alert>
+    return <Alert severity="info">{describeLoadFailure('TRASH').summary}</Alert>
   }
 
   return (

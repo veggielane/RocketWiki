@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Alert, Button } from '@mui/material'
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined'
 import { uploadAttachment, type UploadedAttachment } from './attachmentApi'
+import { describeAttachmentUnavailable } from '../feedback/unavailableCopy'
 
 export function AttachmentUploadButton({
   pageId,
@@ -23,7 +24,7 @@ export function AttachmentUploadButton({
       const attachment = await uploadAttachment(pageId, file)
       onUploaded(attachment)
     } catch {
-      setError("Upload failed — there's no live API in this environment yet.")
+      setError(describeAttachmentUnavailable({ kind: 'UPLOAD_FAILED', fileName: file.name }).summary)
     } finally {
       setUploading(false)
       if (inputRef.current) inputRef.current.value = ''

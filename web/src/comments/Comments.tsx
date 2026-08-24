@@ -3,6 +3,7 @@ import { Box, Button, Stack, Typography } from '@mui/material'
 import { RichTextEditor, type RichTextEditorHandle } from '../editor/RichTextEditor'
 import { buildCommentTree, type CommentNode, type FlatComment } from './buildCommentTree'
 import { UserAvatar } from '../avatars/UserAvatar'
+import { formatTimestamp } from '../format/dateTime'
 
 export interface CommentsProps {
   pageId: string
@@ -161,7 +162,7 @@ function CommentItem({
           />
           <Typography variant="subtitle2">{node.authorDisplayName}</Typography>
           <Typography variant="caption" color="text.secondary">
-            {new Date(node.createdAtUtc).toLocaleString()}
+            {formatTimestamp(node.createdAtUtc)}
           </Typography>
           {node.editedAtUtc && (
             <Typography variant="caption" color="text.secondary">

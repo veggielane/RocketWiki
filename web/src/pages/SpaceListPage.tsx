@@ -4,7 +4,7 @@ import AddIcon from '@mui/icons-material/Add'
 import CloudSyncOutlinedIcon from '@mui/icons-material/CloudSyncOutlined'
 import { useSpaceListQuery } from '../graphql/generated/graphql'
 import { useIsInstanceAdmin } from '../auth/useIsInstanceAdmin'
-import { replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, replicaBadgeLabel } from '../feedback/unavailableCopy'
 
 /**
  * Space directory. Replica spaces (design.md §12) carry a proactive
@@ -37,7 +37,7 @@ export function SpaceListPage() {
 
       {fetching && <Skeleton variant="rectangular" height={120} />}
 
-      {(error || (!fetching && !data)) && <Alert severity="info">No spaces loaded.</Alert>}
+      {(error || (!fetching && !data)) && <Alert severity="info">{describeLoadFailure('SPACE_LIST').summary}</Alert>}
 
       {/* True empty (loaded, zero spaces) — distinct from the load failure
           above. The consequence differs by who's looking: only instance

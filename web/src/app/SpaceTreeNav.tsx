@@ -2,7 +2,7 @@ import { List, ListItemButton, ListItemIcon, ListItemText, Skeleton, Typography,
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined'
 import { Link as RouterLink } from 'react-router-dom'
 import { useSpaceListQuery } from '../graphql/generated/graphql'
-import { replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, replicaBadgeLabel } from '../feedback/unavailableCopy'
 
 /**
  * Space list in the nav drawer — server-filtered to spaces the caller can
@@ -27,7 +27,7 @@ export function SpaceTreeNav() {
     return (
       <Box sx={{ px: 2, py: 1 }}>
         <Typography variant="caption" color="text.secondary">
-          No spaces loaded.
+          {describeLoadFailure('SPACE_LIST').summary}
         </Typography>
       </Box>
     )

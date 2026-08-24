@@ -1,19 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { Provider as UrqlProvider, createClient, fetchExchange } from 'urql'
+import { Provider as UrqlProvider } from 'urql'
 import { CreateSpacePage } from '../CreateSpacePage'
 import { expectNoAxeViolations } from '../../test/axe'
+import { createMockUrqlClient } from '../../test/mockUrqlClient'
 
-// No live API in this environment — queries/mutations simply won't
-// resolve, which is fine here: these tests only assert the form's own
-// client-side gating logic (design.md §6.5.1), not server behavior.
-const client = createClient({ url: '/graphql', exchanges: [fetchExchange] })
-
+// Every operation answered with no data: these tests assert the form's own
+// client-side gating logic (design.md §6.5.1), never server behavior, so
+// there is nothing to stage. Goes through the shared mock client like the
+// rest of the suite rather than a real fetchExchange — a test client that
+// actually reaches for the network is one flaky DNS lookup from failing
+// for reasons that have nothing to do with the form.
 function renderPage() {
   return render(
     <MemoryRouter>
-      <UrqlProvider value={client}>
+      <UrqlProvider value={createMockUrqlClient(() => undefined).client}>
         <CreateSpacePage />
       </UrqlProvider>
     </MemoryRouter>,

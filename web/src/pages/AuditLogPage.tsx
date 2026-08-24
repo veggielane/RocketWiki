@@ -12,6 +12,7 @@ import {
   type SelectChangeEvent,
 } from '@mui/material'
 import { DataGrid, GridToolbar, type GridColDef } from '@mui/x-data-grid'
+import { describeLoadFailure } from '../feedback/unavailableCopy'
 import {
   useAuditEventsQuery,
   type AuditOutcome,
@@ -174,7 +175,7 @@ export function AuditLogPage() {
         />
       </Stack>
 
-      {error && <Alert severity="info">Couldn't load audit events.</Alert>}
+      {error && <Alert severity="info">{describeLoadFailure('AUDIT_EVENTS').summary}</Alert>}
 
       {totalCount !== undefined && (
         <Typography variant="body2" color="text.secondary">

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MovePageDialog, type MoveTargetOption } from '../MovePageDialog'
-import { group } from '../../access/ruleTypes'
-import { expectNoAxeViolations } from '../../test/axe'
-import type { RestrictionSummary } from '../../access/move/visibilityChange'
+import { group } from '../../ruleTypes'
+import { expectNoAxeViolations } from '../../../test/axe'
+import type { RestrictionSummary } from '../visibilityChange'
 
 const restrictedRule: RestrictionSummary = {
   ruleId: 'export-control',

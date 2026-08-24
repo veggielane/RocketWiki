@@ -32,6 +32,26 @@ user-facing surface says "mirror"/"mirrored".
 
 Empty states say the fact **and** the consequence:
 "No spaces yet — create one to start writing", not "No spaces.".
+An empty state and a *failed load* are different things and must not borrow
+each other's words — a query that errored says `describeLoadFailure(...)`,
+never "No spaces.".
+
+## Where a file goes
+
+`src/pages/` holds **route components only** — the things `app/router.tsx`
+mounts. Everything else lives in the folder that owns its domain, beside
+the logic or copy module it depends on: the move dialog with
+`access/move/visibilityChange.ts`, the delete dialog with
+`trash/describeDeleteOutcome.ts`, the merge-flow dialog with
+`diff/staleDiff.ts`, the replica explainer with the replica vocabulary in
+`feedback/`. There is no `components/`, `dialogs/` or `hooks/` bucket
+anywhere in `src/`, and adding one would give every future file two
+plausible homes; a hook likewise goes in its owner's folder as
+`useThing.ts` (`presence/usePresence.ts`, `auth/useIsInstanceAdmin.ts`).
+Tests sit in that same folder's `__tests__/`, except for cross-cutting
+policy suites — `test/dialogsA11y.test.tsx` enforces "every dialog passes
+axe in its open state" across features, so it lives with the axe policy it
+applies rather than in any one feature.
 
 ## Vite template notes
 

@@ -15,6 +15,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useSearchFacetsQuery, useSearchPagesQuery, type SearchPagesQuery } from '../graphql/generated/graphql'
+import { describeLoadFailure } from '../feedback/unavailableCopy'
 import { AskWikiSearchNudge } from '../ask/AskWikiSearchNudge'
 
 type SearchEdge = SearchPagesQuery['search']['edges'][number]
@@ -97,7 +98,7 @@ export function SearchPage() {
         </Stack>
       )}
 
-      {error && <Alert severity="info">Couldn't search — there's no live API in this environment yet.</Alert>}
+      {error && <Alert severity="info">{describeLoadFailure('SEARCH').summary}</Alert>}
 
       {data && (
         <>

@@ -11,6 +11,7 @@ import {
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, asStaleRevision, describeMutationError, type StaleRevision } from '../graphql/mutationError'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { describeLoadFailure } from '../feedback/unavailableCopy'
 import { RichTextEditor, type RichTextEditorHandle, type CollabBinding } from '../editor/RichTextEditor'
 import { useCoEditSession } from '../editor/coedit/useCoEditSession'
 import { usePresence } from '../presence/usePresence'
@@ -18,8 +19,8 @@ import { PresenceAvatars } from '../presence/PresenceAvatars'
 import { PresencePointers } from '../presence/PresencePointers'
 import { colourForUser } from '../presence/colourForUser'
 import { getDefaultCoEditTransport, getDefaultPresenceTransport } from '../realtime/transports'
-import { ReadOnlyReplicaDialog } from './ReadOnlyReplicaDialog'
-import { StaleRevisionDialog } from './StaleRevisionDialog'
+import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
+import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
 
 /**
  * Page edit. Two of the brief's non-negotiables live here, both driven by
@@ -204,7 +205,7 @@ export function PageEditPage() {
   }
 
   if (pageQuery.error || !page) {
-    return <Alert severity="info">Couldn't load this page.</Alert>
+    return <Alert severity="info">{describeLoadFailure('PAGE').summary}</Alert>
   }
 
   if (!page.canEdit) {

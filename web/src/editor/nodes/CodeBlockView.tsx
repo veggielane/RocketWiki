@@ -7,6 +7,7 @@ import { parseFileFence, parseIssuesFence } from '../../gitlab/fenceBody'
 import { describeDiagramUnavailable } from '../../feedback/unavailableCopy'
 import { GitLabFileBlock } from '../../gitlab/GitLabFileBlock'
 import { GitLabIssuesBlock } from '../../gitlab/GitLabIssuesBlock'
+import { useDebouncedValue } from '../useDebouncedValue'
 
 /**
  * NodeView for every `codeBlock`. Ordinary languages render exactly as the
@@ -113,22 +114,6 @@ function MermaidBlock({ node, editor }: NodeViewProps) {
       </div>
     </NodeViewWrapper>
   )
-}
-
-/**
- * While typing in a gitlab fence, wait for the keystrokes to settle before
- * re-parsing (and therefore re-fetching — each variables change is a live
- * API call). Read mode passes 0: the source is static, render immediately.
- */
-function useDebouncedValue(value: string, delayMs: number): string {
-  const [debounced, setDebounced] = useState(value)
-  useEffect(() => {
-    if (delayMs === 0) return
-    const timer = setTimeout(() => setDebounced(value), delayMs)
-    return () => clearTimeout(timer)
-  }, [value, delayMs])
-  // Zero delay derives directly — no state write, no extra render.
-  return delayMs === 0 ? value : debounced
 }
 
 function GitLabFileFence({ node, editor }: NodeViewProps) {
