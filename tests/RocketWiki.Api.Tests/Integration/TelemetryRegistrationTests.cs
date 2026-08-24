@@ -73,7 +73,10 @@ public sealed class TelemetryRegistrationTests(RocketWikiApiFactory factory) : I
         client.SetTestUser(sub: $"hc-{Guid.NewGuid()}");
         using var _ = await client.PostGraphQLAsync("query { me { id isAuthenticated } }");
 
-        Assert.NotEmpty(captured);
+        // Spans may still be stopping concurrently — assert over a locked snapshot.
+        Activity[] capturedSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        Assert.NotEmpty(capturedSnapshot);
     }
 
     [Fact]
@@ -102,8 +105,11 @@ public sealed class TelemetryRegistrationTests(RocketWikiApiFactory factory) : I
         }
 
         // A connection also produces OnConnectedAsync/OnDisconnectedAsync activities on
-        // this source; the hub *method* is the one worth pinning.
-        Assert.Contains(captured, a => a.DisplayName.EndsWith("/LeavePage", StringComparison.Ordinal));
+        // this source; the hub *method* is the one worth pinning. The disconnect span
+        // stops concurrently with this assertion, so enumerate a locked snapshot.
+        Activity[] capturedSnapshot;
+        lock (captured) { capturedSnapshot = [.. captured]; }
+        Assert.Contains(capturedSnapshot, a => a.DisplayName.EndsWith("/LeavePage", StringComparison.Ordinal));
     }
 
     [Fact]
