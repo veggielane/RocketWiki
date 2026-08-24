@@ -258,6 +258,9 @@ public class BundleImportService : IBundleImportService
             case SyncEventType.Labels:
                 await ApplyLabelAsync(root, record.SpaceId, cancellationToken);
                 break;
+            case SyncEventType.PageProperties:
+                await ApplyPagePropertyAsync(root, cancellationToken);
+                break;
             case SyncEventType.Attachment:
                 await ApplyAttachmentAsync(root, archive, cancellationToken);
                 break;
@@ -493,6 +496,67 @@ public class BundleImportService : IBundleImportService
         }
     }
 
+    /// <summary>
+    /// design.md §20. The payload names the registry key, never this instance's key id:
+    /// the property-key registry is instance-local, so the receiving instance may have
+    /// never seen this key and would otherwise be storing a value that references
+    /// nothing. The key is found-or-created by its NORMALIZED name (PagePropertyKey.Normalize,
+    /// the same comparison the local registry enforces uniqueness with), exactly how
+    /// ApplyLabelAsync matches labels by name.
+    ///
+    /// Idempotent both directions: a repeated "set" overwrites with the same value, a
+    /// repeated "remove" finds nothing to remove and does nothing.
+    /// </summary>
+    private async Task ApplyPagePropertyAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var pageId = payload.GetProperty("pageId").GetGuid();
+        var keyName = payload.GetProperty("key").GetString()!;
+        var action = payload.GetProperty("action").GetString();
+        var normalized = PagePropertyKey.Normalize(keyName);
+
+        var key = FindLocal<PagePropertyKey>(k => k.KeyNormalized == normalized)
+            ?? await _db.PagePropertyKeys.FirstOrDefaultAsync(k => k.KeyNormalized == normalized, cancellationToken);
+        if (key is null)
+        {
+            key = new PagePropertyKey
+            {
+                Key = keyName,
+                KeyNormalized = normalized,
+                CreatedAtUtc = DateTime.UtcNow,
+                // No local actor and no local display order: the payload deliberately
+                // carries neither (§20). CreatedByUserId stays null - the same
+                // "system action" shape AuditEvent.UserId has - and SortOrder lands at 0
+                // for a high-side admin to arrange, since presentation order is each
+                // instance's own choice, not synced content.
+                CreatedByUserId = null,
+                SortOrder = 0,
+            };
+            _db.PagePropertyKeys.Add(key);
+        }
+
+        var property = FindLocal<PageProperty>(p => p.PageId == pageId && p.PagePropertyKeyId == key.Id)
+            ?? await _db.PageProperties.FirstOrDefaultAsync(
+                p => p.PageId == pageId && p.PagePropertyKeyId == key.Id, cancellationToken);
+
+        if (action == "set")
+        {
+            var value = payload.GetProperty("value").GetString()!;
+            if (property is null)
+            {
+                property = new PageProperty { PageId = pageId, PagePropertyKeyId = key.Id };
+                _db.PageProperties.Add(property);
+            }
+
+            property.Value = value;
+            property.UpdatedAtUtc = DateTime.UtcNow;
+            property.UpdatedByUserId = null; // applied by sync, no local actor
+        }
+        else if (action == "remove" && property is not null)
+        {
+            _db.PageProperties.Remove(property);
+        }
+    }
+
     private async Task ApplyAttachmentAsync(JsonElement payload, ZipArchive archive, CancellationToken cancellationToken)
     {
         var attachmentId = payload.GetProperty("attachmentId").GetGuid();
@@ -560,6 +624,7 @@ public class BundleImportService : IBundleImportService
             case SyncEventType.PageMove:
             case SyncEventType.Comment:
             case SyncEventType.Labels:
+            case SyncEventType.PageProperties:
             case SyncEventType.Attachment:
                 affectedPages[root.GetProperty("pageId").GetGuid()] = spaceId;
                 break;

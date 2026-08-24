@@ -51,6 +51,8 @@ public class RocketWikiDbContext : DbContext
     public DbSet<Comment> Comments => Set<Comment>();
     public DbSet<Label> Labels => Set<Label>();
     public DbSet<PageLabel> PageLabels => Set<PageLabel>();
+    public DbSet<PagePropertyKey> PagePropertyKeys => Set<PagePropertyKey>();
+    public DbSet<PageProperty> PageProperties => Set<PageProperty>();
     public DbSet<User> Users => Set<User>();
     public DbSet<AccessRule> AccessRules => Set<AccessRule>();
     public DbSet<AttributeDefinition> AttributeDefinitions => Set<AttributeDefinition>();

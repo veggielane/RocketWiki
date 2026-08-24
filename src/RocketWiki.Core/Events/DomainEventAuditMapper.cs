@@ -87,6 +87,38 @@ public static class DomainEventAuditMapper
         LabelDetachedEvent e => ("label.detach", AuditSubjectType.Page, e.PageId, e.SpaceKey,
             JsonSerializer.Serialize(new { labelName = e.LabelName })),
 
+        // Page properties (design.md §20). Same judgement call as the label mappings
+        // above: AuditSubjectType is a closed list (page / space / attachment / comment
+        // / rule) with no Property member, so a value change is audited against the PAGE
+        // whose metadata changed - the more meaningful "what changed" either way - and
+        // the action name carries the distinction.
+        //
+        // The VALUE is in DetailsJson deliberately, and it is worth being explicit about
+        // why that is not the §15 telemetry rule being bent: §15 forbids page content and
+        // attribute values in traces and logs because those are an operational side
+        // channel with their own retention and their own (wider) audience. The audit
+        // table is the opposite - it is the regulated record of who did what (§7), it is
+        // access-controlled like the content it describes, and "what did this property
+        // become" is precisely the change being recorded. A property.set row that did not
+        // say what was set would be a log line, not an audit record. Remove carries no
+        // value: the row is gone, and the previous value is already in the earlier set row.
+        PagePropertySetEvent e => ("page.property.set", AuditSubjectType.Page, e.PageId, e.SpaceKey,
+            JsonSerializer.Serialize(new { key = e.Key, value = e.Value })),
+
+        PagePropertyRemovedEvent e => ("page.property.remove", AuditSubjectType.Page, e.PageId, e.SpaceKey,
+            JsonSerializer.Serialize(new { key = e.Key })),
+
+        // Registry-level actions follow the custom-emoji precedent exactly: no
+        // AuditSubjectType fits instance-local vocabulary (the subject list is wiki
+        // content shapes), so subject stays null and the key is named in DetailsJson.
+        // The name is the id an auditor actually recognizes; the row id rides along for
+        // joinability while the row exists.
+        PagePropertyKeyCreatedEvent e => ("property_key.create", null, null, null,
+            JsonSerializer.Serialize(new { key = e.Key, propertyKeyId = e.PropertyKeyId })),
+
+        PagePropertyKeyDeletedEvent e => ("property_key.delete", null, null, null,
+            JsonSerializer.Serialize(new { key = e.Key, propertyKeyId = e.PropertyKeyId })),
+
         AttachmentAddedEvent e => ("attachment.upload", AuditSubjectType.Attachment, e.AttachmentId, e.SpaceKey,
             JsonSerializer.Serialize(new { fileName = e.FileName })),
 

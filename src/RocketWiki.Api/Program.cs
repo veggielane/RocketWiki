@@ -164,6 +164,12 @@ builder.Services.AddScoped<IPageService>(sp => new PageService(sp.GetRequiredSer
 builder.Services.AddScoped<ICommentService>(sp => new CommentService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 builder.Services.AddScoped<ILabelService>(sp => new LabelService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 
+// --- Page properties (design.md §20) — admin-defined key registry, per-page values.
+// Needs the local InstanceId like every other page-mutation service: setting or
+// removing a value is a page mutation and sits beneath the replica invariant (§12).
+builder.Services.AddScoped<IPagePropertyService>(sp =>
+    new PagePropertyService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+
 // --- Custom emojis (design.md §19) — the admin-curated :name: registry over the same
 // DbContext + IFileStorage as attachments. Instance-local, never synced, so no
 // InstanceId is needed and the plain type registration suffices.

@@ -335,6 +335,11 @@ Neither is covered by the page rules alone, so:
 - **Labels.** Creating a label in a space requires `editor` — tagging is
   routine, not a taxonomy decision reserved to admins. Attaching or
   detaching requires `canEdit` on that specific page.
+- **Page properties** are the third kind of per-page metadata and follow the
+  label rule exactly — `canView` to read, `canEdit` on that page to set or
+  remove, no restriction of their own — with one addition: the *key registry*
+  they draw from is instance-admin vocabulary, like the attribute registry
+  (§6.5). Full treatment in §20.
 - **Label listings are permission-filtered per page.** Labels are flat, not
   hierarchical, so a listing cannot use the page tree's prune-the-subtree
   shortcut: every candidate page needs its own restriction check against its
@@ -2132,3 +2137,173 @@ question (same name, different image, different instances). Deleting a
 definition leaves content rendering the literal text — harmless by
 construction, and why deletes are hard deletes (a tombstone would only
 block re-creating the name).
+
+---
+
+## 20. Page properties
+
+Confluence-style **page properties**: a page carries a small set of key/value
+metadata — `Owner: Ada Lovelace`, `Review Date: 2026-11-01`, `Status: Draft`
+— shown beside the page rather than written into it. Values are plain text.
+There are no types and no validation beyond length (1000 characters), which
+is a deliberate v1 scope decision, not an oversight: typed properties bring a
+type registry, per-type editors, coercion rules, and a migration story for
+every type change, and none of that earns its keep before anyone has asked
+what a date property should *do*.
+
+**They are not page content, and that is the whole point.** Properties live
+in their own tables and are edited on a dedicated properties screen. They
+never enter the Markdown, so:
+
+- the **TipTap ↔ Markdown round trip** (§4) is untouched — there is no
+  property macro to serialize, no node type to lose on a paste, and no way
+  for an editor bug to corrupt a property;
+- the **converted-markdown corpus** and the chunker/embedding pipeline (§9)
+  see exactly what they saw before — properties are not indexed as prose and
+  do not perturb a page's chunk boundaries;
+- the **CRDT co-editing document** (§8's edit sessions) stays the page body
+  alone; two people editing properties are editing rows, not a shared text
+  buffer;
+- the **Confluence importer** (§13) is unchanged and out of scope. Confluence
+  stores properties as a macro inside content, and mapping that into this
+  model is a separate decision with its own fidelity questions.
+
+The cost of that separation is stated plainly: a property is invisible to
+full-text and semantic search, and a page exported as Markdown loses its
+properties. Both follow directly from "properties are not content" and are
+the right trade for keeping the content pipeline uncomplicated.
+
+### 20.1 Keys come from a registry, not from the author
+
+Instance admins define the allowed keys; page editors pick one and supply a
+value. Free-form keys were considered and rejected, and the reason is
+concrete rather than aesthetic: with free-form keys nothing stops `Owner`,
+`owner`, and `Owner ` from all existing, and the moment anyone wants to
+*report* over properties (§20.5) those are three different columns with no
+way to reconcile them after the fact. A registry makes the vocabulary a
+decision someone made once, rather than an accident of whoever typed first.
+
+Uniqueness within the registry is enforced on a **normalized** key —
+`Trim()` then `ToLowerInvariant()` — stored in its own `KeyNormalized`
+column, which is where the unique index lives. **Not** on the display key,
+deliberately: SQL Server's default collation is case-insensitive while
+SQLite's is case-sensitive for ASCII, so a unique index on the raw key would
+mean `Owner` and `owner` collide in production and coexist in the SQLite test
+tier (§14) — the two tiers would be enforcing different rules, and the looser
+one is the one that runs on every commit. Normalizing in the application
+makes the answer byte-identical on both providers. This is the same instinct
+as the BIN2 storage-key column in the SQL Server file-storage provider (§10):
+never let a collation default decide a correctness question. Custom emojis
+(§19) get the same guarantee for free because their grammar admits lowercase
+only; property keys are display strings, so they have to earn it.
+
+Value lengths are likewise checked in the service rather than left to the
+column, for the same tier-parity reason: SQLite does not enforce declared
+string lengths, so an over-long value would silently store in tests and fail
+in production.
+
+### 20.2 Permissions
+
+- **Reading** a page's properties requires only `canView` on that page.
+  Properties carry no restriction of their own — exactly the §6.4.2 rule for
+  comments and labels — and they are resolved through the same DataLoader
+  discipline (§8), on pages that already passed object-level authorization to
+  be resolvable at all.
+- **Setting or removing** a value requires `canEdit` on **that page**. It is
+  an edit of that page's metadata, the same call as attaching a label.
+- **Replicas are read-only.** Both value mutations fail with
+  `ReadOnlyReplicaError` beneath every grant (§12); on a replica, property
+  rows arrive only through sync import.
+- **The registry** (create/delete a key) requires instance `admin`, resolved
+  by the caller from the token's realm role and passed in — the service never
+  derives it, the same shape `ISpaceService`/`ICustomEmojiService` use. The
+  key *list* is readable by any authenticated user: it is vocabulary, like
+  the emoji registry, and a key's existence says nothing about which pages
+  use it.
+- **Deleting a key that pages are using is refused**, with a `ValidationError`
+  naming how many pages use it. Cascading the delete would silently destroy
+  content that nobody chose to delete, which is precisely what §6.4.1's
+  "deletion is an explicit, audited operation, never a side effect" exists to
+  prevent. The count is safe to report and is deliberately as far as it goes:
+  a per-page answer would reveal which restricted pages carry the key (§6.7).
+
+### 20.3 Audit
+
+Four actions, all through the domain-event pipeline (§7), so the audit row
+commits in the same transaction as the change:
+
+| Action | Subject | Details |
+|---|---|---|
+| `page.property.set` | `page` | `{ key, value }` |
+| `page.property.remove` | `page` | `{ key }` |
+| `property_key.create` | *(none)* | `{ key, propertyKeyId }` |
+| `property_key.delete` | *(none)* | `{ key, propertyKeyId }` |
+
+Two judgement calls are worth stating rather than leaving in the code.
+
+**Subject types.** `AuditSubjectType` is a closed list — page, space,
+attachment, comment, rule — and no member fits a property or a registry key.
+Rather than widen it, value changes are audited against the **page** whose
+metadata changed (the same call the label mappings make, and the more
+meaningful "what changed" either way), and registry changes carry **no
+subject at all** with the key named in the details (the custom-emoji
+precedent, §19). The action name carries the distinction in both cases.
+
+**The value is in `DetailsJson`, on purpose.** §15 forbids page content,
+search text, and attribute values from traces and logs, and it would be easy
+to read that as forbidding them here too. It does not, and the distinction
+matters: telemetry is an operational side channel with its own retention and
+a wider audience, while the audit table is the regulated record of who did
+what, access-controlled like the content it describes. "What did this
+property become" *is* the change being recorded — a `page.property.set` row
+that did not say what was set would be a log line, not an audit record.
+Removal records only the key: the row is gone, and its previous value is
+already in that page's earlier `set` row.
+
+### 20.4 Sync
+
+`SyncEventType.PageProperties` (9). Payload:
+`{ pageId, key, value, action: "set" | "remove" }`.
+
+The payload carries the key's **name, never this instance's registry row id**.
+The registry is instance-local — it is not exported, and there is no space to
+journal a key creation against — so the receiving instance may well have
+never seen the key, and an id would point at nothing. On import the key is
+found-or-created by its **normalized** name before the value is applied,
+exactly how a label event finds-or-creates its `Label` row (§12). Both
+directions are idempotent: a repeated `set` overwrites with the same value, a
+repeated `remove` finds nothing to remove. `pageId` stays top level so the
+import's affected-page collection reindexes and notifies the page the same
+way a label or comment event does.
+
+A key materialized this way has no local creator and no local sort order, and
+both stay empty rather than being invented: `CreatedByUserId` is null (the
+same "system action, no user" shape `AuditEvent.UserId` already has), and the
+key lands at the front of the display order for a high-side admin to arrange
+— presentation order is each instance's own choice, not synced content. The
+same applies to a value row's `UpdatedByUserId`: the payload carries no
+actor, and a replica is read-only to users anyway, so every property row on
+the high side has no local author.
+
+Like labels, properties travel on **incremental** events only; a baseline
+bundle carries pages and their revisions. A space baselined after properties
+were set will not carry them until the next change to each — the same
+documented simplification baselines already have (§16, milestone 6).
+
+### 20.5 Not built yet: cross-page reporting
+
+There is **no** "every page in this space with `Status: Draft`" query, and no
+property facet in search. The *data model* supports one without a migration —
+value rows are keyed by `(PageId, PagePropertyKeyId)` and indexed
+`(PagePropertyKeyId, PageId)`, which is exactly the access path such a report
+needs — but the query surface does not exist.
+
+When it is built, it must be permission-filtered **per page**, the way
+`GetPagesByLabelAsync` is (§6.4.2): properties are flat, so there is no
+prune-the-subtree shortcut, every candidate page needs its own restriction
+check against its own ancestor chain, and a page the caller cannot view is
+absent entirely — not a redacted row, and not implied by a count (§6.7). The
+other thing to get right on that day is the missing query filter: property
+rows for a soft-deleted page linger, exactly as `PageLabel` rows do, so a
+report must join to `Pages` rather than assume every row belongs to a live
+page.

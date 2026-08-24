@@ -403,6 +403,87 @@ public class BundleExportImportTests : SqliteTestBase
         }
     }
 
+    [Fact]
+    public async Task Incremental_PagePropertySetThenRemove_AppliesOnImport_MaterializingTheRegistryKeyByName()
+    {
+        var actor = TestData.NewUser();
+        var space = NewExportedSpace();
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.Add(space);
+        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.SaveChanges();
+
+        var pageService = new PageService(lowContext, LowInstanceId);
+        var page = await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "spec", "Spec", "# Spec"), EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(page.IsSuccess);
+        var otherPage = await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "other", "Other", "# Other"), EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(otherPage.IsSuccess);
+
+        var propertyService = new PagePropertyService(lowContext, LowInstanceId);
+        var key = await propertyService.CreateKeyAsync(
+            new CreatePagePropertyKeyRequest("Owner", "Who owns this page"), isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.True(key.IsSuccess);
+
+        // Set on both pages, then remove from one - proves the import side applies "set"
+        // and "remove" as distinct events, not just a final snapshot.
+        Assert.True((await propertyService.SetAsync(
+            new SetPagePropertyRequest(page.Value.Id, key.Value.Id, "Ada Lovelace"), EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+        Assert.True((await propertyService.SetAsync(
+            new SetPagePropertyRequest(otherPage.Value.Id, key.Value.Id, "Grace Hopper"), EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+        Assert.True((await propertyService.RemoveAsync(
+            new RemovePagePropertyRequest(otherPage.Value.Id, key.Value.Id), EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var exportService = new BundleExportService(lowContext, storage);
+            var bundleInfo = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
+            Assert.NotNull(bundleInfo);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                // The high side has NEVER seen this registry key: its property-key table
+                // starts empty, and the payload carries only the key's name (design.md
+                // §20). Import must materialize it or the value would reference nothing.
+                Assert.Empty(highContext.PagePropertyKeys);
+
+                var importService = new BundleImportService(highContext, storage);
+                var result = await importService.ImportAsync(bundleInfo!.BundleFilePath, LowInstanceId, AuditCtx);
+                Assert.True(result.IsSuccess);
+
+                var importedKey = highContext.PagePropertyKeys.Single(k => k.KeyNormalized == "owner");
+                Assert.Equal("Owner", importedKey.Key);
+                Assert.Null(importedKey.CreatedByUserId); // no local actor for a sync-materialized key
+
+                var applied = highContext.PageProperties.Single(p => p.PageId == page.Value.Id);
+                Assert.Equal(importedKey.Id, applied.PagePropertyKeyId);
+                Assert.Equal("Ada Lovelace", applied.Value);
+                Assert.Null(applied.UpdatedByUserId);
+
+                Assert.False(highContext.PageProperties.Any(p => p.PageId == otherPage.Value.Id));
+
+                // Idempotent: re-importing the same bundle is a no-op, not a duplicate
+                // key row or a resurrected value.
+                var second = await importService.ImportAsync(bundleInfo.BundleFilePath, LowInstanceId, AuditCtx);
+                Assert.True(second.IsSuccess);
+                Assert.Single(highContext.PagePropertyKeys.ToList());
+                Assert.Single(highContext.PageProperties.ToList());
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
     // --- Gap-refusing, idempotent, chain-verified -------------------------------------
 
     [Fact]

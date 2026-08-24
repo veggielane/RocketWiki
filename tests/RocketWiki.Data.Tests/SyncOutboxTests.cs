@@ -551,6 +551,81 @@ public class SyncOutboxTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task PagePropertySetAndRemove_OnExportedSpace_ProducePagePropertiesEvents_CarryingTheKeyName()
+    {
+        var admin = TestData.NewUser();
+        var space = NewExportedSpace();
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(EditorGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new PagePropertyService(context, LocalInstanceId);
+        var key = await service.CreateKeyAsync(
+            new CreatePagePropertyKeyRequest("Owner", null), isInstanceAdmin: true, admin.Id, AuditCtx);
+        Assert.True(key.IsSuccess);
+
+        // Creating a registry key alone produces nothing: the registry is instance-local
+        // vocabulary with no space to journal against (design.md §20).
+        Assert.Empty(context.SyncOutboxEvents);
+
+        Assert.True((await service.SetAsync(
+            new SetPagePropertyRequest(page.Id, key.Value.Id, "Ada Lovelace"), EditorPrincipal(), admin.Id, AuditCtx)).IsSuccess);
+        Assert.True((await service.RemoveAsync(
+            new RemovePagePropertyRequest(page.Id, key.Value.Id), EditorPrincipal(), admin.Id, AuditCtx)).IsSuccess);
+
+        var events = context.SyncOutboxEvents
+            .Where(e => e.EventType == SyncEventType.PageProperties)
+            .OrderBy(e => e.SequenceNumber)
+            .ToList();
+        Assert.Equal(2, events.Count);
+
+        Assert.Contains("\"action\":\"set\"", events[0].PayloadJson);
+        Assert.Contains("\"key\":\"Owner\"", events[0].PayloadJson);
+        Assert.Contains("\"value\":\"Ada Lovelace\"", events[0].PayloadJson);
+        // The key NAME crosses, never this instance's registry row id - a replica has
+        // no such row to point at (design.md §20).
+        Assert.DoesNotContain(key.Value.Id.ToString(), events[0].PayloadJson);
+        // Top-level pageId, so CollectAffectedPageIds can reindex/notify on import.
+        Assert.Contains($"\"pageId\":\"{page.Id}\"", events[0].PayloadJson);
+
+        Assert.Contains("\"action\":\"remove\"", events[1].PayloadJson);
+        Assert.Contains("\"key\":\"Owner\"", events[1].PayloadJson);
+    }
+
+    [Fact]
+    public async Task PageProperty_OnNonExportedSpace_ProducesNoOutboxEvent()
+    {
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace(); // native, but IsExported = false
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(EditorGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new PagePropertyService(context, LocalInstanceId);
+        var key = await service.CreateKeyAsync(
+            new CreatePagePropertyKeyRequest("Owner", null), isInstanceAdmin: true, admin.Id, AuditCtx);
+        Assert.True(key.IsSuccess);
+
+        var set = await service.SetAsync(
+            new SetPagePropertyRequest(page.Id, key.Value.Id, "Ada Lovelace"), EditorPrincipal(), admin.Id, AuditCtx);
+        Assert.True(set.IsSuccess);
+
+        // The mutation happened and was audited; only the journal stays empty.
+        Assert.Empty(context.SyncOutboxEvents);
+        Assert.Contains(context.AuditEvents, e => e.Action == "page.property.set");
+    }
+
+    [Fact]
     public async Task AttachmentAddAndDelete_OnExportedSpace_ProduceAttachmentEvents_KeyedByContentHash()
     {
         var actor = TestData.NewUser();

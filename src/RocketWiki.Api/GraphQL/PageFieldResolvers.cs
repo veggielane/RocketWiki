@@ -180,6 +180,17 @@ public sealed class PageFieldResolvers
         [Parent] Page page, LabelRefsByPageIdDataLoader labelLoader, CancellationToken cancellationToken) =>
         await labelLoader.LoadAsync(page.Id, cancellationToken) ?? [];
 
+    /// <summary>
+    /// This page's key/value properties (design.md §20), batched via
+    /// <see cref="PagePropertyValuesByPageIdDataLoader"/> and already ordered by the
+    /// registry's SortOrder then key. No audit row of its own and no gate of its own:
+    /// a nested field inside an already-audited page read, and properties carry no
+    /// restriction beyond the page's (§6.4.2's rule, extended to properties in §20).
+    /// </summary>
+    public async Task<IReadOnlyList<PagePropertyValue>> GetPropertiesAsync(
+        [Parent] Page page, PagePropertyValuesByPageIdDataLoader propertyLoader, CancellationToken cancellationToken) =>
+        await propertyLoader.LoadAsync(page.Id, cancellationToken) ?? [];
+
     /// <summary>See <see cref="ViewerWatchesPageDataLoader"/> for the viewer-relative
     /// contract and why this emits no audit row of its own (the caller's own
     /// subscription-bookkeeping, inside an already-audited page read - design.md §7).</summary>

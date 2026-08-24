@@ -139,6 +139,62 @@ Indexes: `(PageId, CreatedAtUtc)`.
 `Label`: Id (PK v7), SpaceId (FK), Name nvarchar(100); unique
 `(SpaceId, Name)`. `PageLabel`: composite PK `(PageId, LabelId)`.
 
+### PagePropertyKey — the admin-defined key registry (design.md §20)
+
+| Column | Type | Notes |
+|---|---|---|
+| Id | uniqueidentifier PK (v7) | |
+| Key | nvarchar(64) | display form, trimmed — `Owner`, `Review Date` |
+| KeyNormalized | nvarchar(64) | `Trim().ToLowerInvariant()`; **this** is the unique one |
+| Description | nvarchar(256) null | admin hint on the properties screen |
+| SortOrder | int | display order; ties break on `Key` |
+| CreatedByUserId | uniqueidentifier null FK → User | **null** for a key materialized by sync import — no local actor |
+| CreatedAtUtc | datetime2(3) | |
+
+Indexes: unique `KeyNormalized`; `(SortOrder, Key)` for the listing.
+
+GUID v7 rather than `bigint identity` because the table is not an append-only
+journal — but note the id deliberately does **not** cross instances: sync
+payloads carry the key's *name* and the import side finds-or-creates by
+`KeyNormalized` (design.md §20.4), so two instances hold different ids for
+the same key and neither is wrong.
+
+**Uniqueness is on `KeyNormalized`, not `Key`, and that is load-bearing.**
+SQL Server's default collation is case-insensitive while SQLite's is
+case-sensitive for ASCII, so a unique index on the raw key would enforce a
+*different rule per provider* — `Owner`/`owner` colliding in production and
+coexisting in the SQLite tier. Normalizing in the application makes the rule
+identical on both. (Contrast `CustomEmoji.Name`, which gets the same
+guarantee free because its grammar admits lowercase only, and
+`SqlServerFileStorage`'s BIN2 key column, which solves the same class of
+problem in the opposite direction.)
+
+Hard delete, no query filter — and a key in use cannot be deleted at all
+(the service refuses, naming the usage count), so there is nothing for a
+tombstone to protect. Never synced as a table.
+
+### PageProperty — the values (design.md §20)
+
+| Column | Type | Notes |
+|---|---|---|
+| PageId | uniqueidentifier FK → Page | part of PK |
+| PagePropertyKeyId | uniqueidentifier FK → PagePropertyKey | part of PK |
+| Value | nvarchar(1000) | plain text, never empty — clearing removes the row |
+| UpdatedAtUtc | datetime2(3) | |
+| UpdatedByUserId | uniqueidentifier null FK → User | **null** for a row applied by sync import |
+
+Composite PK `(PageId, PagePropertyKeyId)` — one value per key per page, so
+"set" is an upsert and the row needs no surrogate id of its own, exactly like
+`PageLabel`. Indexes: the PK, plus `(PagePropertyKeyId, PageId)` — the "which
+pages use this key" path, used today by the delete-key-in-use check and the
+access path a future space-level property report would need, which is why the
+table is shaped this way now rather than after a migration.
+
+All FKs `ON DELETE NO ACTION` like everything else. **No global query
+filter**, matching `PageLabel`, with the same consequence: rows for a
+soft-deleted page linger, so any cross-page query over this table must join
+to `Pages` rather than assume every row belongs to a live page.
+
 ---
 
 ## Identity & access
