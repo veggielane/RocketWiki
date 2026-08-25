@@ -394,7 +394,11 @@ bullet keeps its own sharper caveat where one exists):
 - **Protective markings** (design.md §21) — every page carries a UK
   Government classification (`OFFICIAL` < `OFFICIAL_SENSITIVE` < `SECRET` <
   `TOP_SECRET`) plus an optional *eyes-only* set of countries it is
-  releasable to, rendered `SECRET [UK/US EYES ONLY]`. **It enforces.**
+  releasable to, written with a national prefix — `UK SECRET`,
+  `UK OFFICIAL [GB EYES ONLY]` — which defaults to `UK`, is clearable per
+  page, and is **purely presentational**: it is not read by the clearance
+  gate, never appears in a denial reason, and changes no access decision.
+  **The classification itself enforces.**
   Effective view access is `canView AND clearanceAllows(marking,
   principal)`, and a classification can only ever *subtract*: no space
   grant, space-admin or instance-admin role reads around it, exactly as
