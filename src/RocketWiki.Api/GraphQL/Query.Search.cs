@@ -16,9 +16,10 @@ namespace RocketWiki.Api.GraphQL;
 /// non-null connection, neither of which the paging middleware's defaults produce.
 /// Cursors are opaque positions into the permission-filtered hit sequence.
 /// </summary>
-public sealed record SearchConnection(int TotalCount, IReadOnlyList<SearchEdge> Edges, SearchPageInfo PageInfo)
+public sealed record SearchConnection(
+    int TotalCount, IReadOnlyList<SearchEdge> Edges, SearchPageInfo PageInfo, IReadOnlyList<Guid> HitPageIds)
 {
-    public static SearchConnection Empty { get; } = new(0, [], new SearchPageInfo(false, null));
+    public static SearchConnection Empty { get; } = new(0, [], new SearchPageInfo(false, null), []);
 }
 
 public sealed record SearchEdge(string Cursor, SearchHit Node);
@@ -84,7 +85,12 @@ public partial class Query
             edges,
             new SearchPageInfo(
                 HasNextPage: start + edges.Count < hits.Count,
-                EndCursor: edges.Count > 0 ? edges[^1].Cursor : null));
+                EndCursor: edges.Count > 0 ? edges[^1].Cursor : null),
+            // The permission-filtered hit set this connection reports — exactly what
+            // totalCount counts — carried for the aggregate marking label and never
+            // exposed as a field. See SearchConnectionType for why the aggregate spans
+            // the whole hit set rather than this page's edges.
+            hits.Select(h => h.PageId).Distinct().ToArray());
     }
 
     /// <summary>

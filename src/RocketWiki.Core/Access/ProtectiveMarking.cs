@@ -201,14 +201,64 @@ public sealed record ProtectiveMarking
     /// and the caveat countries are independent: <c>UK SECRET [US EYES ONLY]</c> is a
     /// perfectly ordinary marking, and reading the leading <c>UK</c> as a releasability
     /// statement would be exactly backwards.</para>
+    ///
+    /// <para>The rendering itself lives in <see cref="FormatLabel"/>, which this is a
+    /// one-set special case of. That indirection exists so an <i>aggregate</i> label over
+    /// several pages (§21.13) renders through the same code rather than composing its own
+    /// — the second formatter §21.1 exists to forbid.</para>
     /// </summary>
-    public string Format()
-    {
-        var body = HasEyesOnly
-            ? $"{LevelName(Level)} [{string.Join("/", EyesOnly)} EYES ONLY]"
-            : LevelName(Level);
+    public string Format() => FormatLabel(Prefix, Level, HasEyesOnly ? [EyesOnly] : []);
 
-        return HasPrefix ? $"{Prefix} {body}" : body;
+    /// <summary>
+    /// <b>THE</b> renderer — the one implementation <see cref="Format"/> delegates to, and
+    /// the one an <i>aggregate</i> marking label (§21.13) delegates to as well. It takes
+    /// the three parts loose rather than a whole <see cref="ProtectiveMarking"/> for
+    /// exactly one reason: an aggregate over several sources can carry something a single
+    /// page's marking cannot — <b>more than one eyes-only set</b> — and the alternative
+    /// (letting the aggregate compose its own string) is the second formatter §21.1
+    /// forbids. Two renderings of one marking that disagree is a compliance problem, and
+    /// an aggregate that renders its caveats a hair differently from a page's would be
+    /// that problem with extra steps.
+    ///
+    /// <para><b>Several caveat sets are LISTED, never merged.</b>
+    /// <c>UK SECRET [GB EYES ONLY] [US EYES ONLY]</c> means "one source was GB-eyes-only
+    /// and another was US-eyes-only" — a conjunction, i.e. a reader needs both. Merging
+    /// them into <c>[GB/US EYES ONLY]</c> would say the opposite (either nationality
+    /// suffices) and intersecting them would produce an <i>empty</i> set, which in this
+    /// format renders as no caveat at all: the least restrictive possible answer from the
+    /// two most restrictive inputs. See <c>AggregateMarkingLabel</c> for why that
+    /// intersection is the level-0 trap wearing a different hat.</para>
+    ///
+    /// <para>Zero sets renders the bare (prefixed) level. A set that is somehow empty
+    /// contributes nothing rather than an empty <c>[ EYES ONLY]</c> bracket — so an empty
+    /// rendering can only ever mean "no caveat", which is the property the aggregate's
+    /// emptiness rule depends on.</para>
+    /// </summary>
+    public static string FormatLabel(
+        string? prefix, ClassificationLevel level, IReadOnlyList<IReadOnlyList<string>> eyesOnlySets)
+    {
+        var builder = new System.Text.StringBuilder();
+
+        // No prefix renders the bare level with NO leading space: a cosmetic gap would
+        // make two identical markings compare unequal as strings (§21.12).
+        if (!string.IsNullOrEmpty(prefix))
+        {
+            builder.Append(prefix).Append(' ');
+        }
+
+        builder.Append(LevelName(level));
+
+        foreach (var set in eyesOnlySets)
+        {
+            if (set.Count == 0)
+            {
+                continue;
+            }
+
+            builder.Append(" [").Append(string.Join("/", set)).Append(" EYES ONLY]");
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>

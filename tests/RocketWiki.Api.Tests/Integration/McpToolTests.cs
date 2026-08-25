@@ -129,10 +129,11 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
     /// HttpClient carries the fake-auth claims header, so every JSON-RPC POST the
     /// transport makes is an authenticated request — exactly how a real client's
     /// bearer token would ride along.</summary>
-    private async Task<McpClient> CreateMcpClientAsync(string sub, string[]? nationality = null)
+    private async Task<McpClient> CreateMcpClientAsync(
+        string sub, string[]? nationality = null, string? clearance = null)
     {
         var httpClient = factory.CreateClient();
-        httpClient.SetTestUser(sub: sub, nationality: nationality);
+        httpClient.SetTestUser(sub: sub, nationality: nationality, clearance: clearance);
 
         var transport = new HttpClientTransport(new HttpClientTransportOptions
         {
@@ -559,5 +560,119 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
             new Dictionary<string, object?> { ["spaceKey"] = "NO-SUCH-SPACE" });
         Assert.Equal(true, missingResult.IsError);
         Assert.Equal(rowsBefore, await McpAuditRowCountAsync());
+    }
+
+    // ---------- protective markings on the payloads (design.md §21.13) ----------
+
+    /// <summary>Re-marks a seeded page (which the DbContext materialized at OFFICIAL) so a
+    /// tool payload has something other than the baseline to report.</summary>
+    private async Task MarkAsync(Guid pageId, ClassificationLevel level, params string[] eyesOnly)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var marking = await db.PageMarkings.Include(m => m.Countries).SingleAsync(m => m.PageId == pageId);
+        marking.Level = level;
+        marking.Countries.Clear();
+        foreach (var country in eyesOnly)
+        {
+            marking.Countries.Add(new PageMarkingCountry { PageId = pageId, CountryValue = country });
+        }
+
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task GetPage_PayloadCarriesThePagesMarking()
+    {
+        // §21.13: an MCP client is typically an LLM, and an unmarked payload is exactly how
+        // classified text gets summarised into an unclassified context. The marking rides
+        // with the content, as the one server-rendered label string (§21.1).
+        var f = await SeedAsync();
+        await MarkAsync(f.PageAId, ClassificationLevel.Secret, "GB");
+
+        await using var client = await CreateMcpClientAsync(
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["GB"], clearance: "SECRET");
+
+        var result = await client.CallToolAsync("get_page",
+            new Dictionary<string, object?> { ["pageId"] = f.PageAId.ToString() });
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Equal("UK SECRET [GB EYES ONLY]", SingleJson(result).GetProperty("marking").GetString());
+    }
+
+    [Fact]
+    public async Task Search_PayloadCarriesPerHitMarkingsAndTheAggregateOverThem()
+    {
+        var f = await SeedAsync();
+        await MarkAsync(f.PageBId, ClassificationLevel.Secret); // the US-restricted page
+
+        // A US national cleared to SECRET sees both the OFFICIAL page and the SECRET one,
+        // so the aggregate is genuinely higher than any single hit's baseline.
+        await using var client = await CreateMcpClientAsync(
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["US"], clearance: "SECRET");
+
+        var result = await client.CallToolAsync("search",
+            new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
+
+        Assert.NotEqual(true, result.IsError);
+        var payload = SingleJson(result);
+
+        var byId = payload.GetProperty("hits").EnumerateArray()
+            .ToDictionary(h => h.GetProperty("pageId").GetGuid(), h => h.GetProperty("marking").GetString());
+        Assert.Equal("UK OFFICIAL", byId[f.PageAId]);
+        Assert.Equal("UK SECRET", byId[f.PageBId]);
+
+        // The containing payload carries the highest of them.
+        Assert.Equal("UK SECRET", payload.GetProperty("aggregateMarking").GetString());
+    }
+
+    [Fact]
+    public async Task Search_AggregateCoversOnlyTheHitsTheCallerWasShown()
+    {
+        // The other half of the same claim: the SECRET page is invisible to this caller
+        // (it is restricted to US nationals), so it cannot raise the payload's marking.
+        // §6.7 verified rather than assumed.
+        var f = await SeedAsync();
+        await MarkAsync(f.PageBId, ClassificationLevel.Secret);
+
+        await using var client = await CreateMcpClientAsync(
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["NZ"], clearance: "TOP_SECRET");
+
+        var result = await client.CallToolAsync("search",
+            new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
+
+        var payload = SingleJson(result);
+        var hit = Assert.Single(payload.GetProperty("hits").EnumerateArray());
+        Assert.Equal(f.PageAId, hit.GetProperty("pageId").GetGuid());
+        Assert.Equal("UK OFFICIAL", payload.GetProperty("aggregateMarking").GetString());
+    }
+
+    [Fact]
+    public async Task GetPageTree_PayloadCarriesPerNodeMarkingsAndTheAggregateOverThePrunedTree()
+    {
+        // The aggregate spans every depth of the payload, not just its top level: the
+        // SECRET marking sits on a CHILD, and the tree as a whole must say so.
+        var f = await SeedAsync();
+        await MarkAsync(f.PageDId, ClassificationLevel.Secret, "GB");
+
+        await using var client = await CreateMcpClientAsync(
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["GB"], clearance: "SECRET");
+
+        var result = await client.CallToolAsync("get_page_tree",
+            new Dictionary<string, object?> { ["spaceKey"] = f.SpaceKey });
+
+        Assert.NotEqual(true, result.IsError);
+        var tree = SingleJson(result);
+
+        var root = Assert.Single(tree.GetProperty("pages").EnumerateArray());
+        Assert.Equal("UK OFFICIAL", root.GetProperty("marking").GetString());
+
+        var child = Assert.Single(
+            root.GetProperty("children").EnumerateArray(),
+            c => c.GetProperty("id").GetGuid() == f.PageDId);
+        Assert.Equal("UK SECRET [GB EYES ONLY]", child.GetProperty("marking").GetString());
+
+        Assert.Equal("UK SECRET [GB EYES ONLY]", tree.GetProperty("aggregateMarking").GetString());
     }
 }

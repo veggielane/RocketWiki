@@ -241,6 +241,15 @@ page inserted without it, and the `AddPageMarkings` migration backfilled every
 page that predated the feature. A page found *without* one is read as TOP SECRET
 (§21.5); that is a diagnosis, never a mode.
 
+**Aggregate markings (§21.13) add no storage, and that is the point.** The label a
+search result list or an Ask answer carries is computed per response from the
+markings of the pages that fed it, and thrown away with the response. There is no
+aggregate column, no aggregate table, and no page whose stored marking was derived
+from an aggregate: a compilation's label is a fact about one response, not a
+classification anybody decided. The only place one is ever written down is the
+`assistant.ask` audit row's `DetailsJson`, as the rendered label — the same
+"a mutable row's history lives only in the audit log" reasoning as §21.7.
+
 ### PageMarkingCountry — the eyes-only set (design.md §21.4)
 
 | Column | Type | Notes |
@@ -252,7 +261,7 @@ Composite PK `(PageId, CountryValue)` — a country appears at most once per pag
 so applying a set is idempotent and there is no ordering question between two
 rows for the same country, exactly like `PageLabel`. Indexes: the PK, plus
 `(CountryValue, PageId)` — the "which pages are releasable to X" access path,
-which has no query surface yet (§21.13) but is the reason the table is shaped
+which has no query surface yet (§21.14) but is the reason the table is shaped
 this way now rather than after a migration.
 
 A **normalized child table, not a delimited column on `PageMarking`**, and that

@@ -138,6 +138,14 @@ type AddCommentPayload {
   error: PageMutationErrorView
 }
 
+type AggregateMarkingLabel {
+  level: ClassificationLevel!
+  eyesOnlySets: [[String!]!]!
+  prefix: String
+  label: String!
+  levelName: String!
+}
+
 type ArchivedSpace {
   id: UUID!
   key: String!
@@ -155,12 +163,14 @@ type AskWikiCitation {
   title: String!
   headingPath: [String!]!
   anchorId: String!
+  marking: PageMarkingView!
 }
 
 type AskWikiPayload {
   answer: String
   citations: [AskWikiCitation!]!
   unavailable: AskWikiUnavailableReason
+  aggregateMarking: AggregateMarkingLabel
 }
 
 type AttachLabelPayload {
@@ -616,6 +626,7 @@ type RestrictionCheckView {
 }
 
 type SearchConnection {
+  aggregateMarking: AggregateMarkingLabel @cost(weight: "10")
   totalCount: Int!
   edges: [SearchEdge!]!
   pageInfo: SearchPageInfo!

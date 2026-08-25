@@ -2,6 +2,7 @@ using System.Text.Json;
 using RocketWiki.Api.Assistant;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
+using RocketWiki.Api.Markings;
 using RocketWiki.Core.Enums;
 
 namespace RocketWiki.Api.GraphQL;
@@ -12,11 +13,24 @@ namespace RocketWiki.Api.GraphQL;
 /// canView for — see AskWikiService.ValidateCitations), or a typed unavailability.
 /// Payload facts, never GraphQL errors — the GitLab degradation pattern: a failed
 /// ask must answer legibly, not error the request around it.
+///
+/// <para><see cref="AggregateMarking"/> is what the answer IS (design.md §21.13): the
+/// highest classification among every page that entered the model context, with each
+/// distinct eyes-only caveat listed. <b>Anything rendering the answer must render this
+/// beside it</b> — an answer synthesized from a SECRET page is SECRET, and the whole
+/// reason this field exists is that without it such an answer arrives looking like plain
+/// text. Null exactly when <see cref="Answer"/> is null: no text, nothing to mark. Render
+/// <c>aggregateMarking.label</c> verbatim; do not compose a string from the parts
+/// (§21.1).</para>
+///
+/// <para>Each citation carries its own source page's marking too, so the bibliography is
+/// marked per entry as well as in aggregate.</para>
 /// </summary>
 public sealed record AskWikiPayload(
     string? Answer,
     IReadOnlyList<AskWikiCitation> Citations,
-    AskWikiUnavailableReason? Unavailable);
+    AskWikiUnavailableReason? Unavailable,
+    AggregateMarkingLabel? AggregateMarking);
 
 public partial class Query
 {
@@ -75,9 +89,19 @@ public partial class Query
                     disposition = outcome.Disposition,
                     retrievedPageIds = outcome.RetrievedPageIds,
                     citedPageIds = outcome.CitedPageIds,
+                    // §21.13/§21.7: what the answer was marked as when it left. Not
+                    // recoverable from retrievedPageIds later — markings are a single
+                    // mutable row, so re-deriving it after a re-marking would report
+                    // today's classification for yesterday's answer. Same reason §21.7
+                    // records the before-state of a marking change: for a mutable row,
+                    // the audit log is the only history there is. The audit table is also
+                    // where a full country set is allowed to appear (§21.7) — and this is
+                    // a label built from them.
+                    aggregateMarking = outcome.AggregateMarking?.Label,
                 })),
             cancellationToken);
 
-        return new AskWikiPayload(outcome.Answer, outcome.Citations, outcome.Unavailable);
+        return new AskWikiPayload(
+            outcome.Answer, outcome.Citations, outcome.Unavailable, outcome.AggregateMarking);
     }
 }

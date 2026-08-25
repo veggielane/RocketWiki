@@ -3,6 +3,7 @@ using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
+using RocketWiki.Api.Markings;
 using RocketWiki.Api.Reads;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
@@ -39,6 +40,14 @@ namespace RocketWiki.Api.Mcp;
 /// registry, the SDK's tool list, and design.md §8's published names cannot drift —
 /// enforced by AuditCoverageTests.
 ///
+/// 4. <b>Marked payloads (§21.13).</b> Every payload that carries page text carries the
+///    page's protective marking with it, and a multi-item payload carries the aggregate
+///    over its items. This is not decoration: <b>an MCP client is typically an LLM</b>,
+///    and an unmarked payload is precisely how a paragraph of UK SECRET ends up
+///    summarised into a document nobody classified. The label is
+///    <c>ProtectiveMarking.Format</c>'s output — the same string the SPA and an audit
+///    reviewer see (§21.1's one-formatter rule) — never a second rendering.
+///
 /// Identity: tools resolve the ABAC <see cref="Principal"/> from
 /// <see cref="ICurrentPrincipalAccessor"/> — the validated token of THIS request, never
 /// a service account and never the local User mirror (§6.1, §11). In stateless HTTP
@@ -67,6 +76,7 @@ public sealed class WikiMcpTools
     public static async Task<McpSearchResult> SearchAsync(
         [Description("The text to search for in page titles and content.")] string query,
         ISearchService searchService,
+        IPageMarkingReader markingReader,
         ICurrentPrincipalAccessor principalAccessor,
         McpAuditState auditState,
         CancellationToken cancellationToken,
@@ -85,8 +95,16 @@ public sealed class WikiMcpTools
         auditState.SetDetails(System.Text.Json.JsonSerializer.Serialize(
             new { query, spaceKey, results = hits.Count }));
 
+        // §21.13: per-hit markings and an aggregate over exactly the hits being returned
+        // — which are already permission-filtered, so nothing the caller cannot view can
+        // contribute to either. One query for the batch.
+        var markings = await markingReader.LoadAsync(
+            hits.Select(h => h.PageId).Distinct().ToArray(), cancellationToken);
+
         return new McpSearchResult(
-            hits.Select(h => new McpSearchHit(h.PageId, h.Title, h.SpaceKey, h.Snippet)).ToList());
+            AggregateMarkingLabel.Of(hits.Select(h => MarkingFor(markings, h.PageId)))?.Label,
+            hits.Select(h => new McpSearchHit(
+                h.PageId, h.Title, h.SpaceKey, MarkingFor(markings, h.PageId).Format(), h.Snippet)).ToList());
     }
 
     [McpServerTool(Name = "get_page", Title = "Read a wiki page", ReadOnly = true, Idempotent = true, OpenWorld = false)]
@@ -96,6 +114,7 @@ public sealed class WikiMcpTools
     public static async Task<McpPage> GetPageAsync(
         [Description("The page id (a GUID, as returned by search, get_page_tree, or list_spaces).")] string pageId,
         IPageReadService readService,
+        IPageMarkingReader markingReader,
         ICurrentPrincipalAccessor principalAccessor,
         IAuditSink auditSink,
         McpAuditState auditState,
@@ -127,8 +146,14 @@ public sealed class WikiMcpTools
         }
 
         auditState.SetSubject(AuditSubjectType.Page, page.Id);
+
+        // §21.13: the marking rides with the content, resolved only after canView passed
+        // — so this is the marking of a page the caller has just been permitted to read,
+        // and stating it is stating why they were let in.
+        var markings = await markingReader.LoadAsync([page.Id], cancellationToken);
+
         return new McpPage(
-            page.Id, page.Title, page.Slug, page.SpaceId,
+            page.Id, page.Title, MarkingFor(markings, page.Id).Format(), page.Slug, page.SpaceId,
             page.CurrentRevisionNumber, page.UpdatedAtUtc, page.CurrentContent);
     }
 
@@ -194,7 +219,16 @@ public sealed class WikiMcpTools
         var tree = treeResult.ValueOrNull() ?? [];
 
         auditState.SetSubject(AuditSubjectType.Space, space.Id, space.Key);
-        return new McpPageTree(space.Key, space.Name, tree.Select(ToNode).ToList());
+
+        // §21.13: each surviving node's own marking, plus the aggregate over the whole
+        // pruned tree. No query at all — PageTreeNode already carries the marking the
+        // walk GATED on (§21.9), so the payload cannot show one marking while pruning
+        // used another, and the constant-query budget is untouched.
+        return new McpPageTree(
+            space.Key,
+            space.Name,
+            AggregateMarkingLabel.Of(Flatten(tree).Select(n => n.Marking.ToMarking()))?.Label,
+            tree.Select(ToNode).ToList());
     }
 
     /// <summary>
@@ -207,22 +241,56 @@ public sealed class WikiMcpTools
         accessor.Current ?? throw new McpException(AuthenticationRequiredMessage);
 
     private static McpPageTreeNode ToNode(PageTreeNode node) =>
-        new(node.Id, node.Title, node.Slug, node.Children.Select(ToNode).ToList());
+        new(node.Id, node.Title, node.Marking.Label, node.Slug, node.Children.Select(ToNode).ToList());
+
+    /// <summary>Every node in the pruned tree, at every depth — the aggregate covers what
+    /// the payload actually contains, not just its top level.</summary>
+    private static IEnumerable<PageTreeNode> Flatten(IEnumerable<PageTreeNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            yield return node;
+            foreach (var child in Flatten(node.Children))
+            {
+                yield return child;
+            }
+        }
+    }
+
+    /// <summary>The reader fills every requested key, so the fallback is unreachable — but
+    /// the one honest answer for a page whose marking row went missing is the same TOP
+    /// SECRET every other read path substitutes (§21.5), never an unmarked payload.</summary>
+    private static ProtectiveMarking MarkingFor(
+        IReadOnlyDictionary<Guid, ProtectiveMarking> markings, Guid pageId) =>
+        markings.GetValueOrDefault(pageId) ?? ProtectiveMarking.FailClosed;
 }
 
 /// <summary>Results are plain records; the SDK serializes them into a JSON text content
-/// block. Content is Markdown (design.md §8: the API serves Markdown, not HTML).</summary>
+/// block. Content is Markdown (design.md §8: the API serves Markdown, not HTML).
+///
+/// <para><c>Marking</c> on a content-bearing payload, and <c>AggregateMarking</c> on a
+/// multi-item one, are design.md §21.13. Both are rendered strings from the single
+/// server-side formatter (<c>UK SECRET [GB EYES ONLY]</c>) rather than structured parts:
+/// the consumer is usually a language model, the marking has to travel with the text as
+/// text, and a client that reassembled the parts itself would be the second renderer
+/// §21.1 forbids. <c>AggregateMarking</c> is null only when the payload has no items —
+/// nothing shown, nothing to mark.</para></summary>
 public sealed record McpPage(
-    Guid Id, string Title, string Slug, Guid SpaceId, int Revision, DateTime UpdatedAtUtc, string Markdown);
+    Guid Id, string Title, string Marking, string Slug, Guid SpaceId, int Revision, DateTime UpdatedAtUtc,
+    string Markdown);
 
-public sealed record McpSearchResult(IReadOnlyList<McpSearchHit> Hits);
+public sealed record McpSearchResult(string? AggregateMarking, IReadOnlyList<McpSearchHit> Hits);
 
-public sealed record McpSearchHit(Guid PageId, string Title, string SpaceKey, string Snippet);
+public sealed record McpSearchHit(Guid PageId, string Title, string SpaceKey, string Marking, string Snippet);
 
+/// <summary>No marking: a space is not marked, its pages are (§21 marks pages). Listing
+/// spaces reveals no page content, so there is nothing here to label.</summary>
 public sealed record McpSpaceList(IReadOnlyList<McpSpace> Spaces);
 
 public sealed record McpSpace(Guid Id, string Key, string Name);
 
-public sealed record McpPageTree(string SpaceKey, string SpaceName, IReadOnlyList<McpPageTreeNode> Pages);
+public sealed record McpPageTree(
+    string SpaceKey, string SpaceName, string? AggregateMarking, IReadOnlyList<McpPageTreeNode> Pages);
 
-public sealed record McpPageTreeNode(Guid Id, string Title, string Slug, IReadOnlyList<McpPageTreeNode> Children);
+public sealed record McpPageTreeNode(
+    Guid Id, string Title, string Marking, string Slug, IReadOnlyList<McpPageTreeNode> Children);

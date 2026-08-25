@@ -206,8 +206,8 @@ public sealed class PageFieldResolvers
         // NonNull GraphQL field must not be able to throw a nullability surprise, and the
         // one honest fallback for "no marking" is the same TOP SECRET every other read
         // path substitutes (design.md §21), never a blank badge.
-        await markingLoader.LoadAsync(page.Id, cancellationToken)
-        ?? PageMarkingView.From(ProtectiveMarking.FailClosed);
+        PageMarkingView.From(
+            await markingLoader.LoadAsync(page.Id, cancellationToken) ?? ProtectiveMarking.FailClosed);
 
     /// <summary>See <see cref="ViewerWatchesPageDataLoader"/> for the viewer-relative
     /// contract and why this emits no audit row of its own (the caller's own
