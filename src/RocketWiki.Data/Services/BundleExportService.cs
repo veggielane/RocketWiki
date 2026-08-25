@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -86,10 +87,28 @@ public class BundleExportService : IBundleExportService
             ? await _db.Users.Where(u => authorIds.Contains(u.Id)).ToDictionaryAsync(u => u.Id, cancellationToken)
             : new Dictionary<Guid, User>();
 
+        // design.md §21: a baseline carries every page's protective marking inside its own
+        // PageUpsert line. Without this the entire pre-existing content of a newly
+        // exported space would land on the high side unmarked - the one gap that would
+        // let classified content cross the boundary and arrive without its classification.
+        // One query for the whole space, countries included.
+        var markingsByPage = (await _db.PageMarkings
+                .Include(m => m.Countries)
+                .Where(m => livePageIds.Contains(m.PageId))
+                .ToListAsync(cancellationToken))
+            .ToDictionary(m => m.PageId, m => m.ToMarking());
+
         var lines = livePages
             .Select(p => new BundleEventLine(
                 space.Key, space.Id, SequenceNumber: 0, SyncEventType.PageUpsert,
-                SerializePageUpsert(p, revisionsByPage.GetValueOrDefault(p.Id, []), authorsById), DateTime.UtcNow))
+                SerializePageUpsert(
+                    p, revisionsByPage.GetValueOrDefault(p.Id, []), authorsById,
+                    // A page with no marking row exports as TOP SECRET rather than as
+                    // "no marking" - the same fail-closed substitution the read path
+                    // makes, carried across the boundary so the high side inherits the
+                    // caution rather than the gap.
+                    markingsByPage.GetValueOrDefault(p.Id) ?? ProtectiveMarking.FailClosed),
+                DateTime.UtcNow))
             .ToList();
 
         return await WriteBundleAsync(outputDirectory, localInstanceId, lines, cancellationToken);
@@ -133,6 +152,7 @@ public class BundleExportService : IBundleExportService
 
         var enrichedPayloads = await EnrichAuthorPayloadsAsync(pendingEvents, cancellationToken);
         enrichedPayloads = await EnrichRevisionPayloadsAsync(pendingEvents, enrichedPayloads, cancellationToken);
+        enrichedPayloads = await EnrichMarkingPayloadsAsync(pendingEvents, enrichedPayloads, cancellationToken);
 
         var lines = pendingEvents
             .Select(e => new BundleEventLine(spaceKeysById[e.SpaceId], e.SpaceId, e.SequenceNumber, e.EventType, enrichedPayloads[e.Id], e.CreatedAtUtc))
@@ -264,6 +284,62 @@ public class BundleExportService : IBundleExportService
             var node = JsonNode.Parse(payloads[eventId])!.AsObject();
             node["revisions"] = JsonSerializer.SerializeToNode(
                 new[] { RevisionPayload(revision, authorsById.GetValueOrDefault(revision.AuthorUserId)) }, JsonOptions);
+            payloads[eventId] = node.ToJsonString(JsonOptions);
+        }
+
+        return payloads;
+    }
+
+    /// <summary>
+    /// Attaches the page's CURRENT protective marking to every incremental PageUpsert
+    /// payload (design.md §21), in the same shape a baseline uses — one payload key, one
+    /// import path.
+    ///
+    /// <para>Done at EXPORT time rather than journalled into the outbox row, for the same
+    /// two reasons revision enrichment is: journal payloads stay lean, and outbox rows
+    /// written before markings existed still export with one. That second reason is the
+    /// important one here — without it, every page edited on low before this feature
+    /// shipped would cross as an unmarked upsert and the high side would have to guess.
+    /// It also means the marking on an upsert is the page's state at export time, not at
+    /// edit time; that is the correct reading for a snapshot-replay protocol, and any
+    /// marking change in between has its own PageMarking event in the same drain
+    /// anyway.</para>
+    ///
+    /// <para>A page whose marking row is genuinely missing exports as TOP SECRET, not as
+    /// an absent key: the high side must never be able to infer "unmarked" from a bundle
+    /// this instance produced.</para>
+    /// </summary>
+    private async Task<Dictionary<long, string>> EnrichMarkingPayloadsAsync(
+        List<SyncOutboxEvent> events, Dictionary<long, string> payloads, CancellationToken cancellationToken)
+    {
+        var pageIdsByEvent = new Dictionary<long, Guid>();
+        foreach (var evt in events.Where(e => e.EventType == SyncEventType.PageUpsert))
+        {
+            var pageId = TryGetGuidProperty(payloads[evt.Id], "pageId");
+            if (pageId is not null)
+            {
+                pageIdsByEvent[evt.Id] = pageId.Value;
+            }
+        }
+
+        if (pageIdsByEvent.Count == 0)
+        {
+            return payloads;
+        }
+
+        // One query for the whole drain, countries included.
+        var pageIds = pageIdsByEvent.Values.Distinct().ToList();
+        var markingsByPage = (await _db.PageMarkings
+                .Include(m => m.Countries)
+                .Where(m => pageIds.Contains(m.PageId))
+                .ToListAsync(cancellationToken))
+            .ToDictionary(m => m.PageId, m => m.ToMarking());
+
+        foreach (var (eventId, pageId) in pageIdsByEvent)
+        {
+            var marking = markingsByPage.GetValueOrDefault(pageId) ?? ProtectiveMarking.FailClosed;
+            var node = JsonNode.Parse(payloads[eventId])!.AsObject();
+            node["marking"] = JsonSerializer.SerializeToNode(MarkingPayload(marking), JsonOptions);
             payloads[eventId] = node.ToJsonString(JsonOptions);
         }
 
@@ -407,7 +483,9 @@ public class BundleExportService : IBundleExportService
     }
 
     /// <summary>Baseline line: the page's current state plus its complete revision history (design.md §12).</summary>
-    private static string SerializePageUpsert(Page page, IReadOnlyList<PageRevision> revisions, IReadOnlyDictionary<Guid, User> authorsById) =>
+    private static string SerializePageUpsert(
+        Page page, IReadOnlyList<PageRevision> revisions, IReadOnlyDictionary<Guid, User> authorsById,
+        ProtectiveMarking marking) =>
         JsonSerializer.Serialize(
             new
             {
@@ -421,8 +499,17 @@ public class BundleExportService : IBundleExportService
                 content = page.CurrentContent,
                 revisionNumber = page.CurrentRevisionNumber,
                 revisions = revisions.Select(r => RevisionPayload(r, authorsById.GetValueOrDefault(r.AuthorUserId))).ToList(),
+                marking = MarkingPayload(marking),
             },
             JsonOptions);
+
+    /// <summary>The shape a marking crosses in, shared by the baseline's PageUpsert and
+    /// the incremental enrichment below so the import side has exactly one parser.</summary>
+    private static object MarkingPayload(ProtectiveMarking marking) => new
+    {
+        level = ProtectiveMarking.LevelWireName(marking.Level),
+        eyesOnly = marking.EyesOnly,
+    };
 
     /// <summary>
     /// One entry of a PageUpsert payload's <c>revisions</c> array. Carries the same

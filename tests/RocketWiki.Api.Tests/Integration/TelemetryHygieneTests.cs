@@ -105,6 +105,16 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
             UpdatedAtUtc = now,
         };
         db.Pages.Add(page);
+
+        // design.md §21: a protective marking the caller *is* cleared for, so the
+        // clearance gate genuinely evaluates a real level and a real country set on every
+        // resolution of this page rather than short-circuiting on the OFFICIAL default.
+        // The eyes-only country is the sentinel nationality, which makes the marking's own
+        // contents part of what this sweep is looking for: if a level, a country, or a
+        // marking-with-page-id ever reached a span or a metric tag, it lands here.
+        var marking = new PageMarking { PageId = page.Id, Level = ClassificationLevel.Secret, SetAtUtc = now };
+        marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = SentinelNationality });
+        db.PageMarkings.Add(marking);
         await db.SaveChangesAsync();
 
         // A restriction the caller *satisfies*, so the rule engine actually evaluates the
@@ -136,7 +146,10 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
             sub: $"tel-{Guid.NewGuid()}",
             email: "telemetry@example.test",
             name: "Telemetry Tester",
-            nationality: [SentinelNationality]);
+            nationality: [SentinelNationality],
+            // Cleared for the seeded page's SECRET marking (design.md §21), so the reads
+            // below still succeed and the clearance gate runs on real values.
+            clearance: "SECRET");
 
         var captured = new List<Activity>();
         var metricTags = new List<string>();

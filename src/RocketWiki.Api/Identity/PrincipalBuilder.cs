@@ -33,14 +33,31 @@ public static class PrincipalBuilder
 
         var groups = user.FindAll("groups").Select(c => c.Value);
 
-        // Registered attributes (design.md §6.2) - nationality is the only one wired end
-        // to end today. Absent entirely (not an empty list) when the claim isn't present,
-        // matching Principal's own fail-closed contract for a key nobody holds a value for.
-        var nationality = user.FindAll("nationality").Select(c => c.Value).ToArray();
-        IEnumerable<KeyValuePair<string, IReadOnlyList<string>>>? attributes = nationality.Length > 0
-            ? [new KeyValuePair<string, IReadOnlyList<string>>("nationality", nationality)]
-            : null;
+        // Registered attributes (design.md §6.2). Each is absent entirely (not an empty
+        // list) when its claim isn't present, matching Principal's own fail-closed
+        // contract for a key nobody holds a value for - which is what makes
+        // ClearanceGate.ResolveClearance's "absent means OFFICIAL" and AttrCondition's
+        // "absent matches nothing" both land on the intended answer rather than on an
+        // empty-string comparison.
+        var attributes = new List<KeyValuePair<string, IReadOnlyList<string>>>();
+        AddIfPresent(attributes, user, ClearanceGate.NationalityAttributeKey);
 
-        return Principal.Create(subject, groups, attributes);
+        // design.md §21: the clearance attribute gates every page read against its
+        // protective marking. It is an ordinary registered attribute - no special
+        // plumbing, no separate accessor - precisely so it inherits §6.1's "evaluate the
+        // token, never the local User mirror" for free.
+        AddIfPresent(attributes, user, ClearanceGate.ClearanceAttributeKey);
+
+        return Principal.Create(subject, groups, attributes.Count > 0 ? attributes : null);
+    }
+
+    private static void AddIfPresent(
+        List<KeyValuePair<string, IReadOnlyList<string>>> attributes, ClaimsPrincipal user, string claimName)
+    {
+        var values = user.FindAll(claimName).Select(c => c.Value).ToArray();
+        if (values.Length > 0)
+        {
+            attributes.Add(new KeyValuePair<string, IReadOnlyList<string>>(claimName, values));
+        }
     }
 }

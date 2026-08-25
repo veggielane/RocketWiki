@@ -90,6 +90,37 @@ public class PageService : IPageService
             UpdatedAtUtc = now,
         };
         _db.Pages.Add(page);
+
+        // design.md §21: every page is marked, from the moment it exists. A child
+        // inherits its parent's marking - inheritance happens ONCE, here, producing a
+        // value the page then owns; it is not re-derived from ancestors at read time, so
+        // an editor can later raise or lower it without fighting the tree. A root page
+        // starts at OFFICIAL. The permission computation above already used this same
+        // marking (the loader reads the last chain element's, which is the parent's for a
+        // create), so the caller has necessarily been cleared for what the new page
+        // inherits - creating a page you could not then read is impossible by
+        // construction rather than by a second check.
+        //
+        // No audit row of its own: the marking is part of what page.create created, and a
+        // page.marking.set row alongside every page.create would be noise that made real
+        // marking changes harder to find. The inherited value is deterministic from the
+        // parent, which the page.create row already identifies.
+        var inherited = parent is null
+            ? ProtectiveMarking.Baseline
+            : await _permissions.LoadMarkingAsync(parent.Id, cancellationToken);
+        var marking = new PageMarking
+        {
+            PageId = page.Id,
+            Level = inherited.Level,
+            SetAtUtc = now,
+            SetByUserId = actingUserId,
+        };
+        foreach (var country in inherited.EyesOnly)
+        {
+            marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = country });
+        }
+
+        _db.PageMarkings.Add(marking);
         _db.PageRevisions.Add(new PageRevision
         {
             PageId = page.Id,

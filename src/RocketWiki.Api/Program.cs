@@ -170,6 +170,13 @@ builder.Services.AddScoped<ILabelService>(sp => new LabelService(sp.GetRequiredS
 builder.Services.AddScoped<IPagePropertyService>(sp =>
     new PagePropertyService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
 
+// --- Protective markings (design.md §21) — the classification that gates canView.
+// Needs the local InstanceId for the same reason: re-marking a page is a page mutation
+// and sits beneath the replica invariant (§12). There is no read service to register —
+// a marking is resolved off a Page that already passed canView, via a DataLoader.
+builder.Services.AddScoped<IPageMarkingService>(sp =>
+    new PageMarkingService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+
 // --- Custom emojis (design.md §19) — the admin-curated :name: registry over the same
 // DbContext + IFileStorage as attachments. Instance-local, never synced, so no
 // InstanceId is needed and the plain type registration suffices.

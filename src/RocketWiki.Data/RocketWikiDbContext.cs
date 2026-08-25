@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
@@ -53,6 +54,8 @@ public class RocketWikiDbContext : DbContext
     public DbSet<PageLabel> PageLabels => Set<PageLabel>();
     public DbSet<PagePropertyKey> PagePropertyKeys => Set<PagePropertyKey>();
     public DbSet<PageProperty> PageProperties => Set<PageProperty>();
+    public DbSet<PageMarking> PageMarkings => Set<PageMarking>();
+    public DbSet<PageMarkingCountry> PageMarkingCountries => Set<PageMarkingCountry>();
     public DbSet<User> Users => Set<User>();
     public DbSet<AccessRule> AccessRules => Set<AccessRule>();
     public DbSet<AttributeDefinition> AttributeDefinitions => Set<AttributeDefinition>();
@@ -121,6 +124,7 @@ public class RocketWikiDbContext : DbContext
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
+        EnsurePageMarkings();
         var telemetry = ProcessPendingDomainEvents();
         var result = base.SaveChanges(acceptAllChangesOnSuccess);
         telemetry.RecordCommitted();
@@ -129,10 +133,89 @@ public class RocketWikiDbContext : DbContext
 
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
+        EnsurePageMarkings();
         var telemetry = ProcessPendingDomainEvents();
         var result = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
         telemetry.RecordCommitted();
         return result;
+    }
+
+    /// <summary>
+    /// design.md §21's <b>every page is marked</b> invariant, enforced at the persistence
+    /// seam rather than by each write path remembering. Any <see cref="Page"/> being
+    /// INSERTed in this unit of work without a <see cref="PageMarking"/> gets one before
+    /// the transaction opens, so an unmarked page cannot be committed through any code
+    /// path — present or future — that goes through this context.
+    ///
+    /// <para>This is the write-side twin of putting the clearance gate inside
+    /// <c>EffectivePermissionCalculator</c>: an invariant that lives in one structural
+    /// place cannot be lost one call site at a time. It is a backstop, not the feature —
+    /// <c>PageService.CreatePageAsync</c> sets the marking explicitly (with real parent
+    /// inheritance and an author override), and <c>BundleImportService</c> sets it
+    /// explicitly (fail-closed for a bundle that carries none), so in a running instance
+    /// this method has nothing left to do.</para>
+    ///
+    /// <para><b>It touches the database not at all</b>, deliberately: a save hook that
+    /// issues queries is a save hook that can deadlock or double a round trip on every
+    /// write. Parent inheritance here is therefore change-tracker-only — it covers
+    /// creating a parent and a child in one unit of work — and anything else lands on
+    /// <c>ProtectiveMarking.Baseline</c> (OFFICIAL, no caveat), which is the documented
+    /// default for a page nobody marked. Real inheritance from a parent already in the
+    /// database is <c>PageService</c>'s job, where the parent is loaded anyway.</para>
+    ///
+    /// <para>Note the asymmetry with the READ side, which is intentional. A missing
+    /// marking on read means "something went wrong" and fails closed to TOP SECRET; a
+    /// missing marking on insert means "nobody said", and the answer to that is the
+    /// scheme's floor. Defaulting an insert to TOP SECRET would classify content nobody
+    /// asked to classify and lock its own author out of it.</para>
+    /// </summary>
+    private void EnsurePageMarkings()
+    {
+        var insertedPages = ChangeTracker.Entries<Page>()
+            .Where(e => e.State == EntityState.Added)
+            .Select(e => e.Entity)
+            .ToList();
+        if (insertedPages.Count == 0)
+        {
+            return;
+        }
+
+        // Markings already in this change set (added by the caller, or by an earlier
+        // iteration below) - a page never gets two.
+        var markingsByPageId = ChangeTracker.Entries<PageMarking>()
+            .Where(e => e.State != EntityState.Deleted)
+            .Select(e => e.Entity)
+            .ToDictionary(m => m.PageId);
+
+        var now = DateTime.UtcNow;
+        foreach (var page in insertedPages)
+        {
+            if (page.Marking is not null || markingsByPageId.ContainsKey(page.Id))
+            {
+                continue;
+            }
+
+            var inherited = page.ParentPageId is { } parentId && markingsByPageId.TryGetValue(parentId, out var parent)
+                ? parent.ToMarking()
+                : ProtectiveMarking.Baseline;
+
+            var marking = new PageMarking
+            {
+                PageId = page.Id,
+                Level = inherited.Level,
+                SetAtUtc = now,
+                // No actor: nobody chose this marking, the invariant did. Same "system
+                // action, no user" shape a sync-applied marking has.
+                SetByUserId = null,
+            };
+            foreach (var country in inherited.EyesOnly)
+            {
+                marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = country });
+            }
+
+            PageMarkings.Add(marking);
+            markingsByPageId[page.Id] = marking;
+        }
     }
 
     /// <summary>

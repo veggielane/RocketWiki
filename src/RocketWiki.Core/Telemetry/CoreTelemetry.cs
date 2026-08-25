@@ -135,6 +135,18 @@ public static class CoreTelemetry
     /// <c>restriction:{pageId}:{ruleId}</c> — fine for an audit row, wrong for a metric
     /// dimension, which would then carry one series per rule. The audit log keeps the
     /// specific reason; this keeps only the shape.
+    ///
+    /// <para>design.md §21's marking reasons collapse the same way.
+    /// <c>classification:{level}</c> becomes <c>classification</c> and
+    /// <c>caveat:eyes_only</c> becomes <c>caveat</c>. The level alone would be a bounded
+    /// four-value tag and is therefore tempting to keep — it is dropped deliberately.
+    /// A "denials by classification level" time series is a census of how much SECRET
+    /// and TOP SECRET content exists and how hard it is being probed, published to
+    /// whatever audience the dashboard has; that is exactly the second, unregulated
+    /// record of who-reads-what §15 exists to prevent, and the audit table already holds
+    /// the specific level for anyone entitled to ask. The country set never appears in a
+    /// reason string at all (see <c>ClearanceGate.EyesOnlyReason</c>), so no page id and
+    /// no marking contents can reach a metric tag through this path.</para>
     /// </summary>
     public static string CategorizeDenialReason(string? denialReason) => denialReason switch
     {
@@ -143,6 +155,8 @@ public static class CoreTelemetry
         "replica-read-only" => "replica-read-only",
         "insufficient-space-role" => "insufficient-space-role",
         _ when denialReason.StartsWith("restriction:", StringComparison.Ordinal) => "restriction",
+        _ when denialReason.StartsWith("classification:", StringComparison.Ordinal) => "classification",
+        _ when denialReason.StartsWith("caveat:", StringComparison.Ordinal) => "caveat",
         _ => "other",
     };
 

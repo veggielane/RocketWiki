@@ -289,10 +289,20 @@ Effective permission:
 ```
 canView(page) = spaceRole ≥ viewer
                 AND every view-restriction on page + ancestors passes
+                AND clearanceAllows(page's protective marking, principal)   [§21]
 canEdit(page) = canView(page) AND spaceRole ≥ editor
                 AND every edit-restriction on page + ancestors passes
 comment       = requires canView
 ```
+
+That third conjunct is the **protective marking** (§21): every page carries a UK
+Government classification and an optional eyes-only caveat, and it gates view
+access rather than merely being displayed. It is a third kind of thing on top of
+grants and restrictions, not a variant of either, and its defining property is
+that it can only ever **subtract** — no grant, no restriction, and no role widens
+a marking. It is applied inside the same `EffectivePermissionCalculator.Compute`
+that evaluates the two rule kinds above, so every read path inherits it
+structurally rather than by remembering. Full treatment in §21.
 
 On a **replica space** (§12), `canEdit` is unconditionally false — the
 read-only invariant of one-way sync beats every grant and restriction. All
@@ -357,6 +367,15 @@ not bypass page restrictions** — with export-control content there must be no
 silent read-around. Admins can *edit* rules (and thereby grant themselves
 access), but every rule change is audited (who, when, before/after), so
 widening access always leaves a trace.
+
+**Nor do they bypass a protective marking (§21).** The same rule, applied to the
+third conjunct of `canView`: an instance admin without the clearance a page's
+marking demands sees that page exactly as everyone else without it does — absent.
+Unlike a rule, an admin cannot edit their way past it either: re-marking a page
+requires `canEdit`, which already includes the clearance gate against the page's
+current marking, so a page you cannot see is a page you cannot re-mark downward.
+Clearance itself lives in Keycloak, not in RocketWiki, which is what keeps that
+door shut.
 
 ### 6.5.1 Space lifecycle
 
@@ -526,6 +545,16 @@ retrieval already enforced by making restricted pages absent; the race-only
 mid-retrieval denial audits as an ordinary `page.view` Denied row.
 Anonymous asks are refused before any work with no row. Telemetry
 (`rocketwiki.assistant.*`) sees dispositions, counts and durations only.
+
+`page.marking.set` / `page.marking.downgrade` (§21) — a page's protective
+marking changed, subject = page, details carrying the full before-and-after
+marking. Two action names for one mutation on purpose: downgrading (anything
+that lets somebody read the page who could not before) is the operationally
+risky direction, and its own action name is what lets a reviewer find every
+widening in the estate with one query. Like access rules, the audit log is the
+*only* history a marking has — the row itself is mutable — so the before-state
+is load-bearing, not decoration. This is also the only place an eyes-only
+country set is written out in full; §15 keeps it out of every telemetry tag.
 
 `gitlab.fetch` (§18) — every GitLab read, one row per distinct resource per
 request (same resource twice in one document is one row, like `page.view`).
@@ -1315,6 +1344,7 @@ Defense in depth: the one-way guarantee is the whole point of the design.
 | Attachments (bytes + metadata) | Audit log — each side keeps its own |
 | Comments made on low | Users and logins — each side has its own Keycloak |
 | Page **restrictions** (fail closed: a group/attribute unknown on high matches nobody) | Search index + embeddings — recomputed locally on import (§9.4) |
+| Page **protective markings** (§21) — a page that is SECRET on low is SECRET wherever it lands. Same fail-closed reading as restrictions: an eyes-only country the high side's nationality vocabulary doesn't recognize matches nobody, so the page arrives *more* restricted. A page can never land unmarked — an upsert carrying no marking creates the row at TOP SECRET | Clearance itself — each side's Keycloak decides who holds what (§21.3), exactly as it decides group membership |
 | | Space **lifecycle and identity** — name, description, archived state. Spaces aren't a sync event type: import creates the replica row from the space key alone, so renaming or archiving a replica is legitimate local curation (like grants), not a blocked content write |
 | | Custom emoji **definitions** (§19) — content carrying `:name:` syncs as plain text and degrades to literal text on an instance whose registry lacks the name. Syncing the registry is a flagged future decision (collision question: same name, different image, different instances). User avatars likewise never travel |
 
@@ -2307,3 +2337,390 @@ other thing to get right on that day is the missing query filter: property
 rows for a soft-deleted page linger, exactly as `PageLabel` rows do, so a
 report must join to `Pages` rather than assume every row belongs to a live
 page.
+
+---
+
+## 21. Protective markings
+
+Every page carries a **protective marking**: a UK Government classification plus
+an optional *eyes-only* caveat naming the countries the page is releasable to.
+
+**It enforces.** A marking is not a banner the author draws and the reader
+respects; it gates who can view the page, on every read path, exactly as a page
+restriction does. That is the whole reason it exists, and every other decision
+in this section follows from it.
+
+### 21.1 The scheme
+
+Fixed, ordered, and not configurable:
+
+```
+OFFICIAL  <  OFFICIAL_SENSITIVE  <  SECRET  <  TOP_SECRET
+```
+
+The ordering **is** the comparison — a principal may view a page when their
+clearance is at or above the page's level — so the four values are hard-coded as
+a `ClassificationLevel` enum with load-bearing numeric values (`tinyint` in the
+database, so the comparison is numeric on every provider). The scheme is set by
+policy, not by an admin, which is precisely what makes hard-coding it safe: there
+is no fifth level to insert, and a member inserted in the middle would silently
+re-rank everything below it. Numbering starts at **1**, so
+`default(ClassificationLevel)` is not a valid level and an uninitialized value
+can never read as OFFICIAL.
+
+Three spellings of a level exist and they are deliberately different things: the
+**wire name** (`OFFICIAL_SENSITIVE`) is what the `clearance` claim, the sync
+payload, the audit `DetailsJson` and the GraphQL enum all use; the **display
+name** (`OFFICIAL-SENSITIVE`, `TOP SECRET`) is the UK Government's own written
+form and appears only in the rendered marking; the **reason token**
+(`official_sensitive`) appears only in denial reasons. One method each, in
+`ProtectiveMarking`, so they cannot drift.
+
+### 21.2 It composes by subtraction, and only by subtraction
+
+Effective view access becomes:
+
+```
+canView(page) = spaceRole ≥ viewer
+                AND every view-restriction on page + ancestors passes
+                AND clearanceAllows(marking, principal)
+```
+
+**Nothing grants around it.** A space grant, a passing page restriction, a
+`space-admin` role, the instance `admin` role — none of them widens a marking, in
+the same way and for the same reason none of them reads around a page restriction
+(§6.5). This is structural rather than remembered: the check lives inside
+`EffectivePermissionCalculator.Compute`, the one computation every read path
+already funnels through, and there is no parameter, overload, or flag by which a
+caller can obtain a `canView` that skipped it. `canEdit` is reached only by
+falling through `canView`, so an editor who fails clearance loses edit too
+without the gate knowing edit exists.
+
+The single loader in the data layer (`PermissionContextLoader`, §6.7) supplies
+the marking alongside the grants and restriction chain, so a call site cannot
+supply "no marking" any more than it can supply "no restrictions". Its batched
+path loads every marking **and its country rows** in one query for the whole
+batch — search post-filters hundreds of candidates, and an N+1 sitting on the hot
+path of the control itself would be the thing that gets the control turned off.
+
+Ordering inside the computation — space role, then classification, then the
+restriction chain — affects only which reason a denial *reports*, never the
+verdict: both gates are conjuncts. Clearance is reported ahead of a failing
+restriction because "this principal has no business reading this page at all" is
+the more actionable answer for a reviewer, and because it is the cheaper check,
+so a page the caller cannot be cleared for costs no rule evaluations.
+
+### 21.3 Clearance, and every fail-closed choice in it
+
+Clearance is an ordinary **principal attribute** (§6.1/§6.2) under the well-known
+key `clearance`, resolved per request from the token, never from the local `User`
+mirror. Expected claim values are the four wire names. Being an ordinary
+registered attribute is the point: it inherits §6.1's "evaluate the token" rule
+for free rather than needing its own plumbing.
+
+- **Absent, unrecognised, or malformed clearance grants OFFICIAL — and only
+  OFFICIAL.** This is a deliberate middle, not a compromise. "No clearance = see
+  everything" is obviously wrong. "No clearance = see nothing" is wrong in a
+  subtler way: an unconfigured claim mapper would empty the entire wiki for every
+  user, which is an outage dressed as security and, worse, an outage that
+  pressures whoever is on call into turning the check off. Granting the least
+  sensitive tier denies everything the control exists to deny while leaving
+  OFFICIAL content readable exactly as it was before markings existed. It matches
+  the engine's existing doctrine that a missing attribute matches no condition
+  (`Attr_MissingAttribute_FailsClosed`): the principal gets nothing from the
+  attribute, and OFFICIAL is what nothing is worth.
+- **Parsing is closed and ordinal.** Only the four wire names parse.
+  `Enum.TryParse` is deliberately not used: it accepts the C# member spellings,
+  can be made case-insensitive, and — the reason it is disqualified — happily
+  parses `"4"` into `TOP_SECRET`, so a numeric claim value would grant the top of
+  the ladder.
+- **A multi-valued clearance claim takes the highest recognised value**, mirroring
+  §6.4's "your role is the highest whose expression you satisfy". Unrecognised
+  values are ignored rather than poisoning the result, so garbage can never raise
+  clearance and can never lower it below the OFFICIAL floor.
+
+### 21.4 The eyes-only caveat
+
+A marking may carry a **set of countries**; a principal must hold at least one
+`nationality` value in that set. An empty set means no caveat. Absent or empty
+nationality **denies** any page carrying one — fail closed, consistent with
+`AttrCondition`: a principal with no value for an attribute matches no condition
+that tests it, and the caveat is a condition on nationality.
+
+**The vocabulary is the nationality attribute's, not ISO 3166.** A country value
+is valid only if it appears in the registered `nationality` attribute's
+`AllowedValuesJson` (§6.2). This is the single most important detail in the
+caveat, and it is not fussiness: enforcement compares the marking's set against
+the principal's `nationality` claim values, which are whatever this instance's
+Keycloak mapper emits — `GB`, `UK`, `GBR`, something site-specific. Populating
+the marking side from a hard-coded ISO list would let an admin pick `GB` on a
+wiki whose tokens say `UK`, and every comparison would fail. The failure mode is
+the dangerous kind: it fails *closed*, so nothing looks broken — the page simply
+becomes invisible to everybody, including the audience it names, while the
+marking reads as perfectly correct in the admin UI. Drawing both sides from one
+registry makes that class of mismatch unrepresentable.
+
+The consequence is accepted rather than worked around: **if no `nationality`
+attribute is registered, or it declares no allowed values, an eyes-only set
+cannot be set at all.** There is nothing to pick from, and a caveat naming values
+the instance does not recognise would match nobody. The refusal is a
+`ValidationError` naming the attribute. A level-only marking still works fine on
+such an instance.
+
+**Canonical form.** Country values are stored and compared **upper-cased,
+trimmed, de-duplicated and ordinally sorted**. Canonicalizing in one place means
+the stored rows, the display string, the audit `DetailsJson` and the sync payload
+all agree byte-for-byte, and a set that round-trips through sync comes back
+identical rather than merely equivalent.
+
+That upper-casing is a **documented, deliberate departure from §6.3's "matching
+is exact (ordinal), no case folding"**, confined to this one comparison. §6.3
+keeps rule matching ordinal because an admin hand-typing a group name should not
+have a typo silently forgiven. Here the two sides come from different systems
+that were never guaranteed to agree on case — an admin-registered vocabulary and
+an OIDC claim mapper — and a case mismatch would deny every legitimate reader
+while looking correct. Failing closed on a casing difference is not security, it
+is an outage. The rule engine's `attr` conditions are untouched.
+
+**Rendering** has exactly one implementation, server-side
+(`ProtectiveMarking.Format`, exposed as `PageMarkingView.label` in GraphQL), so
+the SPA, an MCP client and an audit reviewer all read identical text. Two
+renderings of one marking that disagree is a compliance problem, not a cosmetic
+one. The format is the level, then the caveat in brackets:
+`SECRET [UK EYES ONLY]`, or `SECRET [UK/US EYES ONLY]` for several countries in
+canonical order. The country tokens are the instance's own registered values
+verbatim — an instance that registered `GB` renders `[GB EYES ONLY]`. Aliasing
+`GB` to `UK` for display was considered and rejected: a marking must read back as
+the thing that is actually enforced, and a display-only alias is how "we thought
+it said UK" happens.
+
+### 21.5 Every page is marked
+
+There is **no unmarked state**. A page's marking is created with the page,
+inheriting its parent's (root pages start at OFFICIAL), and an editor may
+override it afterwards **in either direction**.
+
+Inheritance happens **once, at creation**, producing a value the page then owns —
+it is not re-derived from ancestors at read time the way restrictions accumulate
+(§6.4). So a child may legitimately sit above *or below* its parent, and an
+editor changing a parent's marking does not silently re-mark the subtree. The one
+place that asymmetry shows is the page tree, which prunes a node the caller
+cannot be cleared for **along with its whole subtree**, including children the
+caller *could* see: a tree cannot render a node whose parent is absent, and the
+more-hidden direction is the safe one. Such a child stays reachable by id and
+through search, both of which check it on its own.
+
+The invariant is enforced at the **persistence seam**: `RocketWikiDbContext`
+materializes an OFFICIAL marking for any `Page` being inserted without one, so an
+unmarked page cannot be committed through any code path — present or future —
+that goes through the context. This is the write-side twin of putting the
+clearance gate inside the calculator: an invariant that lives in one structural
+place cannot be lost one call site at a time. It is a backstop, not the feature —
+`PageService` sets the marking explicitly with real parent inheritance, and the
+sync importer sets it explicitly too — and it touches the database not at all, so
+it costs nothing on every write.
+
+**A page found at read time with no marking row is treated as TOP SECRET.** Belt
+and braces against a future code path that forgets, and the substitution has
+exactly two implementations (`PermissionContextLoader` and its batch sibling) so
+no consumer ever holds a nullable marking it could decide to ignore. Note the
+asymmetry with the insert-time default, which is intentional: a missing marking
+on *read* means something went wrong, and the answer to that is the top of the
+scheme; a missing marking on *insert* means nobody said, and defaulting that to
+TOP SECRET would classify content nobody asked to classify and lock its own
+author out of it.
+
+### 21.6 Changing a marking
+
+`setPageMarking` replaces the whole marking — level and country set together. A
+marking is one value; a partial update would let a caller change the level
+without ever stating what caveat they meant.
+
+- Requires **`canEdit` on that page**, beneath the replica invariant (§12), which
+  refuses first and beneath every grant. `canEdit` already includes the clearance
+  gate against the page's *current* marking, so a page you cannot see is a page
+  you cannot re-mark — including re-marking it downward to make it readable.
+- **You may not set a marking you could not then read.** Enforced as the
+  resulting marking *as a whole* rather than just its level, because that is what
+  mechanizes the stated reason: marking a page `SECRET [US EYES ONLY]` as a
+  GB-national editor loses you the page just as completely as over-classifying it
+  does. Refused as a `ForbiddenError` — the input is well-formed, the caller is
+  simply not entitled to the result.
+
+**Downgrading is permitted but audited distinctly.** A change is a *downgrade*
+when it makes the page readable by someone it was not readable by before: the
+level drops, the caveat is cleared, or the caveat gains a country it did not
+admit. Swapping `{GB}` for `{US}` counts, even though GB also loses access —
+somebody who could not read the page yesterday can read it today, which is the
+fact a reviewer is looking for. Erring toward "call it a downgrade" is the safe
+error: the cost is one extra row in a reviewer's result set, and the cost of the
+opposite error is a widening nobody sees.
+
+### 21.7 Audit
+
+Two actions, one domain event, through the pipeline (§7) so the row commits in
+the same transaction as the change:
+
+| Action | Subject | Details |
+|---|---|---|
+| `page.marking.set` | `page` | `{ level, eyesOnly, previousLevel, previousEyesOnly }` |
+| `page.marking.downgrade` | `page` | same shape — emitted instead of `.set` when the change widens the audience |
+
+Deriving the action from the event (rather than minting two event types with
+identical payloads) keeps "what counts as a downgrade" in exactly one place. The
+GraphQL field declares `page.marking.set` for the coverage guard and for denial
+rows; a denial has no before/after, so `set` is the honest name for it.
+
+Subject is the **page**, the same judgement call the label and page-property
+mappings make: `AuditSubjectType` is a closed list with no member for a marking,
+and the page whose classification changed is the meaningful "what changed"
+anyway.
+
+The before-state is not decoration. Markings are a single mutable row, so — as
+with access rules (§7) — **the audit log is the only history there is**, and a
+reviewer asking "what was it before this was relaxed" has no other source. This
+is also the only place the country set is written out in full: §15 keeps it out
+of every telemetry tag, and the denial reason deliberately names no country.
+
+A page's *creation* raises no marking event: the inherited value is deterministic
+from the parent, which the `page.create` row already identifies, and a
+`page.marking.set` row beside every `page.create` would be noise that made real
+marking changes harder to find.
+
+### 21.8 Denial is invisible (§6.7)
+
+A page the caller lacks clearance for is **absent, not forbidden** — identical in
+every respect to a page that does not exist, byte-for-byte at the HTTP boundary,
+through every path a `Page` is reachable by. The audit row records the real
+reason; the caller cannot tell.
+
+Denial reasons follow the existing vocabulary:
+
+| Reason | Meaning |
+|---|---|
+| `classification:{level}` | clearance below the page's level, e.g. `classification:top_secret` |
+| `caveat:eyes_only` | the eyes-only set and the principal's nationalities do not intersect |
+
+The level is checked before the caveat, so one denial names one reason and a
+caller who lacks the level is not told (via the audit row) that they also lack
+the nationality. **The caveat reason names no country**, deliberately: the
+specific set belongs in the audit row, and a reason string carrying the countries
+would put the marking's contents one careless tag away from a metric dimension.
+
+**Telemetry (§15).** `CoreTelemetry.CategorizeDenialReason` collapses
+`classification:{level}` to `classification` and `caveat:eyes_only` to `caveat`.
+Keeping the level would be tempting — it is a bounded four-value tag — and is
+dropped on purpose: a "denials by classification level" time series is a census
+of how much SECRET and TOP SECRET content exists and how hard it is being probed,
+published to whatever audience the dashboard has. That is exactly the second,
+unregulated record of who-reads-what §15 exists to prevent, and the audit table
+already holds the specific level for anyone entitled to ask.
+
+### 21.9 Reach
+
+Enforcement is inherited, not reimplemented, everywhere `canView` is already
+computed through `PermissionContextLoader`: page reads, `parent`/`children`,
+revision history, search (keyword and vector — the post-filter is the same
+batch), Ask-the-wiki retrieval (a page above the asker's clearance never enters
+the prompt, not merely the citation list), MCP tools, attachments, comments,
+labels, page properties, watch state, the notification read model, the co-editing
+hub's join check, and the §6.6 permission inspector (whose non-short-circuiting
+`Explain` mirrors the gate's classification verdict exactly, pinned by test).
+
+Two read paths assemble their own authorization inputs and therefore had to have
+the gate added by hand. Both now have it; both are worth knowing about:
+
+- **`PageReadService.GetPageTreeAsync`** walks a whole space in memory precisely
+  to avoid per-node work, so it hand-rolls the restriction evaluation the loader
+  would otherwise order for it. The marking is loaded on the same constant-query
+  budget — one more query for the whole space.
+- **`INotificationDispatcher`'s fan-out** lives in `RocketWiki.Api`, and
+  `PermissionContextLoader` is internal to `RocketWiki.Data`, so it cannot use
+  the loader at all. It loads the page's marking once per fan-out.
+
+### 21.10 Sync (§12)
+
+Markings **travel with content**. A page that is SECRET on low is SECRET wherever
+it lands; letting the high side rediscover that for itself is the hole this
+closes. This is unlike space grants, which stay local because the high side
+decides who may read its replica — a grant is about *this instance's* people, a
+marking is a property *of the content*.
+
+- `SyncEventType.PageMarking` (10), payload `{ pageId, level, eyesOnly }` — the
+  level as its **wire name**, never the tinyint, so a future renumbering cannot
+  silently re-rank a bundle already sitting on a transfer disk.
+- Every `PageUpsert` **also** carries the page's current marking, attached at
+  export time (like revision history, and for the same two reasons: journal
+  payloads stay lean, and outbox rows written before §21 existed still export with
+  a marking). Baselines carry it too, which is the gap that would otherwise matter
+  most — a space baselined after markings were applied would deliver its whole
+  back catalogue unmarked. The redundancy with the dedicated event is deliberate:
+  both apply idempotently to the same row, so an overlap is harmless and a gap
+  would not be.
+- Only the **after** state crosses. Sync replays state; the before/after pair
+  exists for the low side's reviewer, in the low side's audit table, which never
+  crosses.
+- The country set crosses verbatim. The receiving instance may have no matching
+  nationality vocabulary, and that is handled the §12 way rather than by dropping
+  the caveat: an unrecognised country matches no principal, so the page arrives
+  **more** restricted — exactly as "a group/attribute unknown on high matches
+  nobody" already works for restrictions. Dropping it would be the one unsafe
+  direction.
+- **A page cannot land on the high side unmarked.** A payload with no marking and
+  no local row creates the row at **TOP SECRET**; a payload with no marking for a
+  page the high side already holds a marking for leaves it alone (silence must
+  never re-classify, in either direction). An unparseable level reads as absent,
+  not as OFFICIAL.
+- Marking rows applied by import have no `SetByUserId` — the payload carries no
+  actor, and a replica is read-only to users anyway.
+
+### 21.11 The OFFICIAL backfill, and its risk
+
+The `AddPageMarkings` migration stamps every pre-existing page **OFFICIAL**, the
+lowest level in the scheme, with no actor.
+
+**This is the pragmatic call, not the safe-by-default one, and it is not
+disguised as one.** Nobody has reviewed that content; the wiki is asserting
+OFFICIAL on its behalf because the alternative is worse. If any pre-existing page
+is in fact SECRET or above, it is now readable by exactly the people who could
+already read it — but it is *wearing a marking that says it is fine*. That is the
+real risk: the marking looks like a reviewed judgement and is not one.
+
+**Existing content must be reviewed and re-marked.** `SetByUserId IS NULL` on
+`PageMarkings` is the query that finds every page nobody has yet looked at.
+
+Backfilling to TOP SECRET was considered and rejected once, with reasons: it
+would make every page invisible to everyone below TOP SECRET the moment the
+migration ran — the wiki would lock itself out of itself, including out of the
+admin pages describing how to fix it, and including on instances where nobody has
+a clearance claim configured at all (who resolve to OFFICIAL by §21.3's default).
+The recovery would be a hand-written `UPDATE` against a production database,
+which is the one operation this whole design exists to avoid. An access control
+that has to be switched off to be adopted does not get adopted.
+
+### 21.12 Deliberately not done
+
+- **No create-time marking override.** A page is created with its inherited
+  marking and re-marked afterwards. Stated cost: for a *root* page holding
+  classified content there is a brief window at OFFICIAL between creation and the
+  first `setPageMarking`. The mitigation is procedural — create the page empty,
+  mark it, then write — and the alternative (a marking on `CreatePageRequest`)
+  would duplicate the vocabulary validation, the clearance constraint and the
+  audit decision into the create path for a window a UI can close.
+- **No caveat registry.** One caveat kind, eyes-only, with a country set. A
+  general caveat registry (types, per-type semantics, per-type enforcement) is not
+  built and is not implied by this design.
+- **No "which pages are marked X" report.** The data model supports one without a
+  migration — `PageMarkings` is indexed on `Level` and `PageMarkingCountries` on
+  `(CountryValue, PageId)`, which is exactly the access path — but the query
+  surface does not exist. When it is built it must be permission-filtered **per
+  page** the way `GetPagesByLabelAsync` is (§6.4.2): a page the caller cannot view
+  is absent entirely, not a redacted row and not implied by a count (§6.7).
+- **Markings do not re-mark a subtree.** Changing a parent's marking leaves its
+  children exactly as they are; there is no cascade and no bulk re-mark tool.
+- **Clearance is not managed in RocketWiki.** Like every other attribute, it lives
+  in Keycloak (§6.2). RocketWiki declares that it exists and reads it.
+- **No declassification schedule, no review dates, no marking expiry.**
+- **No UI.** This is the backend: schema, enforcement, audit, sync and the
+  `setPageMarking` mutation. Rendering the marking banner and the editor's
+  marking control is the frontend's own piece of work.

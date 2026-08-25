@@ -1,4 +1,5 @@
 using System.Text.Json;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 
@@ -107,6 +108,36 @@ public static class DomainEventAuditMapper
 
         PagePropertyRemovedEvent e => ("page.property.remove", AuditSubjectType.Page, e.PageId, e.SpaceKey,
             JsonSerializer.Serialize(new { key = e.Key })),
+
+        // Protective markings (design.md §21). Subject is the Page, like every other
+        // per-page metadata change - AuditSubjectType is a closed list with no member for
+        // a marking, and the page whose classification changed is the meaningful "what
+        // changed" anyway.
+        //
+        // TWO ACTIONS from one event, on purpose. Downgrading - lowering the level, or
+        // relaxing the eyes-only caveat so somebody who could not read the page now can -
+        // is permitted but is the operationally risky direction, so it gets its own action
+        // name and a reviewer can find every widening in the estate with one query rather
+        // than by diffing before/after on every marking row that ever changed. The
+        // predicate itself lives on ProtectiveMarking so the mapper, the tests, and any
+        // future reviewer tooling all agree on what "downgrade" means.
+        //
+        // The from->to marking is in DetailsJson for exactly the reason the property
+        // value is (see above): the audit table is the regulated record of who did what,
+        // and a marking-change row that did not say what the marking became would be a
+        // log line, not an audit record. Note this is also the ONLY place the eyes-only
+        // country set is written out in full - §15 keeps it out of every telemetry tag,
+        // and the denial reason (caveat:eyes_only) deliberately names no country.
+        PageMarkingSetEvent e => (
+            e.IsDowngrade ? "page.marking.downgrade" : "page.marking.set",
+            AuditSubjectType.Page, e.PageId, e.SpaceKey,
+            JsonSerializer.Serialize(new
+            {
+                level = ProtectiveMarking.LevelWireName(e.After.Level),
+                eyesOnly = e.After.EyesOnly,
+                previousLevel = ProtectiveMarking.LevelWireName(e.Before.Level),
+                previousEyesOnly = e.Before.EyesOnly,
+            })),
 
         // Registry-level actions follow the custom-emoji precedent exactly: no
         // AuditSubjectType fits instance-local vocabulary (the subject list is wiki

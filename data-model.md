@@ -79,6 +79,12 @@ Indexes: `(SpaceId, ParentPageId, SortOrder)`; unique
 delete's batch id, and only trashed pages ever have one, so the filtered
 index stays small); full-text index over `(Title, CurrentContent)`.
 
+Every page also has exactly one `PageMarking` row (design.md §21) — its
+protective marking, which gates `canView`. Not a column here, because the
+eyes-only caveat is a set and needs its own child table; and keeping it off
+`Page` means the marking cannot ride along on a projection that skipped
+authorization.
+
 **Why `AncestorPath`:** restrictions accumulate down the tree (design.md
 §6.4), so every permission check needs the ancestor chain, and the tree UI
 needs subtrees. A materialized path gives both in one indexed query
@@ -195,6 +201,68 @@ filter**, matching `PageLabel`, with the same consequence: rows for a
 soft-deleted page linger, so any cross-page query over this table must join
 to `Pages` rather than assume every row belongs to a live page.
 
+### PageMarking — the protective marking (design.md §21)
+
+| Column | Type | Notes |
+|---|---|---|
+| PageId | uniqueidentifier PK, FK → Page | **the PK is the page id** — 1:1 by construction |
+| Level | tinyint | `ClassificationLevel`: 1 OFFICIAL, 2 OFFICIAL_SENSITIVE, 3 SECRET, 4 TOP_SECRET |
+| SetAtUtc | datetime2(3) | |
+| SetByUserId | uniqueidentifier null FK → User | **null** for a row applied by sync import, or by the every-page-is-marked backstop — no local actor |
+
+Indexes: the PK, plus `Level` — "which pages sit at or above X" is the
+administrative sweep the OFFICIAL backfill makes necessary (§21.11), and every
+*enforcement* read is a PK lookup, so the table needs nothing else.
+
+**PK = PageId is the whole enforcement of "one marking per page".** A second
+marking for a page is a primary-key violation rather than something application
+code has to prevent — for a table that gates access, "which marking applies" must
+not be a question with two possible answers.
+
+`Level` is a **tinyint, not a string**: the ordering *is* the access comparison
+(§21.1), so it must be numeric on every provider, and a value outside the
+four-member ladder cannot be typed in. The wire formats (GraphQL enum, sync
+payload, audit details) all use the member's name; only storage is numeric.
+
+**No global query filter**, matching `PageProperty` and `PageLabel`: a
+soft-deleted page keeps its marking, which is what makes restore give the page
+back with the classification it had. Every page has exactly one row — creation
+writes it, sync import writes it, `RocketWikiDbContext` materializes one for any
+page inserted without it, and the `AddPageMarkings` migration backfilled every
+page that predated the feature. A page found *without* one is read as TOP SECRET
+(§21.5); that is a diagnosis, never a mode.
+
+### PageMarkingCountry — the eyes-only set (design.md §21.4)
+
+| Column | Type | Notes |
+|---|---|---|
+| PageId | uniqueidentifier FK → PageMarking | part of PK |
+| CountryValue | nvarchar(32) | canonical: trimmed, `ToUpperInvariant()` |
+
+Composite PK `(PageId, CountryValue)` — a country appears at most once per page,
+so applying a set is idempotent and there is no ordering question between two
+rows for the same country, exactly like `PageLabel`. Indexes: the PK, plus
+`(CountryValue, PageId)` — the "which pages are releasable to X" access path,
+which has no query surface yet (§21.12) but is the reason the table is shaped
+this way now rather than after a migration.
+
+A **normalized child table, not a delimited column on `PageMarking`**, and that
+is deliberate for enforcement-critical data: `LIKE '%GB%'` over a packed string
+is exactly the kind of near-miss that quietly answers the wrong question about an
+access control.
+
+Canonical order for display and serialization is **derived** (ordinal sort), not
+stored — a sort column would be one more thing that can disagree. Comparison
+happens in memory, never in SQL, for the same tier-parity reason
+`PagePropertyKey.KeyNormalized` exists: SQL Server's default collation is
+case-insensitive and SQLite's is case-sensitive for ASCII, so a provider-side
+comparison would enforce two different rules across the two test tiers.
+Canonicalizing on write makes the answer byte-identical everywhere.
+
+Values are drawn from the registered `nationality` attribute's allowed values
+(`AttributeDefinition.AllowedValuesJson`), **not** from an ISO 3166 list — see
+§21.4 for why substituting one silently denies everybody while looking correct.
+
 ---
 
 ## Identity & access
@@ -241,6 +309,15 @@ are read on startup and cache invalidation, not per request.
 Id (PK v7), Key nvarchar(64) unique, ClaimName nvarchar(128), DisplayName
 nvarchar(128), Type tinyint (1 string, 2 string[]), AllowedValuesJson
 nvarchar(max) null.
+
+Two keys are **well known** to code as well as to admins: `nationality`, whose
+`AllowedValuesJson` is also the vocabulary an eyes-only caveat's countries must
+come from (`PageMarkingCountry`, design.md §21.4), and `clearance`, whose values
+are the four `ClassificationLevel` wire names and which gates every page read
+against its protective marking (§21.3). Both are still ordinary registered
+attributes — read from the token per request like any other — and both are absent
+rather than empty when the claim is missing, which is what makes their
+fail-closed defaults land on the intended answer.
 
 ### KnownGroup — rule-builder picker source
 
@@ -358,7 +435,7 @@ application convention only.
 | Id | bigint identity | |
 | SpaceId | uniqueidentifier FK → Space | exported spaces only |
 | SequenceNumber | bigint | **gap-free per space** — see below |
-| EventType | tinyint | page upsert / move / delete / restore, comment, attachment, labels, restrictions |
+| EventType | tinyint | page upsert / move / delete / restore, comment, attachment, labels, restrictions, page properties, page marking |
 | PayloadJson | nvarchar(max) | full Markdown, not diffs; attachments by ContentHash. PageUpsert payloads carry no revision data in the journal; the export job attaches the page's revision history (bundle format 2) by joining `(pageId, revisionNumber)` back to PageRevisions at drain time |
 | CreatedAtUtc | | |
 | ExportedInBundle | int null | stamped by the export job |

@@ -67,6 +67,22 @@
           }
         },
         {
+          "name": "clearance",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "clearance",
+            "claim.name": "clearance",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "false",
+            "aggregate.attrs": "false"
+          }
+        },
+        {
           "name": "roles",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-realm-role-mapper",
@@ -141,7 +157,8 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["NZ"]
+        "nationality": ["NZ"],
+        "clearance": ["OFFICIAL"]
       }
     },
     {
@@ -155,7 +172,8 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["US"]
+        "nationality": ["US"],
+        "clearance": ["SECRET"]
       }
     },
     {
@@ -180,7 +198,8 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["NZ", "GB"]
+        "nationality": ["NZ", "GB"],
+        "clearance": ["OFFICIAL_SENSITIVE"]
       }
     },
     {
@@ -194,7 +213,8 @@
       "groups": ["/export-cleared"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["US"]
+        "nationality": ["US"],
+        "clearance": ["TOP_SECRET"]
       }
     },
     {

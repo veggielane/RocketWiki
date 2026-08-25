@@ -15,6 +15,13 @@ namespace RocketWiki.Core.Access;
 /// Deliberately absent: any notion of "instance admin". design.md §6.5 requires that
 /// instance admins do not bypass page restrictions, so no admin flag is threaded
 /// through this calculator at all — there is nothing here for a caller to bypass with.
+///
+/// design.md §21 adds a second, independent gate on canView: the page's protective
+/// marking versus the principal's clearance. It is applied HERE, inside the one
+/// computation every read path already funnels through, rather than at each call site —
+/// which is what makes "classification can only subtract, never grant" a structural
+/// property. There is no parameter, overload, or flag by which a caller can obtain a
+/// canView that skipped it, for the same reason there is no admin flag.
 /// </summary>
 public static class EffectivePermissionCalculator
 {
@@ -83,10 +90,20 @@ public static class EffectivePermissionCalculator
     /// its ancestors (design.md §6.4: restrictions accumulate down the tree).
     /// </param>
     /// <param name="isReplicaSpace">See <see cref="Space.IsReplicaOf"/>.</param>
+    /// <param name="marking">
+    /// design.md §21: the page's protective marking. <b>Required, not optional</b> —
+    /// there is deliberately no nullable overload meaning "skip the check", because a
+    /// call site that could pass null is a call site that can forget. A caller whose
+    /// page has no marking row passes <see cref="ProtectiveMarking.FailClosed"/>; a
+    /// caller computing permission for a chain that is not a page (a create under a
+    /// parent) passes the marking the created page would inherit. Both decisions belong
+    /// to the loader, not here.
+    /// </param>
     public static EffectivePermission Compute(
         IEnumerable<AccessRule> spaceGrants,
         IEnumerable<AccessRule> pageAndAncestorRestrictions,
         bool isReplicaSpace,
+        ProtectiveMarking marking,
         Principal principal)
     {
         // design.md §15: timed and counted, never traced with a span — canView runs on
@@ -94,7 +111,7 @@ public static class EffectivePermissionCalculator
         // the interesting question is a distribution ("are permission checks slow, are
         // denials spiking"), which a histogram answers without a per-decision record.
         var startTimestamp = Stopwatch.GetTimestamp();
-        var permission = ComputeCore(spaceGrants, pageAndAncestorRestrictions, isReplicaSpace, principal);
+        var permission = ComputeCore(spaceGrants, pageAndAncestorRestrictions, isReplicaSpace, marking, principal);
         CoreTelemetry.RecordPermissionCheck(permission, Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds);
         return permission;
     }
@@ -127,6 +144,7 @@ public static class EffectivePermissionCalculator
         IEnumerable<AccessRule> spaceGrants,
         IEnumerable<AccessRule> pageAndAncestorRestrictions,
         bool isReplicaSpace,
+        ProtectiveMarking marking,
         Principal principal)
     {
         var role = ComputeSpaceRole(spaceGrants, principal);
@@ -136,7 +154,7 @@ public static class EffectivePermissionCalculator
         var viewChecks = EvaluateAll(restrictions, PageAction.View, principal);
         var editChecks = EvaluateAll(restrictions, PageAction.Edit, principal);
 
-        var permission = DeriveVerdict(role, isReplicaSpace, viewChecks, editChecks);
+        var permission = DeriveVerdict(role, isReplicaSpace, marking, principal, viewChecks, editChecks);
         return new EffectivePermissionExplanation(role, isReplicaSpace, permission, viewChecks, editChecks);
     }
 
@@ -165,12 +183,21 @@ public static class EffectivePermissionCalculator
     private static EffectivePermission DeriveVerdict(
         SpaceRole? role,
         bool isReplicaSpace,
+        ProtectiveMarking marking,
+        Principal principal,
         IReadOnlyList<RestrictionCheckDetail> viewChecks,
         IReadOnlyList<RestrictionCheckDetail> editChecks)
     {
         if (role is null)
         {
             return new EffectivePermission(false, false, "no-space-role", "no-space-role");
+        }
+
+        // Mirrors ComputeCore's position for the classification gate exactly.
+        var clearance = ClearanceGate.Check(marking, principal);
+        if (!clearance.IsAllowed)
+        {
+            return new EffectivePermission(false, false, clearance.DenialReason, clearance.DenialReason);
         }
 
         var failedView = viewChecks.FirstOrDefault(c => !c.Passed);
@@ -203,12 +230,34 @@ public static class EffectivePermissionCalculator
         IEnumerable<AccessRule> spaceGrants,
         IEnumerable<AccessRule> pageAndAncestorRestrictions,
         bool isReplicaSpace,
+        ProtectiveMarking marking,
         Principal principal)
     {
         var role = ComputeSpaceRole(spaceGrants, principal);
         if (role is null)
         {
             return new EffectivePermission(false, false, "no-space-role", "no-space-role");
+        }
+
+        // design.md §21: THE composition point. It sits after the space role and before
+        // the restriction chain, and the placement is about which reason gets REPORTED,
+        // never about the decision - both gates are conjuncts, so their order cannot
+        // change any verdict. Reporting clearance ahead of a failing restriction is the
+        // more actionable answer for a reviewer ("this principal has no business
+        // reading this page at all" outranks "and also rule 7 said no"), and it is the
+        // cheaper check, so a page the caller cannot be cleared for costs no rule
+        // evaluations at all.
+        //
+        // Note what CANNOT be expressed here: there is no branch in which a grant, a
+        // role, or a passing restriction causes this check to be skipped. canEdit is
+        // reached only by falling through canView, so an editor or space-admin who
+        // fails clearance gets (false, false) like anyone else, and canEdit's own
+        // marking constraint (you may not mark above your clearance) is enforced in
+        // PageMarkingService on top of this.
+        var clearance = ClearanceGate.Check(marking, principal);
+        if (!clearance.IsAllowed)
+        {
+            return new EffectivePermission(false, false, clearance.DenialReason, clearance.DenialReason);
         }
 
         var restrictions = pageAndAncestorRestrictions as IReadOnlyCollection<AccessRule>

@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Telemetry;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Content;
 using RocketWiki.Core.Entities;
 using RocketWiki.Data;
@@ -41,13 +42,16 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
             ?? principal.FindFirst(ClaimTypes.Name)?.Value
             ?? subject;
 
-        // Registered attributes only (design.md §6.2) — nationality is the only one wired
-        // end to end today. Admin-display only; the rule engine builds its Principal
-        // straight from the token (design.md §6.1), never from this JSON blob.
-        var nationality = principal.FindAll("nationality").Select(c => c.Value).ToArray();
+        // Registered attributes only (design.md §6.2) — nationality and, since §21,
+        // clearance. Admin-display only; the rule engine and the clearance gate both
+        // build their Principal straight from the token (design.md §6.1/§21), never from
+        // this JSON blob, so a stale mirror can never widen anyone's access.
+        var nationality = principal.FindAll(ClearanceGate.NationalityAttributeKey).Select(c => c.Value).ToArray();
+        var clearance = principal.FindAll(ClearanceGate.ClearanceAttributeKey).Select(c => c.Value).ToArray();
         var attributesJson = JsonSerializer.Serialize(new Dictionary<string, string[]>
         {
-            ["nationality"] = nationality,
+            [ClearanceGate.NationalityAttributeKey] = nationality,
+            [ClearanceGate.ClearanceAttributeKey] = clearance,
         });
 
         var now = DateTime.UtcNow;

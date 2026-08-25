@@ -88,6 +88,8 @@ type Mutation {
     @cost(weight: "10")
   markNotificationRead(input: MarkNotificationReadInput!): MarkNotificationReadPayload!
     @cost(weight: "10")
+  setPageMarking(input: SetPageMarkingRequestInput!): SetPageMarkingPayload!
+    @cost(weight: "10")
   setPageProperty(input: SetPagePropertyRequestInput!): SetPagePropertyPayload!
     @cost(weight: "10")
   removePageProperty(input: RemovePagePropertyRequestInput!): RemovePagePropertyPayload!
@@ -441,6 +443,7 @@ type Page {
   labels: [String!]! @cost(weight: "10")
   labelDetails: [LabelRef!]! @cost(weight: "10")
   properties: [PagePropertyValue!]! @cost(weight: "10")
+  marking: PageMarkingView! @cost(weight: "10")
   viewerIsWatching: Boolean! @cost(weight: "10")
   deletedBy: UserRef @cost(weight: "10")
   spaceKey: String! @cost(weight: "10")
@@ -487,6 +490,12 @@ type PageLabel {
   page: Page
   labelId: UUID!
   label: Label
+}
+
+type PageMarkingView {
+  level: ClassificationLevel!
+  eyesOnly: [String!]!
+  label: String!
 }
 
 type PageMutationErrorView {
@@ -620,6 +629,11 @@ type SearchPageInfo {
 
 type SetGitLabTokenPayload {
   tokenState: GitLabTokenState
+  error: PageMutationErrorView
+}
+
+type SetPageMarkingPayload {
+  marking: PageMarkingView
   error: PageMutationErrorView
 }
 
@@ -859,6 +873,12 @@ input SetGitLabTokenRequestInput {
   token: String!
 }
 
+input SetPageMarkingRequestInput {
+  pageId: UUID!
+  level: ClassificationLevel!
+  eyesOnly: [String!]!
+}
+
 input SetPagePropertyRequestInput {
   pageId: UUID!
   pagePropertyKeyId: UUID!
@@ -927,6 +947,13 @@ enum AuditSubjectType {
   ATTACHMENT
   COMMENT
   RULE
+}
+
+enum ClassificationLevel {
+  OFFICIAL
+  OFFICIAL_SENSITIVE
+  SECRET
+  TOP_SECRET
 }
 
 enum GitLabContentIssue {

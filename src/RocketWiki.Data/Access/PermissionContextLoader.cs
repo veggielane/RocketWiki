@@ -53,12 +53,26 @@ internal readonly record struct PermissionSubject(Guid PageId, Guid SpaceId, str
 /// what this returns before passing it to the calculator.</para>
 ///
 /// <para><b>Batching.</b> <see cref="LoadBatchAsync(IReadOnlyCollection{PermissionSubject}, CancellationToken)"/>
-/// issues exactly two queries — one for the grants of every space involved, one for the
-/// restrictions of every page-or-ancestor involved — regardless of batch size; the
+/// issues exactly three queries — one for the grants of every space involved, one for the
+/// restrictions of every page-or-ancestor involved, and one for the protective markings
+/// (joined to their country rows) of every subject page — regardless of batch size; the
 /// per-page work afterwards is pure in-memory rule evaluation. List paths (search
 /// post-filtering, label listings, subtree checks, notification re-checks, per-child
-/// permission facts) use it instead of looping over the per-page load, which costs two
-/// queries each.</para>
+/// permission facts) use it instead of looping over the per-page load, which costs three
+/// queries each. The marking query is the reason
+/// <see cref="PermissionContextBatch"/> holds a <i>lookup</i> of countries by page id
+/// rather than resolving a page's set on demand: search post-filters hundreds of
+/// candidates, and a per-candidate country query would be an N+1 sitting directly on the
+/// hot path of the feature it protects.</para>
+///
+/// <para><b>Markings (design.md §21).</b> Unlike restrictions, a marking does NOT
+/// accumulate down the tree: inheritance happens once, when a page is created, and is
+/// then a value that page owns and an editor may override in either direction. So the
+/// marking loaded here is the subject page's own, never its ancestors'. A page id with
+/// no marking row resolves to <see cref="ProtectiveMarking.FailClosed"/> — TOP SECRET —
+/// and that substitution happens HERE, in the loader, so no consumer of a
+/// <see cref="PagePermissionContext"/> ever holds a nullable marking it could decide to
+/// ignore.</para>
 ///
 /// <para>Fail closed (design.md §6.3): a space with no grant rows yields an empty grant
 /// list, which <see cref="EffectivePermissionCalculator.ComputeSpaceRole"/> turns into
@@ -84,7 +98,9 @@ internal sealed class PermissionContextLoader
 
     private IQueryable<AccessRule> Rules => _noTracking ? _db.AccessRules.AsNoTracking() : _db.AccessRules;
 
-    /// <summary>Grants + ordered restriction chain for one page, in two queries.</summary>
+    private IQueryable<PageMarking> Markings => _noTracking ? _db.PageMarkings.AsNoTracking() : _db.PageMarkings;
+
+    /// <summary>Grants + ordered restriction chain + the page's marking, in three queries.</summary>
     /// <param name="isReplicaSpace">
     /// The space's own <see cref="Space.IsReplicaOf"/> result. Not derived here: a
     /// view-only caller has no local instance id to compare against, and canView is
@@ -95,17 +111,43 @@ internal sealed class PermissionContextLoader
         LoadAsync(page.SpaceId, PermissionSubject.For(page).ChainPageIds(), isReplicaSpace, cancellationToken);
 
     /// <summary>
-    /// Grants + ordered restriction chain for an explicit chain of page ids, in two
-    /// queries. For callers whose chain is not one page's own — a page being created
+    /// Grants + ordered restriction chain + marking for an explicit chain of page ids, in
+    /// three queries. For callers whose chain is not one page's own — a page being created
     /// under a parent (it inherits the parent's chain), or a move's destination chain.
     /// <paramref name="chainPageIds"/> must already be root-most first; see the class doc.
+    ///
+    /// <para>The marking used is the <b>last</b> chain element's, which is exactly right
+    /// for every caller: for a page's own permission the chain ends with that page, for a
+    /// create-under-parent it ends with the parent whose marking the new page will
+    /// inherit, and for a move's destination it ends with the page being moved. An EMPTY
+    /// chain — creating a page at the root of a space — has no page to read a marking
+    /// from and uses <see cref="ProtectiveMarking.Baseline"/> (OFFICIAL), because that is
+    /// precisely the marking the root page being created will receive. Failing closed
+    /// there would make root-page creation impossible for anyone below TOP SECRET, which
+    /// is a bug, not a control.</para>
     /// </summary>
     public async Task<PagePermissionContext> LoadAsync(
         Guid spaceId, IReadOnlyList<Guid> chainPageIds, bool isReplicaSpace, CancellationToken cancellationToken)
     {
         var grants = await LoadSpaceGrantsAsync(spaceId, cancellationToken);
         var restrictions = await LoadOrderedRestrictionsAsync(chainPageIds, cancellationToken);
-        return new PagePermissionContext(grants, restrictions, isReplicaSpace);
+        var marking = chainPageIds.Count == 0
+            ? ProtectiveMarking.Baseline
+            : await LoadMarkingAsync(chainPageIds[^1], cancellationToken);
+        return new PagePermissionContext(grants, restrictions, isReplicaSpace, marking);
+    }
+
+    /// <summary>
+    /// One page's marking, or <see cref="ProtectiveMarking.FailClosed"/> when the row is
+    /// missing (design.md §21). One query — the country rows ride along through the
+    /// navigation include, which for a single page is the cheapest correct shape.
+    /// </summary>
+    public async Task<ProtectiveMarking> LoadMarkingAsync(Guid pageId, CancellationToken cancellationToken)
+    {
+        var marking = await Markings
+            .Include(m => m.Countries)
+            .FirstOrDefaultAsync(m => m.PageId == pageId, cancellationToken);
+        return marking?.ToMarking() ?? ProtectiveMarking.FailClosed;
     }
 
     /// <summary>Every SpaceGrant rule for one space — one query.</summary>
@@ -127,7 +169,7 @@ internal sealed class PermissionContextLoader
         return PermissionContextBatch.Order(chainPageIds, byPageId);
     }
 
-    /// <summary>Two queries for the whole batch — see the class doc's batching guarantee.</summary>
+    /// <summary>Three queries for the whole batch — see the class doc's batching guarantee.</summary>
     public Task<PermissionContextBatch> LoadBatchAsync(
         IReadOnlyCollection<PermissionSubject> subjects, CancellationToken cancellationToken) =>
         LoadBatchAsync(subjects, [], cancellationToken);
@@ -135,7 +177,7 @@ internal sealed class PermissionContextLoader
     /// <summary>
     /// As <see cref="LoadBatchAsync(IReadOnlyCollection{PermissionSubject}, CancellationToken)"/>,
     /// also loading grants for spaces that carry no page in the batch — for callers that
-    /// additionally gate space-scoped rows on "holds any role in that space". Still two
+    /// additionally gate space-scoped rows on "holds any role in that space". Still three
     /// queries.
     /// </summary>
     public async Task<PermissionContextBatch> LoadBatchAsync(
@@ -154,13 +196,14 @@ internal sealed class PermissionContextLoader
 
         return new PermissionContextBatch(
             grants.GroupBy(r => r.SpaceId!.Value).ToDictionary(g => g.Key, g => (IReadOnlyList<AccessRule>)g.ToList()),
-            await LoadRestrictionsAsync(chainIds, cancellationToken));
+            await LoadRestrictionsAsync(chainIds, cancellationToken),
+            await LoadMarkingsAsync(SubjectPageIds(subjects), cancellationToken));
     }
 
     /// <summary>
-    /// Restrictions-only batch — ONE query — for a single-space listing whose caller
-    /// already holds that space's grants because it gated the space role before it
-    /// looked at any page (design.md §6.7). Re-querying them here would be the one
+    /// Restrictions + markings batch — TWO queries — for a single-space listing whose
+    /// caller already holds that space's grants because it gated the space role before it
+    /// looked at any page (design.md §6.7). Re-querying the grants here would be the one
     /// wasted round trip this loader exists to avoid.
     /// </summary>
     public async Task<PermissionContextBatch> LoadBatchAsync(
@@ -172,8 +215,15 @@ internal sealed class PermissionContextLoader
         var chainIds = subjects.SelectMany(s => s.ChainPageIds()).Distinct().ToArray();
         return new PermissionContextBatch(
             new Dictionary<Guid, IReadOnlyList<AccessRule>> { [spaceId] = spaceGrants },
-            await LoadRestrictionsAsync(chainIds, cancellationToken));
+            await LoadRestrictionsAsync(chainIds, cancellationToken),
+            await LoadMarkingsAsync(SubjectPageIds(subjects), cancellationToken));
     }
+
+    /// <summary>The pages a marking is needed for: the subjects themselves, never their
+    /// ancestors. A marking is a page's own property — inheritance happens once at
+    /// creation and is not re-derived at read time (design.md §21).</summary>
+    private static Guid[] SubjectPageIds(IReadOnlyCollection<PermissionSubject> subjects) =>
+        subjects.Select(s => s.PageId).Distinct().ToArray();
 
     /// <summary>Every restriction attached to any of these page ids, grouped by page —
     /// one query, or none at all for an empty id set.</summary>
@@ -192,6 +242,33 @@ internal sealed class PermissionContextLoader
             .GroupBy(r => r.PageId!.Value)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<AccessRule>)g.ToList());
     }
+
+    /// <summary>
+    /// Every marking for these page ids, with its country set, in <b>ONE</b> query
+    /// regardless of batch size — the countries ride along on the collection include
+    /// rather than being fetched per page, which on the search post-filter path (hundreds
+    /// of candidates) is the difference between a constant round trip and an N+1 sitting
+    /// on the hot path of the control itself.
+    ///
+    /// <para>Pages absent from the result are simply absent from the dictionary;
+    /// <see cref="PermissionContextBatch.MarkingFor"/> turns that into
+    /// <see cref="ProtectiveMarking.FailClosed"/>, so the fail-closed substitution has
+    /// exactly one implementation.</para>
+    /// </summary>
+    private async Task<Dictionary<Guid, ProtectiveMarking>> LoadMarkingsAsync(
+        Guid[] pageIds, CancellationToken cancellationToken)
+    {
+        if (pageIds.Length == 0)
+        {
+            return [];
+        }
+
+        var markings = await Markings
+            .Include(m => m.Countries)
+            .Where(m => pageIds.Contains(m.PageId))
+            .ToListAsync(cancellationToken);
+        return markings.ToDictionary(m => m.PageId, m => m.ToMarking());
+    }
 }
 
 /// <summary>
@@ -202,21 +279,34 @@ internal sealed class PermissionContextBatch
 {
     private readonly IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> _grantsBySpaceId;
     private readonly IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> _restrictionsByPageId;
+    private readonly IReadOnlyDictionary<Guid, ProtectiveMarking> _markingsByPageId;
 
     internal PermissionContextBatch(
         IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> grantsBySpaceId,
-        IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> restrictionsByPageId)
+        IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> restrictionsByPageId,
+        IReadOnlyDictionary<Guid, ProtectiveMarking> markingsByPageId)
     {
         _grantsBySpaceId = grantsBySpaceId;
         _restrictionsByPageId = restrictionsByPageId;
+        _markingsByPageId = markingsByPageId;
     }
 
     /// <summary>A space with no grants yields an empty list, which denies (§6.3).</summary>
     public IReadOnlyList<AccessRule> GrantsFor(Guid spaceId) => _grantsBySpaceId.GetValueOrDefault(spaceId, []);
 
+    /// <summary>
+    /// THE fail-closed substitution for a page whose marking row is missing (design.md
+    /// §21): TOP SECRET, not "unmarked". It lives here and in
+    /// <see cref="PermissionContextLoader.LoadMarkingAsync"/> and nowhere else, so a
+    /// consumer never gets the chance to decide what a null marking means.
+    /// </summary>
+    public ProtectiveMarking MarkingFor(Guid pageId) =>
+        _markingsByPageId.GetValueOrDefault(pageId) ?? ProtectiveMarking.FailClosed;
+
     /// <summary>The inputs for one page of the batch, chain ordered per the loader's doc.</summary>
     public PagePermissionContext For(PermissionSubject subject, bool isReplicaSpace) =>
-        new(GrantsFor(subject.SpaceId), Order(subject.ChainPageIds(), _restrictionsByPageId), isReplicaSpace);
+        new(GrantsFor(subject.SpaceId), Order(subject.ChainPageIds(), _restrictionsByPageId), isReplicaSpace,
+            MarkingFor(subject.PageId));
 
     /// <summary>
     /// THE chain ordering (design.md §6.7, and the input contract on
@@ -246,11 +336,12 @@ internal sealed class PermissionContextBatch
 internal sealed record PagePermissionContext(
     IReadOnlyList<AccessRule> SpaceGrants,
     IReadOnlyList<AccessRule> ChainRestrictions,
-    bool IsReplicaSpace)
+    bool IsReplicaSpace,
+    ProtectiveMarking Marking)
 {
     public EffectivePermission Compute(Principal principal) =>
-        EffectivePermissionCalculator.Compute(SpaceGrants, ChainRestrictions, IsReplicaSpace, principal);
+        EffectivePermissionCalculator.Compute(SpaceGrants, ChainRestrictions, IsReplicaSpace, Marking, principal);
 
     public EffectivePermissionExplanation Explain(Principal principal) =>
-        EffectivePermissionCalculator.Explain(SpaceGrants, ChainRestrictions, IsReplicaSpace, principal);
+        EffectivePermissionCalculator.Explain(SpaceGrants, ChainRestrictions, IsReplicaSpace, Marking, principal);
 }

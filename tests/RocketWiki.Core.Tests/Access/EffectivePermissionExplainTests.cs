@@ -114,8 +114,8 @@ public class EffectivePermissionExplainTests
     {
         var (grants, restrictions, replica, principal) = BuildScenario(scenario);
 
-        var gate = EffectivePermissionCalculator.Compute(grants, restrictions, replica, principal);
-        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, replica, principal);
+        var gate = EffectivePermissionCalculator.Compute(grants, restrictions, replica, ProtectiveMarking.Baseline, principal);
+        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, replica, ProtectiveMarking.Baseline, principal);
 
         // Record equality: CanView, CanEdit, AND both denial-reason strings must be
         // byte-identical - the reasons land in audit rows (§7) and the inspector UI
@@ -132,7 +132,7 @@ public class EffectivePermissionExplainTests
         // the least useful answer when several are in play.
         var (grants, restrictions, replica, principal) = BuildScenario("two-failing-view-restrictions");
 
-        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, replica, principal);
+        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, replica, ProtectiveMarking.Baseline, principal);
 
         Assert.Equal(2, explained.ViewRestrictions.Count);
         Assert.All(explained.ViewRestrictions, check => Assert.False(check.Passed));
@@ -146,7 +146,7 @@ public class EffectivePermissionExplainTests
     {
         var (grants, restrictions, replica, principal) = BuildScenario("edit-restriction-fails");
 
-        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, replica, principal);
+        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, replica, ProtectiveMarking.Baseline, principal);
 
         var viewCheck = Assert.Single(explained.ViewRestrictions);
         Assert.True(viewCheck.Passed);
@@ -166,7 +166,7 @@ public class EffectivePermissionExplainTests
         // opposite of what enforcement does.
         var (grants, restrictions, replica, principal) = BuildScenario("malformed-restriction");
 
-        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, replica, principal);
+        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, replica, ProtectiveMarking.Baseline, principal);
 
         var check = Assert.Single(explained.ViewRestrictions);
         Assert.False(check.Passed);
@@ -178,7 +178,7 @@ public class EffectivePermissionExplainTests
     {
         var (grants, restrictions, _, principal) = BuildScenario("replica");
 
-        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, isReplicaSpace: true, principal);
+        var explained = EffectivePermissionCalculator.Explain(grants, restrictions, isReplicaSpace: true, ProtectiveMarking.Baseline, principal);
 
         Assert.True(explained.IsReplicaSpace);
         Assert.True(explained.Permission.CanView);

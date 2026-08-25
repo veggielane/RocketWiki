@@ -110,6 +110,21 @@ public class PageReadService : IPageReadService
                 .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId != null && pageIds.Contains(r.PageId.Value))
                 .ToListAsync(cancellationToken);
 
+        // design.md §21: the tree is the one read path that does NOT go through
+        // PermissionContextLoader - it walks the whole space in memory precisely to avoid
+        // per-node work, so it hand-rolls the restriction evaluation the loader would
+        // otherwise order for it. That made it the place a new view gate is easiest to
+        // forget, so the marking is loaded here in the same shape and on the same
+        // constant-query budget: ONE more query for every marking in the space, countries
+        // included, never one per node.
+        var markingsByPageId = pageIds.Length == 0
+            ? new Dictionary<Guid, ProtectiveMarking>()
+            : (await _db.PageMarkings
+                    .Include(m => m.Countries)
+                    .Where(m => pageIds.Contains(m.PageId))
+                    .ToListAsync(cancellationToken))
+                .ToDictionary(m => m.PageId, m => m.ToMarking());
+
         var restrictionsByPageId = restrictions
             .GroupBy(r => r.PageId!.Value)
             .ToDictionary(g => g.Key, g => g.ToList());
@@ -122,7 +137,7 @@ public class PageReadService : IPageReadService
         var result = new List<PageTreeNode>();
         foreach (var root in rootPages)
         {
-            var node = BuildNodeIfVisible(root, childrenByParentId, restrictionsByPageId, principal);
+            var node = BuildNodeIfVisible(root, childrenByParentId, restrictionsByPageId, markingsByPageId, principal);
             if (node is not null)
             {
                 result.Add(node);
@@ -138,13 +153,30 @@ public class PageReadService : IPageReadService
     /// only ever visited after its parent already passed, so "carried down the
     /// recursion" (design.md §6.7) means each node costs one restriction-list lookup,
     /// not a walk back up the tree.
+    ///
+    /// <para>The protective marking (design.md §21) is checked per node, NOT carried down
+    /// - a marking is a page's own value and a child may legitimately sit below its
+    /// parent's level. The consequence is that failing clearance for a page still prunes
+    /// its subtree, even a child the caller is cleared for: a tree cannot render a node
+    /// whose parent is absent, and the more-hidden direction is the safe one. Such a
+    /// child stays reachable by id and through search, both of which check it on its
+    /// own.</para>
     /// </summary>
     private static PageTreeNode? BuildNodeIfVisible(
         Page page,
         IReadOnlyDictionary<Guid, List<Page>> childrenByParentId,
         IReadOnlyDictionary<Guid, List<AccessRule>> restrictionsByPageId,
+        IReadOnlyDictionary<Guid, ProtectiveMarking> markingsByPageId,
         Principal principal)
     {
+        // Fail closed on a page with no marking row, the same substitution
+        // PermissionContextBatch.MarkingFor makes (design.md §21).
+        var marking = markingsByPageId.GetValueOrDefault(page.Id) ?? ProtectiveMarking.FailClosed;
+        if (!ClearanceGate.Check(marking, principal).IsAllowed)
+        {
+            return null;
+        }
+
         var ownViewRestrictions = new List<PageTreeRestriction>();
         var hasRestrictions = false;
         if (restrictionsByPageId.TryGetValue(page.Id, out var ownRestrictions))
@@ -176,7 +208,7 @@ public class PageReadService : IPageReadService
         {
             foreach (var child in childPages)
             {
-                var childNode = BuildNodeIfVisible(child, childrenByParentId, restrictionsByPageId, principal);
+                var childNode = BuildNodeIfVisible(child, childrenByParentId, restrictionsByPageId, markingsByPageId, principal);
                 if (childNode is not null)
                 {
                     children.Add(childNode);
