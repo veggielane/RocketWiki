@@ -2649,6 +2649,19 @@ the gate added by hand. Both now have it; both are worth knowing about:
   to avoid per-node work, so it hand-rolls the restriction evaluation the loader
   would otherwise order for it. The marking is loaded on the same constant-query
   budget — one more query for the whole space.
+
+  Each surviving node also **carries its marking out** on `PageTreeNode.Marking`
+  (`marking` in GraphQL), so the tree — the one listing surface with no other
+  route to a `Page` — can render a classification badge without a query per node.
+  It is the *same value the walk gated on*, passed along rather than re-loaded:
+  a second lookup could in principle read a different row than pruning consulted,
+  and a tree that displayed a marking other than the one it enforced would be
+  exactly the wrong kind of wrong. Leak-safe on the same construction as
+  `OwnViewRestrictions` — the node exists only because the caller passed the gate
+  for that marking, so showing it is showing them why they were let in. The MCP
+  `get_page_tree` payload is unchanged: it maps through its own DTO and picks
+  fields explicitly, so the Core record growing does not grow a published tool
+  contract by accident.
 - **`INotificationDispatcher`'s fan-out** lives in `RocketWiki.Api`, and
   `PermissionContextLoader` is internal to `RocketWiki.Data`, so it cannot use
   the loader at all. It loads the page's marking once per fan-out.

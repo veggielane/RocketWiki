@@ -406,6 +406,68 @@ public class PageMarkingTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task PageTree_CarriesEachVisibleNodesMarking_TheSameValueThePruningUsed()
+    {
+        // The tree is a listing surface, and every node in it already passed the clearance
+        // gate for the marking reported here - so this exposes what the walk computed
+        // rather than loading it a second time (design.md §21.9). A node showing a
+        // different marking from the one it was gated on would be the wrong kind of wrong.
+        var space = TestData.NewSpace();
+        var root = TestData.NewPage(space, "root");
+        var child = TestData.NewPage(space, "child", root);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.AddRange(root, child);
+        context.PageMarkings.Add(TestData.NewMarkingWithPrefix(root, ClassificationLevel.Official, "UK"));
+        context.PageMarkings.Add(TestData.NewMarkingWithPrefix(child, ClassificationLevel.Secret, "NATO", "GB", "US"));
+        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.SaveChanges();
+
+        var service = new PageReadService(context);
+        var found = Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Found>(
+            await service.GetPageTreeAsync(space.Id, PrincipalWith("SECRET", ["GB"])));
+
+        var rootNode = Assert.Single(found.Value);
+        Assert.Equal("UK OFFICIAL", rootNode.Marking.Label);
+        Assert.Equal(ClassificationLevel.Official, rootNode.Marking.Level);
+
+        var childNode = Assert.Single(rootNode.Children);
+        Assert.Equal("NATO SECRET [GB/US EYES ONLY]", childNode.Marking.Label);
+        Assert.Equal(["GB", "US"], childNode.Marking.EyesOnly);
+    }
+
+    [Fact]
+    public async Task PageTree_APageWhoseMarkingRowIsMissing_IsPruned_AndNeverReportsABlankMarking()
+    {
+        // The fail-closed guard reaching the listing surface: a page with no marking row
+        // reads as TOP SECRET, so it is pruned for anyone below that - and for a caller
+        // who IS cleared, the node reports TOP SECRET rather than an empty badge that
+        // would misrepresent the enforcement they are subject to.
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space, "orphaned");
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(Grant(space.Id, SpaceRole.SpaceAdmin));
+        context.SaveChanges();
+
+        context.PageMarkings.Remove(context.PageMarkings.Single(m => m.PageId == page.Id));
+        context.SaveChanges();
+
+        var service = new PageReadService(context);
+
+        var pruned = Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Found>(
+            await service.GetPageTreeAsync(space.Id, PrincipalWith("SECRET")));
+        Assert.Empty(pruned.Value);
+
+        var visible = Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Found>(
+            await service.GetPageTreeAsync(space.Id, PrincipalWith("TOP_SECRET")));
+        Assert.Equal("TOP SECRET", Assert.Single(visible.Value).Marking.Label);
+    }
+
+    [Fact]
     public async Task Search_ExcludesAnOverClassifiedPage_TitleAndSnippetNeverBuilt()
     {
         var space = TestData.NewSpace();

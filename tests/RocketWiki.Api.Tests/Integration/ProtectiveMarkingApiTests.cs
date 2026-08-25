@@ -340,15 +340,22 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         var client = ClientFor(clearance: null, nationality: ["GB"]);
 
         using var result = await client.PostGraphQLAsync(
-            $$"""{ pageTree(spaceId: "{{f.SpaceId}}") { id title } }""");
+            $$"""{ pageTree(spaceId: "{{f.SpaceId}}") { id title marking { level eyesOnly prefix label } } }""");
 
-        var ids = result.RootElement.GetProperty("data").GetProperty("pageTree")
-            .EnumerateArray().Select(n => n.GetProperty("id").GetString()).ToList();
+        var nodes = result.RootElement.GetProperty("data").GetProperty("pageTree").EnumerateArray().ToList();
+        var ids = nodes.Select(n => n.GetProperty("id").GetString()).ToList();
 
         Assert.Contains(f.OpenPageId.ToString(), ids);
-        Assert.Contains(f.EyesOnlyPageId.ToString(), ids); // GB national, OFFICIAL [GB EYES ONLY]
+        Assert.Contains(f.EyesOnlyPageId.ToString(), ids); // GB national, UK OFFICIAL [GB EYES ONLY]
         Assert.DoesNotContain(f.SecretPageId.ToString(), ids);
         Assert.DoesNotContain(SecretSentinelTitle, result.RootElement.ToString(), StringComparison.Ordinal);
+
+        // Every visible node carries its marking, so the tree badge has a data source
+        // without a second query per node (design.md §21.9).
+        var eyesOnlyNode = nodes.Single(n => n.GetProperty("id").GetString() == f.EyesOnlyPageId.ToString());
+        Assert.Equal("UK OFFICIAL [GB EYES ONLY]", eyesOnlyNode.GetProperty("marking").GetProperty("label").GetString());
+        Assert.All(nodes, n => Assert.NotEqual(
+            JsonValueKind.Null, n.GetProperty("marking").GetProperty("label").ValueKind));
     }
 
     [Fact]
