@@ -64,6 +64,39 @@ public class ProtectiveMarkingTests
     }
 
     [Theory]
+    [InlineData(0)]     // an uninitialized tinyint — the dangerous one: BELOW the ladder
+    [InlineData(7)]     // above the ladder
+    [InlineData(255)]
+    public void Create_ALevelOutsideTheLadder_BecomesTopSecret_NeverASilentBypass(byte raw)
+    {
+        // The column is a tinyint, so a hand-edited row or a botched restore can present
+        // a value the enum does not define. A value BELOW the ladder would compare as
+        // less than every clearance and make the page readable by everybody - a silent
+        // bypass of the entire control. Normalized at the one constructor instead.
+        var marking = ProtectiveMarking.Create((ClassificationLevel)raw, null);
+
+        Assert.Equal(ClassificationLevel.TopSecret, marking.Level);
+        Assert.False(ClearanceGate.Check(
+            marking,
+            Principal.Create("u", [], [new("clearance", new[] { "SECRET" })])).IsAllowed);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    public void LevelNaming_NeverThrows_BecauseAThrowOnAReadPathWouldBeADistinguishable500(byte raw)
+    {
+        // A 500 is distinguishable from a not-found, which is precisely the §6.7 leak the
+        // denial design exists to prevent - so these answer with the most restrictive
+        // value rather than throwing on a corrupt input.
+        var level = (ClassificationLevel)raw;
+
+        Assert.Equal("TOP SECRET", ProtectiveMarking.LevelName(level));
+        Assert.Equal("TOP_SECRET", ProtectiveMarking.LevelWireName(level));
+        Assert.Equal("top_secret", ProtectiveMarking.LevelToken(level));
+    }
+
+    [Theory]
     [InlineData(ClassificationLevel.Official, "OFFICIAL")]
     [InlineData(ClassificationLevel.OfficialSensitive, "OFFICIAL-SENSITIVE")]
     [InlineData(ClassificationLevel.Secret, "SECRET")]

@@ -75,9 +75,21 @@ public sealed record ProtectiveMarking
     /// The only way to build one. Canonicalizes the country set: trims, drops blanks,
     /// upper-cases with the invariant culture, de-duplicates ordinally, and sorts
     /// ordinally.
+    ///
+    /// <para><b>A level outside the four-member ladder becomes TOP SECRET.</b> The
+    /// column is a tinyint, so a hand-edited row, a botched restore, or a future
+    /// migration bug can present a value the enum does not define — and the two ways
+    /// that could go wrong are not symmetric. A value ABOVE the ladder would deny
+    /// everyone (harmless but noisy); a value BELOW it — <c>0</c>, which is what an
+    /// uninitialized tinyint is — would compare as less than every clearance and make
+    /// the page readable by <i>everybody</i>. That is a silent bypass of the whole
+    /// control, so an undefined level is normalized to the top of the scheme here,
+    /// where every marking is built, rather than being trusted at each comparison.
+    /// Fail closed, §6.3's doctrine applied to a corrupt value instead of a corrupt
+    /// rule.</para>
     /// </summary>
     public static ProtectiveMarking Create(ClassificationLevel level, IEnumerable<string>? eyesOnly) =>
-        new(level, Canonicalize(eyesOnly));
+        new(Enum.IsDefined(level) ? level : ClassificationLevel.TopSecret, Canonicalize(eyesOnly));
 
     /// <summary>
     /// The canonical form of one country value. <b>Upper-case invariant</b> is the
@@ -144,9 +156,12 @@ public sealed record ProtectiveMarking
         ClassificationLevel.OfficialSensitive => "OFFICIAL-SENSITIVE",
         ClassificationLevel.Secret => "SECRET",
         ClassificationLevel.TopSecret => "TOP SECRET",
-        // Unreachable for a level that came from the enum, but this method must never
-        // invent a friendly name for an unknown value - see ClearanceGate's parse.
-        _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown classification level."),
+        // Unreachable through Create, which normalizes an undefined level to TOP SECRET.
+        // Answering rather than throwing anyway: these three methods run on read paths,
+        // and an exception there would turn a page read into a 500 - which is
+        // DISTINGUISHABLE from a not-found, and therefore the §6.7 leak the whole denial
+        // design exists to prevent. The most restrictive answer is the safe one.
+        _ => "TOP SECRET",
     };
 
     /// <summary>
@@ -164,7 +179,7 @@ public sealed record ProtectiveMarking
         ClassificationLevel.OfficialSensitive => "OFFICIAL_SENSITIVE",
         ClassificationLevel.Secret => "SECRET",
         ClassificationLevel.TopSecret => "TOP_SECRET",
-        _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown classification level."),
+        _ => "TOP_SECRET", // see LevelName - never throw on a read path
     };
 
     /// <summary>
@@ -177,7 +192,7 @@ public sealed record ProtectiveMarking
         ClassificationLevel.OfficialSensitive => "official_sensitive",
         ClassificationLevel.Secret => "secret",
         ClassificationLevel.TopSecret => "top_secret",
-        _ => throw new ArgumentOutOfRangeException(nameof(level), level, "Unknown classification level."),
+        _ => "top_secret", // see LevelName - never throw on a read path
     };
 
     /// <summary>

@@ -2438,6 +2438,18 @@ for free rather than needing its own plumbing.
   §6.4's "your role is the highest whose expression you satisfy". Unrecognised
   values are ignored rather than poisoning the result, so garbage can never raise
   clearance and can never lower it below the OFFICIAL floor.
+- **A stored level outside the ladder becomes TOP SECRET.** `Level` is a tinyint,
+  so a hand-edited row, a botched restore or a future migration bug can present a
+  value the enum does not define, and the two failure directions are not
+  symmetric: a value *above* the ladder denies everyone (noisy but harmless),
+  while `0` — what an uninitialized tinyint is — compares as less than every
+  clearance and would make the page readable by **everybody**. That is a silent
+  bypass of the entire control, so `ProtectiveMarking.Create` normalizes an
+  undefined level at the one constructor rather than trusting it at each
+  comparison. Relatedly, the level-naming methods answer TOP SECRET for an
+  unknown value instead of throwing: an exception on a read path is a 500, a 500
+  is distinguishable from a not-found, and that is exactly the §6.7 leak the
+  denial design exists to prevent.
 
 ### 21.4 The eyes-only caveat
 
