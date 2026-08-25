@@ -22,6 +22,14 @@ namespace RocketWiki.Core.Services;
 /// rules §6.6's banner lists to viewers of a restricted page. This is what lets the
 /// move dialog warn that a move changes who can see a page (§6.4) without a second
 /// query per node.</item>
+/// <item><see cref="Marking"/> — this page's protective marking (design.md §21).
+/// Leak-safe by exactly the same construction as OwnViewRestrictions: this node is
+/// only present because the caller passed the clearance gate for this marking, so
+/// showing it is showing them why they were let in, not a second secret. It is the
+/// <b>same value the walk gated on</b>, carried out rather than re-loaded — a second
+/// lookup could in principle read a different row than the one pruning consulted, and
+/// a tree that displayed a marking other than the one it enforced would be exactly
+/// the wrong kind of wrong.</item>
 /// </list>
 /// </summary>
 public sealed record PageTreeNode(
@@ -31,6 +39,7 @@ public sealed record PageTreeNode(
     int SortOrder,
     bool HasRestrictions,
     IReadOnlyList<PageTreeRestriction> OwnViewRestrictions,
+    PageMarkingView Marking,
     IReadOnlyList<PageTreeNode> Children);
 
 /// <summary>One view restriction attached directly to a tree node — id (for chain

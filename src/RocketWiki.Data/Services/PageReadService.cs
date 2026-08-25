@@ -216,7 +216,13 @@ public class PageReadService : IPageReadService
             }
         }
 
-        return new PageTreeNode(page.Id, page.Title, page.Slug, page.SortOrder, hasRestrictions, ownViewRestrictions, children);
+        // The marking carried out is the one resolved at the top of this method - the
+        // very value the clearance gate just passed on. Not re-loaded downstream: see
+        // PageTreeNode's doc for why a tree that displayed a different marking from the
+        // one it enforced would be the wrong kind of wrong.
+        return new PageTreeNode(
+            page.Id, page.Title, page.Slug, page.SortOrder, hasRestrictions, ownViewRestrictions,
+            PageMarkingView.From(marking), children);
     }
 
     /// <summary>

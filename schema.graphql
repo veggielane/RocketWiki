@@ -562,6 +562,7 @@ type PageTreeNode {
   sortOrder: Int!
   hasRestrictions: Boolean!
   ownViewRestrictions: [PageTreeRestriction!]!
+  marking: PageMarkingView!
   children: [PageTreeNode!]!
   labels: [String!]! @cost(weight: "10")
 }
