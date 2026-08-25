@@ -1,5 +1,6 @@
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Services;
 using Xunit;
 
 namespace RocketWiki.Core.Tests.Access;
@@ -170,6 +171,40 @@ public class ProtectiveMarkingTests
     [InlineData("nato", "NATO")]
     public void Create_NormalizesThePrefix_UpperCasedAndTrimmed(string input, string expected) =>
         Assert.Equal(expected, ProtectiveMarking.Create(ClassificationLevel.Secret, null, input).Prefix);
+
+    [Theory]
+    [InlineData(ClassificationLevel.Official, "OFFICIAL")]
+    [InlineData(ClassificationLevel.OfficialSensitive, "OFFICIAL-SENSITIVE")]
+    [InlineData(ClassificationLevel.Secret, "SECRET")]
+    [InlineData(ClassificationLevel.TopSecret, "TOP SECRET")]
+    public void PageMarkingView_CarriesTheLevelsOwnDisplaySpellingBesideTheComposedLabel(
+        ClassificationLevel level, string expectedLevelName)
+    {
+        // design.md §21.1: a level has three spellings and one method each, ON THE SERVER,
+        // so they cannot drift. Surfaces with nowhere to put a full marking - a one-word
+        // list badge, a radio option - need the display spelling of a level alone, and
+        // without this they would transliterate the GraphQL enum, which is a machine
+        // identifier and not a marking.
+        var view = PageMarkingView.From(ProtectiveMarking.Create(level, ["GB"], "UK"));
+
+        Assert.Equal(expectedLevelName, view.LevelName);
+        Assert.Equal(ProtectiveMarking.LevelName(level), view.LevelName);
+
+        // And the composed label is still the WHOLE marking - the two are not
+        // interchangeable, which is the mistake the names are shaped to prevent.
+        Assert.Equal($"UK {expectedLevelName} [GB EYES ONLY]", view.Label);
+        Assert.NotEqual(view.Label, view.LevelName);
+    }
+
+    [Fact]
+    public void PageMarkingView_LevelName_IgnoresPrefixAndCaveat_ItIsTheLevelAlone()
+    {
+        var bare = PageMarkingView.From(ProtectiveMarking.Create(ClassificationLevel.Secret, null, prefix: null));
+        var dressed = PageMarkingView.From(ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB", "US"], "NATO"));
+
+        Assert.Equal("SECRET", bare.LevelName);
+        Assert.Equal("SECRET", dressed.LevelName);
+    }
 
     [Fact]
     public void Prefix_ParticipatesInEquality_ButNotInTheDowngradePredicate()

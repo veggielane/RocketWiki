@@ -2379,6 +2379,29 @@ form and appears only in the rendered marking; the **reason token**
 (`official_sensitive`) appears only in denial reasons. One method each, in
 `ProtectiveMarking`, so they cannot drift.
 
+"So they cannot drift" is only true if clients can *get* the display name, and
+two surfaces need a level's spelling on its own rather than a whole marking — a
+one-word list badge, and the picker that offers a level before one is chosen. Both
+are served from the server, from the same `ProtectiveMarking.LevelName`:
+
+- `PageMarkingView.levelName` — the level of a marking the caller already holds.
+  Note it is **not** interchangeable with `label`: `label` is the whole marking
+  (prefix, level, caveat) and is what anything claiming to show "this page's
+  marking" must render. Rendering `levelName` in its place drops the caveat, which
+  understates the marking. That is the safer direction of error — the caveat is
+  still *enforced*, the badge is informational — but it is still wrong, which is
+  why the two fields are named to be hard to confuse.
+- `Query.classificationScheme` — every level in **scheme order** with its display
+  name, for the picker, which has no marking in hand. The list order is the scheme
+  order, so a client never encodes that OFFICIAL sorts below SECRET. Deliberately
+  no numeric rank: the only use for one is comparing levels client-side, and the
+  comparisons that matter (may I read this, may I set this) are decisions the
+  server already makes and returns typed errors for.
+
+Without those two fields a client hard-codes four spellings and their order, which
+is exactly the second implementation this paragraph exists to forbid — and the
+order it would duplicate is the access comparison itself.
+
 ### 21.2 It composes by subtraction, and only by subtraction
 
 Effective view access becomes:
