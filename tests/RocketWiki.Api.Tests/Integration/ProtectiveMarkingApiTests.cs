@@ -425,6 +425,71 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         return content;
     }
 
+    // --- Level display spellings (design.md §21.1) ---------------------------------------
+
+    [Fact]
+    public async Task ClassificationScheme_ReturnsEveryLevelInSchemeOrder_WithItsUkWrittenForm()
+    {
+        // The picker's data source. Without it the SPA would hard-code four display
+        // spellings AND their order - a second implementation of both, and the order it
+        // would be duplicating is the access comparison itself (§21.1).
+        var client = ClientFor(clearance: null);
+
+        using var result = await client.PostGraphQLAsync("{ classificationScheme { level name } }");
+
+        var levels = result.RootElement.GetProperty("data").GetProperty("classificationScheme")
+            .EnumerateArray().ToList();
+
+        Assert.Equal(
+            ["OFFICIAL", "OFFICIAL_SENSITIVE", "SECRET", "TOP_SECRET"],
+            levels.Select(l => l.GetProperty("level").GetString()));
+        // Least sensitive first: the list order IS the scheme order, so a client never
+        // needs to know that OFFICIAL sorts below SECRET.
+        Assert.Equal(
+            ["OFFICIAL", "OFFICIAL-SENSITIVE", "SECRET", "TOP SECRET"],
+            levels.Select(l => l.GetProperty("name").GetString()));
+    }
+
+    [Fact]
+    public async Task ClassificationScheme_IsEmptyForAnAnonymousCaller_LikeEveryOtherRead()
+    {
+        var client = factory.CreateClient();
+        client.ClearTestUser();
+
+        using var result = await client.PostGraphQLAsync("{ classificationScheme { level } }");
+
+        Assert.Empty(result.RootElement.GetProperty("data").GetProperty("classificationScheme").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task PageMarking_ExposesTheLevelsOwnSpelling_SoAListBadgeNeverRendersTheEnum()
+    {
+        // A search row or a tree badge has nowhere to put a full label. Rendering the
+        // GraphQL enum there would put a machine identifier (OFFICIAL_SENSITIVE) in front
+        // of a human as though it were a marking.
+        var f = await SeedAsync();
+        var editor = ClientFor("TOP_SECRET");
+
+        using var set = await editor.PostGraphQLAsync($$"""
+            mutation {
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: OFFICIAL_SENSITIVE, eyesOnly: [] }) {
+                marking { levelName label }
+              }
+            }
+            """);
+
+        var marking = set.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("marking");
+        Assert.Equal("OFFICIAL-SENSITIVE", marking.GetProperty("levelName").GetString());
+        // ... and the composed label is still the whole marking, prefix included.
+        Assert.Equal("UK OFFICIAL-SENSITIVE", marking.GetProperty("label").GetString());
+
+        using var read = await editor.PostGraphQLAsync(
+            $$"""{ page(id: "{{f.OpenPageId}}") { marking { levelName label } } }""");
+        var onPage = read.RootElement.GetProperty("data").GetProperty("page").GetProperty("marking");
+        Assert.Equal("OFFICIAL-SENSITIVE", onPage.GetProperty("levelName").GetString());
+        Assert.Equal("UK OFFICIAL-SENSITIVE", onPage.GetProperty("label").GetString());
+    }
+
     // --- Setting a marking over the wire -------------------------------------------------
 
     [Fact]

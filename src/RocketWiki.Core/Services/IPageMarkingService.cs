@@ -61,11 +61,29 @@ public sealed record SetPageMarkingRequest(
     string? Prefix = ProtectiveMarking.DefaultPrefix);
 
 /// <summary>
-/// One page's marking, flattened for callers, with the display string built server-side
+/// One page's marking, flattened for callers, with the display strings built server-side
 /// so every surface — the SPA, an MCP client, an audit reviewer reading the details —
-/// renders the identical text. Two renderings of one marking that disagree is a
-/// compliance problem, so <c>Label</c> has exactly one implementation
+/// renders identical text. Two renderings of one marking that disagree is a compliance
+/// problem, so <c>Label</c> has exactly one implementation
 /// (<c>ProtectiveMarking.Format</c>) and it is this one.
+///
+/// <para><b>Two display strings, and choosing wrongly matters.</b> <c>Label</c> is the
+/// WHOLE marking — prefix, level, caveat (<c>UK SECRET [GB EYES ONLY]</c>) — and is what
+/// anything claiming to show "this page's marking" must render. <c>LevelName</c> is the
+/// level ALONE in its UK written form (<c>OFFICIAL-SENSITIVE</c>, <c>TOP SECRET</c>), for
+/// the surfaces that have nowhere to put a full marking: a one-word list badge, a radio
+/// option in a picker. It exists because otherwise a client would transliterate the
+/// GraphQL enum itself — <c>OFFICIAL_SENSITIVE</c> is a machine identifier, not a
+/// marking — and §21.1's "one method per spelling, on the server, so they cannot drift"
+/// would be quietly broken by the one consumer that matters.</para>
+///
+/// <para>Rendering <c>LevelName</c> where <c>Label</c> belongs understates the marking:
+/// it drops the caveat, so a page released only to GB nationals would read as plain
+/// SECRET. That direction is the safer error (the caveat is still *enforced* regardless
+/// — the badge is informational, not the control), but it is still wrong, and it is why
+/// the fields are named to be hard to confuse rather than <c>label</c>/<c>levelLabel</c>.
+/// <c>LevelName</c> maps 1:1 onto <c>ProtectiveMarking.LevelName</c>, so its provenance
+/// is one grep away.</para>
 ///
 /// <para>Deliberately not the <c>PageMarking</c> entity: that carries a <c>Page</c>
 /// navigation, and returning it from a read path would open a Page-shaped route around
@@ -73,8 +91,13 @@ public sealed record SetPageMarkingRequest(
 /// that produced <c>LabelRef</c> and <c>PagePropertyValue</c>.</para>
 /// </summary>
 public sealed record PageMarkingView(
-    ClassificationLevel Level, IReadOnlyList<string> EyesOnly, string? Prefix, string Label)
+    ClassificationLevel Level, IReadOnlyList<string> EyesOnly, string? Prefix, string Label, string LevelName)
 {
     public static PageMarkingView From(ProtectiveMarking marking) =>
-        new(marking.Level, marking.EyesOnly, marking.Prefix, marking.Format());
+        new(
+            marking.Level,
+            marking.EyesOnly,
+            marking.Prefix,
+            marking.Format(),
+            ProtectiveMarking.LevelName(marking.Level));
 }
