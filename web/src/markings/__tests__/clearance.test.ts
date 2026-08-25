@@ -132,6 +132,23 @@ describe('markingRefusal — §21.6 mirrored so the UI prevents rather than refu
     })
   })
 
+  it('survives a nationality that arrives in any case or padding — the comparison canonicalizes both sides', () => {
+    // This is the §21.4 case-mismatch trap one layer up, and it is worth its
+    // own test at THIS level rather than only on eyesOnlyAdmits: a marking's
+    // country set is always canonical, so a principal whose token says `gb`
+    // IS admitted to a `GB` marking by the server. A comparison that folded
+    // only one side would conclude the opposite and warn an author out of a
+    // marking that would have worked — a false refusal in the affordance whose
+    // entire purpose is to predict the server's answer.
+    //
+    // It also guards a tempting future simplification: "the server already
+    // canonicalizes `me.nationality`, so we can drop ours". The wire value is
+    // not this module's to assume, and the cost of being wrong is silent.
+    for (const held of [['gb'], [' GB '], ['Gb']]) {
+      expect(markingRefusal({ level: 'OFFICIAL', eyesOnly: ['GB'] }, { clearance: 'SECRET', nationality: held })).toBeNull()
+    }
+  })
+
   it('ignores the prefix entirely — §21.12 gives it no access-control semantics', () => {
     // The draft type has no prefix field at all, which is the structural half
     // of this; the behavioural half is that nothing about a prefix can change

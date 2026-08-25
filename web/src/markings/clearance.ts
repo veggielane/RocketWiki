@@ -84,6 +84,14 @@ export function levelIsWithinClearance(level: ClassificationLevel, clearance: Cl
  * claim mapper were never guaranteed to agree on case, and failing closed on
  * a casing difference is an outage, not security. `toUpperCase` (not
  * `toLocaleUpperCase`) so the result cannot depend on the browser's locale.
+ *
+ * Applied to BOTH sides here even though §21.6 has the server canonicalize
+ * `me.nationality` before sending it. That is not redundancy worth removing:
+ * the wire representation is not this module's to assume, the comparison has
+ * to be right on its own terms, and being wrong about it is silent — it warns
+ * an author out of a marking that would have worked rather than failing
+ * loudly. One canonicalizer, both sides, is the same rule §21.4 applies to the
+ * marking itself.
  */
 export function canonicalCountry(value: string): string {
   return value.trim().toUpperCase()
