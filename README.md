@@ -418,6 +418,23 @@ bullet keeps its own sharper caveat where one exists):
   cannot land on the high side unmarked. Downgrades carry their own audit
   action so every widening is one query away.
 
+  Results are marked, and so is what contains them (design.md §21.13).
+  Search hits, MCP items and Ask citations each carry their own page's
+  marking, and the containing result carries the **aggregate**: the highest
+  classification among everything that fed it. For an Ask answer that means
+  everything that entered the model context, cited or not — a
+  retrieved-but-uncited `UK SECRET` page still makes the answer `UK SECRET`,
+  because a marking a model could defeat by declining to cite would not be a
+  marking. Caveats are a truthful conjunction rather than a merge: two
+  sources released to different countries render
+  `UK SECRET [GB EYES ONLY] [US EYES ONLY]`, never their union (a widening)
+  and never their intersection (which would be empty, and an empty caveat
+  reads as *no* caveat — the most restrictive inputs producing the least
+  restrictive output). An aggregate is a **display label**, not a marking:
+  computed after enforcement from pages you were already permitted to see,
+  never stored, and gating nothing — the type lives in the API layer, which
+  the rule engine and every read service cannot reference.
+
   > ⚠️ **The `AddPageMarkings` migration backfills every pre-existing page
   > to OFFICIAL — the lowest level.** That is the pragmatic call, not the
   > safe one: nobody has reviewed that content and it now wears a marking
