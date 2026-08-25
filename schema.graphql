@@ -42,6 +42,7 @@ type Query {
   labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
   pagePropertyKeys: [PagePropertyKeyRef!]! @cost(weight: "10")
+  classificationScheme: [ClassificationLevelInfo!]!
   groups: [String!]! @cost(weight: "10")
   attributeRegistry: [AttributeDefinition!]! @cost(weight: "10")
   search(query: String!, spaceKey: String, labels: [String!], after: String): SearchConnection!
@@ -223,6 +224,11 @@ type AuditEventsEdge {
   cursor: String!
   "The item at the end of the edge."
   node: AuditEvent!
+}
+
+type ClassificationLevelInfo {
+  level: ClassificationLevel!
+  name: String!
 }
 
 type ClearGitLabTokenPayload {
@@ -499,6 +505,7 @@ type PageMarkingView {
   eyesOnly: [String!]!
   prefix: String
   label: String!
+  levelName: String!
 }
 
 type PageMutationErrorView {
