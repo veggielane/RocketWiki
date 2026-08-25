@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using RocketWiki.Api.Audit;
+using RocketWiki.Api.Markings;
 using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
@@ -37,12 +38,19 @@ public enum AskWikiUnavailableReason
 /// <summary>One source the answer cites: a section of a page the asker passed canView
 /// for. Validated server-side against the exact context the model was given — the
 /// model can only cite what retrieval handed it, so a citation can never name a page
-/// the asker couldn't open.</summary>
+/// the asker couldn't open.
+///
+/// <para><see cref="Marking"/> is that source page's OWN protective marking (§21.13) —
+/// per-result marking, the same value <c>Page.marking</c> would show, so a citation list
+/// reads as the marked bibliography it is rather than as four indistinguishable links.
+/// Not a leak on the established construction: the citation exists only because the asker
+/// passed the clearance gate for this page.</para></summary>
 public sealed record AskWikiCitation(
     Guid PageId,
     string Title,
     IReadOnlyList<string> HeadingPath,
-    string AnchorId);
+    string AnchorId,
+    PageMarkingView Marking);
 
 /// <summary>
 /// The service-internal ask result (the GraphQL payload plus the record-keeping the
@@ -50,6 +58,11 @@ public sealed record AskWikiCitation(
 /// was actually placed in the model context — i.e. exactly what traveled to the
 /// configured endpoint — and <see cref="CitedPageIds"/> the validated citation
 /// subset. Both belong in the assistant.ask audit row's details and nowhere else.
+///
+/// <para><see cref="AggregateMarking"/> is the answer's own marking (§21.13): the
+/// aggregate over <see cref="RetrievedPageIds"/> — everything that entered the model
+/// context, cited or not. Non-null exactly when <see cref="Answer"/> is: an ask that
+/// produced no text has nothing to mark.</para>
 /// </summary>
 public sealed record AskWikiOutcome(
     string? Answer,
@@ -57,7 +70,8 @@ public sealed record AskWikiOutcome(
     AskWikiUnavailableReason? Unavailable,
     string Disposition,
     IReadOnlyList<Guid> RetrievedPageIds,
-    IReadOnlyList<Guid> CitedPageIds);
+    IReadOnlyList<Guid> CitedPageIds,
+    AggregateMarkingLabel? AggregateMarking);
 
 /// <summary>
 /// "Ask the wiki" (design.md §9, resolving §17's assistant bullet). The load-bearing
@@ -81,6 +95,16 @@ public sealed record AskWikiOutcome(
 /// double-record one action, exactly what DbAuditSink's dedup exists to prevent
 /// between paths.
 ///
+/// §21.13, the other half of that: an answer is a COMPILATION of the pages that fed
+/// it, so it carries an aggregate marking — the highest classification among
+/// everything that entered the model context, with every distinct caveat listed.
+/// "Entered the context", not "was cited": a retrieved page that shaped the answer
+/// without earning a citation shaped it just the same, and a marking a model could
+/// defeat by declining to cite would not be a marking. The aggregate is a DISPLAY
+/// LABEL — computed after enforcement, never stored, never consulted by anything
+/// (AggregateMarkingLabel's doc says how that is made structural). Retrieval already
+/// ran under the caller's principal, so every contributor passed the gate on its own.
+///
 /// §15 flow-of-content, stated honestly: the question and the retrieved (viewable)
 /// page content DO travel to the configured chat endpoint — that is the feature.
 /// The boundary controls are that the endpoint is fail-closed config (absent by
@@ -91,6 +115,7 @@ public sealed record AskWikiOutcome(
 public sealed class AskWikiService(
     ISearchService searchService,
     IPageReadService pageReadService,
+    IPageMarkingReader markingReader,
     IAuditSink auditSink,
     AssistantOptions? options = null,
     IChatClient? chatClient = null)
@@ -169,6 +194,22 @@ public sealed class AskWikiService(
 
         var retrievedPageIds = entries.Select(e => e.PageId).Distinct().ToArray();
 
+        // Markings for display only (§21.13): the answer's aggregate and each citation's
+        // badge. Keyed on retrievedPageIds — NOT on `pages` — because that is exactly the
+        // set whose content reached the prompt: a page whose chunks did not fit the char
+        // budget never shaped the answer and must not raise its marking. It is also the
+        // set the assistant.ask audit row reports, so the label and the record of what
+        // traveled stay honest about the same thing. One query for the batch, and none at
+        // all on the NO_RESULTS path above. Every id belongs to a page the caller was just
+        // permitted to read, which is what makes reading its marking free of any access
+        // question.
+        var markings = await markingReader.LoadAsync(retrievedPageIds, cancellationToken);
+
+        // THE aggregate: the highest level among the contributors, every distinct caveat
+        // listed. Retrieved, not merely cited — see the class doc.
+        var aggregateMarking = AggregateMarkingLabel.Of(
+            retrievedPageIds.Select(id => MarkingFor(markings, id)));
+
         List<ChatMessage> messages =
         [
             new(ChatRole.System, SystemPrompt),
@@ -197,7 +238,7 @@ public sealed class AskWikiService(
                 ApiTelemetry.AssistantDispositionUnreachable, retrievedPageIds));
         }
 
-        var (answer, citations) = ValidateCitations(text.Trim(), entries);
+        var (answer, citations) = ValidateCitations(text.Trim(), entries, markings);
 
         return Finish(new AskWikiOutcome(
             answer,
@@ -205,16 +246,30 @@ public sealed class AskWikiService(
             Unavailable: null,
             ApiTelemetry.AssistantDispositionAnswered,
             retrievedPageIds,
-            citations.Select(c => c.PageId).Distinct().ToArray()));
+            citations.Select(c => c.PageId).Distinct().ToArray(),
+            aggregateMarking));
     }
 
+    /// <summary>No answer, so no aggregate marking: there is no text in front of the user
+    /// to label, and labelling an absent answer would be marking nothing. Note this holds
+    /// even on the UNREACHABLE path, where content DID travel to the endpoint — the
+    /// record of that is the audit row's retrievedPageIds, which is the right place for
+    /// it; a marking on a payload with no answer would mark a blank.</summary>
     private static AskWikiOutcome Unavailable(
         AskWikiUnavailableReason reason, string disposition, IReadOnlyList<Guid> retrievedPageIds) =>
-        new(Answer: null, Citations: [], reason, disposition, retrievedPageIds, CitedPageIds: []);
+        new(Answer: null, Citations: [], reason, disposition, retrievedPageIds, CitedPageIds: [],
+            AggregateMarking: null);
 
     /// <summary>One context section as the model sees it, keyed by its 1-based marker position.</summary>
     private sealed record ContextEntry(
         Guid PageId, string Title, IReadOnlyList<string> HeadingPath, string AnchorId, string Text);
+
+    /// <summary>The reader fills every requested key, so the fallback is unreachable — but
+    /// the one honest answer for a page whose marking row went missing is the same TOP
+    /// SECRET every other read path substitutes (§21.5), never an unmarked answer.</summary>
+    private static ProtectiveMarking MarkingFor(
+        IReadOnlyDictionary<Guid, ProtectiveMarking> markings, Guid pageId) =>
+        markings.GetValueOrDefault(pageId) ?? ProtectiveMarking.FailClosed;
 
     /// <summary>
     /// Builds the context under the char budget, reusing the §9.2 chunker verbatim
@@ -300,7 +355,7 @@ public sealed class AskWikiService(
     /// first appearance, deduplicated per marker.
     /// </summary>
     private static (string Answer, IReadOnlyList<AskWikiCitation> Citations) ValidateCitations(
-        string text, List<ContextEntry> entries)
+        string text, List<ContextEntry> entries, IReadOnlyDictionary<Guid, ProtectiveMarking> markings)
     {
         var citations = new List<AskWikiCitation>();
         var seen = new HashSet<int>();
@@ -316,7 +371,11 @@ public sealed class AskWikiService(
             if (seen.Add(position))
             {
                 var entry = entries[position - 1];
-                citations.Add(new AskWikiCitation(entry.PageId, entry.Title, entry.HeadingPath, entry.AnchorId));
+                citations.Add(new AskWikiCitation(
+                    entry.PageId, entry.Title, entry.HeadingPath, entry.AnchorId,
+                    // Per-result marking (§21.13): the source page's own, so a citation
+                    // list reads as the marked bibliography it is.
+                    PageMarkingView.From(MarkingFor(markings, entry.PageId))));
             }
 
             return match.Value;

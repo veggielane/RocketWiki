@@ -30,9 +30,20 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
     private const string SentinelHeading = "ZZSENTINELHEADINGZZ";
     private const string SentinelAnswer = "ZZSENTINELMODELANSWERZZ";
 
+    /// <summary>design.md §21.13/§21.8: the answer's aggregate marking is built from its
+    /// sources' eyes-only countries and national prefixes, so it is a NEW way for both to
+    /// reach a span — and a level in a metric dimension would be a census of the
+    /// classified estate, which is the §21.8 reasoning that keeps even the bounded
+    /// four-value level out of telemetry. Planted as the retrieved page's own marking, so
+    /// the aggregate the ask returns genuinely contains them.</summary>
+    private const string SentinelCountry = "ZZSENTINELCOUNTRYZZ";
+
+    private const string SentinelPrefix = "ZZSENTINELPREFIXZZ";
+
     private static readonly string[] AllSentinels =
     [
         SentinelQuestion, SentinelContent, SentinelTitle, SentinelHeading, SentinelAnswer,
+        SentinelCountry, SentinelPrefix,
     ];
 
     [Fact]
@@ -85,19 +96,36 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
         }
 
         var client = fixture.Factory.CreateClient();
-        client.SetTestUser(sub: $"ask-tel-{Guid.NewGuid():N}");
+        // The nationality claim admits the seeded page's sentinel eyes-only caveat, so the
+        // marking is genuinely evaluated and genuinely aggregated rather than the page
+        // simply being filtered out before any of it happens.
+        client.SetTestUser(sub: $"ask-tel-{Guid.NewGuid():N}", nationality: [SentinelCountry]);
 
         // 1. A successful ask: the sentinel question as an inline literal, sentinel
-        //    title/heading/content through retrieval into the model context, and the
-        //    sentinel answer back out through the GraphQL response path.
+        //    title/heading/content through retrieval into the model context, the sentinel
+        //    answer back out through the GraphQL response path, and the sentinel
+        //    country/prefix back out inside the aggregate marking label.
         fixture.ChatClient.Respond = _ => $"{SentinelAnswer} [S1]";
         try
         {
             using var asked = await client.PostGraphQLAsync($$"""
-                query { askWiki(question: "{{SentinelQuestion}}") { answer citations { title anchorId } unavailable } }
+                query {
+                  askWiki(question: "{{SentinelQuestion}}") {
+                    answer
+                    unavailable
+                    aggregateMarking { label }
+                    citations { title anchorId marking { label } }
+                  }
+                }
                 """);
             var ask = asked.RootElement.GetProperty("data").GetProperty("askWiki");
             Assert.Contains(SentinelAnswer, ask.GetProperty("answer").GetString());
+
+            // Non-vacuous for §21.13 specifically: the aggregate label really does carry
+            // both sentinels, so the sweep below has something to find if it leaks.
+            var aggregate = ask.GetProperty("aggregateMarking").GetProperty("label").GetString()!;
+            Assert.Contains(SentinelCountry, aggregate);
+            Assert.Contains(SentinelPrefix, aggregate);
 
             // 2. The unreachable path: content already traveled, then the endpoint
             //    fails — the degraded disposition must be exactly as clean.
@@ -170,7 +198,7 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
         // headingPath), and body (→ chunk text → model context). The body mentions the
         // question sentinel so the LIKE-fallback retrieval genuinely hits this page.
         var now = DateTime.UtcNow;
-        db.Pages.Add(new Page
+        var page = new Page
         {
             SpaceId = space.Id,
             AncestorPath = "/",
@@ -180,7 +208,23 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
             CurrentRevisionNumber = 1,
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
-        });
+        };
+        db.Pages.Add(page);
+
+        // design.md §21.13: a real marking, at a level the (clearance-less, therefore
+        // OFFICIAL) asker is admitted to, with a sentinel eyes-only country and a sentinel
+        // national prefix. Both flow into the answer's aggregate label and each citation's
+        // marking — two new surfaces §15 has to stay clean across.
+        var marking = new PageMarking
+        {
+            PageId = page.Id,
+            Level = ClassificationLevel.Official,
+            Prefix = SentinelPrefix,
+            SetAtUtc = now,
+        };
+        marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = SentinelCountry });
+        db.PageMarkings.Add(marking);
+
         await db.SaveChangesAsync();
     }
 
@@ -222,8 +266,9 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
         }
 
         Assert.True(violations.Count == 0,
-            "design.md §15 forbids question text, page content, titles, and answers in telemetry; " +
-            "the ask-the-wiki pipeline is a new path for all of them. " +
+            "design.md §15 forbids question text, page content, titles, answers, and marking " +
+            "detail (§21.8: a level in a metric dimension is a census of the classified estate) " +
+            "in telemetry; the ask-the-wiki pipeline and its aggregate marking are new paths for all of them. " +
             $"Found {violations.Count} violation(s) across {captured.Count} captured activities:\n  " +
             string.Join("\n  ", violations));
     }

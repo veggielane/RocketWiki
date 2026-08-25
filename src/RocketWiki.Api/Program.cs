@@ -172,10 +172,16 @@ builder.Services.AddScoped<IPagePropertyService>(sp =>
 
 // --- Protective markings (design.md §21) — the classification that gates canView.
 // Needs the local InstanceId for the same reason: re-marking a page is a page mutation
-// and sits beneath the replica invariant (§12). There is no read service to register —
-// a marking is resolved off a Page that already passed canView, via a DataLoader.
+// and sits beneath the replica invariant (§12). There is no *gated* read service — a
+// marking is resolved off a Page that already passed canView.
 builder.Services.AddScoped<IPageMarkingService>(sp =>
     new PageMarkingService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+// The DISPLAY-side batch read (design.md §21.13) — markings of pages the caller has
+// already been permitted to see, for badges, MCP payloads and aggregate labels. It makes
+// no access decision and returns none; enforcement reads markings through
+// PermissionContextLoader inside the calculator, and these two paths stay separate on
+// purpose. See IPageMarkingReader's doc.
+builder.Services.AddScoped<IPageMarkingReader, PageMarkingReadService>();
 
 // --- Custom emojis (design.md §19) — the admin-curated :name: registry over the same
 // DbContext + IFileStorage as attachments. Instance-local, never synced, so no

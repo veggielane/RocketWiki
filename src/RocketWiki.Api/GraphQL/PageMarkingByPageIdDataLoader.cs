@@ -1,8 +1,6 @@
 using GreenDonut;
-using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Services;
-using RocketWiki.Data;
 
 namespace RocketWiki.Api.GraphQL;
 
@@ -10,7 +8,9 @@ namespace RocketWiki.Api.GraphQL;
 /// Batches per-page protective-marking resolution: ONE PageMarkings query (with its
 /// country rows) for every page id in the batch — how <c>Page.marking</c> resolves for a
 /// single page and for a list of them alike, without an N+1 (design.md §8's DataLoader
-/// rule).
+/// rule). The query itself lives in <see cref="IPageMarkingReader"/>, shared with the
+/// paths that have no DataLoader to reach for (the MCP tools, the assistant), so the
+/// display side has one implementation and one fail-closed substitution.
 ///
 /// <para>No authorization decision here, and the reasoning is the labels/properties one
 /// (§6.4.2/§20/§21): every page id reaching this loader belongs to a <c>Page</c> that
@@ -19,42 +19,27 @@ namespace RocketWiki.Api.GraphQL;
 /// reveals nothing they were not entitled to; the marking is not a second secret, it is
 /// the reason they were let in.</para>
 ///
-/// <para>Returns <see cref="ProtectiveMarking.FailClosed"/> for a page with no marking
-/// row, matching every other read path, so the rendered label reads TOP SECRET rather
-/// than blank. A blank would be the one answer that misrepresents the enforcement the
-/// caller is actually subject to.</para>
+/// <para>Yields <see cref="ProtectiveMarking"/> — the value object, not the
+/// <c>PageMarking</c> entity, which carries a <c>Page</c> navigation whose exposure would
+/// open a Page-shaped route around object-level authorization (the same reason
+/// <c>LabelRef</c> and <c>PagePropertyValue</c> exist). The GraphQL field maps it to
+/// <c>PageMarkingView</c> at the resolver; the value object is what comes out of here
+/// because the connection-level aggregate label (§21.13) folds real markings, and
+/// re-deriving them from views would be a round trip through the display shape for no
+/// reason.</para>
 ///
-/// <para>Yields <see cref="PageMarkingView"/>, never the <c>PageMarking</c> entity: that
-/// carries a <c>Page</c> navigation, and returning it from a read path would open a
-/// Page-shaped route around object-level authorization — the same reason
-/// <c>LabelRef</c> and <c>PagePropertyValue</c> exist.</para>
+/// <para>A page with no marking row resolves to <see cref="ProtectiveMarking.FailClosed"/>
+/// inside the reader, matching every other read path, so the rendered label reads TOP
+/// SECRET rather than blank. A blank would be the one answer that misrepresents the
+/// enforcement the caller is actually subject to.</para>
 /// </summary>
 public sealed class PageMarkingByPageIdDataLoader(
-    RocketWikiDbContext db,
+    IPageMarkingReader reader,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
-    : BatchDataLoader<Guid, PageMarkingView>(batchScheduler, options ?? new DataLoaderOptions())
+    : BatchDataLoader<Guid, ProtectiveMarking>(batchScheduler, options ?? new DataLoaderOptions())
 {
-    private readonly RocketWikiDbContext _db = db;
-
-    protected override async Task<IReadOnlyDictionary<Guid, PageMarkingView>> LoadBatchAsync(
-        IReadOnlyList<Guid> keys, CancellationToken cancellationToken)
-    {
-        var rows = await _db.PageMarkings
-            .AsNoTracking()
-            .Include(m => m.Countries)
-            .Where(m => keys.Contains(m.PageId))
-            .ToListAsync(cancellationToken);
-
-        var byPageId = rows.ToDictionary(m => m.PageId, m => PageMarkingView.From(m.ToMarking()));
-        foreach (var key in keys)
-        {
-            if (!byPageId.ContainsKey(key))
-            {
-                byPageId[key] = PageMarkingView.From(ProtectiveMarking.FailClosed);
-            }
-        }
-
-        return byPageId;
-    }
+    protected override async Task<IReadOnlyDictionary<Guid, ProtectiveMarking>> LoadBatchAsync(
+        IReadOnlyList<Guid> keys, CancellationToken cancellationToken) =>
+        await reader.LoadAsync(keys, cancellationToken);
 }

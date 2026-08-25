@@ -100,4 +100,11 @@ public sealed record PageMarkingView(
             marking.Prefix,
             marking.Format(),
             ProtectiveMarking.LevelName(marking.Level));
+
+    // No instance methods here, deliberately: this record IS a GraphQL object type, and
+    // Hot Chocolate infers a field from every public instance member. An instance helper
+    // would silently grow the published schema (and, for anything returning
+    // ProtectiveMarking, drag a second representation of a marking into the SDL beside
+    // this one). The inverse of From lives as an extension method in the API layer, where
+    // it is needed - see RocketWiki.Api.Markings.PageMarkingViewExtensions.
 }

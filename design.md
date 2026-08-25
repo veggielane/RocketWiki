@@ -538,8 +538,11 @@ content-bearing channel, which is what makes it §7-worthy. The save's
 
 `assistant.ask` (§9.5) — every ask, one row, Details carrying the question
 text (exactly as `search.query` carries its query text), the disposition,
-the ids of pages whose content was sent to the model, and the validated
-cited page ids. Outcome is always `success` — an unavailable result is
+the ids of pages whose content was sent to the model, the validated cited
+page ids, and the answer's aggregate marking label (§21.13) as it stood when
+the answer left — not recoverable later from the page ids, because a marking
+is a mutable row and re-deriving it after a re-marking would report today's
+classification for yesterday's answer. Outcome is always `success` — an unavailable result is
 still a completed ask, and `denied` stays reserved for ABAC refusals, which
 retrieval already enforced by making restricted pages absent; the race-only
 mid-retrieval denial audits as an ordinary `page.view` Denied row.
@@ -1081,6 +1084,17 @@ the server validates against the exact context it issued — an in-range
 marker is a viewable section by construction, and fabricated markers are
 stripped. Zero retrieved content means the model is never called
 (`NO_RESULTS`); the LLM is plumbing, access control is the feature.
+
+**The answer carries an aggregate protective marking** (§21.13): the highest
+classification among *everything that entered the model context*, cited or
+not, with each distinct eyes-only caveat listed rather than merged. An answer
+drawn from a `UK SECRET` page is `UK SECRET`, because the model launders the
+marking off the content and something has to put it back on. Each citation
+additionally carries its own source page's marking. Both are display labels
+computed after enforcement — retrieval already ran under the caller's
+principal — and anything rendering the answer must render `aggregateMarking.
+label` beside it. `aggregateMarking` is null exactly when `answer` is: no
+text, nothing to mark.
 
 The chat endpoint is configured like the embedding endpoint and carries the
 same honesty: **the user's question and the retrieved (viewable) page
@@ -2716,9 +2730,10 @@ the gate added by hand. Both now have it; both are worth knowing about:
   exactly the wrong kind of wrong. Leak-safe on the same construction as
   `OwnViewRestrictions` — the node exists only because the caller passed the gate
   for that marking, so showing it is showing them why they were let in. The MCP
-  `get_page_tree` payload is unchanged: it maps through its own DTO and picks
-  fields explicitly, so the Core record growing does not grow a published tool
-  contract by accident.
+  `get_page_tree` payload maps through its own DTO and picks fields explicitly, so
+  the Core record growing did not grow a published tool contract by accident — it
+  now carries the marking because §21.13 decided it should, deliberately and with
+  its own tests, reusing *this same carried value* at no extra query.
 - **`INotificationDispatcher`'s fan-out** lives in `RocketWiki.Api`, and
   `PermissionContextLoader` is internal to `RocketWiki.Data`, so it cannot use
   the loader at all. It loads the page's marking once per fan-out.
@@ -2886,7 +2901,135 @@ Unlike the OFFICIAL backfill (§21.11) this one carries **no security risk and
 needs no review sweep**: the prefix grants nothing and denies nothing, so
 asserting `UK` on a page nobody has reviewed cannot change who can read it.
 
-### 21.13 Deliberately not done
+### 21.13 Aggregation: what a compilation of marked content is marked
+
+A search result list, an MCP payload and — above all — an Ask-the-wiki answer are
+**compilations**. Standard doctrine: a compilation carries the classification of
+its most sensitive constituent. Before this, an answer synthesized from a
+`UK SECRET` page arrived with no marking at all, and a cleared reader could
+legitimately paste it somewhere that was not. The model launders the marking off
+the content; this puts it back on. Two rules, together:
+
+1. **Every individual result carries its own marking** — search hits, MCP items,
+   Ask citations.
+2. **The containing result carries the aggregate**: the highest classification
+   among everything that fed it.
+
+**A display label, not a marking, and not enforcement.** This is the distinction
+the whole subsection rests on. `AggregateMarkingLabel` is deliberately not a
+`ProtectiveMarking`, is never stored, and gates nothing — *enforcement already
+happened, per source, before it was computed*. Retrieval and search run under the
+caller's own principal, so every contributing page individually passed `canView`
+and the clearance gate; a page the caller cannot see contributes nothing because
+it never reached retrieval (§6.7), which is verified by test rather than assumed.
+The aggregate exists to tell a human what the text in front of them *is*.
+
+That is structural rather than promised: the type lives in **`RocketWiki.Api`**,
+and neither `RocketWiki.Core` (where `ClearanceGate` and
+`EffectivePermissionCalculator` live) nor `RocketWiki.Data` (where every gated
+read service lives) references `RocketWiki.Api`. No enforcement code *can* consult
+it — the same argument that keeps `PermissionContextLoader` internal to
+`RocketWiki.Data`. It also takes no `Principal` and returns no verdict type, both
+pinned by reflection test.
+
+**The aggregate covers everything that entered the model context, not merely what
+got cited.** Retrieved content that shaped an answer without earning a citation
+shaped it anyway, and a marking a model could defeat by declining to cite would
+not be a marking. So `AskWikiService` aggregates over exactly the set the
+`assistant.ask` audit row reports as `retrievedPageIds` — the pages whose chunks
+actually reached the prompt (a page whose chunks did not fit the char budget never
+reached it and must not raise the label). The test that matters plants a SECRET
+page in the context, scripts the model to cite *nothing*, and requires the answer
+to come back `UK SECRET`.
+
+**Level** is the maximum over contributors. That part is easy, because levels are
+totally ordered.
+
+**Caveat is a truthful conjunction, and this is the subtle part.** The storage
+model holds one eyes-only set per page; an aggregate can have sources with
+different ones, and there is no honest single set:
+
+- The **union** — `[GB/US EYES ONLY]` — says either nationality suffices. That is
+  a widening and it is false: the GB source is still GB-only.
+- The **intersection** is worse, and it is why this paragraph exists. `{GB} ∩ {US}`
+  is **empty**, and an empty eyes-only set in this model means *no caveat at all* —
+  so the two most restrictive inputs available would produce the least restrictive
+  possible output, silently, while the label looked perfectly correct. That is the
+  level-0 trap of §21.3 wearing a different hat: a value that reads as "nothing
+  here" when it should read as "everything here".
+
+So distinct source sets are **listed**: `UK SECRET [GB EYES ONLY] [US EYES ONLY]`,
+meaning a reader needs both. Identical sets collapse to one entry; a source with no
+caveat contributes none; the list order is derived from the sets themselves, so
+retrieval rank cannot change the rendered bytes. The invariant that follows is the
+one to defend: **an empty aggregate caveat means, and can only mean, "no source had
+one"** — it is built by filtering for sources that *have* a caveat, so nothing
+subtracts and no set-algebra result can reach empty. Swept by test over every subset
+of a mixed corpus.
+
+**Prefix carries through only on unanimity** — including unanimous absence — and any
+disagreement (`UK` vs `US`, or `UK` vs none) drops to no prefix, rendering the bare
+level. The prefix gates nothing (§21.12), so its only failure mode is
+misrepresentation: picking a winner would assert a national qualifier no single
+source asserted, and would make the label depend on retrieval order, which is not a
+property of the content. Dropping it is the answer `ProtectiveMarking.FailClosed`
+already gives for "we do not know what this said". A missing marking row therefore
+propagates twice over — TOP SECRET *and* prefixless — which is the right visible
+signal that something is wrong.
+
+**No sources yields no label at all**, not OFFICIAL and not TOP SECRET: nothing was
+shown, so there is nothing to mark. OFFICIAL would assert a reviewed judgement about
+content that does not exist (§21.11's specific complaint), TOP SECRET would invent a
+fact, and fail-closed does not apply because nothing is being closed — this decides
+nothing. The GraphQL fields are nullable to carry that, and an Ask answer's aggregate
+is non-null exactly when its `answer` is.
+
+**One formatter.** The label is rendered by `ProtectiveMarking.FormatLabel`, which
+`ProtectiveMarking.Format` (a page's `marking.label`) is now the one-set special case
+of. A client renders `label` verbatim and composes nothing — §21.1's rule, and the
+reason the aggregate can never render a caveat a hair differently from a page's.
+
+**Where it applies.**
+
+| Surface | Per-item marking | Aggregate |
+|---|---|---|
+| `askWiki` | `citations[].marking` (the source page's own) | `aggregateMarking` over everything that entered the context |
+| `search` | already reachable as `edges[].node.page.marking` — no field was added, because a hit reaches its page through the object-level-authorized `page` resolver and a projected copy would route around it (§6.7) | `aggregateMarking` over the permission-filtered hit set the connection reports |
+| MCP `get_page` | `marking` | — |
+| MCP `search` | `hits[].marking` | `aggregateMarking` |
+| MCP `get_page_tree` | `pages[].marking`, at every depth | `aggregateMarking` over the whole pruned tree |
+| MCP `list_spaces` | — | — (a space is not marked; its pages are) |
+
+The search aggregate spans the whole permission-filtered hit set — the same set
+`totalCount` counts — rather than the twenty edges of one page, so every page of the
+connection reports the same label. A per-page aggregate would force the SPA to
+*combine* aggregates as the user loads more, which is the caveat-conjunction rule
+reimplemented in TypeScript, which §21.1 forbids; and a label that drops as you
+scroll would tell a user the results got less sensitive when all that happened is
+that they paged past the sensitive ones.
+
+**The MCP addition is a published tool contract change, made on purpose.** MCP
+clients are typically LLMs, and an unmarked payload is precisely how classified text
+ends up summarised into an unclassified context. The payload fields are rendered
+label strings rather than structured parts, for that audience: the marking has to
+travel with the text, as text, and a client reassembling parts would be the second
+renderer §21.1 forbids.
+
+**Telemetry (§15): an aggregate reaches no span, no metric tag, no log.** It is built
+from levels, country sets and prefixes — the three things §21.7 confines to the audit
+table and §21.8 keeps out of every dimension, because a level in a metric tag is a
+census of the classified estate. `AssistantTelemetryHygieneTests` plants a sentinel
+country and a sentinel prefix, asserts they really do appear in the returned label,
+and then sweeps every ActivitySource and RocketWiki meter in the process for them.
+
+**Audit (§7).** The `assistant.ask` row's details gain `aggregateMarking` — the label
+as it was when the answer left. It is not recoverable later from `retrievedPageIds`:
+a marking is a single mutable row, so re-deriving it after a re-marking would report
+today's classification for yesterday's answer, which is exactly why §21.7 records a
+marking change's before-state. The audit table is also the one place a full country
+set is allowed to appear.
+
+### 21.14 Deliberately not done
 
 - **No create-time marking override.** A page is created with its inherited
   marking and re-marked afterwards. Stated cost: for a *root* page holding
@@ -2912,3 +3055,17 @@ asserting `UK` on a page nobody has reviewed cannot change who can read it.
 - **No UI.** This is the backend: schema, enforcement, audit, sync and the
   `setPageMarking` mutation. Rendering the marking banner and the editor's
   marking control is the frontend's own piece of work.
+- **An aggregate marking (§21.13) is never stored, never enforced, and never
+  written back to a page.** It is computed per response from the sources of that
+  response. There is no "mark this answer" action, no aggregate on a `Page`, and no
+  path by which an aggregate becomes a page's marking — a compilation's label is a
+  fact about one response, not a classification decision anybody made.
+- **No aggregate on the GraphQL page tree.** `pageTree` nodes carry their own
+  markings (§21.9) and the SPA renders a badge per node; there is no
+  results-view-style banner over a tree, so there is nothing for an aggregate to
+  label. The MCP tree has one because its consumer is a model reading the whole
+  payload as text.
+- **No aggregate over a whole space, label listing, or export.** Every aggregate
+  today spans one response's own items. A "this space is effectively SECRET" figure
+  would be the "which pages are marked X" report by another name, with the same
+  per-page permission-filtering obligation (see above), and it is not built.
