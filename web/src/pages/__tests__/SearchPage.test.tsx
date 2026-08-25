@@ -21,13 +21,21 @@ const hit = (id: string, title: string, level: string, levelName: string, label:
   },
 })
 
-function renderSearch() {
+/**
+ * §21.13's aggregate over the whole permission-filtered hit set. Defaults to
+ * null — the honest value for "nothing fed this" — so every pre-existing
+ * assertion below still describes a screen with only row badges on it.
+ */
+type Aggregate = { level: string; label: string } | null
+
+function renderSearch(aggregateMarking: Aggregate = null, totalCount = 2) {
   const mock = createMockUrqlClient((name) => {
     if (name === 'SearchFacets') return { spaces: [{ key: 'ENG', name: 'Engineering' }], labels: [] }
     if (name === 'SearchPages')
       return {
         search: {
-          totalCount: 2,
+          aggregateMarking,
+          totalCount,
           pageInfo: { hasNextPage: false, endCursor: null },
           edges: [
             // The hyphenated form is the UK Government's written spelling and
@@ -84,6 +92,66 @@ describe('SearchPage protective markings (design.md §21)', () => {
   it('has no axe violations with badged results', async () => {
     renderSearch()
     await resultRow('page-2')
+    await expectNoAxeViolations()
+  })
+})
+
+/**
+ * design.md §21.13: a result list is a COMPILATION and carries the
+ * classification of its most sensitive constituent. The aggregate spans the
+ * whole permission-filtered hit set — the same set `totalCount` counts — not
+ * the edges currently on screen, which is the property these tests pin.
+ */
+describe('SearchPage aggregate marking (design.md §21.13)', () => {
+  const TOP_SECRET_AGGREGATE = { level: 'TOP_SECRET', label: 'TOP SECRET [GB EYES ONLY] [US EYES ONLY]' }
+
+  it('renders the aggregate label verbatim above the results', async () => {
+    renderSearch(TOP_SECRET_AGGREGATE)
+    await resultRow('page-1')
+    const banner = document.querySelector('[data-aggregate-marking="results"]')
+    // Byte-for-byte: the conjunctive caveat is a shape only the server's
+    // formatter builds, and any client-side assembly would mangle it.
+    expect(banner?.textContent).toContain('TOP SECRET [GB EYES ONLY] [US EYES ONLY]')
+  })
+
+  it('out-ranks every row on screen without that being a contradiction', async () => {
+    // The staged hits top out at SECRET; the aggregate is TOP SECRET because
+    // the hit that earns it is somewhere further down the filtered set.
+    renderSearch(TOP_SECRET_AGGREGATE, 96)
+    await resultRow('page-2')
+    expect(document.querySelector('[data-aggregate-marking="results"]')?.textContent).toContain('TOP SECRET')
+    for (const row of ['page-1', 'page-2']) {
+      expect((await resultRow(row))?.textContent).not.toContain('TOP SECRET')
+    }
+  })
+
+  it('says the label covers the whole result set, never only what is visible', async () => {
+    renderSearch(TOP_SECRET_AGGREGATE, 96)
+    await resultRow('page-1')
+    expect(screen.getByText('Covers every result for this search, including any not shown here.')).toBeInTheDocument()
+  })
+
+  it('names what it marks for a screen reader — these results, not this page', async () => {
+    renderSearch(TOP_SECRET_AGGREGATE)
+    await resultRow('page-1')
+    expect(document.querySelector('[data-aggregate-marking="results"]')?.textContent).toContain(
+      'Protective marking for these search results:',
+    )
+  })
+
+  it('a null aggregate renders no banner and no substitute (§21.13)', async () => {
+    // No sources means no label: not OFFICIAL, not TOP SECRET, not a
+    // placeholder. The absence is the honest output.
+    renderSearch(null)
+    await resultRow('page-1')
+    expect(document.querySelector('[data-aggregate-marking]')).toBeNull()
+    expect(screen.queryByText(/UNMARKED|Unmarked|Not marked/)).toBeNull()
+    expect(screen.queryByText(/Covers every result/)).toBeNull()
+  })
+
+  it('has no axe violations with an aggregate banner over badged results', async () => {
+    renderSearch(TOP_SECRET_AGGREGATE, 96)
+    await resultRow('page-1')
     await expectNoAxeViolations()
   })
 })

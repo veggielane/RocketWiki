@@ -18,6 +18,7 @@ import {
 import { useSearchFacetsQuery, useSearchPagesQuery, type SearchPagesQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
+import { AggregateMarkingBanner } from '../markings/AggregateMarkingBanner'
 import { AskWikiSearchNudge } from '../ask/AskWikiSearchNudge'
 
 type SearchEdge = SearchPagesQuery['search']['edges'][number]
@@ -107,6 +108,15 @@ export function SearchPage() {
           <Typography variant="body2" color="text.secondary">
             {data.search.totalCount} result{data.search.totalCount === 1 ? '' : 's'}
           </Typography>
+          {/* design.md §21.13: a result list is a compilation and carries the
+              classification of its most sensitive constituent. The aggregate
+              spans the whole permission-filtered hit set — the same set
+              `totalCount` counts, not the edges currently rendered — so it can
+              out-rank every badge on screen and does not drop as you page.
+              The banner's scope note says so; without it the label would read
+              as a claim about the visible rows. An empty result set has no
+              aggregate and gets no banner. */}
+          <AggregateMarkingBanner marking={data.search.aggregateMarking} placement="results" />
           <List disablePadding>
             {edges.map(({ node, cursor }) => (
               // ListItem (an <li>) wraps the link — a bare <a> as a direct

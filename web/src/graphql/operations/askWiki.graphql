@@ -10,6 +10,18 @@
 # appearance) that index into `citations`; each citation's
 # pageId + anchorId deep-links exactly like a search hit
 # (`/pages/{id}#{anchorId}` — same §9.2 chunker anchors).
+# design.md §21.13 adds the two marking selections below, and they are
+# different things. `citations[].marking` is each SOURCE PAGE's own marking —
+# the reader scanning citations needs to see which source is the sensitive
+# one. `aggregateMarking` is what the ANSWER is: the highest classification
+# among everything that entered the model's context, which is deliberately
+# wider than the citations — retrieved content that shaped the answer without
+# earning a citation shaped it anyway, and a marking a model could defeat by
+# declining to cite would not be a marking. So the aggregate can legitimately
+# out-rank every citation badge on screen.
+#
+# It is nullable: no sources means no label, and the SPA renders nothing
+# rather than substituting one.
 query AskWiki($question: String!) {
   askWiki(question: $question) {
     answer
@@ -18,7 +30,13 @@ query AskWiki($question: String!) {
       title
       headingPath
       anchorId
+      marking {
+        ...PageMarking
+      }
     }
     unavailable
+    aggregateMarking {
+      ...AggregateMarking
+    }
   }
 }

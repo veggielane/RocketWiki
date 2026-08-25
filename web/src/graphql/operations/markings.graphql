@@ -26,6 +26,27 @@ fragment PageMarking on PageMarkingView {
   label
 }
 
+# §21.13: a search result list and an Ask answer are COMPILATIONS, and a
+# compilation carries the classification of its most sensitive constituent.
+# This is a display label and nothing else — never stored, gating nothing
+# (enforcement already happened per source, before the aggregate existed), and
+# nullable, because "nothing fed this" has no honest marking: not OFFICIAL,
+# which would assert a judgement about content that does not exist, and not
+# TOP SECRET, which would invent a fact.
+#
+# `label` and `level`, and the omissions are the point. `eyesOnlySets` and
+# `prefix` are the PARTS, and an aggregate's caveat is a truthful CONJUNCTION
+# the per-page model cannot express — `UK SECRET [GB EYES ONLY] [US EYES ONLY]`,
+# meaning a reader needs both, because a union would widen and an intersection
+# can reach empty (which in this model reads as "no caveat at all"). Composing
+# that client-side would be a second formatter reimplementing the harder half
+# of the one server-side formatter; not selecting the parts is how the SPA
+# stays unable to try. `level` is styling only (markingTone).
+fragment AggregateMarking on AggregateMarkingLabel {
+  level
+  label
+}
+
 # The picker's vocabulary (§21.1). A picker holds no marking, so it cannot use
 # `levelName` — it has to offer all four levels before one is chosen, and
 # hard-coding their spellings here would put a second implementation of the
