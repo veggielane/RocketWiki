@@ -36,6 +36,14 @@ query PageById($id: UUID!) {
       value
       sortOrder
     }
+    # design.md §21: the marking gates who may read this page, so it rides on
+    # the page read itself rather than a second round trip — a banner that
+    # popped in after the content would show the page unmarked for a beat,
+    # and the top-and-bottom convention exists precisely so the marking is
+    # never missing from what a reader (or a screenshot) sees.
+    marking {
+      ...PageMarking
+    }
     parent {
       id
       title

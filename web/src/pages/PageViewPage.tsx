@@ -54,6 +54,7 @@ import { Comments } from '../comments/Comments'
 import { LabelEditor } from '../labels/LabelEditor'
 import { computeLabelOps } from '../labels/labelOps'
 import { PagePropertiesPanel } from '../properties/PagePropertiesPanel'
+import { MarkingBanner } from '../markings/MarkingBanner'
 import { useScrollToHash } from './useScrollToHash'
 import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
@@ -252,6 +253,14 @@ export function PageViewPage() {
 
   return (
     <Box>
+      {/* design.md §21: the marking goes at the top AND the bottom. Both
+          render the server-built `label` — someone printing or screenshotting
+          a long page has to meet the marking without knowing where to look,
+          which is the whole reason for the pair. */}
+      <Box sx={{ mb: 2 }}>
+        <MarkingBanner label={page.marking.label} level={page.marking.level} placement="head" />
+      </Box>
+
       <Stack direction="row" sx={{ mb: 2, alignItems: 'center', justifyContent: 'space-between' }}>
         <Typography variant="h4" component="h1">
           {page.title}
@@ -420,6 +429,10 @@ export function PageViewPage() {
           }
         }}
       />
+
+      <Box sx={{ mt: 4 }}>
+        <MarkingBanner label={page.marking.label} level={page.marking.level} placement="foot" />
+      </Box>
 
       <MovePageDialog
         open={moveOpen}

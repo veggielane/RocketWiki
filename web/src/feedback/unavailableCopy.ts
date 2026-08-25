@@ -121,6 +121,13 @@ export type LoadFailureReason =
   | 'EMOJI_REGISTRY'
   /** The page-property key registry (design.md §20.1) — instance vocabulary, so it can name itself. */
   | 'PROPERTY_KEY_REGISTRY'
+  /**
+   * The registered `nationality` attribute behind the eyes-only caveat
+   * (design.md §21.4). Kept apart from PROPERTY_KEY_REGISTRY because they are
+   * different registries and a user told "the property key registry is
+   * unreachable" while editing a marking would go looking in the wrong place.
+   */
+  | 'NATIONALITY_VOCABULARY'
   | 'SYNC_STATUS'
   | 'SEARCH'
   /** The what-if inspector: `forPrincipal` distinguishes "your own view" from a staged subject. */
@@ -150,6 +157,11 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       return { summary: "Couldn't load the emoji registry.", pointsToSettings: false }
     case 'PROPERTY_KEY_REGISTRY':
       return { summary: "Couldn't load the property key registry.", pointsToSettings: false }
+    case 'NATIONALITY_VOCABULARY':
+      return {
+        summary: "Couldn't load the countries an eyes-only caveat can name. A classification on its own still works.",
+        pointsToSettings: false,
+      }
     case 'SYNC_STATUS':
       return { summary: "Couldn't load sync status.", pointsToSettings: false }
     case 'SEARCH':
@@ -165,7 +177,7 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
  * server's considered refusals with their own designed UX. All of these say
  * what didn't happen, since "try again" is the only useful next step.
  */
-export type WriteFailureReason = 'PAGE_PROPERTY' | 'PROPERTY_KEY'
+export type WriteFailureReason = 'PAGE_PROPERTY' | 'PROPERTY_KEY' | 'PAGE_MARKING'
 
 export function describeWriteFailure(reason: WriteFailureReason): UnavailableCopy {
   switch (reason) {
@@ -173,6 +185,14 @@ export function describeWriteFailure(reason: WriteFailureReason): UnavailableCop
       return { summary: "Couldn't reach the API — that property change wasn't saved.", pointsToSettings: false }
     case 'PROPERTY_KEY':
       return { summary: "Couldn't reach the API — that registry change wasn't saved.", pointsToSettings: false }
+    case 'PAGE_MARKING':
+      // Names what the page still carries rather than only what failed: a
+      // marking is an access control (design.md §21), so "which one is in
+      // force right now" is the fact the user is actually asking about.
+      return {
+        summary: "Couldn't reach the API — this page's marking is unchanged.",
+        pointsToSettings: false,
+      }
   }
 }
 

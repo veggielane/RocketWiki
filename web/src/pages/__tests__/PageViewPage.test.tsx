@@ -28,6 +28,16 @@ const basePage = {
   viewerIsWatching: false,
   labels: ['ops'],
   labelDetails: [{ id: 'l-ops', spaceId: 'space-1', name: 'ops' }],
+  // design.md §21.5: there is no unmarked state, so every staged page carries
+  // one. `label` is the server's own formatting — the SPA renders it verbatim.
+  // Widened so an override can stage another level, a caveat, or §21.12's
+  // legal no-prefix marking.
+  marking: {
+    level: 'OFFICIAL' as string,
+    eyesOnly: [] as string[],
+    prefix: 'UK' as string | null,
+    label: 'UK OFFICIAL',
+  },
   properties: [
     { keyId: 'k-owner', key: 'Owner', value: 'Propulsion team', sortOrder: 0 },
     { keyId: 'k-status', key: 'Status', value: 'Draft', sortOrder: 1 },
@@ -206,6 +216,38 @@ describe('PageViewPage properties panel (design.md §20)', () => {
     renderPage({ pageOverrides: { properties: [] } })
     await screen.findByRole('heading', { name: 'Runbook' })
     expect(screen.queryByRole('heading', { name: 'Properties' })).not.toBeInTheDocument()
+  })
+})
+
+describe('PageViewPage protective marking (design.md §21)', () => {
+  it('shows the marking at the top AND the bottom, both the same string', async () => {
+    renderPage({
+      pageOverrides: {
+        marking: { level: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
+      },
+    })
+    await screen.findByRole('heading', { name: 'Runbook' })
+    // The pair is the convention and it is deliberate: someone printing or
+    // screenshotting a long page must meet the marking without scrolling to a
+    // particular spot.
+    const banners = document.querySelectorAll('[data-marking-placement]')
+    expect(banners.length).toBe(2)
+    expect([...banners].map((banner) => banner.getAttribute('data-marking-placement'))).toEqual(['head', 'foot'])
+    for (const banner of banners) {
+      expect(banner.textContent).toContain('UK SECRET [UK/US EYES ONLY]')
+    }
+  })
+
+  it("renders the server's label rather than composing prefix + level + caveat", async () => {
+    // A marking with no prefix reads as the bare level, with no leading space
+    // and no "UK" invented for it (design.md §21.12).
+    renderPage({
+      pageOverrides: { marking: { level: 'TOP_SECRET', eyesOnly: [], prefix: null, label: 'TOP SECRET' } },
+    })
+    await screen.findByRole('heading', { name: 'Runbook' })
+    expect(document.querySelector('[data-marking-placement="head"]')?.textContent).toBe(
+      'Protective marking: TOP SECRET',
+    )
   })
 })
 

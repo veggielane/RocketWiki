@@ -3,6 +3,7 @@ import { Link as RouterLink, useSearchParams } from 'react-router-dom'
 import {
   Alert,
   Autocomplete,
+  Box,
   Breadcrumbs,
   Button,
   List,
@@ -16,6 +17,7 @@ import {
 } from '@mui/material'
 import { useSearchFacetsQuery, useSearchPagesQuery, type SearchPagesQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 import { AskWikiSearchNudge } from '../ask/AskWikiSearchNudge'
 
 type SearchEdge = SearchPagesQuery['search']['edges'][number]
@@ -127,10 +129,22 @@ export function SearchPage() {
                       ))}
                     </Breadcrumbs>
                   )}
-                  <ListItemText
-                    primary={node.headingPath.length > 0 ? node.headingPath[node.headingPath.length - 1] : node.page.title}
-                    secondary={node.snippet}
-                  />
+                  {/* design.md §21: results are already clearance-filtered
+                      server-side, so the badge is not a gate — it tells a
+                      reader scanning a list how sensitive each hit is before
+                      they open it. The level only; the page's own banners
+                      carry the full marking. */}
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
+                    <ListItemText
+                      primary={
+                        node.headingPath.length > 0 ? node.headingPath[node.headingPath.length - 1] : node.page.title
+                      }
+                      secondary={node.snippet}
+                    />
+                    <Box sx={{ pt: 0.5 }}>
+                      <MarkingLevelBadge level={node.page.marking.level} />
+                    </Box>
+                  </Stack>
                 </ListItemButton>
               </ListItem>
             ))}

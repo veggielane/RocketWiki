@@ -41,6 +41,10 @@ import { TrashPage } from '../pages/TrashPage'
 import { AuditLogPage } from '../pages/AuditLogPage'
 import { MovePageDialog } from '../access/move/MovePageDialog'
 import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
+import { Box } from '@mui/material'
+import { MarkingBanner } from '../markings/MarkingBanner'
+import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
+import { CLASSIFICATION_LADDER } from '../markings/clearance'
 import { ColorModeProvider } from '../theme/ColorModeProvider'
 import { createMockUrqlClient } from '../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../test/axe'
@@ -167,6 +171,10 @@ const page = {
     { id: 'l-1', spaceId: 'space-eng', name: 'anomaly' },
     { id: 'l-2', spaceId: 'space-eng', name: 'propulsion' },
   ],
+  // design.md §21: staged with a caveat and a prefix so the page-view capture
+  // exercises a real label rather than the shortest possible one. `label` is
+  // the server's formatting — the SPA never composes it (§21.4).
+  marking: { level: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
   properties: [
     { keyId: 'k-owner', key: 'Owner', value: 'Ada Lovelace', sortOrder: 0 },
     { keyId: 'k-review', key: 'Review Date', value: '2026-11-01', sortOrder: 1 },
@@ -216,6 +224,9 @@ const spaces = [
   { id: 'space-mirror', key: 'RANGE', name: 'Range Safety (mirror)', description: null, isReplica: true, originInstanceId: 'RANGE-LOW' },
 ]
 
+// Three different levels across the tree so the space-browser capture puts
+// three of the four marking tones (§21.1's ladder) in front of the browser
+// layer's contrast check in both themes.
 const spaceTreeNodes = [
   {
     id: 'page-1',
@@ -224,6 +235,7 @@ const spaceTreeNodes = [
     sortOrder: 0,
     hasRestrictions: false,
     labels: ['anomaly'],
+    marking: { level: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
     children: [
       {
         id: 'page-4',
@@ -232,11 +244,12 @@ const spaceTreeNodes = [
         sortOrder: 0,
         hasRestrictions: true,
         labels: [],
+        marking: { level: 'TOP_SECRET', eyesOnly: ['UK'], prefix: 'UK', label: 'UK TOP SECRET [UK EYES ONLY]' },
         children: [],
       },
     ],
   },
-  { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', sortOrder: 1, hasRestrictions: false, labels: [], children: [] },
+  { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', sortOrder: 1, hasRestrictions: false, labels: [], marking: { level: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' }, children: [] },
 ]
 
 function mockClient() {
@@ -247,6 +260,10 @@ function mockClient() {
         me: {
           id: 'sub-chris', email: 'chris@rocketwiki.dev', name: 'Chris', groups: ['propulsion'],
           isAuthenticated: true, isInstanceAdmin: true, localUserId: 'user-chris', hasAvatar: true,
+          // §21.6: SECRET clearance leaves TOP_SECRET visibly unavailable in
+          // the marking control, which is the state worth capturing — the
+          // "Above your clearance" reason has to be readable in both themes.
+          clearance: 'SECRET', nationality: ['UK'],
         },
       }
     if (name === 'SpaceReplicaBanner')
@@ -264,7 +281,7 @@ function mockClient() {
     if (name === 'CustomEmojis')
       return { customEmojis: [{ name: 'rocket', etag: '"r1"' }, { name: 'banana', etag: '"b1"' }] }
     if (name === 'PagePropertiesForPage')
-      return { page: { id: page.id, title: page.title, spaceKey: page.spaceKey, canEdit: true, properties: page.properties } }
+      return { page: { id: page.id, title: page.title, spaceKey: page.spaceKey, canEdit: true, marking: page.marking, properties: page.properties } }
     if (name === 'PagePropertyKeys')
       return {
         pagePropertyKeys: [
@@ -282,9 +299,9 @@ function mockClient() {
           totalCount: 12,
           pageInfo: { hasNextPage: true, endCursor: 'c10' },
           edges: [
-            { cursor: 'c1', node: { snippet: '…showed a 270 ms ignition delay on the stage two vacuum engine…', headingPath: ['Stage two ignition anomaly review'], anchorId: 'stage-two-ignition-anomaly-review', page: { id: 'page-1', title: 'Stage two ignition anomaly review', spaceKey: 'PROP' } } },
-            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP' } } },
-            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP' } } },
+            { cursor: 'c1', node: { snippet: '…showed a 270 ms ignition delay on the stage two vacuum engine…', headingPath: ['Stage two ignition anomaly review'], anchorId: 'stage-two-ignition-anomaly-review', page: { id: 'page-1', title: 'Stage two ignition anomaly review', spaceKey: 'PROP', marking: page.marking } } },
+            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP', marking: { level: 'OFFICIAL_SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } } } },
+            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', eyesOnly: [], prefix: null, label: 'OFFICIAL' } } } },
           ],
         },
       }
@@ -352,7 +369,12 @@ function mockClient() {
     if (name === 'RuleVocabulary')
       return {
         groups: ['propulsion', 'export-cleared'],
-        attributeRegistry: [{ key: 'clearance', displayName: 'Clearance', allowedValues: ['itar', 'public'] }],
+        attributeRegistry: [
+          { key: 'clearance', displayName: 'Clearance', allowedValues: ['itar', 'public'] },
+          // §21.4: the eyes-only picker's vocabulary is this attribute's
+          // allowedValues and nothing else — there is no ISO list.
+          { key: 'nationality', displayName: 'Nationality', allowedValues: ['UK', 'US', 'AU'] },
+        ],
       }
     if (name === 'EffectivePermission')
       return {
@@ -396,6 +418,19 @@ interface Screen {
   render: (mode: Mode) => React.ReactElement
   /** Post-render staging (open menus, type questions, emit presence…). */
   stage?: () => Promise<void> | void
+}
+
+/**
+ * Labels as `ProtectiveMarking.Format` would build them (design.md §21.12's
+ * four-combination table). TOP_SECRET is staged without a prefix on purpose:
+ * that is a legal marking, and it is also what the server's fail-closed
+ * substitute renders when a marking row is missing.
+ */
+const STAGED_MARKING_LABELS: Record<(typeof CLASSIFICATION_LADDER)[number], string> = {
+  OFFICIAL: 'UK OFFICIAL',
+  OFFICIAL_SENSITIVE: 'UK OFFICIAL-SENSITIVE',
+  SECRET: 'UK SECRET [UK/US EYES ONLY]',
+  TOP_SECRET: 'TOP SECRET',
 }
 
 const restrictedRule = {
@@ -503,6 +538,29 @@ const SCREENS: Screen[] = [
       fireEvent.click(screen.getByText('Export-Controlled Docs'))
       await settle()
     },
+  },
+  {
+    // Every rung of §21.1's ladder, in one capture, because the page-view and
+    // page-properties screens can only ever stage ONE marking each — and the
+    // whole point of markingTone.ts is that all four tones stay readable in
+    // both themes. Real components, staged with labels shaped exactly as the
+    // server's one formatter builds them (§21.12's table), including the
+    // legal no-prefix case at the top of the ladder.
+    name: 'marking-levels',
+    render: (mode) =>
+      standalone(
+        mode,
+        <Box sx={{ p: 3, display: 'grid', gap: 3, maxWidth: 720 }}>
+          {CLASSIFICATION_LADDER.map((level) => (
+            <Box key={level} sx={{ display: 'grid', gap: 1 }}>
+              <MarkingBanner level={level} placement="head" label={STAGED_MARKING_LABELS[level]} />
+              <Box>
+                <MarkingLevelBadge level={level} />
+              </Box>
+            </Box>
+          ))}
+        </Box>,
+      ),
   },
   {
     name: 'stale-revision-dialog',

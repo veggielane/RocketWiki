@@ -35,12 +35,14 @@ import {
   useSpacePageTreeQuery,
   useWatchSpaceMutation,
   useUnwatchSpaceMutation,
+  type ClassificationLevel,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
 import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { filterTreeByLabel } from '../labels/filterTreeByLabel'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { RenameSpaceDialog } from '../spaces/RenameSpaceDialog'
+import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 
 /**
  * The generated query type only nests as deep as the `.graphql` operation
@@ -55,6 +57,12 @@ interface PageTreeNode {
   /** `PageTreeNode.hasRestrictions` — drives the lock badge (design.md §6.6). */
   hasRestrictions: boolean
   labels: string[]
+  /**
+   * `PageTreeNode.marking` — the value the tree's own pruning walk gated on
+   * (design.md §21.9), so the badge shows the marking that decided this node
+   * is visible rather than a second lookup that could disagree with it.
+   */
+  marking: { level: ClassificationLevel }
   children?: PageTreeNode[]
 }
 
@@ -63,8 +71,12 @@ function PageTreeList({ nodes, depth = 0 }: { nodes: PageTreeNode[]; depth?: num
     <List dense disablePadding>
       {nodes.map((node) => (
         <li key={node.id}>
-          <ListItemButton component={RouterLink} to={`/pages/${node.id}`} sx={{ pl: 2 + depth * 2 }}>
+          <ListItemButton component={RouterLink} to={`/pages/${node.id}`} sx={{ pl: 2 + depth * 2, gap: 1 }}>
             <ListItemText primary={node.title} />
+            {/* §21.5: an over-classified node is pruned with its whole
+                subtree, so every node still here is one this caller may read —
+                the badge says how sensitive it is, not whether it is reachable. */}
+            <MarkingLevelBadge level={node.marking.level} />
             {node.hasRestrictions && (
               <Tooltip title="This page has access restrictions">
                 <LockOutlinedIcon fontSize="small" color="action" aria-label="Has access restrictions" />

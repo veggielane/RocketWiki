@@ -25,8 +25,12 @@ const baseRegistry = [
   { id: 'k-review', key: 'Review Date', description: 'When this page is next reviewed.', sortOrder: 2 },
 ]
 
+/** design.md §21.5: no page is unmarked, so the staged page always carries one. */
+const baseMarking = { level: 'OFFICIAL', eyesOnly: [] as string[], prefix: 'UK', label: 'UK OFFICIAL' }
+
 interface Options {
   canEdit?: boolean
+  marking?: typeof baseMarking
   properties?: typeof baseProperties
   registry?: typeof baseRegistry
   pageMissing?: boolean
@@ -38,6 +42,7 @@ interface Options {
 function renderPage(options: Options = {}) {
   const {
     canEdit = true,
+    marking = baseMarking,
     properties = baseProperties,
     registry = baseRegistry,
     pageMissing = false,
@@ -48,9 +53,22 @@ function renderPage(options: Options = {}) {
   const mock = createMockUrqlClient((name) => {
     if (name === 'PagePropertiesForPage') {
       if (pageMissing) return { page: null }
-      return { page: { id: 'page-1', title: 'Runbook', spaceKey: 'ENG', canEdit, properties } }
+      return { page: { id: 'page-1', title: 'Runbook', spaceKey: 'ENG', canEdit, marking, properties } }
     }
     if (name === 'PagePropertyKeys') return { pagePropertyKeys: registry }
+    // The marking section (design.md §21) reads the caller's own clearance and
+    // the nationality vocabulary; both are staged so this screen's property
+    // assertions aren't testing the marking control by accident.
+    if (name === 'CurrentUser')
+      return {
+        me: {
+          id: 'sub-1', email: null, name: 'Editor', groups: [], isAuthenticated: true,
+          isInstanceAdmin: false, localUserId: 'user-1', hasAvatar: false,
+          clearance: 'SECRET', nationality: ['UK'],
+        },
+      }
+    if (name === 'RuleVocabulary')
+      return { groups: [], attributeRegistry: [{ key: 'nationality', displayName: 'Nationality', allowedValues: ['UK', 'US'] }] }
     if (name === 'SpaceReplicaBanner')
       return { space: { id: 'space-1', key: 'ENG', isReplica, originInstanceId: isReplica ? 'LOW' : 'HIGH' } }
     if (name === 'SetPageProperty')
@@ -231,6 +249,25 @@ describe('PagePropertiesPage typed refusals', () => {
     renderPage({ removeError: { kind: 'Forbidden', message: 'canEdit required' } })
     fireEvent.click(await screen.findByRole('button', { name: 'Remove Status' }))
     expect(await screen.findByText('Not permitted: canEdit required')).toBeInTheDocument()
+  })
+})
+
+describe('PagePropertiesPage protective marking section (design.md §21)', () => {
+  it('puts the marking in its own section ABOVE the properties table, never as a row', async () => {
+    renderPage()
+    const marking = await screen.findByRole('heading', { name: 'Protective marking' })
+    const properties = screen.getByRole('heading', { name: 'Properties' })
+    // A property is metadata beside the page (§20); a marking decides who may
+    // read the page at all (§21), and the layout has to say which is which.
+    expect(marking.compareDocumentPosition(properties) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const table = screen.getByRole('table', { name: 'Page properties' })
+    expect(table.textContent).not.toContain('OFFICIAL')
+  })
+
+  it('shows a viewer the marking read-only, alongside the read-only properties', async () => {
+    renderPage({ canEdit: false })
+    expect(await screen.findByText('UK OFFICIAL')).toBeInTheDocument()
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
   })
 })
 

@@ -1,0 +1,43 @@
+# design.md §21: every page carries a protective marking — a UK Government
+# classification, an optional eyes-only country set, and an optional national
+# prefix — and the first two GATE READ ACCESS. This is an access control the
+# SPA renders, not a decoration it draws.
+#
+# `label` is the whole reason this fragment asks for four fields instead of
+# composing three: §21.4/§21.12 put the ONE formatter server-side
+# (`ProtectiveMarking.Format`) so the SPA, an MCP client and an audit reviewer
+# read identical text — "two renderings of one marking that disagree is a
+# compliance problem, not a cosmetic one". Every banner renders `label`
+# verbatim. `level`/`eyesOnly`/`prefix` exist for the CONTROL (they are what
+# setPageMarking replaces) and for the compact list badge, never to be
+# reassembled into a display string.
+fragment PageMarking on PageMarkingView {
+  level
+  eyesOnly
+  prefix
+  label
+}
+
+# §21.6: one mutation replaces the whole marking — level and country set
+# together — because a marking is one value and a partial update would let a
+# caller change the level without ever stating what caveat they meant. The
+# prefix is sent explicitly on every call rather than omitted: omitting it
+# takes the schema's `UK` default, which would silently re-assert a national
+# qualifier on a page whose author cleared it (§21.12 — null/empty is legal
+# and must stay clearable).
+#
+# Two refusals reach here that the control tries to make unreachable
+# (markings/clearance.ts): a level above the caller's own clearance and a
+# resulting marking the caller could not then read, both ForbiddenError
+# (§21.6). They are still surfaced rather than swallowed — a clearance can
+# change mid-session, and the server is the authority either way.
+mutation SetPageMarking($input: SetPageMarkingRequestInput!) {
+  setPageMarking(input: $input) {
+    marking {
+      ...PageMarking
+    }
+    error {
+      ...MutationError
+    }
+  }
+}

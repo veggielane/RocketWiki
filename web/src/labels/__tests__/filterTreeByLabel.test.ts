@@ -75,6 +75,7 @@ describe('filterTreeByLabel', () => {
       sortOrder: 0,
       hasRestrictions: false,
       labels: ['onboarding'],
+      marking: { level: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
       children: [],
     }
     expect(filterTreeByLabel([apiNode], 'onboarding').map((m) => m.id)).toEqual(['api-a'])

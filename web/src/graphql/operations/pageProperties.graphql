@@ -15,6 +15,13 @@ query PagePropertiesForPage($id: UUID!) {
     title
     spaceKey
     canEdit
+    # The marking control lives on this screen (design.md §21 gives it no
+    # screen of its own), so its current value comes back with the read that
+    # already resolves `canEdit` — the one flag that decides whether the
+    # control is editable or read-only (§21.6).
+    marking {
+      ...PageMarking
+    }
     properties {
       keyId
       key
