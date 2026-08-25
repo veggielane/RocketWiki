@@ -54,7 +54,16 @@ export type EveryLevelIsPlaced = AssertNever<Exclude<ClassificationLevel, (typeo
  * rather than trusting it, because the two failure directions are not
  * symmetric — a value above the ladder denies everyone (noisy but harmless),
  * while one that compares as low would make the page look readable by
- * everybody. The SPA takes the same direction for the same reason.
+ * everybody.
+ *
+ * Same direction as the server, deliberately one notch stricter, and the
+ * difference is worth knowing before anyone "corrects" it: `ProtectiveMarking`
+ * normalizes an unknown level *to* TOP SECRET, so the server would still admit
+ * a TOP_SECRET principal to it; ranking above the top denies even them. The
+ * only way the two can disagree is a server ahead of this client, and on that
+ * path an affordance should be the stricter side — greying out a level the
+ * server might have allowed costs a refused click, while offering one it
+ * refuses is the failure this module exists to prevent.
  */
 export function markingLevelRank(level: ClassificationLevel): number {
   const index = CLASSIFICATION_LADDER.indexOf(level)

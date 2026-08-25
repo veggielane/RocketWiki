@@ -45,6 +45,17 @@ describe('fail-closed directions (design.md §21.3)', () => {
   it('never lets an unplaceable clearance reach an unplaceable level', () => {
     expect(levelIsWithinClearance('COSMIC' as ClassificationLevel, 'COSMIC' as ClassificationLevel)).toBe(false)
   })
+
+  it('denies an unplaceable level even to TOP_SECRET — one notch stricter than the server, on purpose', () => {
+    // Logged divergence, not a defect: `ProtectiveMarking` normalizes an
+    // unknown level TO TOP SECRET, so the server would admit a TOP_SECRET
+    // principal where this denies them. The only way the two can disagree is a
+    // server ahead of this client, and an affordance should be the stricter
+    // side of that gap — a greyed-out level the server might have allowed
+    // costs a click, offering one it refuses is the whole failure mode.
+    // Change this only alongside the comment on `markingLevelRank`.
+    expect(levelIsWithinClearance('COSMIC' as ClassificationLevel, 'TOP_SECRET')).toBe(false)
+  })
 })
 
 describe('levelIsWithinClearance (design.md §21.2)', () => {
