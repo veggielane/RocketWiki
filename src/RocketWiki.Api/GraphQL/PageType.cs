@@ -86,6 +86,20 @@ public sealed class PageType : ObjectType<Page>
             .Type<NonNullType<ListType<NonNullType<ObjectType<PagePropertyValue>>>>>()
             .ResolveWith<PageFieldResolvers>(r => r.GetPropertiesAsync(default!, default!, default));
 
+        // The protective marking (design.md §21). Rebinds the raw Marking navigation
+        // rather than ignoring it, for the same reason Revisions/Comments/Attachments are
+        // rebound: its camelCase name IS this field's name, and Ignore() would win
+        // permanently over a later Field() of the same name. The entity - which carries a
+        // Page navigation - is never exposed; PageMarkingView is.
+        //
+        // NonNull: every page carries a marking, and a nullable field here would invite a
+        // client to render "unclassified" for a page whose marking row went missing,
+        // which the read path treats as TOP SECRET. `label` on the payload is the single
+        // server-built display string, so the SPA and an MCP client render identical text.
+        descriptor.Field(p => p.Marking)
+            .Type<NonNullType<ObjectType<PageMarkingView>>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetMarkingAsync(default!, default!, default));
+
         // Viewer-relative watch state (design.md §8's known-deltas list); display of
         // the caller's own Watch row, no audit of its own - see the resolver's doc.
         descriptor.Field("viewerIsWatching")

@@ -40,8 +40,101 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260823173233_AddPageRevisionContributors", applied);
         Assert.Contains("20260823180135_AlterPageEmbeddingToNativeVector", applied);
         Assert.Contains("20260824185208_AddPageProperties", applied);
-        Assert.Equal(8, applied.Count);
+        Assert.Contains("20260825054144_AddPageMarkings", applied);
+        Assert.Equal(9, applied.Count);
         Assert.Empty(pending);
+    }
+
+    [SqlServerFact]
+    public async Task AddPageMarkings_BackfillsEveryPreExistingPageToOfficial()
+    {
+        // design.md §21: the backfill is the part of that migration a reviewer cares
+        // about. This tier is the only one that runs it at all — the SQLite tier builds
+        // its schema from the live model with EnsureCreated and never replays a
+        // migration, so the raw INSERT..SELECT here has no other coverage.
+        //
+        // Level 1 is OFFICIAL, the LOWEST in the scheme. See the migration's own comment
+        // for why that is the pragmatic call and not the safe one; the assertion below
+        // pins the actual behaviour so a future "surely this should be TOP SECRET" edit
+        // is a deliberate, reviewed change rather than a silent one.
+        using var context = CreateContext();
+
+        var pageId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var userId = Guid.CreateVersion7();
+        await ExecuteNonQueryAsync($$"""
+            INSERT INTO Users (Id, Subject, DisplayName, AttributesJson, IsExternal, CreatedAtUtc, LastSeenAtUtc)
+            VALUES ('{{userId}}', 'backfill-sub', 'Backfill', '{}', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+            INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, IsArchived, LastOutboxSequence, CreatedAtUtc, CreatedByUserId)
+            VALUES ('{{spaceId}}', 'BFL', 'Backfill Space', 'local-instance', 0, 0, 0, SYSUTCDATETIME(), '{{userId}}');
+
+            INSERT INTO Pages (Id, SpaceId, AncestorPath, Slug, Title, SortOrder, CurrentRevisionNumber, CurrentContent, IsDeleted, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('{{pageId}}', '{{spaceId}}', '/', 'backfilled', 'Backfilled', 0, 1, '# Backfilled', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+            INSERT INTO PageMarkings (PageId, Level, SetAtUtc, SetByUserId)
+            SELECT p.Id, 1, SYSUTCDATETIME(), NULL
+            FROM Pages p
+            WHERE NOT EXISTS (SELECT 1 FROM PageMarkings m WHERE m.PageId = p.Id);
+            """);
+
+        Assert.Equal(1, await ExecuteScalarAsync<byte>($"SELECT Level FROM PageMarkings WHERE PageId = '{pageId}'"));
+        // No local actor: nobody reviewed this page, the migration asserted OFFICIAL on
+        // its behalf. SetByUserId IS NULL is exactly the query an admin runs to find
+        // every page still awaiting review.
+        Assert.Equal(0, await ExecuteScalarAsync<int>(
+            $"SELECT COUNT(*) FROM PageMarkings WHERE PageId = '{pageId}' AND SetByUserId IS NOT NULL"));
+    }
+
+    [SqlServerFact]
+    public async Task PageMarkings_KeysIndexesAndForeignKeys_LandAsDeclared()
+    {
+        // PK = PageId alone, which is what makes "one marking per page" a database fact
+        // rather than an application convention (design.md §21).
+        Assert.Equal("PageId", await ExecuteScalarAsync<string>("""
+            SELECT c.name
+            FROM sys.indexes i
+            JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            WHERE i.object_id = OBJECT_ID('dbo.PageMarkings') AND i.is_primary_key = 1
+            """));
+
+        // The country set is a child table with a composite PK, so a country can appear
+        // at most once per page and applying a set is idempotent.
+        Assert.Equal(
+            new List<string> { "PageId", "CountryValue" },
+            await ExecuteColumnAsync("""
+                SELECT c.name
+                FROM sys.indexes i
+                JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE i.object_id = OBJECT_ID('dbo.PageMarkingCountries') AND i.is_primary_key = 1
+                ORDER BY ic.key_ordinal
+                """));
+
+        // Level is a tinyint, so the ordering the whole feature rests on is numeric in
+        // the database too, and a value outside the ladder cannot be typed in.
+        Assert.Equal("tinyint", await ExecuteScalarAsync<string>("""
+            SELECT t.name
+            FROM sys.columns c
+            JOIN sys.types t ON t.user_type_id = c.user_type_id
+            WHERE c.object_id = OBJECT_ID('dbo.PageMarkings') AND c.name = 'Level'
+            """));
+
+        // NO ACTION on every FK, like every other table here — cascading deletes are
+        // exactly what data-model.md forbids.
+        Assert.Equal(2, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.foreign_keys
+            WHERE parent_object_id = OBJECT_ID('dbo.PageMarkings')
+              AND delete_referential_action_desc = 'NO_ACTION'
+            """));
+        Assert.Equal(1, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.foreign_keys
+            WHERE parent_object_id = OBJECT_ID('dbo.PageMarkingCountries')
+              AND delete_referential_action_desc = 'NO_ACTION'
+            """));
     }
 
     [SqlServerFact]
@@ -224,6 +317,14 @@ public sealed class MigrationTests : SqlServerTestBase
             ORDER BY ic.key_ordinal
             """);
         Assert.Equal(["TimestampUtc", "Id"], primaryKeyColumns);
+    }
+
+    private async Task ExecuteNonQueryAsync(string sql)
+    {
+        await using var connection = new SqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
     }
 
     private async Task<T?> ExecuteScalarAsync<T>(string sql)

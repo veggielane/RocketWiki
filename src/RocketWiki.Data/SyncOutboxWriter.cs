@@ -1,4 +1,5 @@
 using System.Text.Json;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
@@ -167,6 +168,12 @@ internal static class SyncOutboxWriter
         // import side materializes whatever key a value event names.
         PagePropertySetEvent => SyncEventType.PageProperties,
         PagePropertyRemovedEvent => SyncEventType.PageProperties,
+        // Protective markings travel with content (design.md §21/§12's table). Unlike
+        // space grants - which stay local because the high side decides who may read its
+        // replica - a marking is a property OF the content: a page that is SECRET on low
+        // is SECRET wherever it lands, and letting the high side rediscover that for
+        // itself would be exactly the "arrived unmarked" hole this event closes.
+        PageMarkingSetEvent => SyncEventType.PageMarking,
         AttachmentAddedEvent => SyncEventType.Attachment,
         AttachmentDeletedEvent => SyncEventType.Attachment,
         _ => null,
@@ -190,6 +197,7 @@ internal static class SyncOutboxWriter
         LabelDetachedEvent e => e.SpaceKey,
         PagePropertySetEvent e => e.SpaceKey,
         PagePropertyRemovedEvent e => e.SpaceKey,
+        PageMarkingSetEvent e => e.SpaceKey,
         AttachmentAddedEvent e => e.SpaceKey,
         AttachmentDeletedEvent e => e.SpaceKey,
         _ => null,
@@ -241,6 +249,28 @@ internal static class SyncOutboxWriter
             new { pageId = e.PageId, key = e.Key, value = e.Value, action = "set" }, PayloadOptions),
         PagePropertyRemovedEvent e => JsonSerializer.Serialize(
             new { pageId = e.PageId, key = e.Key, value = (string?)null, action = "remove" }, PayloadOptions),
+
+        // design.md §21. The level crosses as its WIRE NAME (OFFICIAL_SENSITIVE, not the
+        // C# spelling and not the tinyint), so a future renumbering of the enum cannot
+        // silently re-rank a bundle already sitting on a transfer disk. Only the AFTER
+        // state travels: sync replays state, and the receiving instance's own audit log
+        // records what it applied - the before/after pair exists for the LOW side's
+        // reviewer, in the low side's audit table, which never crosses (§12).
+        //
+        // The country set crosses verbatim, in canonical order. The receiving instance
+        // may well have no matching nationality vocabulary registered, and that is
+        // handled the §12 way rather than by dropping the caveat: an unrecognised country
+        // matches no principal, so the page arrives MORE restricted, exactly as "a
+        // group/attribute unknown on high matches nobody" already works for restrictions.
+        // Dropping it would be the one unsafe direction.
+        PageMarkingSetEvent e => JsonSerializer.Serialize(
+            new
+            {
+                pageId = e.PageId,
+                level = ProtectiveMarking.LevelWireName(e.After.Level),
+                eyesOnly = e.After.EyesOnly,
+            },
+            PayloadOptions),
 
         AttachmentAddedEvent e => SerializeAttachment(RequireTrackedAttachment(db, e.AttachmentId)),
         AttachmentDeletedEvent e => SerializeAttachment(RequireTrackedAttachment(db, e.AttachmentId)),

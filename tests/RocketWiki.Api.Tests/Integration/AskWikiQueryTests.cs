@@ -70,7 +70,8 @@ public sealed class AskWikiQueryTests(AskWikiApiFixture fixture) : IClassFixture
     }
 
     private async Task<Page> SeedPageAsync(
-        Space space, string slug, string title, string content, string? restrictToGroup = null)
+        Space space, string slug, string title, string content, string? restrictToGroup = null,
+        ClassificationLevel? markAs = null)
     {
         using var scope = fixture.Factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
@@ -87,6 +88,14 @@ public sealed class AskWikiQueryTests(AskWikiApiFixture fixture) : IClassFixture
             UpdatedAtUtc = now,
         };
         db.Pages.Add(page);
+
+        // design.md §21: an explicit marking, when the test is about classification.
+        // Otherwise RocketWikiDbContext materializes OFFICIAL, which is what every other
+        // test in this class assumes.
+        if (markAs is { } level)
+        {
+            db.PageMarkings.Add(new PageMarking { PageId = page.Id, Level = level, SetAtUtc = now });
+        }
 
         if (restrictToGroup is not null)
         {
@@ -174,6 +183,69 @@ public sealed class AskWikiQueryTests(AskWikiApiFixture fixture) : IClassFixture
         var raw = response.RootElement.GetRawText();
         Assert.DoesNotContain(restrictedSentinel, raw);
         Assert.DoesNotContain("Controlled Overrides", raw);
+    }
+
+    [Fact]
+    public async Task AskWiki_OverClassifiedPage_NeverReachesTheModel_AndIsNeverCited()
+    {
+        // design.md §21: the same adversarial proof as the restriction case above, for a
+        // protective marking. Retrieval runs under the caller's principal, so a page above
+        // their clearance is not merely omitted from the citation list - its content never
+        // enters the prompt, which is the only place a summarizer could leak it from.
+        fixture.ChatClient.Reset();
+        var term = $"zzterm{Guid.NewGuid():N}"[..16];
+        var markedSentinel = $"ZZMARKED{Guid.NewGuid():N}ZZ";
+
+        var (space, _) = await SeedSpaceAsync();
+        var filler = string.Join(" ", Enumerable.Repeat("procedural filler text", 120));
+        var publicPage = await SeedPageAsync(space, "public-marked", "Umbilical Ops Guide",
+            $"# Procedures\n\n{filler}\n\n## Purge\n\nThe {term} purge interval is 90 seconds.");
+        var classifiedPage = await SeedPageAsync(space, "classified", "Controlled Overrides (classified)",
+            $"# Overrides\n\n{markedSentinel} override values for {term} operations.",
+            markAs: ClassificationLevel.Secret);
+
+        var callsBefore = fixture.ChatClient.CallCount;
+        // No clearance claim at all: §21's fail-closed default admits OFFICIAL only.
+        using var response = await AskAsync(CreateUserClient(), term);
+
+        var ask = response.RootElement.GetProperty("data").GetProperty("askWiki");
+        var citedIds = ask.GetProperty("citations").EnumerateArray()
+            .Select(c => c.GetProperty("pageId").GetString()).ToList();
+        Assert.Contains(publicPage.Id.ToString(), citedIds);
+        Assert.DoesNotContain(classifiedPage.Id.ToString(), citedIds);
+
+        Assert.True(fixture.ChatClient.CallCount > callsBefore);
+        var transcript = fixture.ChatClient.Transcript;
+        Assert.Contains(term, transcript); // non-vacuous: the public page did travel
+        Assert.DoesNotContain(markedSentinel, transcript);
+        Assert.DoesNotContain("Controlled Overrides (classified)", transcript); // not even the title
+        Assert.DoesNotContain(markedSentinel, response.RootElement.GetRawText());
+    }
+
+    [Fact]
+    public async Task AskWiki_ClearedAsker_RetrievesAndCitesTheClassifiedPage()
+    {
+        // The other half: the same pipeline hands the page over once the asker's clearance
+        // admits it, proving the absence above was the clearance gate and not the
+        // assistant simply never loading the content.
+        fixture.ChatClient.Reset();
+        var term = $"zzterm{Guid.NewGuid():N}"[..16];
+        var markedSentinel = $"ZZMARKED{Guid.NewGuid():N}ZZ";
+
+        var (space, _) = await SeedSpaceAsync();
+        var classifiedPage = await SeedPageAsync(space, "classified-cleared", "Controlled Overrides",
+            $"# Overrides\n\n{markedSentinel} override values for {term} operations.",
+            markAs: ClassificationLevel.Secret);
+
+        var client = fixture.Factory.CreateClient();
+        client.SetTestUser(sub: $"asker-{Guid.NewGuid():N}", clearance: "SECRET");
+        using var response = await AskAsync(client, term);
+
+        Assert.Contains(markedSentinel, fixture.ChatClient.Transcript);
+        Assert.Contains(
+            classifiedPage.Id.ToString(),
+            response.RootElement.GetProperty("data").GetProperty("askWiki").GetProperty("citations")
+                .EnumerateArray().Select(c => c.GetProperty("pageId").GetString()));
     }
 
     [Fact]

@@ -117,6 +117,7 @@ public class CoreTelemetryTests
             [SpaceGrant(SpaceRole.Viewer, """{ "everyone": true }""")],
             [],
             isReplicaSpace: false,
+            ProtectiveMarking.Baseline,
             Principal());
 
         Assert.True(permission.CanView);
@@ -139,6 +140,7 @@ public class CoreTelemetryTests
             [SpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }""")],
             [],
             isReplicaSpace: true,
+            ProtectiveMarking.Baseline,
             Principal());
 
         var check = Assert.Single(checks.GetMeasurementSnapshot());
@@ -153,10 +155,49 @@ public class CoreTelemetryTests
     [InlineData("no-space-role", "no-space-role")]
     [InlineData("replica-read-only", "replica-read-only")]
     [InlineData("insufficient-space-role", "insufficient-space-role")]
+    // design.md §21's marking reasons collapse the same way, and the level is dropped
+    // rather than kept as a bounded four-value tag: a "denials by classification level"
+    // series would be a census of how much SECRET and TOP SECRET content exists and how
+    // hard it is being probed, published to whatever audience the dashboard has.
+    [InlineData("classification:top_secret", "classification")]
+    [InlineData("classification:official_sensitive", "classification")]
+    [InlineData("caveat:eyes_only", "caveat")]
     [InlineData(null, "none")]
     [InlineData("something-new-nobody-mapped", "other")]
     public void CategorizeDenialReason_CollapsesToABoundedVocabulary(string? reason, string expected) =>
         Assert.Equal(expected, CoreTelemetry.CategorizeDenialReason(reason));
+
+    [Fact]
+    public void CategorizeDenialReason_NeverLetsAMarkingLevelOrCountryReachAMetricTag()
+    {
+        // The countries never appear in a reason string at all (ClearanceGate.EyesOnlyReason
+        // is a constant), and the level is collapsed away here. Together that is what keeps
+        // the marking's contents out of every metric dimension (design.md §15).
+        Assert.Equal("classification", CoreTelemetry.CategorizeDenialReason("classification:top_secret"));
+        Assert.DoesNotContain("secret", CoreTelemetry.CategorizeDenialReason("classification:top_secret"));
+        Assert.DoesNotContain("GB", CoreTelemetry.CategorizeDenialReason("caveat:eyes_only"));
+    }
+
+    [Fact]
+    public void PermissionCheck_OnAClassificationDenial_TagsOnlyTheCollapsedCategory()
+    {
+        using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
+
+        EffectivePermissionCalculator.Compute(
+            [SpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }""")],
+            [],
+            isReplicaSpace: false,
+            ProtectiveMarking.Create(ClassificationLevel.TopSecret, ["SENTINELCOUNTRY"]),
+            Principal());
+
+        var check = Assert.Single(checks.GetMeasurementSnapshot());
+        Assert.Equal("classification", check.Tags[CoreTelemetry.DenialReasonTag]);
+        foreach (var tag in check.Tags)
+        {
+            Assert.DoesNotContain("SENTINELCOUNTRY", $"{tag.Key}={tag.Value}", StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("top_secret", $"{tag.Key}={tag.Value}", StringComparison.OrdinalIgnoreCase);
+        }
+    }
 
     [Fact]
     public void AuditCounter_TagsTheActionOutcomeChannelAndWriter()

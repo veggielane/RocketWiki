@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
@@ -261,6 +262,9 @@ public class BundleImportService : IBundleImportService
             case SyncEventType.PageProperties:
                 await ApplyPagePropertyAsync(root, cancellationToken);
                 break;
+            case SyncEventType.PageMarking:
+                await ApplyPageMarkingAsync(root.GetProperty("pageId").GetGuid(), root, cancellationToken);
+                break;
             case SyncEventType.Attachment:
                 await ApplyAttachmentAsync(root, archive, cancellationToken);
                 break;
@@ -291,6 +295,110 @@ public class BundleImportService : IBundleImportService
         page.IsDeleted = false; // an upsert always represents live content
 
         await ApplyPageRevisionsAsync(pageId, payload, cancellationToken);
+        await ApplyPageMarkingAsync(pageId, payload, cancellationToken);
+    }
+
+    /// <summary>
+    /// design.md §21: applies a page's protective marking, from a <c>marking</c> object
+    /// on a PageUpsert payload or from a standalone PageMarking event's payload (the same
+    /// shape, which is why one method serves both). Idempotent: re-applying the same
+    /// marking overwrites with identical values, and the country set is replaced
+    /// wholesale so a removed country really goes.
+    ///
+    /// <para><b>A page can never land on the high side unmarked.</b> Three cases, and the
+    /// distinction between them is the whole point:</para>
+    /// <list type="bullet">
+    /// <item>The payload carries a marking — apply it.</item>
+    /// <item>No marking in the payload and no local row (a format-1 bundle, or one
+    /// produced before §21 shipped) — create the row at <b>TOP SECRET</b>. This is the
+    /// fail-closed direction and it is deliberately loud in its consequences: content
+    /// arriving from a lower instance without a declared classification is exactly the
+    /// case where guessing OFFICIAL would be a cross-boundary disclosure, so it arrives
+    /// visible to nobody but the highest-cleared and a high-side admin reviews and marks
+    /// it down.</item>
+    /// <item>No marking in the payload but a local row already exists — leave it alone. A
+    /// legacy incremental bundle must not silently re-classify a page the high side
+    /// already holds a marking for, in either direction.</item>
+    /// </list>
+    ///
+    /// <para>An unparseable level is treated as absent, not as OFFICIAL — the same
+    /// fail-closed reading a malformed rule gets (§6.3).</para>
+    /// </summary>
+    private async Task ApplyPageMarkingAsync(Guid pageId, JsonElement payload, CancellationToken cancellationToken)
+    {
+        var declared = ParseMarking(payload);
+
+        var marking = FindLocal<PageMarking>(m => m.PageId == pageId)
+            ?? await _db.PageMarkings.Include(m => m.Countries).FirstOrDefaultAsync(m => m.PageId == pageId, cancellationToken);
+
+        if (declared is null && marking is not null)
+        {
+            return; // legacy payload, already-marked page - never re-classify from silence
+        }
+
+        var applied = declared ?? ProtectiveMarking.FailClosed;
+
+        if (marking is null)
+        {
+            marking = new PageMarking { PageId = pageId };
+            _db.PageMarkings.Add(marking);
+        }
+
+        marking.Level = applied.Level;
+        marking.SetAtUtc = DateTime.UtcNow;
+        marking.SetByUserId = null; // applied by sync, no local actor
+
+        var existingCountries = FindLocalAll<PageMarkingCountry>(c => c.PageId == pageId)
+            .Concat(marking.Countries)
+            .Distinct()
+            .ToList();
+        foreach (var stale in existingCountries.Where(c => !applied.EyesOnly.Contains(c.CountryValue, StringComparer.Ordinal)))
+        {
+            marking.Countries.Remove(stale);
+            _db.PageMarkingCountries.Remove(stale);
+        }
+
+        var held = marking.Countries.Select(c => c.CountryValue).ToHashSet(StringComparer.Ordinal);
+        foreach (var country in applied.EyesOnly.Where(c => !held.Contains(c)))
+        {
+            marking.Countries.Add(new PageMarkingCountry { PageId = pageId, CountryValue = country });
+        }
+    }
+
+    /// <summary>The <c>marking</c> object as exported by BundleExportService, or null when
+    /// the payload carries none (or carries one this instance cannot make sense of).</summary>
+    private static ProtectiveMarking? ParseMarking(JsonElement payload)
+    {
+        var element = payload;
+        if (payload.TryGetProperty("marking", out var nested))
+        {
+            if (nested.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            element = nested;
+        }
+
+        if (!element.TryGetProperty("level", out var levelElement) || levelElement.ValueKind != JsonValueKind.String
+            || !ClearanceGate.TryParseLevel(levelElement.GetString(), out var level))
+        {
+            return null;
+        }
+
+        var countries = new List<string>();
+        if (element.TryGetProperty("eyesOnly", out var eyesOnly) && eyesOnly.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var country in eyesOnly.EnumerateArray())
+            {
+                if (country.ValueKind == JsonValueKind.String && country.GetString() is { } value)
+                {
+                    countries.Add(value);
+                }
+            }
+        }
+
+        return ProtectiveMarking.Create(level, countries);
     }
 
     /// <summary>
@@ -625,6 +733,12 @@ public class BundleImportService : IBundleImportService
             case SyncEventType.Comment:
             case SyncEventType.Labels:
             case SyncEventType.PageProperties:
+            // A marking change is a change to the page, so watchers hear about it and the
+            // page is reindexed - the same treatment a label or property change gets.
+            // Note this is a NOTIFICATION decision, not an access one: the recipients are
+            // still canView-filtered downstream, so a page that just became invisible to
+            // a watcher does not ping them about it.
+            case SyncEventType.PageMarking:
             case SyncEventType.Attachment:
                 affectedPages[root.GetProperty("pageId").GetGuid()] = spaceId;
                 break;
@@ -741,6 +855,16 @@ public class BundleImportService : IBundleImportService
     /// </summary>
     private T? FindLocal<T>(Func<T, bool> predicate) where T : class =>
         _db.ChangeTracker.Entries<T>().Select(e => e.Entity).FirstOrDefault(predicate);
+
+    /// <summary>Every tracked entity matching the predicate, not just the first — needed
+    /// where a page owns a SET of rows in this unit of work (marking countries) rather
+    /// than one.</summary>
+    private List<T> FindLocalAll<T>(Func<T, bool> predicate) where T : class =>
+        _db.ChangeTracker.Entries<T>()
+            .Where(e => e.State != EntityState.Deleted)
+            .Select(e => e.Entity)
+            .Where(predicate)
+            .ToList();
 
     private async Task<Page?> FindPageAsync(Guid pageId, CancellationToken cancellationToken) =>
         FindLocal<Page>(p => p.Id == pageId)

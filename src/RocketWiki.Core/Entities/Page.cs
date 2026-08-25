@@ -42,6 +42,16 @@ public class Page
     /// <summary>Structured key/value metadata (design.md §20) — never page content, never in the Markdown.</summary>
     public ICollection<PageProperty> PageProperties { get; set; } = new List<PageProperty>();
 
+    /// <summary>
+    /// This page's protective marking (design.md §21). Every page has exactly one;
+    /// nullable here only because a navigation reference is null until it is loaded, and
+    /// because a row read from a database that somehow lacks one must be representable
+    /// rather than crash. The read path treats a missing marking as TOP SECRET
+    /// (<c>ProtectiveMarking.FailClosed</c>), and RocketWikiDbContext materializes one
+    /// for any page inserted without it, so "absent" is a diagnosis, never a mode.
+    /// </summary>
+    public PageMarking? Marking { get; set; }
+
     /// <summary>Page-restriction AccessRules attached directly to this page (not ancestors).</summary>
     public ICollection<AccessRule> Restrictions { get; set; } = new List<AccessRule>();
 

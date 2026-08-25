@@ -6,7 +6,7 @@ namespace RocketWiki.Api.Tests.Integration;
 /// <summary>
 /// Friendly wrapper over <see cref="TestAuthHandler"/>'s header encoding, so
 /// tests describe a fake principal the way design.md §6.1 describes one
-/// (sub/email/name plus groups/nationality claims) instead of building
+/// (sub/email/name plus groups/nationality/clearance claims) instead of building
 /// <see cref="System.Security.Claims.Claim"/> lists by hand.
 /// </summary>
 public static class TestUserHttpClientExtensions
@@ -18,9 +18,10 @@ public static class TestUserHttpClientExtensions
         string? name = null,
         IEnumerable<string>? groups = null,
         IEnumerable<string>? nationality = null,
-        IEnumerable<string>? roles = null)
+        IEnumerable<string>? roles = null,
+        string? clearance = null)
     {
-        var encoded = BuildEncodedClaimsHeaderValue(sub, email, name, groups, nationality, roles);
+        var encoded = BuildEncodedClaimsHeaderValue(sub, email, name, groups, nationality, roles, clearance);
 
         client.DefaultRequestHeaders.Remove(TestAuthHandler.ClaimsHeaderName);
         client.DefaultRequestHeaders.Add(TestAuthHandler.ClaimsHeaderName, encoded);
@@ -43,7 +44,8 @@ public static class TestUserHttpClientExtensions
         string? name = null,
         IEnumerable<string>? groups = null,
         IEnumerable<string>? nationality = null,
-        IEnumerable<string>? roles = null)
+        IEnumerable<string>? roles = null,
+        string? clearance = null)
     {
         var claims = new List<TestAuthHandler.TestClaim> { new("sub", sub) };
 
@@ -75,6 +77,16 @@ public static class TestUserHttpClientExtensions
         foreach (var role in roles ?? [])
         {
             claims.Add(new TestAuthHandler.TestClaim("roles", role));
+        }
+
+        // design.md §21: the protective-marking clearance attribute. Claim type matches
+        // the "clearance" protocol mapper in the same realm file. Left ABSENT when null
+        // rather than emitted as an empty string — "no clearance claim at all" is exactly
+        // the case §21's fail-closed default (OFFICIAL and nothing above) is written for,
+        // and a blank value would be a different code path.
+        if (clearance is not null)
+        {
+            claims.Add(new TestAuthHandler.TestClaim("clearance", clearance));
         }
 
         var json = JsonSerializer.Serialize(claims);

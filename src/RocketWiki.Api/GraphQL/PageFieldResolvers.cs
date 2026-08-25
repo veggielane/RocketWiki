@@ -2,6 +2,7 @@ using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -190,6 +191,23 @@ public sealed class PageFieldResolvers
     public async Task<IReadOnlyList<PagePropertyValue>> GetPropertiesAsync(
         [Parent] Page page, PagePropertyValuesByPageIdDataLoader propertyLoader, CancellationToken cancellationToken) =>
         await propertyLoader.LoadAsync(page.Id, cancellationToken) ?? [];
+
+    /// <summary>
+    /// The page's protective marking (design.md §21). Visible to anyone who can view the
+    /// page — which, since §21, means anyone the marking itself already admitted; showing
+    /// a cleared reader why they were cleared is not a leak, and a page whose banner
+    /// omitted its own classification would be worse than useless to an author deciding
+    /// what to write in it. Batched through a DataLoader so a list of pages costs one
+    /// query.
+    /// </summary>
+    public async Task<PageMarkingView> GetMarkingAsync(
+        [Parent] Page page, PageMarkingByPageIdDataLoader markingLoader, CancellationToken cancellationToken) =>
+        // The loader fills every requested key, so the null branch is unreachable - but a
+        // NonNull GraphQL field must not be able to throw a nullability surprise, and the
+        // one honest fallback for "no marking" is the same TOP SECRET every other read
+        // path substitutes (design.md §21), never a blank badge.
+        await markingLoader.LoadAsync(page.Id, cancellationToken)
+        ?? PageMarkingView.From(ProtectiveMarking.FailClosed);
 
     /// <summary>See <see cref="ViewerWatchesPageDataLoader"/> for the viewer-relative
     /// contract and why this emits no audit row of its own (the caller's own

@@ -92,7 +92,7 @@ public class EffectivePermissionCalculatorTests
         var principal = MakePrincipal();
         var grants = new[] { SpaceGrant(SpaceRole.Viewer, """{ "group": "engineering" }""") };
 
-        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.False(result.CanView);
         Assert.False(result.CanEdit);
@@ -104,7 +104,7 @@ public class EffectivePermissionCalculatorTests
         var principal = MakePrincipal(groups: new[] { "engineering" });
         var grants = new[] { SpaceGrant(SpaceRole.Viewer, """{ "group": "engineering" }""") };
 
-        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.True(result.CanView);
         Assert.False(result.CanEdit);
@@ -117,7 +117,7 @@ public class EffectivePermissionCalculatorTests
         var principal = MakePrincipal(groups: new[] { "engineering" });
         var grants = new[] { SpaceGrant(SpaceRole.Editor, """{ "group": "engineering" }""") };
 
-        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.True(result.CanView);
         Assert.True(result.CanEdit);
@@ -136,7 +136,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(pageId, PageAction.View, """{ "group": "top-secret" }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.False(result.CanView);
         Assert.False(result.CanEdit);
@@ -158,7 +158,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(childPageId, PageAction.View, """{ "everyone": true }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.False(result.CanView);
     }
@@ -174,7 +174,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(pageId, PageAction.Edit, """{ "group": "senior-engineering" }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.True(result.CanView);
         Assert.False(result.CanEdit);
@@ -192,7 +192,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(pageId, PageAction.Edit, """{ "group": "senior-engineering" }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.True(result.CanView);
         Assert.True(result.CanEdit);
@@ -208,7 +208,7 @@ public class EffectivePermissionCalculatorTests
         var principal = MakePrincipal(groups: new[] { "engineering" });
         var grants = new[] { SpaceGrant(SpaceRole.SpaceAdmin, """{ "group": "engineering" }""") };
 
-        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: true, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: true, ProtectiveMarking.Baseline, principal);
 
         Assert.True(result.CanView);
         Assert.False(result.CanEdit);
@@ -226,7 +226,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(pageId, PageAction.View, """{ "group": "top-secret" }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: true, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: true, ProtectiveMarking.Baseline, principal);
 
         Assert.False(result.CanView);
         Assert.False(result.CanEdit);
@@ -250,7 +250,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(pageId, PageAction.View, """{ "attr": "nationality", "in": ["NZ", "US"] }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.False(result.CanView);
         Assert.False(result.CanEdit);
@@ -269,7 +269,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(pageId, PageAction.View, """{ "attr": "nationality", "in": ["NZ", "US"] }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.False(result.CanView);
     }
@@ -287,7 +287,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(pageId, PageAction.View, """{ "group": "clearance-level-9" }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.False(result.CanView);
     }
@@ -303,7 +303,7 @@ public class EffectivePermissionCalculatorTests
             PageRestriction(pageId, PageAction.View, """{ "not": { "group": "engineering" } }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, restrictions, isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.False(result.CanView);
         Assert.False(result.CanEdit);
@@ -319,7 +319,7 @@ public class EffectivePermissionCalculatorTests
             SpaceGrant(SpaceRole.Viewer, """{ "group": "engineering" }"""),
         };
 
-        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, principal);
+        var result = EffectivePermissionCalculator.Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, ProtectiveMarking.Baseline, principal);
 
         Assert.True(result.CanView);
         Assert.False(result.CanEdit); // only the valid Viewer grant counted, not the malformed SpaceAdmin one

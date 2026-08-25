@@ -214,6 +214,18 @@ public sealed class NotificationDispatcher(
             .Where(r => r.Kind == AccessRuleKind.PageRestriction &&
                 r.PageId != null && (r.PageId == page.Id || ancestorIds.Contains(r.PageId.Value)))
             .ToListAsync(cancellationToken);
+
+        // design.md §21: fan-out gates each connected recipient on canView, so it needs
+        // the page's protective marking like every other read path. This method assembles
+        // its own authorization inputs rather than using PermissionContextLoader - the
+        // loader is internal to RocketWiki.Data and this dispatcher lives in
+        // RocketWiki.Api - which is exactly what makes it the one place a new view gate
+        // has to be added by hand. Loaded once for the whole fan-out, not per recipient;
+        // a missing row reads as TOP SECRET, the same substitution the loader makes.
+        var markingRow = await db.PageMarkings.AsNoTracking()
+            .Include(m => m.Countries)
+            .FirstOrDefaultAsync(m => m.PageId == page.Id, cancellationToken);
+        var marking = markingRow?.ToMarking() ?? ProtectiveMarking.FailClosed;
         var isReplica = space is not null && space.IsReplicaOf(localInstanceId);
 
         // Split the (already precedence-resolved) candidate set by connectivity. The
@@ -252,7 +264,7 @@ public sealed class NotificationDispatcher(
 
         foreach (var (recipientId, recipientType, principal) in connected)
         {
-            var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplica, principal);
+            var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplica, marking, principal);
             if (!permission.CanView)
             {
                 Bump(skippedNotViewable, recipientType);
