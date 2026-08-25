@@ -2477,6 +2477,18 @@ for free rather than needing its own plumbing.
   is distinguishable from a not-found, and that is exactly the §6.7 leak the
   denial design exists to prevent.
 
+  **The SPA does not match this exactly, on purpose — change both together.** Its
+  affordance ladder (`web/src/markings/clearance.ts`) ranks an unknown level
+  *above* TOP SECRET rather than normalizing it *to* TOP SECRET, so a TOP SECRET
+  principal is offered the page here and not there. The gap is only reachable when
+  the server knows a level the client does not, and on that path the affordance
+  should be the stricter side: a greyed-out level the server would have allowed
+  costs a click, while offering one it refuses is the failure the affordance
+  exists to prevent. Both sides pin their own direction by test. If this
+  normalization is ever revisited, revisit that one in the same change — the two
+  are deliberately a notch apart, which is exactly the kind of difference someone
+  later "fixes" into agreement without knowing it was chosen.
+
 ### 21.4 The eyes-only caveat
 
 A marking may carry a **set of countries**; a principal must hold at least one
