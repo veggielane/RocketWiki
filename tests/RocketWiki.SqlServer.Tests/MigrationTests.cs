@@ -66,7 +66,7 @@ public sealed class MigrationTests : SqlServerTestBase
             INSERT INTO Users (Id, Subject, DisplayName, AttributesJson, IsExternal, CreatedAtUtc, LastSeenAtUtc)
             VALUES ('{{userId}}', 'backfill-sub', 'Backfill', '{}', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
 
-            INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, IsArchived, LastOutboxSequence, CreatedAtUtc, CreatedByUserId)
+            INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, IsDeleted, LastOutboxSequence, CreatedAtUtc, CreatedByUserId)
             VALUES ('{{spaceId}}', 'BFL', 'Backfill Space', 'local-instance', 0, 0, 0, SYSUTCDATETIME(), '{{userId}}');
 
             INSERT INTO Pages (Id, SpaceId, AncestorPath, Slug, Title, SortOrder, CurrentRevisionNumber, CurrentContent, IsDeleted, CreatedAtUtc, UpdatedAtUtc)
