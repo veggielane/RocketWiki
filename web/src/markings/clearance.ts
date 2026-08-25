@@ -64,6 +64,11 @@ export type EveryLevelIsPlaced = AssertNever<Exclude<ClassificationLevel, (typeo
  * path an affordance should be the stricter side — greying out a level the
  * server might have allowed costs a refused click, while offering one it
  * refuses is the failure this module exists to prevent.
+ *
+ * **design.md §21.3 records this divergence from the other side** and asks that
+ * the two be revisited in the same change. That paragraph cites this file; this
+ * is the pointer back, so whoever starts here finds the shared record rather
+ * than re-deriving which direction is correct.
  */
 export function markingLevelRank(level: ClassificationLevel): number {
   const index = CLASSIFICATION_LADDER.indexOf(level)
