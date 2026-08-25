@@ -22,16 +22,52 @@ import type { AskWikiQuery } from '../../graphql/generated/graphql'
 
 type Payload = AskWikiQuery['askWiki']
 
+/**
+ * Two sources at different classifications (design.md §21.13's first rule:
+ * every individual result carries its own marking), so a test can tell the
+ * per-citation badges apart from the answer's aggregate.
+ */
 const CITATIONS = [
-  { pageId: 'p1', title: 'Turbopump overview', headingPath: ['Design', 'Impeller'], anchorId: 'impeller' },
-  { pageId: 'p2', title: 'Igniter spec', headingPath: [] as string[], anchorId: 'igniter-spec' },
-]
+  {
+    pageId: 'p1',
+    title: 'Turbopump overview',
+    headingPath: ['Design', 'Impeller'],
+    anchorId: 'impeller',
+    marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+  },
+  {
+    pageId: 'p2',
+    title: 'Igniter spec',
+    headingPath: [] as string[],
+    anchorId: 'igniter-spec',
+    marking: {
+      level: 'SECRET',
+      levelName: 'SECRET',
+      eyesOnly: ['GB'],
+      prefix: 'UK',
+      label: 'UK SECRET [GB EYES ONLY]',
+    },
+  },
+] as const
 
-const answered = (answer: string, citations = CITATIONS): { askWiki: Payload } => ({
-  askWiki: { answer, citations, unavailable: null },
+/**
+ * The conjunctive form only an aggregate can take (§21.13): distinct source
+ * eyes-only sets are LISTED, never unioned or intersected. It is one opaque
+ * server-built string here and the SPA must render it byte-for-byte.
+ */
+const CONJUNCTIVE = { level: 'SECRET', label: 'UK SECRET [GB EYES ONLY] [US EYES ONLY]' } as const
+
+const answered = (
+  answer: string,
+  citations: readonly (typeof CITATIONS)[number][] = CITATIONS,
+  aggregateMarking: Payload['aggregateMarking'] = { level: 'SECRET', label: 'UK SECRET [GB EYES ONLY]' },
+): { askWiki: Payload } => ({
+  askWiki: { answer, citations: citations as unknown as Payload['citations'], unavailable: null, aggregateMarking },
 })
 const unavailable = (reason: NonNullable<Payload['unavailable']>): { askWiki: Payload } => ({
-  askWiki: { answer: null, citations: [], unavailable: reason },
+  // §21.13: nothing was shown, so there is nothing to mark — the server sends
+  // null, not a substitute level.
+  askWiki: { answer: null, citations: [], unavailable: reason, aggregateMarking: null },
 })
 
 function renderAsk(
@@ -166,6 +202,110 @@ describe('AskWikiPage — ask flow', () => {
     expect(screen.getByLabelText('Ask a question')).toHaveValue('turbopump seals')
     // Prefill only — an ask is a multi-second model call, never a navigation side effect.
     expect(mock.operations).toHaveLength(0)
+  })
+})
+
+/**
+ * design.md §21.13. The failure this whole block defends against: an answer
+ * synthesized from a UK SECRET page arriving unmarked, so a cleared reader
+ * pastes it somewhere that is not. The model launders the marking off the
+ * content; the aggregate puts it back on.
+ */
+describe('AskWikiPage — the answer carries its aggregate marking', () => {
+  const rowText = (row: HTMLElement | undefined) => row?.textContent ?? ''
+
+  it('renders the aggregate above the answer body, so it travels with the text a reader copies', async () => {
+    renderAsk(() => answered('Titanium impeller [S1].'))
+    askQuestion('what is it made of?')
+    const answer = await screen.findByText(/Titanium impeller/)
+
+    const banner = document.querySelector('[data-aggregate-marking="answer-head"]')
+    expect(banner?.textContent).toContain('UK SECRET [GB EYES ONLY]')
+    // Order, not just presence: the marking must precede the prose it marks.
+    expect(banner && (banner.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy()
+  })
+
+  it('repeats the marking at the foot of the answer, as a page view does', async () => {
+    renderAsk(() => answered('Titanium.'))
+    askQuestion('q')
+    await screen.findByText('Titanium.')
+    const foot = document.querySelector('[data-aggregate-marking="answer-foot"]')
+    expect(foot?.textContent).toContain('UK SECRET [GB EYES ONLY]')
+    // Named as a repeat for a screen reader, so meeting it twice doesn't read
+    // as the answer changing classification part-way down.
+    expect(foot?.textContent).toContain('repeated at the end of this answer')
+  })
+
+  it('renders a conjunctive aggregate label verbatim — the SPA composes nothing (§21.1)', async () => {
+    // `[GB EYES ONLY] [US EYES ONLY]` is a shape the per-page marking model
+    // cannot express: a union would widen it and an intersection would empty
+    // it. Byte-for-byte is the assertion.
+    renderAsk(() => answered('Both sources agree [S1][S2].', CITATIONS, CONJUNCTIVE))
+    askQuestion('q')
+    await screen.findByText(/Both sources agree/)
+    expect(screen.getAllByText('UK SECRET [GB EYES ONLY] [US EYES ONLY]').length).toBeGreaterThan(0)
+  })
+
+  it('announces the marking with the answer, not only in the banner', async () => {
+    renderAsk(() => answered('Titanium.'))
+    askQuestion('q')
+    await screen.findByText('Titanium.')
+    // A screen-reader user who jumps to the new text would otherwise never
+    // meet the banner. Verbatim label after a fixed lead-in.
+    expect(screen.getByRole('status')).toHaveTextContent('Answer ready. Protective marking: UK SECRET [GB EYES ONLY]')
+  })
+
+  it('badges each citation with its OWN source marking, so the sensitive source is visible', async () => {
+    renderAsk(() => answered('The impeller [S1], the igniter [S2].'))
+    askQuestion('q')
+    await screen.findByText('Sources')
+    const links = screen.getAllByRole('link', { name: /^S\d / })
+    expect(rowText(links.find((l) => l.textContent?.includes('Turbopump overview')))).toContain(
+      'Classification: OFFICIAL',
+    )
+    expect(rowText(links.find((l) => l.textContent?.includes('Igniter spec')))).toContain('Classification: SECRET')
+  })
+
+  it('badges show the level only — a citation row never claims to be the whole marking', async () => {
+    renderAsk(() => answered('The impeller [S1], the igniter [S2].'))
+    askQuestion('q')
+    await screen.findByText('Sources')
+    const sources = screen.getAllByRole('link', { name: /^S\d / })
+    // The source page's caveat is enforced server-side and shown on the page
+    // itself; a row has no space for it. The only EYES ONLY text on screen is
+    // the aggregate's, which is a banner, not a row.
+    for (const row of sources) expect(row.textContent).not.toContain('EYES ONLY')
+  })
+
+  it('a null aggregate renders no banner at all — not "UNMARKED", not a placeholder', async () => {
+    // §21.13: no sources means no label. OFFICIAL would assert a judgement
+    // about content that does not exist; TOP SECRET would invent a fact.
+    renderAsk(() => answered('Answered from nothing.', [], null))
+    askQuestion('q')
+    await screen.findByText('Answered from nothing.')
+    expect(document.querySelector('[data-aggregate-marking]')).toBeNull()
+    expect(screen.queryByText(/UNMARKED|Unmarked|Not marked/)).toBeNull()
+    expect(screen.queryByText(/Protective marking/)).toBeNull()
+    // …and the announcement drops it too rather than saying nothing is marked.
+    expect(screen.getByRole('status')).toHaveTextContent('Answer ready.')
+    expect(screen.getByRole('status').textContent).not.toContain('Protective marking')
+  })
+
+  it('says what the aggregate covers, because it can out-rank every citation on screen', async () => {
+    // The aggregate spans everything that entered the model context, cited or
+    // not — without saying so, a SECRET banner over two OFFICIAL citations
+    // reads as a bug.
+    renderAsk(() => answered('Only the open source is cited [S1].', [CITATIONS[0]]))
+    askQuestion('q')
+    await screen.findByText(/Only the open source/)
+    expect(screen.getByText('Covers every page this answer drew on, including any not cited.')).toBeInTheDocument()
+  })
+
+  it('has no axe violations with a marked answer, marked citations and both banners', async () => {
+    renderAsk(() => answered('The impeller [S1], the igniter [S2].', CITATIONS, CONJUNCTIVE))
+    askQuestion('q')
+    await screen.findByText('Sources')
+    await expectNoAxeViolations()
   })
 })
 

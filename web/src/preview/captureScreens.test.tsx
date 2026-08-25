@@ -217,6 +217,9 @@ function mockClient() {
     if (name === 'SearchPages')
       return {
         search: {
+          // §21.13: over the whole permission-filtered hit set, not the three
+          // edges below it.
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [UK/US EYES ONLY]' },
           totalCount: 12,
           pageInfo: { hasNextPage: true, endCursor: 'c10' },
           edges: [
@@ -234,10 +237,13 @@ function mockClient() {
             'The igniter feed transient was masked by the telemetry filter — the unfiltered channel confirms it [S2]. ' +
             'The corrective actions are an extended pre-press hold and an unfiltered igniter-feed channel [S1].',
           citations: [
-            { pageId: 'page-1', title: 'Stage two ignition anomaly review', headingPath: ['Findings so far'], anchorId: 'findings-so-far' },
-            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed' },
+            { pageId: 'page-1', title: 'Stage two ignition anomaly review', headingPath: ['Findings so far'], anchorId: 'findings-so-far', marking: page.marking },
+            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } },
           ],
           unavailable: null,
+          // §21.13's conjunctive caveat: distinct source sets are listed, so
+          // the README shot shows the widest marking the app can render.
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [GB EYES ONLY] [US EYES ONLY]' },
         },
       }
     if (name === 'SearchFacets')

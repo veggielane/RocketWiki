@@ -21,6 +21,7 @@ import { visuallyHidden } from '@mui/utils'
 import { useClient } from 'urql'
 import {
   AskWikiDocument,
+  type AggregateMarkingFragment,
   type AskWikiQuery,
   type AskWikiQueryVariables,
   type AskWikiUnavailableReason,
@@ -29,6 +30,8 @@ import { citationHref, type AskCitation } from '../ask/answerSegments'
 import { AnswerBody } from '../ask/AnswerBody'
 import { isAskWikiMarkedNotConfigured, markAskWikiNotConfigured, useAskWikiPossiblyAvailable } from '../ask/askAvailability'
 import { describeAskUnavailable } from '../feedback/unavailableCopy'
+import { AggregateMarkingBanner } from '../markings/AggregateMarkingBanner'
+import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 
 /**
  * "Ask the wiki" (design.md §9.5) — single-question RAG over pages the
@@ -47,7 +50,18 @@ import { describeAskUnavailable } from '../feedback/unavailableCopy'
 
 type EntryResult =
   | { state: 'pending' }
-  | { state: 'answered'; answer: string; citations: AskCitation[] }
+  | {
+      state: 'answered'
+      answer: string
+      citations: AskCitation[]
+      /**
+       * §21.13's aggregate over everything that entered the model context.
+       * The server states it is non-null exactly when `answer` is; this does
+       * not lean on that. Null is carried through and renders no banner at
+       * all, because inventing a marking is worse than showing none.
+       */
+      aggregateMarking: AggregateMarkingFragment | null
+    }
   | { state: 'unavailable'; reason: AskWikiUnavailableReason }
   /** Transport-level failure reaching our own API — not a designed payload, but still retryable UX, not a raw toast. */
   | { state: 'failed' }
@@ -60,8 +74,34 @@ interface TranscriptEntry {
 
 function toResult(payload: AskWikiQuery['askWiki'] | undefined): EntryResult {
   if (payload?.unavailable != null) return { state: 'unavailable', reason: payload.unavailable }
-  if (payload?.answer != null) return { state: 'answered', answer: payload.answer, citations: payload.citations }
+  if (payload?.answer != null)
+    return {
+      state: 'answered',
+      answer: payload.answer,
+      citations: payload.citations,
+      aggregateMarking: payload.aggregateMarking ?? null,
+    }
   return { state: 'failed' }
+}
+
+/**
+ * What the page's live region says when an answer lands (design.md §21.13).
+ *
+ * A sighted reader meets a loud banner directly above the answer; a screen
+ * reader user is told "Answer ready." and then navigates to text that is
+ * several elements away from its marking, at the moment it is easiest to
+ * start reading the prose and never meet the banner at all. So the
+ * announcement carries the marking with it — the same fact, at the same
+ * moment.
+ *
+ * The label goes in VERBATIM after a fixed lead-in, exactly as
+ * MarkingBanner's own visually-hidden lead-in does: nothing is composed from
+ * level, prefix or caveat parts, and no punctuation is appended to the label
+ * itself (§21.1 — one formatter, and it is the server's).
+ */
+function answerReadyAnnouncement(marking: AggregateMarkingFragment | null): string {
+  if (marking == null) return 'Answer ready.'
+  return `Answer ready. Protective marking: ${marking.label}`
 }
 
 export function AskWikiPage() {
@@ -79,7 +119,11 @@ export function AskWikiPage() {
   // need no entry here: they render as role="alert" Alerts, which announce
   // themselves.
   const lastEntry = entries[entries.length - 1]
-  const liveMessage = busy ? 'Looking for an answer…' : lastEntry?.result.state === 'answered' ? 'Answer ready.' : ''
+  const liveMessage = busy
+    ? 'Looking for an answer…'
+    : lastEntry?.result.state === 'answered'
+      ? answerReadyAnnouncement(lastEntry.result.aggregateMarking)
+      : ''
 
   const runAsk = async (id: number, question: string) => {
     // Imperative query with the *generated* document + types: the generated
@@ -220,6 +264,15 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
     case 'answered':
       return (
         <Stack spacing={1}>
+          {/* design.md §21.13: an answer is a COMPILATION and carries the
+              classification of its most sensitive constituent. The banner
+              sits directly above the prose, with nothing between it and the
+              text it marks, because the failure this exists to prevent is
+              someone selecting the answer, pasting it somewhere less
+              protected, and the marking not coming with it. Null (no sources
+              fed the answer) renders nothing at all — AggregateMarkingBanner
+              owns that. */}
+          <AggregateMarkingBanner marking={result.aggregateMarking} placement="answer-head" />
           <AnswerBody answer={result.answer} citations={result.citations} />
           {result.citations.length > 0 && (
             <Box>
@@ -244,12 +297,28 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
                         secondary={citation.headingPath.length > 0 ? citation.headingPath.join(' › ') : undefined}
                         sx={{ my: 0 }}
                       />
+                      {/* §21.13's first rule: every individual result carries
+                          its OWN marking. The compact badge, as on a search
+                          row — a reader scanning citations needs to see which
+                          source is the sensitive one, and a list row has no
+                          space for a caveat. It is the source page's level,
+                          not the answer's aggregate, and the two can differ:
+                          the aggregate covers uncited context too, so it may
+                          legitimately out-rank every badge here. */}
+                      <MarkingLevelBadge
+                        level={citation.marking.level}
+                        levelName={citation.marking.levelName}
+                      />
                     </ListItemButton>
                   </ListItem>
                 ))}
               </List>
             </Box>
           )}
+          {/* The foot repeat, as on a page view: the marking brackets the
+              whole answer so a reader who scrolls past the head — or captures
+              only the lower half — still meets it. */}
+          <AggregateMarkingBanner marking={result.aggregateMarking} placement="answer-foot" />
         </Stack>
       )
     case 'unavailable':

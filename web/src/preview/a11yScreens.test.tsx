@@ -296,6 +296,10 @@ function mockClient() {
     if (name === 'SearchPages')
       return {
         search: {
+          // §21.13: the aggregate spans the whole permission-filtered hit set,
+          // so it legitimately out-ranks the three rows rendered here — which
+          // is exactly the state worth capturing, banner plus scope note.
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [UK/US EYES ONLY]' },
           totalCount: 12,
           pageInfo: { hasNextPage: true, endCursor: 'c10' },
           edges: [
@@ -314,10 +318,18 @@ function mockClient() {
             'The 270 ms delay traces to turbopump inlet pressure sagging below the chill-in redline [S1]. ' +
             'The igniter feed transient was masked by the telemetry filter — the unfiltered channel confirms it [S2].',
           citations: [
-            { pageId: 'page-1', title: 'Stage two ignition anomaly review', headingPath: ['Findings so far'], anchorId: 'findings-so-far' },
-            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed' },
+            { pageId: 'page-1', title: 'Stage two ignition anomaly review', headingPath: ['Findings so far'], anchorId: 'findings-so-far', marking: page.marking },
+            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } },
           ],
           unavailable: null,
+          // §21.13's conjunctive caveat — distinct source eyes-only sets are
+          // LISTED, never unioned or intersected. This is the widest marking
+          // string the app can display and it exists nowhere else in the
+          // capture set, so this is where the browser tier gets to check it
+          // for contrast and for wrapping/overflow in both themes. It also
+          // out-ranks both citation badges below it, which is the honest
+          // rendering of "the aggregate covers uncited context too".
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [GB EYES ONLY] [US EYES ONLY]' },
         },
       }
     if (name === 'SpaceTree')

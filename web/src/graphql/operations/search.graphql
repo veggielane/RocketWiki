@@ -1,5 +1,16 @@
 query SearchPages($query: String!, $spaceKey: String, $labels: [String!], $after: String) {
   search(query: $query, spaceKey: $spaceKey, labels: $labels, after: $after) {
+    # §21.13: the aggregate spans the WHOLE permission-filtered hit set — the
+    # same set `totalCount` counts — not the edges of this one page, so every
+    # page of the connection reports the same label and it never drops as you
+    # scroll. Deliberate: a per-page aggregate would make the SPA *combine*
+    # aggregates while loading more, which is the caveat-conjunction rule
+    # reimplemented in TypeScript. It also means the label can out-rank
+    # everything visible — a SECRET hit at position 95 correctly labels a
+    # screen of OFFICIAL rows — so the UI has to say what it covers.
+    aggregateMarking {
+      ...AggregateMarking
+    }
     totalCount
     pageInfo {
       hasNextPage
