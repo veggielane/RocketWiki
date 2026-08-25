@@ -391,6 +391,36 @@ Being explicit about what has and hasn't been checked, rather than letting
 **Verified by tests and CI** (the standing caveat — design.md §16 —
 applies: test-proven, never yet run against live infrastructure; each
 bullet keeps its own sharper caveat where one exists):
+- **Protective markings** (design.md §21) — every page carries a UK
+  Government classification (`OFFICIAL` < `OFFICIAL_SENSITIVE` < `SECRET` <
+  `TOP_SECRET`) plus an optional *eyes-only* set of countries it is
+  releasable to, rendered `SECRET [UK/US EYES ONLY]`. **It enforces.**
+  Effective view access is `canView AND clearanceAllows(marking,
+  principal)`, and a classification can only ever *subtract*: no space
+  grant, space-admin or instance-admin role reads around it, exactly as
+  none of them reads around a page restriction. The check sits inside the
+  one `EffectivePermissionCalculator.Compute` every read path funnels
+  through, so pages, the tree, search snippets, Ask citations, MCP,
+  attachments, comments and notifications inherit it structurally rather
+  than by remembering. A page you lack clearance for is **absent, not
+  forbidden** — byte-identical to one that doesn't exist, with the real
+  reason in the audit log. Clearance is a principal attribute from the
+  OIDC token; **absent or unrecognised clearance grants OFFICIAL and
+  nothing above** — the deliberate middle between "see everything" and an
+  outage that gets the control switched off. The eyes-only vocabulary is
+  the registered `nationality` attribute's allowed values, never an
+  invented ISO list, so both sides of the comparison speak the same
+  language. Markings cross the sync boundary with content and a page
+  cannot land on the high side unmarked. Downgrades carry their own audit
+  action so every widening is one query away.
+
+  > ⚠️ **The `AddPageMarkings` migration backfills every pre-existing page
+  > to OFFICIAL — the lowest level.** That is the pragmatic call, not the
+  > safe one: nobody has reviewed that content and it now wears a marking
+  > saying it is fine. Existing content must be reviewed and re-marked;
+  > find what is still untouched with `SELECT PageId FROM PageMarkings
+  > WHERE SetByUserId IS NULL`. Backfilling to TOP SECRET would have
+  > locked the wiki out of itself.
 - **Page properties** (design.md §20): pages carry admin-defined key/value
   metadata — `Owner`, `Review Date`, `Status` — edited on a dedicated
   properties screen, never inside the page body. Keys come from an
@@ -607,6 +637,14 @@ bullet keeps its own sharper caveat where one exists):
   run.
 
 **Not built:**
+- **No marking is set at page-creation time** (design.md §21). A new page
+  inherits its parent's marking, or OFFICIAL at the root — so a *root*
+  page created with classified content sits at OFFICIAL until someone
+  changes it. Closing this means putting the marking on the create form
+  and in `CreatePageRequest`; until then it is a procedural control, not a
+  technical one. Also not built: a "which pages are marked X" report,
+  subtree re-marking, declassification schedules, and any caveat kind
+  beyond eyes-only.
 - **Cross-page property reporting.** There is no "every page in this space
   with `Status: Draft`" query and no property facet in search — the data
   model supports one without a migration, but the query surface does not
