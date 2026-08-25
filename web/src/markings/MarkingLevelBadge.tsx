@@ -4,7 +4,17 @@ import type { ClassificationLevel } from '../graphql/generated/graphql'
 import { markingTone } from './markingTone'
 
 export interface MarkingLevelBadgeProps {
+  /** Styling only (markingTone) — nothing readable is derived from it. */
   level: ClassificationLevel
+  /**
+   * `PageMarkingView.levelName` — the server's display spelling for this
+   * level (`OFFICIAL-SENSITIVE`, `TOP SECRET`), from the same
+   * `ProtectiveMarking.LevelName` every other consumer reads.
+   *
+   * Deliberately NOT `label`: `label` is the whole marking, and the two are
+   * not interchangeable. See the component doc.
+   */
+  levelName: string
 }
 
 /**
@@ -12,23 +22,28 @@ export interface MarkingLevelBadgeProps {
  * results and the space browser's page tree — so a reader scanning a list
  * sees how sensitive each hit is without opening it (design.md §21).
  *
- * The level only, never the full label: a list row has no room for the
- * caveat, and the page's own banners are where the whole marking is read.
+ * **This shows a level, not a marking, and the distinction is load-bearing.**
+ * A list row has no space for a caveat, so a page marked
+ * `SECRET [GB EYES ONLY]` badges here as `SECRET` — informational, and short
+ * of the truth by exactly the caveat. That is tolerable only because the
+ * badge is not the control (the caveat is still enforced server-side on every
+ * read, §21.2) and because the page's own banners render the whole `label`.
+ * It is why this component takes `levelName` and has no way to accept
+ * `label`: a caller who wants to present "this page's marking" must use
+ * MarkingBanner instead, and the prop types make the wrong choice hard to
+ * reach by accident.
  *
- * **The level is rendered as its wire name, verbatim.** §21.1 keeps three
- * spellings of a level deliberately distinct — wire name, display name,
- * reason token — with "one method each, in `ProtectiveMarking`, so they
- * cannot drift". Prettifying `OFFICIAL_SENSITIVE` into `OFFICIAL-SENSITIVE`
- * here would be a second implementation of the display spelling living in
- * TypeScript, which is the drift that section exists to prevent. The wire
- * name is what the enum, the clearance claim, the sync payload and the audit
- * row all say, so it is spelled the same way here and transformed not at all.
+ * The spelling itself comes from the server (`PageMarkingView.levelName`,
+ * §21.1). Deriving `OFFICIAL-SENSITIVE` from the `OFFICIAL_SENSITIVE` wire
+ * name in TypeScript would be a second implementation of the display form,
+ * which is precisely the drift §21.1's "one method each, in
+ * `ProtectiveMarking`" exists to prevent.
  *
  * Text, not colour (WCAG 1.4.1): the tone from markingTone.ts makes a higher
  * classification louder beside the word, and carries nothing the word does
  * not already say.
  */
-export function MarkingLevelBadge({ level }: MarkingLevelBadgeProps) {
+export function MarkingLevelBadge({ level, levelName }: MarkingLevelBadgeProps) {
   return (
     <Box
       component="span"
@@ -54,7 +69,7 @@ export function MarkingLevelBadge({ level }: MarkingLevelBadgeProps) {
       <Box component="span" sx={visuallyHidden}>
         Classification:{' '}
       </Box>
-      {level}
+      {levelName}
     </Box>
   )
 }

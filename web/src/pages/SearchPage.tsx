@@ -142,7 +142,10 @@ export function SearchPage() {
                       secondary={node.snippet}
                     />
                     <Box sx={{ pt: 0.5 }}>
-                      <MarkingLevelBadge level={node.page.marking.level} />
+                      <MarkingLevelBadge
+                        level={node.page.marking.level}
+                        levelName={node.page.marking.levelName}
+                      />
                     </Box>
                   </Stack>
                 </ListItemButton>

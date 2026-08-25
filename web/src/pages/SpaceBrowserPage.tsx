@@ -62,7 +62,7 @@ interface PageTreeNode {
    * (design.md §21.9), so the badge shows the marking that decided this node
    * is visible rather than a second lookup that could disagree with it.
    */
-  marking: { level: ClassificationLevel }
+  marking: { level: ClassificationLevel; levelName: string }
   children?: PageTreeNode[]
 }
 
@@ -76,7 +76,7 @@ function PageTreeList({ nodes, depth = 0 }: { nodes: PageTreeNode[]; depth?: num
             {/* §21.5: an over-classified node is pruned with its whole
                 subtree, so every node still here is one this caller may read —
                 the badge says how sensitive it is, not whether it is reachable. */}
-            <MarkingLevelBadge level={node.marking.level} />
+            <MarkingLevelBadge level={node.marking.level} levelName={node.marking.levelName} />
             {node.hasRestrictions && (
               <Tooltip title="This page has access restrictions">
                 <LockOutlinedIcon fontSize="small" color="action" aria-label="Has access restrictions" />
