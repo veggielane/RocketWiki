@@ -3,19 +3,40 @@
 # prefix — and the first two GATE READ ACCESS. This is an access control the
 # SPA renders, not a decoration it draws.
 #
-# `label` is the whole reason this fragment asks for four fields instead of
-# composing three: §21.4/§21.12 put the ONE formatter server-side
+# `label` is the whole reason this fragment asks for the display strings
+# instead of composing them: §21.4/§21.12 put the ONE formatter server-side
 # (`ProtectiveMarking.Format`) so the SPA, an MCP client and an audit reviewer
 # read identical text — "two renderings of one marking that disagree is a
-# compliance problem, not a cosmetic one". Every banner renders `label`
-# verbatim. `level`/`eyesOnly`/`prefix` exist for the CONTROL (they are what
-# setPageMarking replaces) and for the compact list badge, never to be
-# reassembled into a display string.
+# compliance problem, not a cosmetic one".
+#
+# `label` and `levelName` are NOT interchangeable and the difference is not
+# cosmetic: `label` is the WHOLE marking, `levelName` is only its level
+# (§21.1's display spelling — `OFFICIAL-SENSITIVE`, not the `OFFICIAL_SENSITIVE`
+# wire name). Rendering `levelName` where a marking is claimed silently drops
+# the caveat, so a page released only to GB nationals would read as plain
+# SECRET. The rule this fragment exists to keep: **anything presenting "this
+# page's marking" renders `label`; `levelName` is only for surfaces with no
+# room for one** — a one-word list badge. `level`/`eyesOnly`/`prefix` are the
+# machine values `setPageMarking` replaces, never display.
 fragment PageMarking on PageMarkingView {
   level
+  levelName
   eyesOnly
   prefix
   label
+}
+
+# The picker's vocabulary (§21.1). A picker holds no marking, so it cannot use
+# `levelName` — it has to offer all four levels before one is chosen, and
+# hard-coding their spellings here would put a second implementation of the
+# display form in TypeScript, which is exactly what §21.1's "one method each"
+# forbids. Returned in SCHEME ORDER, least sensitive first, so the control
+# renders the list as given and never encodes that OFFICIAL sorts below SECRET.
+query ClassificationScheme {
+  classificationScheme {
+    level
+    name
+  }
 }
 
 # §21.6: one mutation replaces the whole marking — level and country set

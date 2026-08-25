@@ -34,6 +34,7 @@ const basePage = {
   // legal no-prefix marking.
   marking: {
     level: 'OFFICIAL' as string,
+    levelName: 'OFFICIAL' as string,
     eyesOnly: [] as string[],
     prefix: 'UK' as string | null,
     label: 'UK OFFICIAL',
@@ -223,7 +224,13 @@ describe('PageViewPage protective marking (design.md §21)', () => {
   it('shows the marking at the top AND the bottom, both the same string', async () => {
     renderPage({
       pageOverrides: {
-        marking: { level: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
+        marking: {
+          level: 'SECRET',
+          levelName: 'SECRET',
+          eyesOnly: ['UK', 'US'],
+          prefix: 'UK',
+          label: 'UK SECRET [UK/US EYES ONLY]',
+        },
       },
     })
     await screen.findByRole('heading', { name: 'Runbook' })
@@ -242,7 +249,9 @@ describe('PageViewPage protective marking (design.md §21)', () => {
     // A marking with no prefix reads as the bare level, with no leading space
     // and no "UK" invented for it (design.md §21.12).
     renderPage({
-      pageOverrides: { marking: { level: 'TOP_SECRET', eyesOnly: [], prefix: null, label: 'TOP SECRET' } },
+      pageOverrides: {
+        marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: [], prefix: null, label: 'TOP SECRET' },
+      },
     })
     await screen.findByRole('heading', { name: 'Runbook' })
     expect(document.querySelector('[data-marking-placement="head"]')?.textContent).toBe(

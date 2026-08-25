@@ -26,7 +26,13 @@ const baseRegistry = [
 ]
 
 /** design.md §21.5: no page is unmarked, so the staged page always carries one. */
-const baseMarking = { level: 'OFFICIAL', eyesOnly: [] as string[], prefix: 'UK', label: 'UK OFFICIAL' }
+const baseMarking = {
+  level: 'OFFICIAL',
+  levelName: 'OFFICIAL',
+  eyesOnly: [] as string[],
+  prefix: 'UK',
+  label: 'UK OFFICIAL',
+}
 
 interface Options {
   canEdit?: boolean
@@ -69,6 +75,15 @@ function renderPage(options: Options = {}) {
       }
     if (name === 'RuleVocabulary')
       return { groups: [], attributeRegistry: [{ key: 'nationality', displayName: 'Nationality', allowedValues: ['UK', 'US'] }] }
+    if (name === 'ClassificationScheme')
+      return {
+        classificationScheme: [
+          { level: 'OFFICIAL', name: 'OFFICIAL' },
+          { level: 'OFFICIAL_SENSITIVE', name: 'OFFICIAL-SENSITIVE' },
+          { level: 'SECRET', name: 'SECRET' },
+          { level: 'TOP_SECRET', name: 'TOP SECRET' },
+        ],
+      }
     if (name === 'SpaceReplicaBanner')
       return { space: { id: 'space-1', key: 'ENG', isReplica, originInstanceId: isReplica ? 'LOW' : 'HIGH' } }
     if (name === 'SetPageProperty')

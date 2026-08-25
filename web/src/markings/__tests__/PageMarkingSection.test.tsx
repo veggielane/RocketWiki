@@ -12,7 +12,21 @@ import { expectNoAxeViolations } from '../../test/axe'
  * `label` is the server's, and there is exactly one formatter.
  */
 
-const baseMarking = { level: 'OFFICIAL', eyesOnly: [] as string[], prefix: 'UK', label: 'UK OFFICIAL' }
+const baseMarking = {
+  level: 'OFFICIAL',
+  levelName: 'OFFICIAL',
+  eyesOnly: [] as string[],
+  prefix: 'UK',
+  label: 'UK OFFICIAL',
+}
+
+/** §21.1: the levels with their UK written spellings, in scheme order. */
+const scheme = [
+  { level: 'OFFICIAL', name: 'OFFICIAL' },
+  { level: 'OFFICIAL_SENSITIVE', name: 'OFFICIAL-SENSITIVE' },
+  { level: 'SECRET', name: 'SECRET' },
+  { level: 'TOP_SECRET', name: 'TOP SECRET' },
+]
 
 interface Options {
   marking?: typeof baseMarking
@@ -21,6 +35,8 @@ interface Options {
   nationality?: string[]
   /** null stages a registry with no `nationality` attribute at all (§21.4's accepted consequence). */
   countries?: string[] | null
+  /** null stages an unanswered classificationScheme, so the picker's fallback is exercised. */
+  levelNames?: typeof scheme | null
   setMarkingError?: Record<string, unknown> | null
 }
 
@@ -31,6 +47,7 @@ function renderSection(options: Options = {}) {
     clearance = 'SECRET',
     nationality = ['UK'],
     countries = ['UK', 'US', 'AU'],
+    levelNames = scheme,
     setMarkingError = null,
   } = options
   const onFeedback = vi.fn()
@@ -44,6 +61,7 @@ function renderSection(options: Options = {}) {
           isInstanceAdmin: false, localUserId: 'user-1', hasAvatar: false, clearance, nationality,
         },
       }
+    if (name === 'ClassificationScheme') return levelNames === null ? undefined : { classificationScheme: levelNames }
     if (name === 'RuleVocabulary')
       return {
         groups: [],
@@ -74,22 +92,40 @@ function renderSection(options: Options = {}) {
   return { mock, onFeedback, onReplicaRefusal, onChanged }
 }
 
-// Exact-or-with-reason: `OFFICIAL` must not also match `OFFICIAL_SENSITIVE`,
-// and an unavailable level's accessible name carries its reason after the name.
-const levelRadio = (level: string) =>
-  screen.getByRole('radio', { name: (name: string) => name === level || name.startsWith(`${level} `) })
+/**
+ * Keyed by the ENUM value, not the visible label: the spelling on screen is
+ * the server's now (§21.1), so an assertion about which level a radio IS must
+ * not go through the text — that would couple every one of these tests to a
+ * display decision the SPA does not own.
+ */
+const levelRadio = (level: string) => {
+  const radio = document.querySelector<HTMLInputElement>(`input[type="radio"][value="${level}"]`)
+  if (!radio) throw new Error(`no radio rendered for level ${level}`)
+  return radio
+}
 
 describe('rendering the marking', () => {
   it("renders the server's label verbatim rather than composing prefix + level + caveat", () => {
     renderSection({
-      marking: { level: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
+      marking: {
+        level: 'SECRET',
+        levelName: 'SECRET',
+        eyesOnly: ['UK', 'US'],
+        prefix: 'UK',
+        label: 'UK SECRET [UK/US EYES ONLY]',
+      },
     })
     expect(screen.getByText('UK SECRET [UK/US EYES ONLY]')).toBeTruthy()
   })
 
   it('renders a bare level for a marking with no prefix — §21.12 keeps null legal and unpadded', () => {
-    renderSection({ marking: { level: 'TOP_SECRET', eyesOnly: [], prefix: null as never, label: 'TOP SECRET' } })
-    expect(screen.getByText('TOP SECRET')).toBeTruthy()
+    renderSection({
+      marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: [], prefix: null as never, label: 'TOP SECRET' },
+    })
+    // Scoped to the read-out: the picker now offers an option spelled the same
+    // way (§21.1's display name), and this assertion is about the MARKING, so
+    // it must not be able to pass by finding the option instead.
+    expect(document.querySelector('[data-marking-placement="section"]')?.textContent).toBe('TOP SECRET')
   })
 
   it('shows a viewer the marking with no controls at all (design.md §21.6 needs canEdit)', () => {
@@ -103,6 +139,38 @@ describe('rendering the marking', () => {
     renderSection()
     await screen.findByRole('button', { name: 'Save marking' })
     await expectNoAxeViolations()
+  })
+})
+
+describe('the level picker names levels from the server (design.md §21.1)', () => {
+  it('labels each option with the scheme display spelling, not the wire name', async () => {
+    renderSection()
+    expect(await screen.findByText('OFFICIAL-SENSITIVE')).toBeTruthy()
+    expect(screen.getByText('TOP SECRET')).toBeTruthy()
+    // A picker has no marking in hand, so these cannot come from `levelName`
+    // — and spelling them locally is the drift §21.1 exists to prevent.
+    expect(screen.queryByText('OFFICIAL_SENSITIVE')).toBeNull()
+    expect(screen.queryByText('TOP_SECRET')).toBeNull()
+  })
+
+  it('still offers every level when the scheme query answers nothing', async () => {
+    // The ladder is compile-time exhaustive, so an unanswered vocabulary query
+    // degrades to ugly wire names rather than a picker with holes in it.
+    renderSection({ levelNames: null })
+    await screen.findByRole('button', { name: 'Save marking' })
+    for (const level of ['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET']) {
+      expect(levelRadio(level)).toBeTruthy()
+    }
+  })
+
+  it('renders options in ladder order, so position never contradicts availability', async () => {
+    renderSection({ clearance: 'OFFICIAL_SENSITIVE' })
+    await screen.findByRole('button', { name: 'Save marking' })
+    const rendered = [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')].map((r) => r.value)
+    expect(rendered).toEqual(['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET'])
+    // Everything below the cut is available and everything above it is not,
+    // which only reads correctly because the order IS the comparison.
+    expect(rendered.map((level) => levelRadio(level).disabled)).toEqual([false, false, true, true])
   })
 })
 

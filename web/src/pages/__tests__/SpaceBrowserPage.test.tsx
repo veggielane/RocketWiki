@@ -28,7 +28,7 @@ const tree = [
     labels: ['onboarding'],
     // design.md §21.5: every page is marked, so every tree node carries one.
     // Two levels here so the tree shows a badge that actually differs.
-    marking: { level: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+    marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
     children: [
       {
         id: 'restricted',
@@ -37,7 +37,15 @@ const tree = [
         sortOrder: 0,
         hasRestrictions: true,
         labels: [],
-        marking: { level: 'SECRET', eyesOnly: ['UK'], prefix: 'UK', label: 'UK SECRET [UK EYES ONLY]' },
+        // Staged with a caveat the badge deliberately does not show: a list row
+        // has no space for one, and §21.1's `levelName` is the level alone.
+        marking: {
+          level: 'SECRET',
+          levelName: 'SECRET',
+          eyesOnly: ['UK'],
+          prefix: 'UK',
+          label: 'UK SECRET [UK EYES ONLY]',
+        },
         children: [],
       },
     ],
@@ -78,6 +86,9 @@ describe('SpaceBrowserPage', () => {
     const restricted = screen.getByText('Restricted Page').closest('a')
     expect(open?.textContent).toContain('Classification: OFFICIAL')
     expect(restricted?.textContent).toContain('Classification: SECRET')
+    // The badge shows the level, not the marking — the caveat on the
+    // restricted node stays on that page's own banners (§21.1's levelName).
+    expect(restricted?.textContent).not.toContain('EYES ONLY')
   })
 
   it('filters the tree by label into a breadcrumbed result list', async () => {

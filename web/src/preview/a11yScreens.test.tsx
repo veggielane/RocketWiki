@@ -174,7 +174,7 @@ const page = {
   // design.md §21: staged with a caveat and a prefix so the page-view capture
   // exercises a real label rather than the shortest possible one. `label` is
   // the server's formatting — the SPA never composes it (§21.4).
-  marking: { level: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
+  marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
   properties: [
     { keyId: 'k-owner', key: 'Owner', value: 'Ada Lovelace', sortOrder: 0 },
     { keyId: 'k-review', key: 'Review Date', value: '2026-11-01', sortOrder: 1 },
@@ -235,7 +235,7 @@ const spaceTreeNodes = [
     sortOrder: 0,
     hasRestrictions: false,
     labels: ['anomaly'],
-    marking: { level: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
+    marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
     children: [
       {
         id: 'page-4',
@@ -244,12 +244,12 @@ const spaceTreeNodes = [
         sortOrder: 0,
         hasRestrictions: true,
         labels: [],
-        marking: { level: 'TOP_SECRET', eyesOnly: ['UK'], prefix: 'UK', label: 'UK TOP SECRET [UK EYES ONLY]' },
+        marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: ['UK'], prefix: 'UK', label: 'UK TOP SECRET [UK EYES ONLY]' },
         children: [],
       },
     ],
   },
-  { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', sortOrder: 1, hasRestrictions: false, labels: [], marking: { level: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' }, children: [] },
+  { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', sortOrder: 1, hasRestrictions: false, labels: [], marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' }, children: [] },
 ]
 
 function mockClient() {
@@ -300,8 +300,8 @@ function mockClient() {
           pageInfo: { hasNextPage: true, endCursor: 'c10' },
           edges: [
             { cursor: 'c1', node: { snippet: '…showed a 270 ms ignition delay on the stage two vacuum engine…', headingPath: ['Stage two ignition anomaly review'], anchorId: 'stage-two-ignition-anomaly-review', page: { id: 'page-1', title: 'Stage two ignition anomaly review', spaceKey: 'PROP', marking: page.marking } } },
-            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP', marking: { level: 'OFFICIAL_SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } } } },
-            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', eyesOnly: [], prefix: null, label: 'OFFICIAL' } } } },
+            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } } } },
+            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: null, label: 'OFFICIAL' } } } },
           ],
         },
       }
@@ -366,6 +366,18 @@ function mockClient() {
           ],
         },
       }
+    if (name === 'ClassificationScheme')
+      // §21.1's display spellings, in scheme order — the picker's option
+      // labels, so the capture pins the hyphenated UK form rather than the
+      // wire name.
+      return {
+        classificationScheme: [
+          { level: 'OFFICIAL', name: 'OFFICIAL' },
+          { level: 'OFFICIAL_SENSITIVE', name: 'OFFICIAL-SENSITIVE' },
+          { level: 'SECRET', name: 'SECRET' },
+          { level: 'TOP_SECRET', name: 'TOP SECRET' },
+        ],
+      }
     if (name === 'RuleVocabulary')
       return {
         groups: ['propulsion', 'export-cleared'],
@@ -422,15 +434,16 @@ interface Screen {
 
 /**
  * Labels as `ProtectiveMarking.Format` would build them (design.md §21.12's
- * four-combination table). TOP_SECRET is staged without a prefix on purpose:
- * that is a legal marking, and it is also what the server's fail-closed
- * substitute renders when a marking row is missing.
+ * four-combination table), paired with the level's own display spelling as
+ * `ProtectiveMarking.LevelName` gives it (§21.1). TOP_SECRET is staged
+ * without a prefix on purpose: that is a legal marking, and it is also what
+ * the server's fail-closed substitute renders when a marking row is missing.
  */
-const STAGED_MARKING_LABELS: Record<(typeof CLASSIFICATION_LADDER)[number], string> = {
-  OFFICIAL: 'UK OFFICIAL',
-  OFFICIAL_SENSITIVE: 'UK OFFICIAL-SENSITIVE',
-  SECRET: 'UK SECRET [UK/US EYES ONLY]',
-  TOP_SECRET: 'TOP SECRET',
+const STAGED_MARKINGS: Record<(typeof CLASSIFICATION_LADDER)[number], { label: string; levelName: string }> = {
+  OFFICIAL: { label: 'UK OFFICIAL', levelName: 'OFFICIAL' },
+  OFFICIAL_SENSITIVE: { label: 'UK OFFICIAL-SENSITIVE', levelName: 'OFFICIAL-SENSITIVE' },
+  SECRET: { label: 'UK SECRET [UK/US EYES ONLY]', levelName: 'SECRET' },
+  TOP_SECRET: { label: 'TOP SECRET', levelName: 'TOP SECRET' },
 }
 
 const restrictedRule = {
@@ -553,9 +566,9 @@ const SCREENS: Screen[] = [
         <Box sx={{ p: 3, display: 'grid', gap: 3, maxWidth: 720 }}>
           {CLASSIFICATION_LADDER.map((level) => (
             <Box key={level} sx={{ display: 'grid', gap: 1 }}>
-              <MarkingBanner level={level} placement="head" label={STAGED_MARKING_LABELS[level]} />
+              <MarkingBanner level={level} placement="head" label={STAGED_MARKINGS[level].label} />
               <Box>
-                <MarkingLevelBadge level={level} />
+                <MarkingLevelBadge level={level} levelName={STAGED_MARKINGS[level].levelName} />
               </Box>
             </Box>
           ))}

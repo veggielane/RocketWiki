@@ -42,13 +42,17 @@ describe('MarkingBanner', () => {
 })
 
 describe('MarkingLevelBadge', () => {
-  it('spells the level as its wire name, the one spelling the SPA does not own (§21.1)', () => {
-    render(<MarkingLevelBadge level="OFFICIAL_SENSITIVE" />)
-    expect(screen.getByText('OFFICIAL_SENSITIVE')).toBeTruthy()
+  it("renders the server's display spelling and derives nothing from the wire name (§21.1)", () => {
+    // The level prop is the wire name (it drives the tone lookup); the text
+    // is `levelName`. If the badge ever rendered `level`, this shows the
+    // difference immediately — they are not the same string.
+    const { container } = render(<MarkingLevelBadge level="OFFICIAL_SENSITIVE" levelName="OFFICIAL-SENSITIVE" />)
+    expect(screen.getByText('OFFICIAL-SENSITIVE')).toBeTruthy()
+    expect(container.textContent).not.toContain('OFFICIAL_SENSITIVE')
   })
 
   it('names itself for a screen reader rather than leaving a bare token in a list row', () => {
-    const { container } = render(<MarkingLevelBadge level="SECRET" />)
+    const { container } = render(<MarkingLevelBadge level="SECRET" levelName="SECRET" />)
     expect(container.textContent).toBe('Classification: SECRET')
   })
 })

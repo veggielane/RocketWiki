@@ -25,6 +25,17 @@ import type { ClassificationLevel } from '../graphql/generated/graphql'
  * schema gained that nobody placed in the ladder. A level inserted in the
  * middle would silently re-rank everything below it (§21.1), so that has to
  * break the build rather than compile.
+ *
+ * **This is the COMPARISON, not the presentation.** `Query.classificationScheme`
+ * supplies the picker's options, their display spellings and the order they
+ * render in, and the control uses it for all three — the SPA owns no spelling
+ * and no display order. What the scheme deliberately does not carry is a
+ * rank, so the one thing that cannot come from it is this: whether a level is
+ * at or above `me.clearance`. That comparison has to be synchronous (a
+ * disabled radio cannot wait on a query), has to survive the query failing,
+ * and has to fail closed when it does — none of which a fetched ordering
+ * gives. Hence a hard-coded ladder that cannot silently disagree with the
+ * schema, rather than a derived one that could silently be absent.
  */
 export const CLASSIFICATION_LADDER = [
   'OFFICIAL',
