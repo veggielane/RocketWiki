@@ -276,6 +276,8 @@ type CurrentUser {
   isInstanceAdmin: Boolean!
   localUserId: UUID
   hasAvatar: Boolean!
+  clearance: ClassificationLevel!
+  nationality: [String!]!
 }
 
 type CustomEmojiRef {

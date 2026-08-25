@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -109,6 +110,7 @@ public partial class Query
         [Service] IInstanceRoleAccessor instanceRoleAccessor,
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] IUserAvatarService avatarService,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
         CancellationToken cancellationToken)
     {
         if (claimsPrincipal.Identity?.IsAuthenticated != true)
@@ -136,9 +138,26 @@ public partial class Query
         var hasAvatar = localUserId is not null
             && await avatarService.HasAvatarAsync(localUserId.Value, cancellationToken);
 
+        // §21: the caller's OWN clearance and nationality, resolved through the same
+        // ClearanceGate/attribute-registry path enforcement uses — not the raw claim —
+        // so what the SPA greys out matches what the server would refuse. Echoing the
+        // caller's own token back to them leaks nothing (it is the same category as
+        // `groups` above), and it is the difference between offering a marking that
+        // will be rejected and explaining up-front why it is unavailable. Authorization
+        // still happens server-side: this is affordance data, never a decision (§6.1).
+        var principal = principalAccessor.Current;
+        var clearance = principal is null
+            ? ClassificationLevel.Official
+            : ClearanceGate.ResolveClearance(principal);
+        var nationality = principal is not null
+            && principal.Attributes.TryGetValue("nationality", out var held)
+                ? held
+                : [];
+
         return new CurrentUser(
             userId, email, name, groups, IsAuthenticated: true,
-            instanceRoleAccessor.IsInstanceAdmin, localUserId, hasAvatar);
+            instanceRoleAccessor.IsInstanceAdmin, localUserId, hasAvatar,
+            clearance, nationality);
     }
 }
 
@@ -157,7 +176,10 @@ public sealed record CurrentUser(
     bool IsAuthenticated,
     bool IsInstanceAdmin,
     Guid? LocalUserId,
-    bool HasAvatar)
+    bool HasAvatar,
+    ClassificationLevel Clearance,
+    IReadOnlyList<string> Nationality)
 {
-    public static readonly CurrentUser Anonymous = new(null, null, null, [], false, false, null, false);
+    public static readonly CurrentUser Anonymous =
+        new(null, null, null, [], false, false, null, false, ClassificationLevel.Official, []);
 }
