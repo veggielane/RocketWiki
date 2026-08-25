@@ -64,6 +64,14 @@ query SpacePageTree($spaceId: UUID!) {
 # `hasRestrictions` feeds the tree's lock badge (design.md §6.6);
 # `labels` feeds the space browser's label-filter facet. Both are
 # permission-filtered server-side like the tree itself.
+#
+# `marking` is the value the tree's own pruning walk gated on (design.md
+# §21.9 — GetPageTreeAsync loads every marking for the space anyway, and a
+# node that displayed a marking other than the one that decided it was
+# visible would be the wrong kind of wrong). The tree shows the LEVEL only:
+# §21.5 prunes an over-classified node together with its whole subtree, so
+# what remains is what this caller may read, and the level is the compact
+# fact a reader scanning the tree needs.
 fragment TreeNode on PageTreeNode {
   id
   title
@@ -71,4 +79,7 @@ fragment TreeNode on PageTreeNode {
   sortOrder
   hasRestrictions
   labels
+  marking {
+    ...PageMarking
+  }
 }

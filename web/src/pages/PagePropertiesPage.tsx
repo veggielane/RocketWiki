@@ -4,6 +4,7 @@ import {
   Alert,
   Box,
   Button,
+  Divider,
   IconButton,
   Link,
   MenuItem,
@@ -42,6 +43,7 @@ import {
 } from '../feedback/unavailableCopy'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { PageMarkingSection } from '../markings/PageMarkingSection'
 import { hasPendingEdits, resolvePropertyEdit } from '../properties/propertyEdit'
 import { MAX_PROPERTY_VALUE_LENGTH } from '../properties/propertyLimits'
 
@@ -426,12 +428,11 @@ export function PagePropertiesPage() {
           Properties: {page.title}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Key/value metadata kept beside{' '}
+          Everything kept beside{' '}
           <Link component={RouterLink} to={`/pages/${page.id}`}>
             {page.title}
-          </Link>
-          , not written into it — properties stay out of the page text, so they are also invisible to search and are
-          not carried by a Markdown export (design.md §20).
+          </Link>{' '}
+          rather than written into it.
         </Typography>
       </Box>
 
@@ -446,6 +447,35 @@ export function PagePropertiesPage() {
           {feedback.error}
         </Alert>
       )}
+
+      {/* design.md §21: markings sit on this screen because it is already the
+          "everything about this page that is not its text" screen — but above
+          the table and in their own bordered section, never as a row. A
+          property is metadata beside the page (§20); a marking decides who may
+          read the page at all, and a control that looked like a key/value row
+          would say otherwise. Remounted on change for the same draft
+          re-baselining reason as the table below. */}
+      <PageMarkingSection
+        key={`${page.marking.level}|${page.marking.eyesOnly.join(',')}|${page.marking.prefix ?? ''}`}
+        pageId={page.id}
+        marking={page.marking}
+        canEdit={page.canEdit}
+        onFeedback={setFeedback}
+        onReplicaRefusal={setReplicaOrigin}
+        onChanged={() => refetch({ requestPolicy: 'network-only' })}
+      />
+
+      <Divider />
+
+      <Box>
+        <Typography variant="h6" component="h2">
+          Properties
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          Key/value metadata — properties stay out of the page text, so they are also invisible to search and are not
+          carried by a Markdown export (design.md §20).
+        </Typography>
+      </Box>
 
       <PropertiesEditor
         // Remount after a refetch so the drafts re-baseline against fresh

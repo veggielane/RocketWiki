@@ -26,6 +26,9 @@ const tree = [
     sortOrder: 0,
     hasRestrictions: false,
     labels: ['onboarding'],
+    // design.md §21.5: every page is marked, so every tree node carries one.
+    // Two levels here so the tree shows a badge that actually differs.
+    marking: { level: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
     children: [
       {
         id: 'restricted',
@@ -34,6 +37,7 @@ const tree = [
         sortOrder: 0,
         hasRestrictions: true,
         labels: [],
+        marking: { level: 'SECRET', eyesOnly: ['UK'], prefix: 'UK', label: 'UK SECRET [UK EYES ONLY]' },
         children: [],
       },
     ],
@@ -63,6 +67,17 @@ describe('SpaceBrowserPage', () => {
     renderPage()
     expect(await screen.findByText('Restricted Page')).toBeInTheDocument()
     expect(screen.getAllByLabelText('Has access restrictions')).toHaveLength(1)
+  })
+
+  it('badges each tree node with its classification (design.md §21)', async () => {
+    renderPage()
+    expect(await screen.findByText('Restricted Page')).toBeInTheDocument()
+    // Every node shows one, because §21.5 leaves no page unmarked — and it is
+    // the LEVEL, as text, not colour alone (WCAG 1.4.1).
+    const open = screen.getByText('Open Page').closest('a')
+    const restricted = screen.getByText('Restricted Page').closest('a')
+    expect(open?.textContent).toContain('Classification: OFFICIAL')
+    expect(restricted?.textContent).toContain('Classification: SECRET')
   })
 
   it('filters the tree by label into a breadcrumbed result list', async () => {

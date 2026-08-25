@@ -14,5 +14,13 @@ query CurrentUser {
     isInstanceAdmin
     localUserId
     hasAvatar
+    # design.md §21: the caller's OWN clearance and nationality, resolved
+    # server-side through the same ClearanceGate path enforcement uses. They
+    # exist so the marking control can PREVENT rather than refuse — a level
+    # above this clearance, or an eyes-only set holding none of these
+    # nationalities, is a marking §21.6 would reject and the UI therefore
+    # never offers. Affordance data, never a decision: the server enforces.
+    clearance
+    nationality
   }
 }

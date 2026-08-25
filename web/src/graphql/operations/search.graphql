@@ -15,6 +15,15 @@ query SearchPages($query: String!, $spaceKey: String, $labels: [String!], $after
           id
           title
           spaceKey
+          # design.md §21: results are already post-filtered by clearance, so
+          # every hit here is one the caller may read — the level is carried
+          # so a reader scanning results knows how sensitive each hit is
+          # without opening it. Only `level` is used in a list (§21.4's label
+          # is the page's own surface), but the fragment is the one selection
+          # of PageMarkingView anywhere in the app.
+          marking {
+            ...PageMarking
+          }
         }
       }
     }
