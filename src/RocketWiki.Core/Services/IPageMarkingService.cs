@@ -22,7 +22,10 @@ namespace RocketWiki.Core.Services;
 /// find someone cleared higher. Enforcing the resulting marking as a whole (rather than
 /// just its level) is what mechanizes that rationale: marking a page
 /// <c>SECRET [US EYES ONLY]</c> as a GB-national editor loses the page just as
-/// completely as over-classifying it does.</para>
+/// completely as over-classifying it does. <b>The prefix is outside that rule</b> and
+/// falls outside it for free rather than by exception: the check is
+/// <c>ClearanceGate.Check(resultingMarking, principal)</c>, and the gate does not read
+/// the prefix, so there is no prefix a caller can be refused for (design.md §21.12).</para>
 ///
 /// <para><b>The eyes-only vocabulary is the nationality attribute's</b>, not ISO 3166 —
 /// see <c>PageMarkingService</c> for why that distinction is the difference between a
@@ -44,8 +47,18 @@ public interface IPageMarkingService
 /// <paramref name="EyesOnly"/> is the full replacement set — empty clears the caveat.
 /// Values are validated against the registered <c>nationality</c> attribute's allowed
 /// values and stored canonical (see <c>ProtectiveMarking.CanonicalizeCountry</c>).
+///
+/// <para><paramref name="Prefix"/> is the national qualifier (design.md §21.12),
+/// upper-cased and trimmed on write. It is <b>optional and clearable</b>: omitting it
+/// keeps the instance default (<c>UK</c>), and passing null or an empty string removes
+/// it, which renders the bare level. Unlike the level and the caveat it is validated
+/// against nothing but its length, because it grants and denies nothing.</para>
 /// </summary>
-public sealed record SetPageMarkingRequest(Guid PageId, ClassificationLevel Level, IReadOnlyList<string> EyesOnly);
+public sealed record SetPageMarkingRequest(
+    Guid PageId,
+    ClassificationLevel Level,
+    IReadOnlyList<string> EyesOnly,
+    string? Prefix = ProtectiveMarking.DefaultPrefix);
 
 /// <summary>
 /// One page's marking, flattened for callers, with the display string built server-side
@@ -59,8 +72,9 @@ public sealed record SetPageMarkingRequest(Guid PageId, ClassificationLevel Leve
 /// the object-level authorization every such field goes through — the same reasoning
 /// that produced <c>LabelRef</c> and <c>PagePropertyValue</c>.</para>
 /// </summary>
-public sealed record PageMarkingView(ClassificationLevel Level, IReadOnlyList<string> EyesOnly, string Label)
+public sealed record PageMarkingView(
+    ClassificationLevel Level, IReadOnlyList<string> EyesOnly, string? Prefix, string Label)
 {
     public static PageMarkingView From(ProtectiveMarking marking) =>
-        new(marking.Level, marking.EyesOnly, marking.Format());
+        new(marking.Level, marking.EyesOnly, marking.Prefix, marking.Format());
 }

@@ -203,6 +203,9 @@ public class RocketWikiDbContext : DbContext
             {
                 PageId = page.Id,
                 Level = inherited.Level,
+                // Inherited from the parent when there is one, ProtectiveMarking.Baseline's
+                // UK otherwise (design.md §21.12).
+                Prefix = inherited.Prefix,
                 SetAtUtc = now,
                 // No actor: nobody chose this marking, the invariant did. Same "system
                 // action, no user" shape a sync-applied marking has.

@@ -112,6 +112,11 @@ public class PageService : IPageService
         {
             PageId = page.Id,
             Level = inherited.Level,
+            // The national prefix inherits exactly like the level and the caveat - it is
+            // part of how this page's marking reads, and a child that rendered
+            // differently from its parent for no reason would be the confusing outcome.
+            // A root page takes ProtectiveMarking.Baseline's UK (design.md §21.12).
+            Prefix = inherited.Prefix,
             SetAtUtc = now,
             SetByUserId = actingUserId,
         };

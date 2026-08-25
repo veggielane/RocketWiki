@@ -54,7 +54,7 @@ public class ClearanceGateTests
         ClassificationLevel clearance, ClassificationLevel markingLevel, bool expectedAllowed)
     {
         var result = ClearanceGate.Check(
-            ProtectiveMarking.Create(markingLevel, null), Cleared(clearance));
+            ProtectiveMarking.Create(markingLevel, null, prefix: null), Cleared(clearance));
 
         Assert.Equal(expectedAllowed, result.IsAllowed);
         if (!expectedAllowed)
@@ -189,6 +189,62 @@ public class ClearanceGateTests
         var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["gb"]);
 
         Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, heldNationality)).IsAllowed);
+    }
+
+    // --- The prefix is outside the gate (design.md §21.12) -------------------------------
+
+    public static TheoryData<string?> Prefixes() => new() { null, "", "UK", "NATO", "ZZNONSENSEZZ" };
+
+    [Theory]
+    [MemberData(nameof(Prefixes))]
+    public void Check_IgnoresTheNationalPrefixEntirely_ForEveryLevelAndCaveatCombination(string? prefix)
+    {
+        // THE test that pins "the prefix has no access-control considerations
+        // whatsoever". Every level, with and without a caveat, against a principal who
+        // passes and one who does not - and the verdict AND the denial reason must be
+        // identical to the no-prefix marking in every single cell. If someone ever
+        // threads the prefix into ClearanceGate "for completeness", this fails.
+        foreach (var level in Enum.GetValues<ClassificationLevel>())
+        {
+            foreach (string[] countries in new[] { Array.Empty<string>(), ["GB"], ["GB", "US"] })
+            {
+                var baseline = ProtectiveMarking.Create(level, countries, prefix: null);
+                var prefixed = ProtectiveMarking.Create(level, countries, prefix);
+
+                foreach (var principal in new[]
+                {
+                    PrincipalWith(),
+                    Cleared(ClassificationLevel.Official, "GB"),
+                    Cleared(ClassificationLevel.Secret, "NZ"),
+                    Cleared(ClassificationLevel.TopSecret, "GB", "US"),
+                })
+                {
+                    var without = ClearanceGate.Check(baseline, principal);
+                    var with = ClearanceGate.Check(prefixed, principal);
+
+                    Assert.Equal(without.IsAllowed, with.IsAllowed);
+                    // Reasons too: a prefix must not leak into the audit vocabulary any
+                    // more than into the verdict.
+                    Assert.Equal(without.DenialReason, with.DenialReason);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void ADenialReason_NeverMentionsThePrefix()
+    {
+        var marking = ProtectiveMarking.Create(ClassificationLevel.TopSecret, ["GB"], "ZZPREFIXSENTINELZZ");
+
+        var levelFailure = ClearanceGate.Check(marking, Cleared(ClassificationLevel.Official, "GB"));
+        var caveatFailure = ClearanceGate.Check(
+            ProtectiveMarking.Create(ClassificationLevel.Official, ["GB"], "ZZPREFIXSENTINELZZ"),
+            Cleared(ClassificationLevel.Official, "NZ"));
+
+        Assert.DoesNotContain("ZZPREFIXSENTINELZZ", levelFailure.DenialReason!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ZZPREFIXSENTINELZZ", caveatFailure.DenialReason!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("classification:top_secret", levelFailure.DenialReason);
+        Assert.Equal("caveat:eyes_only", caveatFailure.DenialReason);
     }
 
     [Fact]

@@ -171,7 +171,76 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         var page = result.RootElement.GetProperty("data").GetProperty("page");
         Assert.Equal(f.SecretPageId.ToString(), page.GetProperty("id").GetString());
         Assert.Equal("SECRET", page.GetProperty("marking").GetProperty("level").GetString());
-        Assert.Equal("SECRET", page.GetProperty("marking").GetProperty("label").GetString());
+        // The seeded marking carries the UK default, so the label is the prefixed form.
+        Assert.Equal("UK SECRET", page.GetProperty("marking").GetProperty("label").GetString());
+    }
+
+    [Fact]
+    public async Task SetPageMarking_RoundTripsTheNationalPrefix_ThroughTheLabelField()
+    {
+        // design.md §21.12: `marking.label` is the single server-built display string, so
+        // this is the contract the SPA renders from. Prefix, space, level, then caveat.
+        var f = await SeedAsync();
+        var client = ClientFor("SECRET", nationality: ["GB"]);
+
+        using var set = await client.PostGraphQLAsync($$"""
+            mutation {
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: SECRET, eyesOnly: ["GB"], prefix: "uk" }) {
+                marking { prefix label }
+                error { kind message }
+              }
+            }
+            """);
+
+        var marking = set.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("marking");
+        Assert.Equal("UK", marking.GetProperty("prefix").GetString());
+        Assert.Equal("UK SECRET [GB EYES ONLY]", marking.GetProperty("label").GetString());
+
+        // ... and clearing it renders the bare level, with no leading space.
+        using var cleared = await client.PostGraphQLAsync($$"""
+            mutation {
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: SECRET, eyesOnly: ["GB"], prefix: null }) {
+                marking { prefix label }
+              }
+            }
+            """);
+
+        var bare = cleared.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("marking");
+        Assert.Equal(JsonValueKind.Null, bare.GetProperty("prefix").ValueKind);
+        Assert.Equal("SECRET [GB EYES ONLY]", bare.GetProperty("label").GetString());
+    }
+
+    [Fact]
+    public async Task ThePrefix_ChangesNoAccessDecision_OverTheWire()
+    {
+        // The HTTP-boundary half of the invariance proof: the same page, re-prefixed, is
+        // still exactly as invisible to an uncleared caller and exactly as visible to a
+        // cleared one.
+        var f = await SeedAsync();
+        var editor = ClientFor("SECRET");
+        var uncleared = ClientFor(clearance: null);
+
+        foreach (var prefix in new[] { "\"UK\"", "null", "\"ZZNONSENSEZZ\"" })
+        {
+            using var set = await editor.PostGraphQLAsync($$"""
+                mutation {
+                  setPageMarking(input: { pageId: "{{f.SecretPageId}}", level: SECRET, eyesOnly: [], prefix: {{prefix}} }) {
+                    error { kind }
+                  }
+                }
+                """);
+            Assert.Equal(
+                JsonValueKind.Null,
+                set.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("error").ValueKind);
+
+            using var denied = await uncleared.PostGraphQLAsync($$"""{ page(id: "{{f.SecretPageId}}") { id } }""");
+            Assert.Equal(JsonValueKind.Null, denied.RootElement.GetProperty("data").GetProperty("page").ValueKind);
+
+            using var allowed = await editor.PostGraphQLAsync($$"""{ page(id: "{{f.SecretPageId}}") { id } }""");
+            Assert.Equal(
+                f.SecretPageId.ToString(),
+                allowed.RootElement.GetProperty("data").GetProperty("page").GetProperty("id").GetString());
+        }
     }
 
     [Fact]
@@ -182,7 +251,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         var gb = ClientFor("OFFICIAL", nationality: ["GB"]);
         using var allowed = await gb.PostGraphQLAsync($$"""{ page(id: "{{f.EyesOnlyPageId}}") { id marking { label eyesOnly } } }""");
         var marking = allowed.RootElement.GetProperty("data").GetProperty("page").GetProperty("marking");
-        Assert.Equal("OFFICIAL [GB EYES ONLY]", marking.GetProperty("label").GetString());
+        Assert.Equal("UK OFFICIAL [GB EYES ONLY]", marking.GetProperty("label").GetString());
         Assert.Equal(["GB"], marking.GetProperty("eyesOnly").EnumerateArray().Select(e => e.GetString()));
 
         var nz = ClientFor("TOP_SECRET", nationality: ["NZ"]);
@@ -368,7 +437,8 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
         var payload = result.RootElement.GetProperty("data").GetProperty("setPageMarking");
         Assert.Equal(JsonValueKind.Null, payload.GetProperty("error").ValueKind);
-        Assert.Equal("SECRET", payload.GetProperty("marking").GetProperty("label").GetString());
+        // The input omits `prefix`, so the schema default (UK) applies — see §21.12.
+        Assert.Equal("UK SECRET", payload.GetProperty("marking").GetProperty("label").GetString());
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();

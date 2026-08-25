@@ -263,12 +263,17 @@ internal static class SyncOutboxWriter
         // matches no principal, so the page arrives MORE restricted, exactly as "a
         // group/attribute unknown on high matches nobody" already works for restrictions.
         // Dropping it would be the one unsafe direction.
+        // The national prefix travels too, even though it gates nothing: a replica must
+        // render the same marking string as its origin, and "presentational" is exactly
+        // why it has to cross - a high-side reader comparing a page against its low-side
+        // counterpart would otherwise see two different markings on identical content.
         PageMarkingSetEvent e => JsonSerializer.Serialize(
             new
             {
                 pageId = e.PageId,
                 level = ProtectiveMarking.LevelWireName(e.After.Level),
                 eyesOnly = e.After.EyesOnly,
+                prefix = e.After.Prefix,
             },
             PayloadOptions),
 

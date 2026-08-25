@@ -495,6 +495,7 @@ type PageLabel {
 type PageMarkingView {
   level: ClassificationLevel!
   eyesOnly: [String!]!
+  prefix: String
   label: String!
 }
 
@@ -877,6 +878,7 @@ input SetPageMarkingRequestInput {
   pageId: UUID!
   level: ClassificationLevel!
   eyesOnly: [String!]!
+  prefix: String = "UK"
 }
 
 input SetPagePropertyRequestInput {

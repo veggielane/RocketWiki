@@ -2342,8 +2342,11 @@ page.
 
 ## 21. Protective markings
 
-Every page carries a **protective marking**: a UK Government classification plus
-an optional *eyes-only* caveat naming the countries the page is releasable to.
+Every page carries a **protective marking**: a UK Government classification, an
+optional *eyes-only* caveat naming the countries the page is releasable to, and
+an optional national *prefix* — together, `UK SECRET [UK/US EYES ONLY]`.
+
+The first two gate access. The prefix does not, at all, ever (§21.12).
 
 **It enforces.** A marking is not a banner the author draws and the reader
 respects; it gates who can view the page, on every read path, exactly as a page
@@ -2575,7 +2578,7 @@ the same transaction as the change:
 
 | Action | Subject | Details |
 |---|---|---|
-| `page.marking.set` | `page` | `{ level, eyesOnly, previousLevel, previousEyesOnly }` |
+| `page.marking.set` | `page` | `{ level, eyesOnly, prefix, previousLevel, previousEyesOnly, previousPrefix }` |
 | `page.marking.downgrade` | `page` | same shape — emitted instead of `.set` when the change widens the audience |
 
 Deriving the action from the event (rather than minting two event types with
@@ -2658,9 +2661,12 @@ closes. This is unlike space grants, which stay local because the high side
 decides who may read its replica — a grant is about *this instance's* people, a
 marking is a property *of the content*.
 
-- `SyncEventType.PageMarking` (10), payload `{ pageId, level, eyesOnly }` — the
-  level as its **wire name**, never the tinyint, so a future renumbering cannot
-  silently re-rank a bundle already sitting on a transfer disk.
+- `SyncEventType.PageMarking` (10), payload `{ pageId, level, eyesOnly, prefix }`
+  — the level as its **wire name**, never the tinyint, so a future renumbering
+  cannot silently re-rank a bundle already sitting on a transfer disk. The prefix
+  travels even though it gates nothing (§21.12): a replica must render the same
+  marking string as its origin. An **absent** `prefix` key means *no prefix*,
+  never this instance's default.
 - Every `PageUpsert` **also** carries the page's current marking, attached at
   export time (like revision history, and for the same two reasons: journal
   payloads stay lean, and outbox rows written before §21 existed still export with
@@ -2710,7 +2716,107 @@ The recovery would be a hand-written `UPDATE` against a production database,
 which is the one operation this whole design exists to avoid. An access control
 that has to be switched off to be adopted does not get adopted.
 
-### 21.12 Deliberately not done
+### 21.12 The national prefix
+
+UK protective markings are conventionally written with a national qualifier —
+`UK OFFICIAL`, `UK SECRET`, `UK TOP SECRET` — so a marking carries an optional
+**prefix** alongside its level and caveat.
+
+**It is presentational, and that is a hard boundary, not a phase.** The prefix
+has *no access-control considerations whatsoever*:
+
+- `ClearanceGate` does not read it. The gate's entire input is the level and the
+  eyes-only set; `ProtectiveMarking.Prefix` is never touched by it. (The proof is
+  mechanical: the commit that introduced the prefix has a **zero-line diff** on
+  `ClearanceGate.cs` and on `EffectivePermissionCalculator.cs`.)
+- It never appears in a denial reason. `classification:{level}` and
+  `caveat:eyes_only` are unchanged, so nothing about a prefix can reach an audit
+  reason or — via `CategorizeDenialReason` — a metric tag.
+- It changes no verdict. Pinned by test at two tiers: `ClearanceGateTests` sweeps
+  every level × caveat × principal combination and asserts the decision **and the
+  reason** are byte-identical with and without a prefix, and `PageMarkingTests`
+  repeats it through the real permission loader against a real database.
+- It is outside "you may not set a marking above your own clearance" (§21.6), and
+  it falls outside *for free* rather than by exception: that rule is
+  `ClearanceGate.Check(resultingMarking, principal)`, and the gate does not read
+  the prefix, so there is no prefix a caller can be refused for.
+
+If you are reading this because you were about to give the prefix access
+semantics "for completeness": don't. There is nothing to compare it against. A
+principal has no "national prefix" claim, and inventing one would silently
+duplicate the nationality attribute the eyes-only caveat already uses — with
+different values, a different vocabulary, and no registry behind it. Note also
+that the prefix and the caveat countries are independent: `UK SECRET [US EYES
+ONLY]` is an ordinary marking, and reading the leading `UK` as a releasability
+statement would be exactly backwards.
+
+**It defaults to `UK`.** New markings, markings inherited from a parent, and —
+via the `AddPageMarkingPrefix` migration — every row that predated the feature.
+An instance whose content is not UK-marked changes the value per page; the
+default is a default, not a policy.
+
+**`NULL`/empty is legal and must stay clearable.** Some content legitimately
+carries no national qualifier, so the column is nullable, the mutation accepts
+null, and the normalizer collapses null, `""` and whitespace to the same "no
+prefix" state. That state renders the bare level with **no leading space** —
+`SECRET`, not ` SECRET` — because a cosmetic gap would make two identical
+markings compare unequal as strings, and the label is what the SPA, an MCP client
+and an audit reviewer all read.
+
+**Normalized on write**, trimmed and upper-cased, exactly like the country
+values and for the same reason: the stored row, the label, the audit
+`DetailsJson` and the sync payload must agree byte-for-byte. `uk` in becomes
+`UK` stored.
+
+**The label is the one place it appears.** `ProtectiveMarking.Format()` — exposed
+as `marking.label` — renders prefix, space, level, then caveat. All four
+combinations:
+
+| Prefix | Caveat | Label |
+|---|---|---|
+| `UK` | `{UK, US}` | `UK SECRET [UK/US EYES ONLY]` |
+| `UK` | none | `UK SECRET` |
+| none | `{UK, US}` | `SECRET [UK/US EYES ONLY]` |
+| none | none | `SECRET` |
+
+There is deliberately **no second formatter**. The frontend consumes `label`
+rather than composing prefix + level itself, for the same reason it did before
+the prefix existed: two renderings of one marking that disagree is a compliance
+problem, not a cosmetic one.
+
+**Where else it goes, and where it does not.** It travels with the marking
+through sync (`prefix` on both the `PageMarking` event and the `marking` object
+on a `PageUpsert`) — "presentational" is exactly *why* it must cross, since a
+replica showing a different marking string from its origin on identical content
+is precisely the confusion this avoids. An **absent** `prefix` key on an inbound
+payload means *no prefix*, never "apply this instance's default": a pre-prefix
+bundle said nothing about a national qualifier, and defaulting one in would
+assert something its origin never said. It is recorded in the audit
+`DetailsJson` as `prefix`/`previousPrefix`, because a prefix change *is* a change
+to the marking and a reviewer must be able to explain why a page's rendered
+marking changed. It reaches **no** telemetry tag.
+
+**It is not a downgrade.** `ProtectiveMarking.IsDowngrade` does not consult it:
+a downgrade means somebody who could not read the page yesterday can read it
+today, and the prefix cannot move that line in either direction. Clearing
+`UK SECRET` to `SECRET` audits as an ordinary `page.marking.set`, with the
+before-and-after prefix in the details. Counting it as a downgrade would dilute
+the one query that exists to find real widenings.
+
+**`ProtectiveMarking.FailClosed` carries no prefix**, unlike `Baseline`. That
+value means "this page's marking row is missing and we do not know what it
+said", so asserting a national qualifier on its behalf would be inventing a
+fact. It renders a bare `TOP SECRET`, which is also a quiet visual signal that
+something is wrong — every marking the application actually writes carries one.
+
+**The migration is a second one** (`AddPageMarkingPrefix`), not an edit to
+`AddPageMarkings`. That one is already applied on real SQL Server, and editing an
+applied migration produces a schema that can never be reproduced from zero.
+Unlike the OFFICIAL backfill (§21.11) this one carries **no security risk and
+needs no review sweep**: the prefix grants nothing and denies nothing, so
+asserting `UK` on a page nobody has reviewed cannot change who can read it.
+
+### 21.13 Deliberately not done
 
 - **No create-time marking override.** A page is created with its inherited
   marking and re-marked afterwards. Stated cost: for a *root* page holding

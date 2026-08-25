@@ -345,6 +345,7 @@ public class BundleImportService : IBundleImportService
         }
 
         marking.Level = applied.Level;
+        marking.Prefix = applied.Prefix; // travels with the marking so a replica renders the same string
         marking.SetAtUtc = DateTime.UtcNow;
         marking.SetByUserId = null; // applied by sync, no local actor
 
@@ -398,7 +399,16 @@ public class BundleImportService : IBundleImportService
             }
         }
 
-        return ProtectiveMarking.Create(level, countries);
+        // An ABSENT prefix key means null - no prefix - not "use this instance's default".
+        // A bundle from an era before prefixes existed carried no national qualifier, and
+        // inventing UK for it would assert something its origin never said. Only the
+        // level gets a fail-closed substitution here, because only the level gates
+        // anything (design.md §21.12).
+        var prefix = element.TryGetProperty("prefix", out var prefixElement) && prefixElement.ValueKind == JsonValueKind.String
+            ? prefixElement.GetString()
+            : null;
+
+        return ProtectiveMarking.Create(level, countries, prefix);
     }
 
     /// <summary>

@@ -170,6 +170,135 @@ public class PageMarkingTests : SqliteTestBase
         Assert.Equal("classification:top_secret", Assert.IsType<ForbiddenError>(result.Error).Reason);
     }
 
+    // --- The national prefix (design.md §21.12) ------------------------------------------
+
+    [Fact]
+    public void AMarkingMaterializedByTheBackstop_CarriesTheUkDefault()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.SaveChanges();
+
+        Assert.Equal("UK", context.PageMarkings.Single(m => m.PageId == page.Id).Prefix);
+    }
+
+    [Fact]
+    public async Task CreatePage_InheritsTheParentsPrefix_NotJustTheInstanceDefault()
+    {
+        var author = TestData.NewUser();
+        var space = TestData.NewSpace();
+        var parent = TestData.NewPage(space, "parent");
+
+        using var context = CreateContext();
+        context.Users.Add(author);
+        context.Spaces.Add(space);
+        context.Pages.Add(parent);
+        context.PageMarkings.Add(TestData.NewMarkingWithPrefix(parent, ClassificationLevel.Official, "NATO"));
+        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.SaveChanges();
+
+        var service = new PageService(context, "local-instance");
+        var result = await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, parent.Id, "child", "Child", "# Child"),
+            PrincipalWith(), author.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("NATO", context.PageMarkings.Single(m => m.PageId == result.Value.Id).Prefix);
+    }
+
+    [Fact]
+    public async Task SetMarking_NormalizesThePrefix_AndPutsItInTheLabelAndTheAuditRow()
+    {
+        using var context = CreateContext();
+        var f = Seed(context);
+
+        var service = new PageMarkingService(context, "local-instance");
+        var result = await service.SetAsync(
+            new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Secret, ["GB"], "  uk  "),
+            PrincipalWith("SECRET", ["GB"]), f.ActingUserId, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("UK", result.Value.Prefix);
+        Assert.Equal("UK SECRET [GB EYES ONLY]", result.Value.Label);
+        Assert.Equal("UK", context.PageMarkings.Single(m => m.PageId == f.Page.Id).Prefix);
+
+        var audit = Assert.Single(context.AuditEvents.Where(e => e.Action.StartsWith("page.marking")));
+        Assert.Contains("\"prefix\":\"UK\"", audit.DetailsJson);
+        Assert.Contains("\"previousPrefix\":\"UK\"", audit.DetailsJson);
+    }
+
+    [Fact]
+    public async Task SetMarking_ClearingThePrefix_IsPermitted_AndIsNotADowngrade()
+    {
+        // No prefix is a legal marking, so it must be clearable — and clearing it changes
+        // nobody's access, so it stays an ordinary page.marking.set rather than diluting
+        // the downgrade query that exists to find real widenings.
+        using var context = CreateContext();
+        var f = Seed(context);
+
+        var service = new PageMarkingService(context, "local-instance");
+        var result = await service.SetAsync(
+            new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], Prefix: null),
+            PrincipalWith("SECRET"), f.ActingUserId, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Null(result.Value.Prefix);
+        Assert.Equal("OFFICIAL", result.Value.Label);
+        Assert.Null(context.PageMarkings.Single(m => m.PageId == f.Page.Id).Prefix);
+        Assert.Equal("page.marking.set", context.AuditEvents.Single(e => e.Action.StartsWith("page.marking")).Action);
+    }
+
+    [Fact]
+    public async Task SetMarking_AnOverLongPrefix_IsAValidationError()
+    {
+        using var context = CreateContext();
+        var f = Seed(context);
+
+        var service = new PageMarkingService(context, "local-instance");
+        var result = await service.SetAsync(
+            new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], new string('X', 17)),
+            PrincipalWith("SECRET"), f.ActingUserId, AuditCtx);
+
+        Assert.IsType<ValidationError>(result.Error);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("UK")]
+    [InlineData("ZZNONSENSEZZ")]
+    public async Task ThePrefix_ChangesNoAccessDecision(string? prefix)
+    {
+        // The end-to-end half of ClearanceGateTests' invariance proof: the SAME page, read
+        // through the real permission loader, gives identical answers to a cleared and an
+        // uncleared principal whatever prefix it carries.
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.PageMarkings.Add(TestData.NewMarkingWithPrefix(page, ClassificationLevel.Secret, prefix, "GB"));
+        context.AccessRules.Add(Grant(space.Id, SpaceRole.SpaceAdmin));
+        context.SaveChanges();
+
+        var service = new PageReadService(context);
+
+        Assert.IsType<ReadResult<Page>.Found>(
+            await service.GetPageAsync(page.Id, PrincipalWith("SECRET", ["GB"])));
+
+        var deniedByLevel = Assert.IsType<ReadResult<Page>.Denied>(
+            await service.GetPageAsync(page.Id, PrincipalWith("OFFICIAL", ["GB"])));
+        Assert.Equal("classification:secret", deniedByLevel.Reason);
+
+        var deniedByCaveat = Assert.IsType<ReadResult<Page>.Denied>(
+            await service.GetPageAsync(page.Id, PrincipalWith("SECRET", ["NZ"])));
+        Assert.Equal("caveat:eyes_only", deniedByCaveat.Reason);
+    }
+
     // --- Read paths ----------------------------------------------------------------------
 
     [Fact]
@@ -339,7 +468,7 @@ public class PageMarkingTests : SqliteTestBase
             PrincipalWith("TOP_SECRET", ["GB"]), f.ActingUserId, AuditCtx);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("SECRET [GB/US EYES ONLY]", result.Value.Label);
+        Assert.Equal("UK SECRET [GB/US EYES ONLY]", result.Value.Label);
 
         var marking = context.PageMarkings.Include(m => m.Countries).Single(m => m.PageId == f.Page.Id);
         Assert.Equal(ClassificationLevel.Secret, marking.Level);

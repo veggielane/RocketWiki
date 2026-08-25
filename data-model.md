@@ -207,12 +207,21 @@ to `Pages` rather than assume every row belongs to a live page.
 |---|---|---|
 | PageId | uniqueidentifier PK, FK → Page | **the PK is the page id** — 1:1 by construction |
 | Level | tinyint | `ClassificationLevel`: 1 OFFICIAL, 2 OFFICIAL_SENSITIVE, 3 SECRET, 4 TOP_SECRET |
+| Prefix | nvarchar(16) null | national qualifier, canonical (trimmed, upper-cased) — `UK` by default, giving `UK SECRET`. **NULL is legal** and means no prefix (design.md §21.12) |
 | SetAtUtc | datetime2(3) | |
 | SetByUserId | uniqueidentifier null FK → User | **null** for a row applied by sync import, or by the every-page-is-marked backstop — no local actor |
 
 Indexes: the PK, plus `Level` — "which pages sit at or above X" is the
 administrative sweep the OFFICIAL backfill makes necessary (§21.11), and every
-*enforcement* read is a PK lookup, so the table needs nothing else.
+*enforcement* read is a PK lookup, so the table needs nothing else. **`Prefix` is
+deliberately unindexed**: it gates nothing, so no enforcement or filtering path
+ever looks a page up by it.
+
+`Prefix` is nullable rather than defaulted-not-null because "no prefix" is a real
+marking that must stay clearable — a NOT NULL column would have forced a sentinel
+value. It is set by its own migration (`AddPageMarkingPrefix`) rather than by
+editing `AddPageMarkings`, which is already applied: editing an applied migration
+produces a schema that cannot be reproduced from zero.
 
 **PK = PageId is the whole enforcement of "one marking per page".** A second
 marking for a page is a primary-key violation rather than something application
@@ -243,7 +252,7 @@ Composite PK `(PageId, CountryValue)` — a country appears at most once per pag
 so applying a set is idempotent and there is no ordering question between two
 rows for the same country, exactly like `PageLabel`. Indexes: the PK, plus
 `(CountryValue, PageId)` — the "which pages are releasable to X" access path,
-which has no query surface yet (§21.12) but is the reason the table is shaped
+which has no query surface yet (§21.13) but is the reason the table is shaped
 this way now rather than after a migration.
 
 A **normalized child table, not a delimited column on `PageMarking`**, and that

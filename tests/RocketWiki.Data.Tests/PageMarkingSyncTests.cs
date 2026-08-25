@@ -129,6 +129,125 @@ public class PageMarkingSyncTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task MarkingChange_JournalsTheNationalPrefix_AndItRoundTripsToTheHighSide()
+    {
+        // design.md §21.12: the prefix is presentational, and that is precisely why it has
+        // to cross - a replica must render the same marking string as its origin, or a
+        // reader comparing the two sides sees two different markings on identical content.
+        var actor = TestData.NewUser();
+        var space = NewExportedSpace();
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.Add(space);
+        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AttributeDefinitions.Add(NationalityRegistry());
+        lowContext.SaveChanges();
+
+        var created = await new PageService(lowContext, LowInstanceId).CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "home", "Home", "# Welcome"), EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+
+        Assert.True((await new PageMarkingService(lowContext, LowInstanceId).SetAsync(
+            new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, ["GB"], "nato"),
+            EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+
+        var outboxEvent = Assert.Single(lowContext.SyncOutboxEvents.Where(e => e.EventType == SyncEventType.PageMarking));
+        using (var payload = JsonDocument.Parse(outboxEvent.PayloadJson))
+        {
+            Assert.Equal("NATO", payload.RootElement.GetProperty("prefix").GetString());
+        }
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundleInfo = await new BundleExportService(lowContext, storage)
+                .ExportIncrementalAsync(outputDir, LowInstanceId);
+            Assert.NotNull(bundleInfo);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                Assert.True((await new BundleImportService(highContext, storage)
+                    .ImportAsync(bundleInfo!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var marking = highContext.PageMarkings.Include(m => m.Countries)
+                    .Single(m => m.PageId == created.Value.Id);
+                Assert.Equal("NATO", marking.Prefix);
+                // The whole point: the replica renders the identical string.
+                Assert.Equal("NATO SECRET [GB EYES ONLY]", marking.ToMarking().Format());
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_AnUpsertCarryingNoPrefixKey_LandsWithNoPrefix_NeverAnInventedUk()
+    {
+        // A bundle from before prefixes existed said nothing about a national qualifier,
+        // and defaulting one in would assert something its origin never said. Only the
+        // LEVEL gets a fail-closed substitution, because only the level gates anything.
+        var pageId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var payload = JsonSerializer.Serialize(new
+        {
+            pageId,
+            spaceId,
+            parentPageId = (Guid?)null,
+            ancestorPath = "/",
+            slug = "legacy",
+            title = "Legacy",
+            sortOrder = 0,
+            content = "# Legacy",
+            revisionNumber = 1,
+            // A marking, but from the pre-prefix era: no "prefix" key at all.
+            marking = new { level = "SECRET", eyesOnly = Array.Empty<string>() },
+        });
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundlePath = WriteLegacyBundle(outputDir, spaceId, payload);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                highContext.Spaces.Add(new Space
+                {
+                    Id = spaceId,
+                    Key = "LEG",
+                    Name = "Legacy",
+                    OriginInstanceId = LowInstanceId,
+                    CreatedAtUtc = DateTime.UtcNow,
+                    CreatedByUserId = Guid.NewGuid(),
+                });
+                highContext.SaveChanges();
+
+                Assert.True((await new BundleImportService(highContext, storage)
+                    .ImportAsync(bundlePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var marking = highContext.PageMarkings.Single(m => m.PageId == pageId);
+                Assert.Equal(ClassificationLevel.Secret, marking.Level);
+                Assert.Null(marking.Prefix);
+                Assert.Equal("SECRET", marking.ToMarking().Format());
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task MarkingChange_OnANonExportedSpace_JournalsNothing()
     {
         var actor = TestData.NewUser();
