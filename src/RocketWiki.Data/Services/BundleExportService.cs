@@ -509,6 +509,9 @@ public class BundleExportService : IBundleExportService
     {
         level = ProtectiveMarking.LevelWireName(marking.Level),
         eyesOnly = marking.EyesOnly,
+        // Presentational, but it crosses: a replica must render the same marking string
+        // as its origin (design.md §21.12). Null is a legal value and stays null.
+        prefix = marking.Prefix,
     };
 
     /// <summary>

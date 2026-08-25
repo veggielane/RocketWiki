@@ -135,8 +135,16 @@ public static class DomainEventAuditMapper
             {
                 level = ProtectiveMarking.LevelWireName(e.After.Level),
                 eyesOnly = e.After.EyesOnly,
+                // The national prefix is recorded even though it gates nothing
+                // (design.md §21.12): a prefix change IS a change to the marking, and an
+                // audit row that omitted it would leave a reviewer unable to explain why
+                // a page's rendered marking changed. Note this is the ONLY consumer of
+                // the prefix outside the display string - it never reaches a denial
+                // reason or a telemetry tag.
+                prefix = e.After.Prefix,
                 previousLevel = ProtectiveMarking.LevelWireName(e.Before.Level),
                 previousEyesOnly = e.Before.EyesOnly,
+                previousPrefix = e.Before.Prefix,
             })),
 
         // Registry-level actions follow the custom-emoji precedent exactly: no

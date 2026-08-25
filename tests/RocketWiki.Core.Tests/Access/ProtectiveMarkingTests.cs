@@ -102,23 +102,89 @@ public class ProtectiveMarkingTests
     [InlineData(ClassificationLevel.Secret, "SECRET")]
     [InlineData(ClassificationLevel.TopSecret, "TOP SECRET")]
     public void Format_NoCaveat_IsTheUkWrittenFormOfTheLevel(ClassificationLevel level, string expected) =>
-        Assert.Equal(expected, ProtectiveMarking.Create(level, null).Format());
+        Assert.Equal(expected, ProtectiveMarking.Create(level, null, prefix: null).Format());
 
     [Fact]
     public void Format_OneCountry_RendersTheEyesOnlyCaveatAfterTheLevel() =>
-        Assert.Equal("SECRET [UK EYES ONLY]", ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"]).Format());
+        Assert.Equal(
+            "SECRET [UK EYES ONLY]",
+            ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], prefix: null).Format());
 
     [Fact]
     public void Format_SeveralCountries_JoinsThemWithSlashesInCanonicalOrder() =>
         Assert.Equal(
             "SECRET [UK/US EYES ONLY]",
-            ProtectiveMarking.Create(ClassificationLevel.Secret, ["US", "uk"]).Format());
+            ProtectiveMarking.Create(ClassificationLevel.Secret, ["US", "uk"], prefix: null).Format());
 
     [Fact]
     public void Format_UsesTheInstancesOwnCountryTokensVerbatim_NeverAliasingGbToUk() =>
         // A marking must read back as the thing that is actually enforced. A display-only
         // GB->UK alias is how "we thought it said UK" happens.
-        Assert.Equal("SECRET [GB EYES ONLY]", ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"]).Format());
+        Assert.Equal(
+            "SECRET [GB EYES ONLY]",
+            ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"], prefix: null).Format());
+
+    // --- The national prefix in the label (design.md §21.12) ----------------------------
+
+    [Theory]
+    // All four combinations of prefix x caveat, which is the whole contract of the label.
+    [InlineData("UK", new[] { "UK", "US" }, "UK SECRET [UK/US EYES ONLY]")]
+    [InlineData("UK", new string[0], "UK SECRET")]
+    [InlineData(null, new[] { "UK", "US" }, "SECRET [UK/US EYES ONLY]")]
+    [InlineData(null, new string[0], "SECRET")]
+    public void Format_PlacesThePrefixBeforeTheLevel_AndOmitsItCleanlyWhenAbsent(
+        string? prefix, string[] eyesOnly, string expected) =>
+        Assert.Equal(expected, ProtectiveMarking.Create(ClassificationLevel.Secret, eyesOnly, prefix).Format());
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Format_AnEmptyPrefix_LeavesNoLeadingSpace(string prefix)
+    {
+        // A cosmetic leading space would make two identical markings compare unequal as
+        // strings, which matters because the label is what the SPA, MCP and a reviewer
+        // all read.
+        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, null, prefix);
+
+        Assert.Equal("SECRET", marking.Format());
+        Assert.Null(marking.Prefix);
+    }
+
+    [Fact]
+    public void Format_TheDefaultPrefixIsUk() =>
+        // Create's default parameter, so anything that does not mention a prefix gets one.
+        Assert.Equal("UK OFFICIAL", ProtectiveMarking.Create(ClassificationLevel.Official, null).Format());
+
+    [Fact]
+    public void Baseline_IsUkOfficial() => Assert.Equal("UK OFFICIAL", ProtectiveMarking.Baseline.Format());
+
+    [Fact]
+    public void FailClosed_CarriesNoPrefix_BecauseAMissingMarkingSaidNothingAboutOne() =>
+        // Asserting UK on a marking we know nothing about would be inventing a fact; the
+        // bare "TOP SECRET" is also a quiet signal that this page's row is missing.
+        Assert.Equal("TOP SECRET", ProtectiveMarking.FailClosed.Format());
+
+    [Theory]
+    [InlineData("uk", "UK")]
+    [InlineData("  Uk  ", "UK")]
+    [InlineData("nato", "NATO")]
+    public void Create_NormalizesThePrefix_UpperCasedAndTrimmed(string input, string expected) =>
+        Assert.Equal(expected, ProtectiveMarking.Create(ClassificationLevel.Secret, null, input).Prefix);
+
+    [Fact]
+    public void Prefix_ParticipatesInEquality_ButNotInTheDowngradePredicate()
+    {
+        var withPrefix = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"], "UK");
+        var without = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"], prefix: null);
+
+        // Different markings — they render differently.
+        Assert.NotEqual(withPrefix, without);
+
+        // But neither direction is a downgrade: a downgrade means somebody who could not
+        // read the page yesterday can read it today, and the prefix cannot move that line.
+        Assert.False(ProtectiveMarking.IsDowngrade(withPrefix, without));
+        Assert.False(ProtectiveMarking.IsDowngrade(without, withPrefix));
+    }
 
     [Theory]
     [InlineData(ClassificationLevel.Official, "OFFICIAL")]

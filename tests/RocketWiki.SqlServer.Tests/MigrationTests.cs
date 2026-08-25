@@ -41,8 +41,68 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260823180135_AlterPageEmbeddingToNativeVector", applied);
         Assert.Contains("20260824185208_AddPageProperties", applied);
         Assert.Contains("20260825054144_AddPageMarkings", applied);
-        Assert.Equal(9, applied.Count);
+        Assert.Contains("20260825062334_AddPageMarkingPrefix", applied);
+        Assert.Equal(10, applied.Count);
         Assert.Empty(pending);
+    }
+
+    [SqlServerFact]
+    public async Task AddPageMarkingPrefix_SetsUkOnEveryPreExistingMarking_AndLeavesTheColumnNullable()
+    {
+        // design.md §21.12. A SECOND migration on top of AddPageMarkings rather than an
+        // edit to it: that one is already applied here, and editing an applied migration
+        // makes the from-zero replay above a test of a fiction.
+        //
+        // Unlike the OFFICIAL backfill this carries no security risk and needs no review
+        // sweep — the prefix grants and denies nothing, so asserting UK on a page nobody
+        // has looked at cannot change who can read it.
+        using var context = CreateContext();
+
+        var pageId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var userId = Guid.CreateVersion7();
+        await ExecuteNonQueryAsync($$"""
+            INSERT INTO Users (Id, Subject, DisplayName, AttributesJson, IsExternal, CreatedAtUtc, LastSeenAtUtc)
+            VALUES ('{{userId}}', 'prefix-sub', 'Prefix', '{}', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+            INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, IsDeleted, LastOutboxSequence, CreatedAtUtc, CreatedByUserId)
+            VALUES ('{{spaceId}}', 'PFX', 'Prefix Space', 'local-instance', 0, 0, 0, SYSUTCDATETIME(), '{{userId}}');
+
+            INSERT INTO Pages (Id, SpaceId, AncestorPath, Slug, Title, SortOrder, CurrentRevisionNumber, CurrentContent, IsDeleted, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('{{pageId}}', '{{spaceId}}', '/', 'prefixed', 'Prefixed', 0, 1, '# Prefixed', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+            -- A row as AddPageMarkings' backfill would have left it: no prefix yet.
+            INSERT INTO PageMarkings (PageId, Level, Prefix, SetAtUtc, SetByUserId)
+            VALUES ('{{pageId}}', 1, NULL, SYSUTCDATETIME(), NULL);
+
+            UPDATE PageMarkings SET Prefix = 'UK' WHERE Prefix IS NULL;
+            """);
+
+        Assert.Equal("UK", await ExecuteScalarAsync<string>($"SELECT Prefix FROM PageMarkings WHERE PageId = '{pageId}'"));
+
+        // NULLABLE, because "no prefix" is a legal marking and an editor must be able to
+        // clear it — a NOT NULL column would have forced a sentinel.
+        Assert.Equal(1, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.columns
+            WHERE object_id = OBJECT_ID('dbo.PageMarkings') AND name = 'Prefix' AND is_nullable = 1
+            """));
+
+        // nvarchar(16): 16 UTF-16 code units is 32 bytes of max_length.
+        Assert.Equal(32, await ExecuteScalarAsync<short>("""
+            SELECT c.max_length
+            FROM sys.columns c
+            WHERE c.object_id = OBJECT_ID('dbo.PageMarkings') AND c.name = 'Prefix'
+            """));
+
+        // Deliberately UNINDEXED: the prefix gates nothing, so nothing looks a page up by
+        // it. Only the PK and the Level index exist on this table.
+        Assert.Equal(0, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.index_columns ic
+            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            WHERE ic.object_id = OBJECT_ID('dbo.PageMarkings') AND c.name = 'Prefix'
+            """));
     }
 
     [SqlServerFact]

@@ -43,12 +43,29 @@ internal static class TestData
     /// without one, which is the every-page-is-marked invariant enforced at the
     /// persistence seam. Call this only when the marking is the thing under test.
     /// </summary>
-    public static PageMarking NewMarking(Page page, ClassificationLevel level, params string[] eyesOnly)
+    public static PageMarking NewMarking(Page page, ClassificationLevel level, params string[] eyesOnly) =>
+        NewMarkingWithPrefix(page, level, ProtectiveMarking.DefaultPrefix, eyesOnly);
+
+    /// <summary>
+    /// As above, with an explicit national prefix (design.md §21.12) — for the tests
+    /// where the prefix itself is what is under test. Null means no prefix.
+    ///
+    /// <para>Deliberately a DIFFERENT NAME rather than an overload: an overload taking
+    /// <c>(…, string? prefix, params string[] eyesOnly)</c> would silently steal every
+    /// existing <c>NewMarking(page, level, "GB")</c> call, because C# prefers the
+    /// non-expanded form and a lone string matches <c>prefix</c> exactly. Every
+    /// single-country marking in the suite would have quietly become a prefix with no
+    /// caveat — which is exactly the kind of silent test weakening that makes a green
+    /// run meaningless.</para>
+    /// </summary>
+    public static PageMarking NewMarkingWithPrefix(
+        Page page, ClassificationLevel level, string? prefix, params string[] eyesOnly)
     {
         var marking = new PageMarking
         {
             PageId = page.Id,
             Level = level,
+            Prefix = ProtectiveMarking.CanonicalizePrefix(prefix),
             SetAtUtc = DateTime.UtcNow,
         };
         foreach (var country in ProtectiveMarking.Create(level, eyesOnly).EyesOnly)

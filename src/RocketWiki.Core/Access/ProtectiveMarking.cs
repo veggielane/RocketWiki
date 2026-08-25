@@ -3,9 +3,17 @@ using RocketWiki.Core.Enums;
 namespace RocketWiki.Core.Access;
 
 /// <summary>
-/// design.md §21: one page's protective marking — a <see cref="ClassificationLevel"/>
-/// plus an optional <b>eyes-only</b> set of country values that limits the page to
-/// principals holding one of those nationalities.
+/// design.md §21: one page's protective marking — a <see cref="ClassificationLevel"/>,
+/// an optional <b>eyes-only</b> set of country values that limits the page to principals
+/// holding one of those nationalities, and an optional national <b>prefix</b>.
+///
+/// <para><b>Two of those three gate access; the prefix does not.</b> The prefix is
+/// presentational — the national qualifier UK markings are conventionally written with
+/// (<c>UK SECRET</c>) — and it is deliberately outside the gate: <see cref="ClearanceGate"/>
+/// does not read it, no denial reason mentions it, and no verdict depends on it. It
+/// lives on this type only because this type owns the canonical display string. If you
+/// are here to "finish" the prefix by giving it access semantics: don't. There is
+/// nothing to compare it against, and §21.12 says why.</para>
 ///
 /// <para><b>This is a value object, not the database row.</b> The row is
 /// <c>RocketWiki.Core.Entities.PageMarking</c> (plus its country child rows); this is
@@ -30,13 +38,37 @@ namespace RocketWiki.Core.Access;
 /// </summary>
 public sealed record ProtectiveMarking
 {
-    private ProtectiveMarking(ClassificationLevel level, IReadOnlyList<string> eyesOnly)
+    private ProtectiveMarking(ClassificationLevel level, IReadOnlyList<string> eyesOnly, string? prefix)
     {
         Level = level;
         EyesOnly = eyesOnly;
+        Prefix = prefix;
     }
 
     public ClassificationLevel Level { get; }
+
+    /// <summary>
+    /// The national prefix, canonical (upper-cased, trimmed) — <c>UK</c> by default.
+    /// <b>Null means no prefix</b>, which is legal: some content legitimately carries
+    /// none, so it must be clearable, and null renders the bare level with no leading
+    /// space.
+    ///
+    /// <para><b>Presentational only.</b> Nothing in <see cref="ClearanceGate"/> reads
+    /// this property, and nothing should: a prefix is a national qualifier on how the
+    /// marking is written, not a claim about who may read it. Pinned by test — see
+    /// <c>ClearanceGateTests</c>'s prefix-invariance case.</para>
+    /// </summary>
+    public string? Prefix { get; }
+
+    public bool HasPrefix => !string.IsNullOrEmpty(Prefix);
+
+    /// <summary>
+    /// The prefix a marking gets when nobody has said otherwise. UK Government markings
+    /// are conventionally written <c>UK OFFICIAL</c>, <c>UK SECRET</c>, so this instance
+    /// defaults to it — new markings, inherited markings, and (via its own migration)
+    /// every row that predated the prefix.
+    /// </summary>
+    public const string DefaultPrefix = "UK";
 
     /// <summary>
     /// The eyes-only country set, canonical (upper-case, ordinal-sorted, distinct).
@@ -49,12 +81,12 @@ public sealed record ProtectiveMarking
     public bool HasEyesOnly => EyesOnly.Count > 0;
 
     /// <summary>
-    /// The marking a page gets when nobody has said otherwise: OFFICIAL, no caveat.
-    /// New root pages take this, and it is what the migration backfills every
+    /// The marking a page gets when nobody has said otherwise: <c>UK OFFICIAL</c>, no
+    /// caveat. New root pages take this, and it is what the migrations backfill every
     /// pre-existing page to (design.md §21 — read the risk note there before assuming
-    /// that is the safe choice; it is the pragmatic one).
+    /// the OFFICIAL half is the safe choice; it is the pragmatic one).
     /// </summary>
-    public static ProtectiveMarking Baseline { get; } = new(ClassificationLevel.Official, []);
+    public static ProtectiveMarking Baseline { get; } = new(ClassificationLevel.Official, [], DefaultPrefix);
 
     /// <summary>
     /// What the read path uses for a page whose <c>PageMarking</c> row is missing.
@@ -68,8 +100,14 @@ public sealed record ProtectiveMarking
     /// code could invent that would mean "nobody". TOP SECRET alone already denies all
     /// but the highest-cleared principals, and inventing a sentinel country would put a
     /// value into enforcement that no admin ever registered.</para>
+    ///
+    /// <para>And <b>no prefix</b>, unlike <see cref="Baseline"/>. This state means "this
+    /// page's marking is missing and we do not know what it said", so asserting a
+    /// national qualifier on its behalf would be inventing a fact. It renders as a bare
+    /// <c>TOP SECRET</c>, which is also a quiet visual signal that something is wrong —
+    /// every marking the app actually writes carries a prefix.</para>
     /// </summary>
-    public static ProtectiveMarking FailClosed { get; } = new(ClassificationLevel.TopSecret, []);
+    public static ProtectiveMarking FailClosed { get; } = new(ClassificationLevel.TopSecret, [], null);
 
     /// <summary>
     /// The only way to build one. Canonicalizes the country set: trims, drops blanks,
@@ -87,9 +125,27 @@ public sealed record ProtectiveMarking
     /// where every marking is built, rather than being trusted at each comparison.
     /// Fail closed, §6.3's doctrine applied to a corrupt value instead of a corrupt
     /// rule.</para>
+    ///
+    /// <para>The <paramref name="prefix"/> is trimmed and upper-cased; null, empty or
+    /// whitespace all collapse to null, which is the legal "no prefix" state. It gets
+    /// none of the fail-closed treatment the level gets, because it carries no access
+    /// weight to fail closed <i>on</i>.</para>
     /// </summary>
-    public static ProtectiveMarking Create(ClassificationLevel level, IEnumerable<string>? eyesOnly) =>
-        new(Enum.IsDefined(level) ? level : ClassificationLevel.TopSecret, Canonicalize(eyesOnly));
+    public static ProtectiveMarking Create(
+        ClassificationLevel level, IEnumerable<string>? eyesOnly, string? prefix = DefaultPrefix) =>
+        new(
+            Enum.IsDefined(level) ? level : ClassificationLevel.TopSecret,
+            Canonicalize(eyesOnly),
+            CanonicalizePrefix(prefix));
+
+    /// <summary>
+    /// The canonical form of a prefix: trimmed and upper-cased, or null when there is
+    /// nothing left. Same normalize-on-write discipline as the country values, and for
+    /// the same reason — the stored row, the label, the audit details and the sync
+    /// payload must be byte-identical rather than merely equivalent.
+    /// </summary>
+    public static string? CanonicalizePrefix(string? prefix) =>
+        string.IsNullOrWhiteSpace(prefix) ? null : prefix.Trim().ToUpperInvariant();
 
     /// <summary>
     /// The canonical form of one country value. <b>Upper-case invariant</b> is the
@@ -130,18 +186,30 @@ public sealed record ProtectiveMarking
     /// reviewer and an MCP client see. Two renderings of one marking that disagree is a
     /// compliance problem, not a cosmetic one, so neither side invents its own.
     ///
-    /// <para>Format: the level, then the caveat in square brackets —
-    /// <c>SECRET [UK EYES ONLY]</c> for one country, <c>SECRET [UK/US EYES ONLY]</c>
-    /// for several, joined in canonical order. The country tokens are the instance's
-    /// own registered nationality values verbatim: if this instance registered
-    /// <c>GB</c>, it renders <c>[GB EYES ONLY]</c>. Mapping <c>GB</c> to <c>UK</c> for
-    /// display was considered and rejected — a marking must read back as the thing that
-    /// is actually enforced, and a display-only alias is how "we thought it said UK"
-    /// happens.</para>
+    /// <para>Format: the national prefix, the level, then the caveat in square
+    /// brackets — <c>UK SECRET [UK EYES ONLY]</c> for one country,
+    /// <c>UK SECRET [UK/US EYES ONLY]</c> for several, joined in canonical order. A
+    /// marking with no prefix renders the bare level with <b>no leading space</b>
+    /// (<c>SECRET</c>, <c>SECRET [GB EYES ONLY]</c>) — an empty prefix must not leave a
+    /// cosmetic gap that makes two identical markings compare unequal as strings.</para>
+    ///
+    /// <para>The country tokens are the instance's own registered nationality values
+    /// verbatim: if this instance registered <c>GB</c>, it renders
+    /// <c>[GB EYES ONLY]</c>. Mapping <c>GB</c> to <c>UK</c> for display was considered
+    /// and rejected — a marking must read back as the thing that is actually enforced,
+    /// and a display-only alias is how "we thought it said UK" happens. Note the prefix
+    /// and the caveat countries are independent: <c>UK SECRET [US EYES ONLY]</c> is a
+    /// perfectly ordinary marking, and reading the leading <c>UK</c> as a releasability
+    /// statement would be exactly backwards.</para>
     /// </summary>
-    public string Format() => HasEyesOnly
-        ? $"{LevelName(Level)} [{string.Join("/", EyesOnly)} EYES ONLY]"
-        : LevelName(Level);
+    public string Format()
+    {
+        var body = HasEyesOnly
+            ? $"{LevelName(Level)} [{string.Join("/", EyesOnly)} EYES ONLY]"
+            : LevelName(Level);
+
+        return HasPrefix ? $"{Prefix} {body}" : body;
+    }
 
     /// <summary>
     /// The UK Government's own written forms, which are not the C# member names:
@@ -213,6 +281,15 @@ public sealed record ProtectiveMarking
     /// here — the cost is an extra row in a reviewer's result set, and the cost of the
     /// opposite error is a widening nobody sees.</item>
     /// </list>
+    ///
+    /// <para><b>The prefix is deliberately not consulted.</b> A downgrade is defined as
+    /// "somebody who could not read this page yesterday can read it today", and the
+    /// prefix cannot move that line in either direction — it is not read by the gate at
+    /// all. Changing <c>UK SECRET</c> to <c>SECRET</c> is therefore an ordinary
+    /// <c>page.marking.set</c>, not a downgrade, and the audit row still records the
+    /// before-and-after prefix so a reviewer can see exactly what happened. Counting it
+    /// as a downgrade would dilute the one query that exists to find real
+    /// widenings.</para>
     /// </summary>
     public static bool IsDowngrade(ProtectiveMarking from, ProtectiveMarking to)
     {
@@ -233,14 +310,20 @@ public sealed record ProtectiveMarking
     /// <summary>
     /// Records equality would compare <see cref="EyesOnly"/> by reference; two markings
     /// with the same canonical countries must be equal, so both members are overridden.
+    /// The prefix participates — two markings that render differently are different
+    /// markings, even though they gate identically.
     /// </summary>
     public bool Equals(ProtectiveMarking? other) =>
-        other is not null && Level == other.Level && EyesOnly.SequenceEqual(other.EyesOnly, StringComparer.Ordinal);
+        other is not null
+        && Level == other.Level
+        && string.Equals(Prefix, other.Prefix, StringComparison.Ordinal)
+        && EyesOnly.SequenceEqual(other.EyesOnly, StringComparer.Ordinal);
 
     public override int GetHashCode()
     {
         var hash = new HashCode();
         hash.Add(Level);
+        hash.Add(Prefix, StringComparer.Ordinal);
         foreach (var country in EyesOnly)
         {
             hash.Add(country, StringComparer.Ordinal);

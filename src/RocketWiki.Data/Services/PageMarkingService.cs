@@ -5,6 +5,7 @@ using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Data.Access;
+using RocketWiki.Data.Configurations;
 
 namespace RocketWiki.Data.Services;
 
@@ -78,7 +79,20 @@ public class PageMarkingService : IPageMarkingService
             return PageMutationResult<PageMarkingView>.Failure(vocabularyError);
         }
 
-        var after = ProtectiveMarking.Create(request.Level, vocabularyResult.Countries);
+        if (request.Prefix is { Length: > 0 } && request.Prefix.Trim().Length > PageMarkingConfiguration.MaxPrefixLength)
+        {
+            // Checked in the service, not left to the column, for the same tier-parity
+            // reason PagePropertyService checks its value length: SQLite does not enforce
+            // declared string lengths, so an over-long prefix would store silently in the
+            // test tier and fail in production.
+            return PageMutationResult<PageMarkingView>.Failure(new ValidationError(
+                $"A marking prefix may be at most {PageMarkingConfiguration.MaxPrefixLength} characters."));
+        }
+
+        // The prefix rides along into the marking but gets no validation beyond length
+        // and no clearance constraint: it is presentational (design.md §21.12), so there
+        // is nothing to validate it against and nothing for it to be refused for.
+        var after = ProtectiveMarking.Create(request.Level, vocabularyResult.Countries, request.Prefix);
 
         // design.md §21: you may not set a marking you could not then read. Enforced as
         // the resulting marking as a WHOLE, not just its level, because the caveat loses
@@ -109,6 +123,7 @@ public class PageMarkingService : IPageMarkingService
         }
 
         marking.Level = after.Level;
+        marking.Prefix = after.Prefix; // already canonical (upper-cased/trimmed, null when blank)
         marking.SetAtUtc = DateTime.UtcNow;
         marking.SetByUserId = actingUserId;
         ReplaceCountries(marking, after.EyesOnly);

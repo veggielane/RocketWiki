@@ -23,12 +23,24 @@ namespace RocketWiki.Data.Configurations;
 /// </summary>
 public class PageMarkingConfiguration : IEntityTypeConfiguration<PageMarking>
 {
+    /// <summary>Long enough for any national qualifier anyone actually writes
+    /// (<c>UK</c>, <c>NATO</c>, <c>UK/US</c>); short enough that the column is never the
+    /// place a paragraph ends up.</summary>
+    public const int MaxPrefixLength = 16;
+
     public void Configure(EntityTypeBuilder<PageMarking> builder)
     {
         builder.ToTable("PageMarkings");
         builder.HasKey(m => m.PageId);
 
         builder.Property(m => m.Level).HasColumnType("tinyint").IsRequired();
+
+        // Nullable on purpose: no prefix is a legal marking, and the column must be able
+        // to represent "cleared" rather than forcing a sentinel. Deliberately NOT
+        // indexed — the prefix gates nothing (design.md §21.12), so no enforcement or
+        // filtering path ever looks a page up by it.
+        builder.Property(m => m.Prefix).HasMaxLength(MaxPrefixLength);
+
         builder.Property(m => m.SetAtUtc).HasColumnType("datetime2(3)");
 
         // "Which pages sit at or above level X" is the natural administrative question

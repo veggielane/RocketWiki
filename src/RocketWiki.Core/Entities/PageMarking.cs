@@ -26,6 +26,18 @@ public class PageMarking
     public ClassificationLevel Level { get; set; } = ClassificationLevel.Official;
 
     /// <summary>
+    /// The national prefix a UK marking is conventionally written with — <c>UK</c> by
+    /// default, giving <c>UK SECRET</c>. Canonical (upper-cased, trimmed);
+    /// <b>null means no prefix</b>, which is legal and must stay clearable.
+    ///
+    /// <para><b>Presentational only, and deliberately so</b> (design.md §21.12). It is
+    /// not read by <c>ClearanceGate</c>, never appears in a denial reason, and changes no
+    /// verdict. It is stored beside the level because it is part of how this page's
+    /// marking is <i>written</i>, not part of what it <i>permits</i>.</para>
+    /// </summary>
+    public string? Prefix { get; set; } = ProtectiveMarking.DefaultPrefix;
+
+    /// <summary>
     /// The eyes-only country set (design.md §21). Empty means no caveat. Values are
     /// canonical (upper-case, see <see cref="ProtectiveMarking.CanonicalizeCountry"/>)
     /// and drawn from the registered <c>nationality</c> attribute's allowed values, NOT
@@ -51,7 +63,7 @@ public class PageMarking
     /// so a row hand-edited into a non-canonical state still compares correctly.
     /// </summary>
     public ProtectiveMarking ToMarking() =>
-        ProtectiveMarking.Create(Level, Countries.Select(c => c.CountryValue));
+        ProtectiveMarking.Create(Level, Countries.Select(c => c.CountryValue), Prefix);
 }
 
 /// <summary>
