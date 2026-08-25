@@ -145,14 +145,26 @@ public partial class Query
         // `groups` above), and it is the difference between offering a marking that
         // will be rejected and explaining up-front why it is unavailable. Authorization
         // still happens server-side: this is affordance data, never a decision (§6.1).
+        //
+        // Both go through ClearanceGate rather than reading Attributes directly, and for
+        // nationality that is load-bearing rather than tidiness: ResolveNationalities
+        // CANONICALIZES (upper-cases, trims, drops blanks) exactly as a marking's country
+        // set is canonicalized on write, and the raw claim does not. A token saying `gb`
+        // against a marking storing `GB` passes the server's gate and would have failed a
+        // client-side comparison against the raw value — so the UI would have warned that
+        // a marking locks you out when it does not, which is precisely the "what the UI
+        // greys out matches what the server refuses" property this field exists for. It
+        // is the §21.4 case-mismatch trap reappearing one layer up, and it is closed the
+        // same way: one canonicalizer, both sides.
         var principal = principalAccessor.Current;
         var clearance = principal is null
             ? ClassificationLevel.Official
             : ClearanceGate.ResolveClearance(principal);
-        var nationality = principal is not null
-            && principal.Attributes.TryGetValue("nationality", out var held)
-                ? held
-                : [];
+        // Ordinal-sorted so the list is stable between requests and matches the order a
+        // marking's EyesOnly set renders in — a diff of the two reads cleanly.
+        var nationality = principal is null
+            ? []
+            : ClearanceGate.ResolveNationalities(principal).OrderBy(n => n, StringComparer.Ordinal).ToList();
 
         return new CurrentUser(
             userId, email, name, groups, IsAuthenticated: true,

@@ -2585,6 +2585,28 @@ without ever stating what caveat they meant.
   does. Refused as a `ForbiddenError` — the input is well-formed, the caller is
   simply not entitled to the result.
 
+**The UI prevents rather than refuses, and that is affordance data, not
+authorization.** `me.clearance` and `me.nationality` echo the caller's own
+resolved attributes so the marking picker can grey out a level above their
+clearance, and warn about an eyes-only set that excludes their own nationality,
+instead of offering a choice the server will reject. Three properties make that
+safe rather than a second access-control implementation:
+
+- **It is the caller's own token, echoed back.** Same category as `groups`, which
+  `me` already returned; it discloses nothing the caller did not present.
+- **Both fields resolve through `ClearanceGate`, not the raw claim** — the same
+  path enforcement uses. `ResolveClearance` so a garbage claim reads as OFFICIAL
+  here exactly as it does at the gate, and `ResolveNationalities` so the values
+  are *canonicalized*. That second one is load-bearing: a marking's country set is
+  always canonical, so a token saying `gb` is admitted to a `GB` marking by the
+  server, and a client comparing against the raw claim would have concluded the
+  opposite and warned the author out of a marking that would have worked. It is
+  §21.4's case-mismatch trap one layer up, closed the same way — one
+  canonicalizer, both sides.
+- **The server decides regardless.** `PageMarkingService` re-checks the resulting
+  marking against the caller's clearance and returns a typed error; a stale,
+  spoofed, or simply wrong client-side comparison changes nothing but the polish.
+
 **Downgrading is permitted but audited distinctly.** A change is a *downgrade*
 when it makes the page readable by someone it was not readable by before: the
 level drops, the caveat is cleared, or the caveat gains a country it did not
