@@ -268,6 +268,12 @@ function shell(initialPath: string, routePath: string, element: React.ReactEleme
 
 const settle = () => new Promise((r) => setTimeout(r, 400))
 
+// One test renders every README screen in sequence, each with a 400ms settle.
+// That legitimately exceeds vitest's 5s default under full-suite load, where it
+// competes with 100 other files — it then fails as a TIMEOUT with a stack
+// pointing at the first line of the body, which reads like a real defect and has
+// twice sent someone hunting for one. The work is genuinely this long; the
+// default is what was wrong.
 it('composes the README screens (writes HTML only when PREVIEW_OUT is set)', async () => {
   setEmojiRegistry([
     { name: 'rocket', etag: '"r1"' },
@@ -324,4 +330,4 @@ it('composes the README screens (writes HTML only when PREVIEW_OUT is set)', asy
       `<!doctype html><html><head><meta charset="utf-8"><title>RocketWiki</title>${styles}<style>body{margin:0;background:#fff;font-family:Roboto,Helvetica,Arial,sans-serif}</style></head><body>${s.html}</body></html>`,
     )
   }
-})
+}, 60_000)
