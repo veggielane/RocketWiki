@@ -47,10 +47,7 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
-    <!-- Not on 10.0.11 with the rest of the family: 10.0.0 is the newest published
-         version of this particular package. Nothing pulls it in transitively at a
-         higher floor, so it does not trip NU1605. -->
-    <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.11" />
   </ItemGroup>
 
   <!-- Security bumps over transitively-resolved versions. Both are direct references
@@ -73,10 +70,10 @@
        NOT a package reference and is not managed here — keep the two in step by hand
        when upgrading. -->
   <ItemGroup>
-    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.5.2" />
-    <PackageVersion Include="Aspire.Hosting.JavaScript" Version="13.5.2" />
-    <PackageVersion Include="Aspire.Hosting.SqlServer" Version="13.5.2" />
-    <PackageVersion Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.2" />
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.5.3" />
+    <PackageVersion Include="Aspire.Hosting.JavaScript" Version="13.5.3" />
+    <PackageVersion Include="Aspire.Hosting.SqlServer" Version="13.5.3" />
+    <PackageVersion Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.3" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.9.0" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.9.0" />
     <!-- No official Aspire hosting integration exists for Keycloak; this is the
@@ -86,9 +83,9 @@
 
   <!-- GraphQL (design.md §8). -->
   <ItemGroup>
-    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.6.1" />
-    <PackageVersion Include="HotChocolate.AspNetCore.CommandLine" Version="16.6.1" />
-    <PackageVersion Include="HotChocolate.Diagnostics" Version="16.6.1" />
+    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.6.2" />
+    <PackageVersion Include="HotChocolate.AspNetCore.CommandLine" Version="16.6.2" />
+    <PackageVersion Include="HotChocolate.Diagnostics" Version="16.6.2" />
   </ItemGroup>
 
   <!-- OpenTelemetry (design.md §15). design.md §15's finding about
@@ -113,7 +110,7 @@
 
   <!-- Storage and image processing (design.md §10, §19). -->
   <ItemGroup>
-    <PackageVersion Include="AWSSDK.S3" Version="4.0.102.3" />
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.102.4" />
     <!-- 6.1.1 is exactly what Microsoft.EntityFrameworkCore.SqlServer already drags
          into the solution transitively, so the direct reference in RocketWiki.Storage
          adds no second major version. -->

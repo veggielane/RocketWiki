@@ -11,7 +11,7 @@ using Microsoft.Extensions.Configuration;
 //     etc.) that generic `AddContainer` resources don't get. MinIO uses the generic
 //     `.WithVolume(name, target)` API instead, which is functionally identical.
 //   - MinIO has no dedicated Aspire hosting package either (a few third-party ones
-//     exist but are unmaintained/version-mismatched against Aspire 13.5.1), so it's
+//     exist but are unmaintained/version-mismatched against Aspire 13.5.x), so it's
 //     wired by hand: explicit S3 (9000) and console (9001) endpoints, dev-only root
 //     credentials, and the `server /data --console-address :9001` command (wrapped
 //     in a shell so the bucket directory exists first — see below).
