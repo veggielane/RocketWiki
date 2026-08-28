@@ -194,58 +194,148 @@ to set a field, assign, add a comment, or transition a linked issue.
    defeated by a config screen. Audit rows for post-function effects carry the
    acting user, not a system account, or §7's record stops being true.
 
-### Advanced workflows: admin-authored C#
+### The rule engine — one engine, two consumers
 
-This is the request that needs its constraints stated before anyone starts,
-because the obvious implementation is unsafe in a way that is not obvious.
+Conditions, validators, post-functions and (later) automation rules are the
+same thing: a boolean tree over a context, plus a list of effects. Design it
+once for both consumers. Retrofitting triggers onto a transition-shaped engine
+is expensive; designing for both from the start costs nothing.
 
-**The hard fact: .NET has no supported in-process sandbox.** Code Access
-Security was removed in .NET Core, and `AppDomain` isolation went with it. There
-is no mechanism by which C# compiled and executed inside the API process can be
-prevented from opening a `DbContext`, reading any row, calling out over HTTP, or
-reading the process's configuration and secrets. Roslyn scripting compiles and
-runs code; it does not contain it.
+**And you already have this engine.** §6.3's ABAC rules are a validated JSON
+expression tree with a serializer, a builder UI, and a vocabulary query feeding
+it:
 
-For this product that has a specific consequence. §21 establishes that **no
-role — including instance admin — reads around a classification**; the clearance
-gate has no admin bypass, and that invariant is enforced structurally and pinned
-by test. Admin-authored C# running in-process silently repeals it: the script
-runs with the process's authority, not the author's. An instance admin who
-cannot read a `TOP SECRET` page could write a post-function that emails its
-contents outside. Nothing in the current design would notice.
+```csharp
+public abstract record RuleNode;
+public sealed record AllOfNode(IReadOnlyList<RuleNode> Children) : RuleNode;
+public sealed record AnyOfNode(IReadOnlyList<RuleNode> Children) : RuleNode;
+public sealed record GroupCondition(string Group) : RuleNode;
+public sealed record UserCondition(string UserId) : RuleNode;
+public sealed record AttrCondition(string Attribute, IReadOnlyList<string> In) : RuleNode;
+public sealed record EveryoneCondition : RuleNode;
+```
 
-So the real decision is not *"C# or not"* but *"what trust boundary"*. Three
-honest options:
+`RuleExpressionSerializer` validates holistically — "no notion of a partially
+valid tree" — and the whole thing is stored in a column. The workflow engine is
+this, extended. Not a parallel design.
 
-**(a) Declarative rules, no code.** A safe expression language over a curated
-context — field reads, comparisons, and a fixed set of effects. Covers the great
-majority of real post-functions, is statically analysable, has no sandbox
-problem, and can be validated in the UI as it is typed. *Recommended for the
-first advanced tier.*
+**Three node families.** Conditions answer *may this happen*; the actor half
+reuses the nodes above verbatim, because the actor **is** a `Principal`:
 
-**(b) A developer-shipped catalogue.** Post-functions are real C#, written by
-developers, reviewed, and deployed with the application; admins compose and
-configure them through the UI but cannot author new ones. This is how most
-regulated deployments actually run ScriptRunner-style features once the security
-team looks at them. It gets you arbitrary power without an arbitrary-code
-surface.
+```json
+{ "allOf": [ { "group": "engineering" },
+             { "field": "priority", "gte": 3 },
+             { "state": { "categoryIs": "InProgress" } } ] }
+```
 
-**(c) UI-authored C#, executed out-of-process.** If admins genuinely must write
-code in the browser, the only defensible execution model is an isolated worker
-with **no ambient authority**: a separate process or container, no database
-connection, no network egress, no secrets, communicating over an explicit
-`IWorkflowContext` boundary that exposes only what the acting user could do
-anyway. Add resource limits (CPU, memory, wall-clock), a hard timeout, and treat
-script changes as deployment-class events — versioned, diffable, audited, and
-ideally requiring a second approver.
+Validators are the same family plus a message
+(`{ "when": {...}, "reject": "Set a resolution before closing." }`). Effects are
+a separate family — `setField`, `assign`, `addComment`, `addLabel`,
+`transitionLinked`.
 
-Even in (c), be honest in the docs that **authoring a script is equivalent in
-power to deploying code**, and that the boundary is the worker process, not the
-language.
+**Two deliberate exclusions.**
 
-If (c) is the destination, (a) is still the right first step: it is a subset of
-the same UI, it defines the context object the sandbox would later expose, and
-it lets the workflow engine ship without waiting on the isolation work.
+*No `NOT` combinator*, matching §6.3's "allow-list thinking only". Negation comes
+from positive predicates (`isEmpty`/`isNotEmpty`, `equals`/`notEquals`), which
+reads better in a builder and avoids the double negations nobody catches in a
+config screen.
+
+*No `setMarking` effect.* A rule must never change a protective marking. §21
+requires that an author cannot mark above their own clearance and that
+downgrades are individually audited as a distinct action; a config screen that
+silently reclassifies content defeats both. Classification stays a human
+decision.
+
+**The context** is `ctx.Issue.<field>`, `ctx.Actor`, `ctx.Transition.{from,to}`,
+`ctx.Now` (resolved once) — built under the acting principal, so a linked issue
+the actor cannot see is simply unreachable. The permission model does the work;
+the rule engine does not reimplement it.
+
+**Why this beats every scripting engine: there is no engine to escape.** A JSON
+AST cannot loop, recurse, allocate unboundedly, or name a type. No sandbox, no
+worker process, no resource limits, no `StackOverflowException` killing the pod.
+It is also diffable, versionable and auditable — a rule change is a JSON diff in
+an audit row, which is what a reviewer wants and what a code blob is not — and
+a rule becomes unit-testable by evaluating the tree against a synthetic context.
+
+### If you still want real code
+
+The declarative tier covers the overwhelming majority of real post-functions. If
+genuinely arbitrary logic is needed later, the engine choice is not "which
+language" but **deny-list versus allow-list**:
+
+- **Roslyn / `CSharpScript`** starts with a language that can do everything and
+  tries to remove capabilities. It cannot. .NET has no supported in-process
+  sandbox — CAS was removed in .NET Core and `AppDomain` isolation went with it —
+  so a script runs with the *process's* authority, not the author's, and
+  `Type.GetType("System.IO.File")` defeats any reference allowlist. Three failure
+  modes need no malice at all: an uncatchable `StackOverflowException` kills the
+  process, `while(true)` cannot be aborted (`Thread.Abort` is gone), and every
+  saved script version leaks an assembly into the non-collectible default load
+  context. Only defensible out-of-process, with no ambient authority.
+- **Jint** starts with a script that can do nothing. Pure managed — no native
+  binary, which matters for air-gapped image builds — with CLR interop **off**
+  unless explicitly enabled, and real limits the interpreter can enforce because
+  it owns the loop: `LimitRecursion`, `LimitMemory`, `TimeoutInterval`,
+  `MaxStatements`. Nothing is emitted, so nothing leaks.
+- **ClearScript (V8)** if performance or complete modern JS matters; costs a
+  native dependency per platform.
+- **Dynamic Expresso** for conditions and validators specifically — C#-like
+  *expressions* compiled to LINQ trees over registered identifiers only. No
+  statements, no loops, so structurally cannot hang.
+- **Avoid IronPython and Python.NET**: full CLR access by design, no boundary.
+
+**The context object is the boundary, not the engine.** Hand any of them a
+`DbContext` and the sandbox is decorative.
+
+### Automation — the second consumer
+
+Jira Automation is `trigger → condition → action`; workflow post-functions are
+`transition → condition → action`. Same conditions, same effects, different
+front half.
+
+**Two things it needs already exist.** The trigger source is the domain-event
+stream — every mutation raises one, and `DomainEventAuditMapper`'s fall-through
+*throws* for an unmapped event type, so the stream is provably complete. And
+automation must run **after** commit, not inside the triggering transaction, or a
+slow rule blocks the user's save and a failing rule rolls back their edit — which
+is exactly the append-in-transaction, drain-after-commit shape the sync outbox
+already implements. Second consumer, same pattern.
+
+**RQL is the scheduled-scope language**: "every issue matching
+`label = "review" AND updated < now("-30d")`" is a query that exists and is
+already permission-filtered.
+
+**The hard question is whose authority a rule runs as.** A post-function has an
+easy answer — the user who clicked. A scheduled rule at 03:00 has no such user,
+and the tempting answer, *the system*, is precisely the bypass §21 exists to
+prevent: a rule with process authority could read and relay content its author
+cannot see.
+
+Recommended shape: **a named automation principal per project**, with its own
+grants and clearance, subject to the same gate as any human. Everything then
+falls out — a rule triggering on "any issue created" fires only for what that
+principal can see, its actions audit under an identity a reviewer can name, and
+revoking a rule's power is revoking grants, a mechanism that already exists. The
+alternative (run as the author, re-resolved at execution) tracks the author's
+clearance nicely but makes rules die silently when someone changes role.
+**Never "system"**, and the execution log must record which identity acted.
+
+**Cascades are worse here than for workflows.** Post-functions cascade through
+explicit links; automation rules cascade through events they generate
+themselves — rule A updates a field, triggering rule B, which re-triggers A.
+Needs a depth limit, loop detection, a rule-disables-itself circuit breaker, and
+an execution log recording the **causal chain** rather than just the outcome.
+Without that log, a rule that silently stops firing is undiagnosable.
+
+**Two things to keep out of v1.** *Outbound HTTP actions* — the most useful
+action in Jira Automation, and in an air-gapped or high-side deployment an
+egress channel that can carry issue content anywhere; it needs the same
+deliberate decision as email, plus a destination allowlist. And *smart-value
+templating* beyond simple named substitution: Jira's nested field-path
+expressions are a scripting engine wearing a costume, and reintroduce everything
+the JSON AST just eliminated.
+
 
 ### Configuration is instance-local
 
@@ -322,11 +412,20 @@ declarative conditions/validators/post-functions. New permission verbs
 (`Transition`, `Assign`). Transition history in the audit log — a state change
 is exactly the kind of thing §7 exists to record. Scripted post-functions are
 **not** part of this phase: ship the declarative tier, then decide the
-execution model (see "Advanced workflows").
+execution model (see "If you still want real code").
 
 **Phase 3 — links and boards.**
 Issue links with the permission-filtered rendering described above. Kanban board
 over workflow states. Aggregate markings on columns.
+
+**Phase 3b — automation.**
+The rule engine from Phase 2 gains a trigger layer: subscribe to the
+domain-event stream, drain after commit through the outbox pattern, add
+scheduled rules scoped by RQL. Needs the authority decision (a named automation
+principal, never "system"), cascade limits, and an execution log recording the
+causal chain. Cheap *only* because the conditions and effects already exist —
+which is why the rule engine should be designed for both consumers in Phase 2
+rather than shaped around transitions.
 
 **Phase 4 — search federation.** *The hard one.*
 A second FTS index, a second embedding pipeline, and a cross-type ranking
@@ -347,12 +446,15 @@ If not, it is a second outbox and a bundle format bump.
    consumed by audit rows and the permission inspector. An issue rule leaving
    `PageId` null silently produces `restriction::{ruleId}` — a malformed
    contractual string, discovered late.
-3. **What trust boundary for scripted workflows?** Declarative rules, a
-   developer-shipped catalogue, or UI-authored C# in an isolated worker. The
-   answer determines whether §21's "no role reads around a classification"
-   survives contact with the workflow engine, so it is a security decision, not
-   a feature decision. Deferring it is fine; deferring it *while shipping
-   in-process scripting* is not.
+3. **Is the JSON rule AST enough, or is real code required?** The AST needs no
+   sandbox because there is no engine to escape, and it covers the overwhelming
+   majority of real conditions and post-functions. If arbitrary logic is genuinely
+   required later, the choice is an allow-list engine (Jint, in-process, CLR
+   interop off) or out-of-process C# — never in-process Roslyn, which repeals
+   §21's "no role reads around a classification" by running with the process's
+   authority rather than the author's. A security decision, not a feature one:
+   deferring it is fine, deferring it *while shipping in-process scripting* is
+   not.
 4. **Column-per-subject-type, or a discriminator?** `AccessRule` has a nullable
    `PageId` plus a check constraint; `Watch` has a space-or-page XOR with two
    filtered unique indexes. Both are O(n) in columns and constraints per subject
@@ -372,7 +474,10 @@ valuable. Explicitly out:
 - **JQL.** A query language is a product in itself. Structured filters first.
 - **Dashboards and reporting.** Burndown, velocity, cumulative flow — none of
   it is load-bearing for an export-controlled engineering org's first tracker.
-- **Automation rules.** A rules engine is a second workflow engine.
+- **Outbound HTTP from automation, and smart-value templating.** The rule
+  engine itself is planned (see "Automation"), but its two most dangerous
+  features are not: web-request actions are an egress channel for issue content,
+  and nested field-path templating is a scripting engine wearing a costume.
 - **SLAs, service desk, request portals** — out of *tracker* v1, but planned
   rather than rejected: see "Service desk" below. It sits on top of the
   tracker and should not be attempted before Phase 3 exists.
