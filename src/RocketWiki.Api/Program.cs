@@ -205,6 +205,14 @@ builder.Services.AddScoped<IAccessRuleService, AccessRuleService>();
 // generator/options parameters default to null otherwise and search is keyword-only.
 builder.Services.AddScoped<ISearchService, SearchService>();
 
+// --- RQL, the page query language (design.md §22) ---
+// Parsing/validation/printing is pure and lives in RocketWiki.Core; this is the
+// execute-and-permission-filter half. TimeProvider is injected (Program registers
+// TimeProvider.System below) so now() resolves from one clock read per execution and
+// tests can pin the instant.
+builder.Services.AddScoped<IPageQueryService>(sp =>
+    new PageQueryService(sp.GetRequiredService<RocketWikiDbContext>(), sp.GetRequiredService<TimeProvider>()));
+
 // --- Embedding pipeline (design.md §9.2/§9.3, milestone 7) ---
 // IEmbeddingGenerator over the OpenAI-compatible endpoint from the Aspire "embeddings"
 // connection string / Ai section, the EmbeddingIndexer, and the polling background job

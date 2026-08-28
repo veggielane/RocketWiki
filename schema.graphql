@@ -42,6 +42,9 @@ type Query {
   labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
   pagePropertyKeys: [PagePropertyKeyRef!]! @cost(weight: "10")
+  pageQuery(query: String!, first: Int, after: String): PageQueryConnection!
+    @cost(weight: "10")
+  parseRql(query: String!): RqlParseResult!
   classificationScheme: [ClassificationLevelInfo!]!
   groups: [String!]! @cost(weight: "10")
   attributeRegistry: [AttributeDefinition!]! @cost(weight: "10")
@@ -545,6 +548,28 @@ type PagePropertyValue {
   sortOrder: Int!
 }
 
+type PageQueryConnection {
+  aggregateMarking: AggregateMarkingLabel @cost(weight: "10")
+  totalCount: Int!
+  edges: [PageQueryEdge!]!
+  pageInfo: PageQueryPageInfo!
+  errors: [RqlError!]!
+}
+
+type PageQueryEdge {
+  cursor: String!
+  node: PageQueryRow!
+}
+
+type PageQueryPageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
+type PageQueryRow {
+  page: Page! @cost(weight: "10")
+}
+
 type PageRestoreSummary {
   rootPageId: UUID!
   restoredPageCount: Int!
@@ -623,6 +648,42 @@ type RestrictionCheckView {
   action: PageAction!
   expressionJson: String!
   passed: Boolean!
+}
+
+type RqlError {
+  code: RqlErrorCode!
+  message: String!
+  offset: Int!
+  length: Int!
+}
+
+type RqlNode {
+  kind: RqlNodeKind!
+  children: [RqlNode!]!
+  field: RqlField
+  operator: RqlOperator
+  values: [RqlValue!]!
+  offset: Int!
+  length: Int!
+}
+
+type RqlOrderItem {
+  field: RqlField!
+  direction: RqlSortDirection!
+}
+
+type RqlParseResult {
+  isValid: Boolean!
+  canonical: String
+  where: RqlNode
+  orderBy: [RqlOrderItem!]!
+  errors: [RqlError!]!
+}
+
+type RqlValue {
+  kind: RqlValueKind!
+  text: String
+  nowOffset: String
 }
 
 type SearchConnection {
@@ -995,6 +1056,61 @@ enum GitLabUnavailableReason {
 enum PageAction {
   VIEW
   EDIT
+}
+
+enum RqlErrorCode {
+  SYNTAX
+  UNKNOWN_FIELD
+  NOT_QUERYABLE_FIELD
+  UNSUPPORTED_FIELD
+  OPERATOR_NOT_ALLOWED
+  INVALID_VALUE
+  UNKNOWN_FUNCTION
+  FUNCTION_NOT_ALLOWED_HERE
+  TOO_COMPLEX
+}
+
+enum RqlField {
+  LABEL
+  SPACE
+  TITLE
+  CREATED
+  UPDATED
+  CREATOR
+}
+
+enum RqlNodeKind {
+  AND
+  OR
+  NOT
+  PREDICATE
+}
+
+enum RqlOperator {
+  EQUALS
+  NOT_EQUALS
+  CONTAINS
+  NOT_CONTAINS
+  GREATER_THAN
+  GREATER_THAN_OR_EQUAL
+  LESS_THAN
+  LESS_THAN_OR_EQUAL
+  IN
+  NOT_IN
+  IS_EMPTY
+  IS_NOT_EMPTY
+}
+
+enum RqlSortDirection {
+  ASCENDING
+  DESCENDING
+}
+
+enum RqlValueKind {
+  TEXT
+  DATE
+  CURRENT_USER
+  NOW
 }
 
 enum SpaceRole {

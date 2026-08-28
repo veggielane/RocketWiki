@@ -501,7 +501,7 @@ Append-only `AuditEvent` table:
 |---|---|
 | Timestamp (UTC) | `2026-08-21T03:14:07Z` |
 | User | local user id (from `sub`) |
-| Action | `page.view`, `page.edit`, `page.move`, `space.browse`, `attachment.download`, `search.query`, `permission.change`, `audit.view`, `sync.import`, … |
+| Action | `page.view`, `page.edit`, `page.move`, `space.browse`, `attachment.download`, `search.query`, `page.query`, `permission.change`, `audit.view`, `sync.import`, … |
 | Subject | type + id (page, space, attachment, comment, rule) + space key |
 | Outcome | `success` or `denied` |
 | Request context | request id, client IP, channel (`graphql` / `mcp` / `attachment`) + MCP client name |
@@ -510,6 +510,16 @@ Append-only `AuditEvent` table:
 The `search.query` row's Details JSON carries the raw query text, facets,
 and result count — the audit table, not telemetry (§15), is where
 who-searched-what lives.
+
+`page.query` (§22) is RQL's equivalent: one row per executed query, Details
+carrying the raw RQL string and the visible result count, on the same reasoning.
+It dedups on the query text rather than on a subject, so a page embedding several
+list widgets writes a row per query rather than one for the whole request — the
+same discriminator `gitlab.fetch` uses for two resources in one document. Invalid
+queries are audited too, still as `success`: `denied` stays reserved for ABAC
+refusals, and RQL never produces one (restricted pages are absent from the
+candidate set, never refused). `parseRql` is deliberately unaudited — a pure
+syntax service with no subject and no access decision (§22.7).
 
 `settings.avatar.set` / `settings.avatar.cleared` (§19) — the avatar
 mutations, via the domain-event pipeline in the same transaction as the
@@ -2337,7 +2347,12 @@ documented simplification baselines already have (§16, milestone 6).
 ### 20.5 Not built yet: cross-page reporting
 
 There is **no** "every page in this space with `Status: Draft`" query, and no
-property facet in search. The *data model* supports one without a migration —
+property facet in search. RQL (§22) is now the cross-page query surface, and it
+deliberately does **not** include a `property` field: the key registry is
+admin-defined, so admitting it would mean opening RQL's closed field set to an
+open-ended key space — a vocabulary decision that has not been made rather than
+an omission. Everything below still applies on the day it is.
+The *data model* supports one without a migration —
 value rows are keyed by `(PageId, PagePropertyKeyId)` and indexed
 `(PagePropertyKeyId, PageId)`, which is exactly the access path such a report
 needs — but the query surface does not exist.
@@ -3069,3 +3084,290 @@ set is allowed to appear.
   today spans one response's own items. A "this space is effectively SECRET" figure
   would be the "which pages are marked X" report by another name, with the same
   per-page permission-filtering obligation (see above), and it is not built.
+
+---
+
+## 22. RQL — the page query language
+
+A CQL/JQL-shaped filter language over pages. It ships first behind an embedded
+page widget that lists the pages matching a filter, and later behind the search
+page's structured filters.
+
+**Not called CQL.** That name is Atlassian's, and reusing it would imply a
+compatibility promise this grammar does not keep — the field set is smaller, the
+functions are fewer, and the security rules below have no Confluence equivalent.
+
+**The string is the canonical form.** It is what a user types, what a Markdown
+fence stores, and what the GraphQL field accepts. There is deliberately **no
+structured AST input type**: a client-built tree would need exactly the same
+validation the string parser applies, so it would be a second door into the
+compiler with a second chance of leaving the closed field set less than closed.
+The AST is published as **output** instead (`parseRql`), which is all a
+structural query builder needs — it builds, prints through the canonical printer,
+stores the string, and reparses it.
+
+### 22.1 Grammar
+
+```
+query      := orExpr [ "ORDER" "BY" orderItem ("," orderItem)* ]
+orExpr     := andExpr ("OR" andExpr)*
+andExpr    := notExpr ("AND" notExpr)*
+notExpr    := ["NOT"] primary
+primary    := "(" orExpr ")" | predicate
+predicate  := field op value
+            | field ("IN" | "NOT" "IN") "(" value ("," value)* ")"
+            | field "IS" ["NOT"] "EMPTY"
+orderItem  := field ["ASC" | "DESC"]
+```
+
+Operators: `=`, `!=`, `~` (contains), `!~`, `>`, `>=`, `<`, `<=`.
+
+Keywords (`AND OR NOT IN IS EMPTY ORDER BY ASC DESC`) and field names are
+case-insensitive. Values are bare tokens or double-quoted strings with a closed
+escape set (`\" \\ \n \r \t`). **Keywords are keywords everywhere**, including
+where a value could go, so a value that spells one has to be quoted
+(`label = "in"`) — context-sensitive keywords buy nothing and are how a query
+language grows corners nobody can reason about.
+
+`NOT` here is not the `NOT` §6.3 forbids. That prohibition is about *access
+rules*, where a negation turns an allow-list into a deny-list and a missing
+attribute widens access. RQL's `NOT` negates a *content* condition over the
+candidate set, and no RQL expression is an input to any permission decision
+(§22.4) — it cannot widen anything.
+
+### 22.2 The closed field set
+
+| Field | Type | Operators |
+|---|---|---|
+| `label` | string | `=` `!=` `IN` `NOT IN` `IS [NOT] EMPTY` |
+| `space` | space key | `=` `!=` `IN` `NOT IN` |
+| `title` | string | `=` `!=` `~` `!~` |
+| `created`, `updated` | date | `=` `!=` `>` `>=` `<` `<=` |
+| `creator` | user | `=` `!=` |
+
+Anything else is a validation error naming the allowed fields. Adding a member is
+a deliberate widening and belongs in this table before it belongs in code.
+
+- **`creator` is the author of the page's first revision.** There is no
+  `CreatedByUserId` column on `Pages` (data-model.md) and RQL did not add one —
+  a query filter is not a reason for a schema change. A page with no revision 1
+  matches no creator, which is the honest answer for a page whose author is not
+  recorded. The value is an OIDC subject; a picker supplies it, and
+  `currentUser()` is the spelling for "me".
+- **`space` matches keys ordinally**, like `SearchService`'s own `s.Key ==
+  spaceKey` and §6.3's exact-match doctrine. Wrong case yields the empty result a
+  nonexistent key yields, which is the correct behaviour even though it is the
+  less friendly one.
+- **`label != "x"` means "does not carry label x", and therefore matches an
+  unlabelled page.** This is a deliberate divergence from JQL, where the
+  equivalent silently excludes issues with no labels at all and every user
+  eventually learns to write `labels != x OR labels IS EMPTY`. RQL's `!=` is
+  exactly `NOT (= )` and needs no such folklore; `IS EMPTY` exists for the cases
+  where emptiness is the actual question. Same for `NOT IN`.
+- **`ORDER BY` accepts `title`, `created`, `updated` only.** Sorting by label or
+  space would need a join whose order is undefined for a page carrying several
+  labels. The default when absent is `updated DESC`, applied at execution — the
+  parsed AST keeps `ORDER BY` empty, so a query that merely passes through the
+  builder does not grow a clause it never had.
+
+**Functions.** `currentUser()`, valid only for `creator`; and `now()` with an
+optional offset — `now("-7d")`, `now("+1h")`, units `w d h m`. Date literals are
+ISO-8601. **`now()` resolves once per query execution**, so two `now()`s in one
+query cannot disagree and a window built from two of them is never accidentally
+empty.
+
+**Date precision is part of the value.** A date written without a time denotes
+the whole UTC day, so `created = "2026-01-31"` is a half-open range test and
+`created > "2026-01-31"` means "after that day ends". An instant — including
+every resolved `now()` — compares exactly. Compiling day-precision equality as
+exact equality would match only a page created at precisely midnight while
+looking like it worked.
+
+### 22.3 Why classification is not queryable
+
+`marking`, `classification`, `level`, `eyesOnly`, `caveat`, `prefix`,
+`restricted`, `restriction`, `permission`, `clearance`, `group`, `nationality`
+(and their plural and underscore spellings) are **refused by name**, with their
+own error code and message.
+
+The reason is §21.8's, applied to a query box. A filter over classification is a
+**census of the classified estate**: `marking = SECRET` run against a
+permission-filtered result set still tells its author how much SECRET material
+exists in the spaces they can reach, how it clusters, and — run repeatedly with
+different predicates — a great deal about content they cannot open. That is the
+same argument that keeps a classification level out of every metric dimension,
+and the query box is a more capable instrument than a dashboard. The same holds
+for permission state: "which pages are restricted" is a map of where the fences
+are.
+
+Three properties of the refusal matter as much as the refusal:
+
+1. **Not silently ignored.** An ignored predicate is worse than a refused one:
+   the author believes a filter applied and reads the results as if it had.
+2. **Not reported as an unknown field.** That would be a lie, and it invites a
+   retry with a different spelling until something sticks. The message says *not
+   queryable* and says why, so the author learns the rule once.
+3. **A distinct error code** (`NOT_QUERYABLE_FIELD`), so a client can style it
+   differently from a typo without matching on message text.
+
+`text` gets its own third answer — `UNSUPPORTED_FIELD`, "not supported yet" —
+because it is a real field deliberately absent from v1 rather than a forbidden
+one. A text predicate has to compile onto the ranked hybrid FTS/vector path
+(§9.3), which *ranks* rather than filters; shipping a `text ~` that filters in a
+widget and ranks on the search page would be two behaviours under one name. The
+message points at the `search` field.
+
+### 22.4 An invisible space is indistinguishable from a nonexistent one
+
+`space = "BLACKPROJECT"` where that space exists but the caller holds no role in
+it returns **exactly** what a key naming no space at all returns: an empty
+connection, no error, no hint (§6.7). The same holds for an unknown label and an
+unknown creator.
+
+This is structural rather than remembered. The compiler resolves space keys
+against a map built from **only the spaces the caller holds a role in**, so an
+invisible key and an imaginary key are both simply absent from it and both
+compile to the same never-matches predicate. There is no branch that could tell
+them apart, because nothing ever looked.
+
+It follows that **validation errors are about syntax and vocabulary, never about
+existence**. The validator has no database and no principal: it cannot report
+that a space is unknown, and `parseRql` is safe to answer for any authenticated
+caller precisely because of that. The failure mode to guard against is a future
+"helpful" error — "no such space" — which would hand an outsider a space-key
+oracle. It is pinned by test, on raw response bytes.
+
+### 22.5 Execution: parse → validate → compile → post-filter → cap
+
+1. **Parse and validate**, purely, in `RocketWiki.Core/Query`. Syntax errors stop
+   at the first (past a shape error the token stream means nothing); vocabulary
+   errors are all collected, with offsets, so an editor underlines them at once.
+2. **Compile to a parameterized EF query.** No user text is ever concatenated
+   into SQL. The one pattern language RQL reaches — LIKE, for `title ~` — has
+   `%`, `_`, `[` and the escape character escaped with an explicit `ESCAPE`
+   clause; `FullTextQueryBuilder` is the local precedent for treating a query
+   mini-language as something to construct carefully rather than interpolate
+   into. Plain provider-agnostic LINQ, so the SQLite tier exercises the same
+   expression tree SQL Server runs.
+3. **Narrow to spaces the caller holds a role in.** A space role is a *necessary*
+   condition of `canView` (§6.4), so this changes no answer — and it is what makes
+   the candidate cap meaningful rather than a lottery over the whole estate.
+4. **Post-filter every candidate through `canView`**, per page, against its own
+   ancestor restriction chain and its own protective marking, via
+   `PermissionContextLoader.LoadBatchAsync` — the same shape search and
+   `GetPagesByLabelAsync` use (§6.4.2/§6.7/§9.3). Clearance and eyes-only arrive
+   free through `EffectivePermissionCalculator.Compute`; §21's gate is not
+   reimplemented here. **The query decides which candidates are considered; it
+   never decides which permission check runs.**
+5. **Cap**, at both ends.
+
+**Bounded cost.** Candidates are capped at 500 before permission filtering (an
+over-fetch, so a restriction-heavy result set does not come back looking empty,
+per §9.3's reasoning) and visible results at 100, where `totalCount` saturates —
+`Query.Search`'s honest-cap idiom, stated rather than hidden: an exact
+permission-filtered total means running `canView` over every candidate for a
+number nobody scrolls to, and any cheaper count would be computed *before* the
+filter and would leak restricted pages into it. The AST is capped too — 4096
+characters, 512 tokens, 32 predicates, depth 8, 50 values per `IN` list, 3
+`ORDER BY` terms — and a query over any of them is a positioned validation error,
+so a pathological query fails before it reaches the parser's stack or the
+database.
+
+**No count includes a filtered-out row.** `totalCount` counts visible results
+only. There is deliberately **no "capped" or "truncated" flag**: it would report
+that at least 500 candidates matched, which is a count over rows the caller may
+not know exist (§6.7). The cap is documented, not inferred from a response.
+
+**Known cost, stated rather than discovered later.** No index supports RQL's
+default ordering: `Pages` is indexed on `(SpaceId, ParentPageId, SortOrder)` and
+on `AncestorPath` (data-model.md), so `ORDER BY UpdatedAtUtc DESC` over a
+multi-space candidate set is a sort. The candidate cap bounds what comes *back*,
+not what the engine sorts to produce it. That is acceptable at the scale this
+ships into and is the obvious first thing to measure if a list widget is slow;
+the fix is an index on `(SpaceId, UpdatedAtUtc)`, which is a migration and was
+deliberately not written speculatively.
+
+### 22.6 GraphQL surface
+
+- **`pageQuery(query: String!, first: Int, after: String): PageQueryConnection!`**
+  — the same hand-rolled connection shape as `search`
+  (`totalCount`/`pageInfo`/`edges{cursor,node}`), plus an `errors` list and the
+  §21.13 `aggregateMarking` over the whole permission-filtered result set. A row
+  exposes **only** `page`, resolved through `PageByIdDataLoader`: nothing is
+  projected onto it, for the reason `SearchHitType` documents — a projected title
+  is an unauthorized copy that routes around object-level authorization (§6.7/§8).
+
+  `errors` is the one addition to search's shape, and it is deliberate: an
+  unparseable RQL string is *authored content* (it lives in a Markdown fence), not
+  a server fault, so the widget rendering it must be able to show the author what
+  is wrong and where — which a GraphQL top-level error cannot do positionally.
+
+- **`parseRql(query: String!): RqlParseResult!`** — the AST as output, the
+  canonical printed form, and positioned errors. It **executes nothing and touches
+  no page data**: `Rql.Parse` is a pure function of the string, with no database,
+  clock or principal, which is what makes it safe with no permission gate beyond
+  authentication. The reasoning is confirmed rather than asserted, because "a
+  parser needs no authorization" stops being true the moment validation consults
+  the world: it resolves no space, label or user, so it cannot reveal whether any
+  exists; its vocabulary and messages are compile-time constants identical for
+  every caller (the same category as `protectiveMarkings` and
+  `pagePropertyKeys`); and the only thing it returns about the input is the
+  caller's own text, normalized.
+
+**The canonical printer is a fixed point.** `Print(Parse(x))` reparses and
+reprints identically, pinned by test over a corpus — because the builder UI's
+round trip is build → print → store → reparse, and a printer that normalized
+differently on the second pass would make a query drift a little every time it
+was edited. Three rules get it there: keywords upper-cased, values *always*
+quoted and escaped (so no value can be re-lexed as syntax), and parentheses
+emitted only where precedence requires them, with the parser flattening
+same-operator chains so `(a AND b) AND c` and `a AND b AND c` are the same tree.
+
+### 22.7 Audit (§7) and telemetry (§15)
+
+`pageQuery` audits as **`page.query`**, one row per executed query, Details
+carrying the raw RQL text and the visible result count — the decision
+`search.query` already makes and for the same reason: the audit table is the
+grant-protected, append-only record of who asked what, and a query probing for
+restricted terms is exactly the signal it exists to keep. Dedup keys on the query
+text (like `gitlab.fetch`'s resource reference) so a page full of list widgets
+gets a row per query rather than one for the request. An unparseable query is
+audited too; `Outcome` stays `Success`, since `denied` is reserved for ABAC
+refusals and RQL never produces one — restricted pages are *absent* from the
+candidate set rather than refused.
+
+`parseRql` carries `[NoAudit]`, and the justification is §22.6's rather than
+convenience: §7 audits *user actions*, and an action has a subject and an access
+decision. This has neither — no page, space or attachment to name, and no rule
+evaluated for or against anybody — so a row could only record "someone typed a
+string", which an editor with live syntax checking would write per keystroke.
+Every query that actually runs is audited.
+
+**An RQL string never reaches telemetry.** It is user-supplied text, so §15's
+rule applies unchanged: no span name, tag, event, baggage entry, or metric tag.
+`TelemetryHygieneTests` drives a sentinel through both fields and sweeps every
+ActivitySource and RocketWiki meter in the process.
+
+### 22.8 Deliberately not in v1
+
+- **`text`.** See §22.3 — it belongs on the ranked retrieval path, not here.
+- **Page properties (§20.5).** `property["Status"] = "Draft"` is the obvious next
+  field and is not built. It needs its own vocabulary decision (the key registry is
+  admin-defined, so the closed field set would have to admit an open-ended key
+  space), and §20.5's own caveats apply unchanged when it is: permission-filtered
+  per page, joined to `Pages` so rows for soft-deleted pages do not linger into a
+  report.
+- **A structured AST input type.** See the opening of this section.
+- **Saved filters.** No storage, no sharing, no named queries. A query lives in
+  the page that embeds it; adding a saved-filter entity would immediately raise
+  who may see whose filter, which is an access-control question this feature does
+  not need to answer to be useful.
+- **Aggregations.** No `COUNT`, no `GROUP BY`, no facets. Every count RQL could
+  produce would need the same per-page permission filtering the row list gets, and
+  a count is exactly the shape §6.7 forbids implying a restricted page with.
+- **Cross-instance queries.** RQL runs against the local instance's pages,
+  replicas included as ordinary read-only content (§12); it does not reach the
+  other side.
+- **No UI.** The backend: grammar, validation, compilation, enforcement, audit and
+  the two GraphQL fields. The widget, the builder and the editor integration are
+  the frontend's own piece of work.

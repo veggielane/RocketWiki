@@ -27,6 +27,8 @@ public static class GraphQLConfiguration
             .AddType<AuditEventType>()
             .AddType<SearchHitType>()
             .AddType<SearchConnectionType>()
+            .AddType<PageQueryRowType>()
+            .AddType<PageQueryConnectionType>()
             // Extension rather than a PageTreeNode ObjectType: Core's record stays
             // shared with MCP get_page_tree unchanged (see the extension's doc).
             .AddTypeExtension<PageTreeNodeTypeExtension>();
