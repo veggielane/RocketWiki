@@ -1,4 +1,4 @@
-# Platform plan: adding issue tracking
+# Platform plan: issue tracking and service desk
 
 **Status: a proposal, not a decision.** Nothing here is built. This document
 exists to make the shape of the work visible before anyone commits to it, and
@@ -7,9 +7,13 @@ written in the same voice as the rest of the repo: what is genuinely known,
 what is a judgement call, and what nobody has decided yet.
 
 The question: *what would it take to turn RocketWiki into a platform that also
-replaces Jira?*
+replaces Jira — and then Jira Service Management?*
 
-## The short answer
+Two parts, in dependency order. **Part 1 (issue tracking)** is the foundation
+and stands alone. **Part 2 (service desk)** is a front door onto it and cannot
+start before Part 1's Phase 3. Each part ends with its own decisions and risks.
+
+## Part 1 — Issue tracking: the short answer
 
 Roughly **70% of the cross-cutting machinery is reusable with mechanical
 renames**, because the pure decision logic was written without entity
@@ -213,7 +217,9 @@ valuable. Explicitly out:
 - **Dashboards and reporting.** Burndown, velocity, cumulative flow — none of
   it is load-bearing for an export-controlled engineering org's first tracker.
 - **Automation rules.** A rules engine is a second workflow engine.
-- **SLAs, service desk, request portals.** A different product.
+- **SLAs, service desk, request portals** — out of *tracker* v1, but planned
+  rather than rejected: see "Service desk" below. It sits on top of the
+  tracker and should not be attempted before Phase 3 exists.
 - **Sprints,** unless Scrum is actually wanted. Kanban is a complete v1.
 - **Time tracking and worklogs.**
 
@@ -235,3 +241,123 @@ of them leaves something coherent.
 **The unverified-infrastructure caveat still applies.** Per README's status
 ledger, nothing has run against real containers yet. Adding a second vertical
 does not change that, and does not reduce its importance.
+
+---
+
+# Part 2 — Service desk
+
+A Jira Service Management alternative — request portal, queues, SLAs,
+approvals. **Phase 6 and beyond**: it is a front door onto the tracker, so it
+cannot start before Phases 1–3 exist. What follows is why it is a better fit
+here than it looks, and where it is considerably more dangerous.
+
+## Why this one is worth doing
+
+The strategic argument is not "Jira has it too". It is that **Atlassian sells
+Confluence and JSM together for a reason, and here they are one product**.
+
+A service desk's most valuable feature is *deflection*: answering the request
+before a ticket exists. That needs a knowledge base, permission-filtered
+search over it, and ideally a retrieval-augmented assistant. RocketWiki already
+has all three, and Ask-the-wiki already retrieves strictly under the caller's
+own principal with an aggregate protective marking on the answer (§21.13). A
+portal that says *"three existing articles may answer this"* before offering a
+form is, here, a query away — not an integration.
+
+Second: **queues are RQL filters**. Saved filters were deliberately deferred
+out of RQL v1 (§22) on the grounds that a saved filter is a new securable
+object whose *definition* can itself be sensitive. A service desk is the thing
+that makes them necessary, and it is the right moment to design them properly
+rather than early.
+
+## What reuses what
+
+| Service desk concept | What it is here |
+|---|---|
+| Request type | An issue type plus a form definition |
+| Queue | A saved RQL filter with an ordering |
+| Agent / customer split | Container roles — `agent` is a role, **never a bypass** |
+| Ticket conversation | Comments, already threaded with tombstones |
+| Attachments, labels, watches, notifications | Unchanged |
+| Deflection | Existing permission-filtered search + Ask |
+| Approvals | A workflow state plus a permission verb |
+
+Genuinely new: the **portal** (a deliberately reduced UI for requesters), **form
+definitions**, **SLAs**, **CSAT**, and **canned responses**.
+
+**SLAs are the one substantial new subsystem** — not the timer, which is easy,
+but working calendars (business hours, holidays, timezones), pause conditions
+("waiting for customer"), breach escalation, and the fact that changing an SLA
+definition must not retroactively rewrite history. Budget for it accordingly;
+everything else on that list is small.
+
+## Where it gets dangerous here
+
+**1. Who is allowed to raise a request?** This is the decision the whole design
+hangs on, and it must be made first.
+
+The product currently has *no anonymous access at all* — §6.1's "no anonymous
+wikis" — and every principal is a Keycloak subject carrying ABAC attributes
+including nationality and clearance. A service desk's classic requester is an
+*external* party with none of that.
+
+**Recommendation: internal requesters only.** IT, facilities, engineering
+support — people who already have principals. If external requesters are ever
+needed, the right shape is a **separate low-side instance** whose tickets sync
+upward through the existing one-way bundle mechanism (§12), not a portal
+punched into a high-side deployment. That preserves the boundary the entire
+architecture is built around, and it is a far smaller change than making the
+main instance safe for outsiders.
+
+**2. "Agent sees the whole queue" is an ABAC hole.** Every other product treats
+agent visibility as a given. Here it cannot be: a queue that shows everything
+would let an agent read whatever anyone pasted into a ticket, and clearance
+would be bypassed by the front door. Agents need grants like everyone else, and
+the queue is a permission-filtered listing — which also means **queue counts and
+SLA dashboards are §6.7 surfaces**: a "47 open" badge over 31 visible tickets
+leaks 16.
+
+**3. Tickets accumulate classified content by accident.** A user pastes a SECRET
+extract into a support request that was raised as OFFICIAL. Markings apply to
+tickets exactly as to pages, defaulting from the request type — and the lesson
+from §21.11's backfill applies directly: **an unreviewed default marking reads
+as a reviewed judgement**. A request type's default marking should be chosen as
+carefully as a page's.
+
+**4. Deflection must run as the requester.** The article suggestions and any
+assistant answer must retrieve under the requester's own principal. Running them
+as a service account — the obvious implementation, and how many products do it —
+would turn the portal's helpful-suggestions box into a disclosure channel for
+titles the requester cannot otherwise see.
+
+**5. Notifications are an egress question.** A service desk without requester
+notifications is barely a service desk, and the product currently sends no email
+at all. In an air-gapped or high-side deployment, outbound mail is a boundary
+crossing that needs a deliberate decision — including what may appear in a
+subject line, since a ticket title can carry the sensitive fact.
+
+**6. One-way sync cuts both ways.** If a requester is on the low side and agents
+are on the high side, the response cannot flow back: §12 is low → high, by
+design, permanently. A cross-domain support workflow is therefore *not*
+expressible in this architecture, and pretending otherwise would be the most
+expensive possible mistake. Say it out loud before anyone assumes it.
+
+## Phasing
+
+- **Phase 6 — requests.** Request types with forms, the portal as a reduced
+  view, internal requesters only. Queues as saved RQL filters, which forces the
+  saved-filter design.
+- **Phase 7 — SLAs.** Calendars, pause conditions, breach escalation, and the
+  no-retroactive-rewrite rule.
+- **Phase 8 — approvals and CSAT.**
+- **Deflection lands in Phase 6**, not later. It is the cheapest thing on the
+  list and the reason the product is differentiated; shipping the portal without
+  it would be shipping the least interesting half.
+
+## Decide before starting
+
+1. **Internal requesters only, or external?** Everything above assumes internal.
+2. **Is there email?** If not, requesters are notified in-app only, and that
+   constrains what "service desk" can mean here.
+3. **Do agents get a broad grant, or per-project grants like everyone else?**
+   The honest answer is the second; the convenient answer is the first.
