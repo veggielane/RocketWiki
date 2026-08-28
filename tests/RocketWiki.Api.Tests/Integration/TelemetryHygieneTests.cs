@@ -268,6 +268,28 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         Assert.True(searchHit.RootElement.GetProperty("data").GetProperty("search")
             .GetProperty("totalCount").GetInt32() >= 1);
 
+        //    3c. RQL (design.md §22), both halves: a query that RUNS (the string lands in
+        //        the page.query audit row's Details and must not land in a span) and a pure
+        //        parse. The sentinel goes in as a bare RQL token so the GraphQL document
+        //        carries it as an inline literal, which is the case §15 calls out.
+        using var rql = await client.PostGraphQLAsync($$"""
+            query RunRql { pageQuery(query: "title ~ {{SentinelSearchText}}") { totalCount errors { code } } }
+            """);
+        Assert.Equal(0, rql.RootElement.GetProperty("data").GetProperty("pageQuery")
+            .GetProperty("totalCount").GetInt32());
+
+        using var rqlHit = await client.PostGraphQLAsync($$"""
+            query RunRqlHit { pageQuery(query: "title ~ {{SentinelTitle}}") { totalCount edges { node { page { id title } } } } }
+            """);
+        Assert.True(rqlHit.RootElement.GetProperty("data").GetProperty("pageQuery")
+            .GetProperty("totalCount").GetInt32() >= 1);
+
+        using var rqlParse = await client.PostGraphQLAsync($$"""
+            query ParseRqlSentinel { parseRql(query: "title ~ {{SentinelSearchText}}") { isValid canonical } }
+            """);
+        Assert.True(rqlParse.RootElement.GetProperty("data").GetProperty("parseRql")
+            .GetProperty("isValid").GetBoolean());
+
         using var searchish = await client.PostGraphQLAsync($$"""
             query FindByTitle { pageTree(spaceId: "{{fixture.SpaceId}}") { id title } }
             """);
