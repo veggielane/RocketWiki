@@ -111,10 +111,18 @@
   <!-- Storage and image processing (design.md §10, §19). -->
   <ItemGroup>
     <PackageVersion Include="AWSSDK.S3" Version="4.0.102.4" />
-    <!-- 6.1.1 is exactly what Microsoft.EntityFrameworkCore.SqlServer already drags
-         into the solution transitively, so the direct reference in RocketWiki.Storage
-         adds no second major version. -->
-    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.1" />
+    <!-- Referenced directly by RocketWiki.Storage's SqlServerFileStorage, but this
+         version governs the whole solution: it is ahead of the 6.1.x floor
+         Microsoft.EntityFrameworkCore.SqlServer asks for, so NuGet unification lifts
+         EF Core's provider onto it too. That is supported (EF's dependency is a floor,
+         not a pin) but it does mean EF runs on a SqlClient major its own release was
+         not tested against. Taken deliberately, on evidence rather than on the build
+         going green: the design.md §14 tier 3 container tests exercise it against a
+         real SQL Server 2025 (migrations from zero, CONTAINSTABLE, the native vector
+         column, and SqlServerFileStorage's streaming reads and chunked writes) and
+         all 37 pass. If odd ADO.NET behaviour ever shows up, dropping back to 6.1.1
+         is a one-line revert here. -->
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <!-- Pinned to the newest 3.x deliberately, NOT 4.x: ImageSharp 4's build-time
          license validation hard-fails Release builds — CI's configuration — without a
          provisioned SixLaborsLicenseKey. Upgrading is this one line plus that key,
