@@ -42,8 +42,13 @@
 
   <ItemGroup>
     <!-- SqlServerContainerFixture builds this at runtime when no pre-built image is
-         supplied; CI pre-builds the same file (see .github/workflows/ci.yml). -->
-    <None Update="mssql-fts\Dockerfile" CopyToOutputDirectory="PreserveNewest" />
+         supplied; CI pre-builds the same file (see .github/workflows/ci.yml), and so
+         does the AppHost (src/RocketWiki.AppHost/AppHost.cs) - the stock SQL Server
+         image cannot apply InitialCreate, so `aspire run` needs the same derived image
+         this tier does. Linked from the repo-level docker/ folder rather than owned
+         here, so those three consumers cannot drift onto different base images. -->
+    <None Include="..\..\docker\mssql-fts\Dockerfile" Link="mssql-fts\Dockerfile"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

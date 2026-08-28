@@ -88,7 +88,7 @@ jobs:
       - name: Build FTS-enabled SQL Server image
         uses: docker/build-push-action@v7
         with:
-          context: tests/RocketWiki.SqlServer.Tests/mssql-fts
+          context: docker/mssql-fts
           tags: rocketwiki-mssql-fts:ci
           load: true
           cache-from: type=gha

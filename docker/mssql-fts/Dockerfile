@@ -21,11 +21,16 @@
 # as the production engine (§2; §9.3's native vector + DiskANN follow-up needs
 # it), and the whole point of this tier is testing what production runs.
 #
-# Built two ways from this same file:
+# Built three ways from this same file - which is why it lives here at the repo
+# root rather than inside the test project that first needed it:
 #  - CI: an explicit `docker build` step (cache-friendly, fails loudly if the
 #    apt repo breaks), then handed to tests via ROCKETWIKI_MSSQL_FTS_IMAGE.
 #  - Local dev with Docker: SqlServerContainerFixture builds it on first run via
 #    Testcontainers' ImageFromDockerfile (cached by the daemon afterwards).
+#  - `aspire run`: AppHost.cs points the SQL Server resource at this context.
+#    Aspire's AddSqlServer defaults to the stock mssql/server:2022-latest, which
+#    fails the same two migrations any other stock image would - verified on the
+#    first real container run: IsFullTextInstalled=0 and no `vector` type.
 # Pinned by digest for reproducibility: CI run #28 crashed at engine boot on
 # the SAME digest that ran green in #21-27 (a runner-side flake, proven by
 # comparing build-log digests), and a digest pin removes tag drift as a
