@@ -12,19 +12,17 @@
     <!-- design.md §9.2 (milestone 7): IEmbeddingGenerator<string, Embedding<float>> —
          the provider-agnostic embedding abstraction. Data consumes the interface only
          (EmbeddingIndexer, hybrid SearchService); the OpenAI-compatible client behind
-         it is wired in RocketWiki.Api. 10.9.0 is the current stable on nuget.org
-         (verified 2026-08-23). -->
-    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
+         it is wired in RocketWiki.Api. -->
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
-    <!-- Direct override: Microsoft.Data.SqlClient (via EFCore.SqlServer) pulls in a
-         transitive System.Security.Cryptography.Xml 9.0.0, which NU1903 flags for
-         several known high-severity advisories. Pin to a patched version. -->
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.11" />
+    <!-- Direct override of a vulnerable transitive version; the advisory and the
+         reasoning live with the version in Directory.Packages.props. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" />
   </ItemGroup>
 
   <ItemGroup>

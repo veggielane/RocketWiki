@@ -169,6 +169,32 @@ The drift test enforces the export; CI regenerates the web client from the
 committed `schema.graphql`. (`schema-settings.json` is an incidental export
 artifact and is gitignored.)
 
+## Adding or upgrading a NuGet package
+
+The solution uses **Central Package Management**: every version lives in
+`Directory.Packages.props` at the repo root, and project files reference
+packages with no `Version` attribute at all.
+
+```xml
+<!-- Directory.Packages.props -->
+<PackageVersion Include="Some.Package" Version="1.2.3" />
+
+<!-- the project that needs it -->
+<PackageReference Include="Some.Package" />
+```
+
+Putting a `Version` back on a `PackageReference` is a restore **error**
+(NU1008), so the two halves cannot drift. Upgrading a package shared by six
+projects is now one edit rather than six, and the rationale for a pin lives
+in one place next to the version it explains — read the comments there before
+bumping ImageSharp, SQLitePCLRaw or the `Microsoft.Extensions.*` line, each of
+which is pinned for a stated reason.
+
+Transitive pinning is deliberately **off**; the two security overrides stay
+direct references, because running the tier that references them is what
+proves the pinned version actually loads. Dependabot understands this layout
+and keeps raising the same grouped minor/patch PRs against it.
+
 ## CI (`.github/workflows/ci.yml`)
 
 Five jobs on every push: `backend` (Release build + the container-free
