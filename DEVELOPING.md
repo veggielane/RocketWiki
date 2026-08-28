@@ -72,11 +72,27 @@ set `VITE_API_TARGET=http://localhost:<port>` before `npm run dev`. Point
 `VITE_OIDC_AUTHORITY` at the Keycloak the dashboard shows (realm
 `rocketwiki`). All frontend env vars are documented in `web/.env.example`.
 
-> **Standing caveat (design.md §16):** as of this writing, `aspire run` has
-> never actually been executed — no local machine with working Docker has
-> touched this repo. The topology is correct by inspection and its SQL Server
-> slice is CI-verified, but the first person to run this should expect to be
-> the first person to run this.
+Two things to know before the first run on a new machine:
+
+- **Trust the ASP.NET dev certificate first** (`dotnet dev-certs https
+  --trust`, then accept the Windows prompt). The Aspire CLI tries to do this
+  for you and will sit on a modal dialog until someone clicks it, which looks
+  exactly like a hung build if you started it from a script.
+- **The first start builds the SQL Server image** from `docker/mssql-fts`
+  (a few minutes; cached afterwards). Aspire's default `AddSqlServer` image
+  cannot run this application at all — see that Dockerfile's header.
+
+The Keycloak realm is imported only into a *fresh* data volume. After editing
+`rocketwiki-realm.json`, `docker volume rm` the keycloak volume or the old
+realm persists and your change appears to do nothing.
+
+> **Retired caveat (design.md §16):** this section used to warn that
+> `aspire run` had never actually been executed. It has, on 2026-08-28, from
+> empty volumes: containers up, migrations applied to a real SQL Server 2025,
+> every dev user logged in through PKCE, attachments round-tripped through
+> MinIO, telemetry captured off the wire. See the README's status section for
+> what that run verified — and for the eight defects it found, which is the
+> honest argument for doing it sooner.
 
 ### Backend standalone (no Docker)
 
@@ -116,7 +132,9 @@ better done through the vitest suites, which mock the urql exchange
    Server 2025, CONTAINSTABLE search, migrate-on-startup, dialect-sensitive
    service behavior. **Docker presence is the switch**: no daemon → the
    whole project skips visibly; with Docker it runs locally too (first run
-   builds the FTS image from `tests/RocketWiki.SqlServer.Tests/mssql-fts/`).
+   builds the FTS image from `docker/mssql-fts/` — the same image `aspire run`
+   uses, which is why that Dockerfile lives at the repo root rather than
+   inside this test project).
    CI's `sqlserver` job is its first-class home and fails if the tier skips.
 
 **Accessibility (two tiers).** The vitest suite runs axe (WCAG 2.2 AA,

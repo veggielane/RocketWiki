@@ -1866,10 +1866,10 @@ caveat below the table.
 
 | # | Milestone | Status | Contents |
 |---|---|---|---|
-| 0 | Walking skeleton | **done** (bar `aspire run`) | Aspire AppHost + ServiceDefaults, Vite app scaffolded, Keycloak dev realm with the §11 protocol mappers, schema-drift + audit-coverage guards |
+| 0 | Walking skeleton | **done** | Aspire AppHost + ServiceDefaults, Vite app scaffolded, Keycloak dev realm with the §11 protocol mappers, schema-drift + audit-coverage guards. `aspire run` verified end to end on 2026-08-28 (see the caveat section below); the Vite app is still not in the AppHost |
 | 1 | Editor spike ⚠️ | **done** | TipTap + Markdown round-trip for the full v1 feature set, proven against a real editor instance. Was the highest-risk item; it held. |
 | 2 | Core wiki | **done** | Rule engine, EF model proven on SQLite, domain-event pipeline (audit in the same transaction), page CRUD + subtree delete, permission-filtered reads (incl. §6.7's not-found-vs-denied result with denied-read auditing), GraphQL resolvers + object-level authorization (adversarially tested), access-rule management with replay-provable history, space CRUD |
-| 3 | Content features | **done** | Attachments (S3 + filesystem providers; S3 unverified against a live endpoint), comments, labels — all wired end to end and audited |
+| 3 | Content features | **done** | Attachments (S3 + filesystem providers; S3 now verified against live MinIO — upload, download and object placement), comments, labels — all wired end to end and audited |
 | 4 | Search & polish | **done** | `search`/`labels` API matching the shipped UI operations, permission-filtered with section attribution; the SQL Server FTS path (CONTAINSTABLE, inflectional stemming) is CI-verified against a real FTS-enabled engine by the §14 Testcontainers tier on every run — the `sqlserver` job fails if the tier skips — while the SQLite LIKE fallback is what the container-free tiers exercise; trash/restore, space management UI, rule builder + permission inspector, audit log viewer, import report UI |
 | 4b | Notifications & presence | **done** (live hub unexercised) | SignalR hub, watches, delta-based mentions and reply notifications, per-recipient `canView` fan-out (re-checked at read time too), persisted notification list incl. `sync_bundle_landed` rows from the offline import. The SPA now generates its client from the exported `schema.graphql` (placeholder deleted), runs the real SignalR transports by default (fakes only behind `VITE_FAKE_REALTIME`, for tests and backend-less dev), and wires the bell (persisted list + live push, de-duplicated by row id), watch/unwatch on pages and spaces, and the §12 admin sync status page. Per the standing caveat no browser has ever actually connected to the hub |
 | 5 | Migration | not started | Importer against a real Confluence space export; trial runs and fidelity review |
@@ -1879,26 +1879,51 @@ caveat below the table.
 | 9 | k3s deployment | **authored, unexercised** | Dockerfiles + Helm chart in-repo (`deploy/`), migration Job via EF bundle, Traefik ingress with WebSocket upgrade, secrets by reference, probes (TCP until health endpoints get a non-Dev config gate), offline image path. `helm lint`/`template` pass; nothing applied to a cluster; restore drill unrun |
 | 10 | Co-editing | **done** (live hub unexercised) | Relay-only Yjs edit sessions over the existing hub: canEdit-gated join with denied-join auditing, seeder designation + reseed protocol, log cap + empty-session GC, rule-change eviction extended to edit groups, PageRevisionContributor attribution wired through updatePageContent (forgery-proof: server-side session data only), session-scoped audit on the new realtime channel, `rocketwiki.coedit.*` telemetry with sentinel hygiene test. SPA phase 2: SignalR Yjs provider over the shared hub connection (join/seed/replay, batched updates, awareness carets, log-cap auto-save-and-reseed, eviction, documented reconnect), collaborative TipTap mode with solo fallback as the default degradation, session-base saves with contributor attribution surfaced on save, presence pointers on the edit route |
 
-### The standing caveat
+### The standing caveat, and what happened when it was lifted
 
-Everything above is verified by **tests**, not by running. No container has
-ever started in development: no `aspire run`, no migration applied to real
-SQL Server, no Keycloak realm imported, no token decoded to confirm the
-`groups` and `nationality` claims actually arrive, no S3 call against a live
-bucket. Full-text search and the native `vector` type were once part of this
-gap; both now ship in the checked-in migrations and are exercised against a
-real engine by the §14 Testcontainers tier on every CI run. What remains
-SQL-Server-only and unbuilt is narrower: the DiskANN vector index
-(deliberately deferred with engine-verified, tripwire-tested blockers —
-§9.3) and the audit partitioning/append-only grants, whose DDL is not yet
-written (§7, §14).
+This section used to say that everything above was verified by **tests**, not
+by running — that no container had ever started in development, no realm been
+imported, no token decoded, no S3 call made against a live bucket. On
+2026-08-28 a working Docker runtime finally arrived and all of that was done:
+`aspire run` from empty volumes, migrations applied to a real SQL Server 2025,
+the dev realm imported, every dev user logged in through PKCE, attachments
+round-tripped through MinIO, and OTLP traces/metrics/logs captured off the
+wire. The README's status section records exactly what was observed.
 
-The SQL Server slice of that gap now closes on every CI run — the §14
-Testcontainers tier applies the real migrations and exercises FTS against a
-real engine in the `sqlserver` job — but only in CI; no container has yet
-run on a developer machine. The rest of the gap closes the day a local
-container runtime works, and closing it is
-the highest-value unblocking action available.
+**The result is the argument for this caveat having existed.** Eight defects
+surfaced in the first hour, three of them in shipped product code that both
+the test suite and repeated human review had passed over:
+
+1. The dev realm's tokens carried **no `sub` claim** — a realm-level
+   `clientScopes` array suppresses Keycloak's built-in scopes, and `sub` has
+   lived in the `basic` scope since Keycloak 24. `PrincipalBuilder` returns
+   `null` without it, so every request from a valid login was anonymous.
+2. **No caller could ever be an instance admin.** ASP.NET's default inbound
+   claim map renames `roles` to `ClaimTypes.Role`; `IInstanceRoleAccessor`
+   read only `"roles"`. Invisible to the test tier precisely because its fake
+   auth handler does no claim mapping — the test double was *more* faithful to
+   the code's assumption than reality was.
+3. **Every S3 upload failed over plain HTTP.** `DisablePayloadSigning` was
+   hard-coded true, which the AWS SDK refuses without TLS — i.e. against
+   exactly the in-network object stores §9.4 describes.
+
+The other five were AppHost wiring (stock SQL Server image with no full-text
+search and no `vector` type; unresolved optional connection strings holding
+the API in a pending state forever; no `WaitFor` on the database, so
+migrate-on-startup lost a boot race; a Keycloak reference injecting service
+discovery variables while the API read a connection string; MinIO running with
+nothing configured to use it). All eight are fixed, with regression tests where
+the defect was in `src/`.
+
+The general lesson is worth keeping: **every one of these was a seam between
+two correct components** — Keycloak and its import format, ASP.NET and its
+claim mapping, the AWS SDK and its transport, Aspire and the API's
+configuration. Unit and integration tests own the components; only running the
+system owns the seams. What remains SQL-Server-only and unbuilt is narrower:
+the DiskANN vector index (deliberately deferred with engine-verified,
+tripwire-tested blockers — §9.3) and the audit partitioning/append-only
+grants, whose DDL is not yet written (§7, §14). The k3s deployment (milestone
+9) is the largest remaining unexercised seam.
 
 ---
 
