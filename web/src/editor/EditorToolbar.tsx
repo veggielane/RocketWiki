@@ -26,6 +26,7 @@ import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
 import CodeOffIcon from '@mui/icons-material/DataObject'
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
 import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined'
+import FormatListBulletedAddIcon from '@mui/icons-material/PlaylistAddOutlined'
 import CallMergeIcon from '@mui/icons-material/CallMerge'
 import CallSplitIcon from '@mui/icons-material/CallSplit'
 import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft'
@@ -40,6 +41,8 @@ import { InsertGitLabFileDialog } from './gitlab/InsertGitLabFileDialog'
 import { InsertGitLabIssuesDialog } from './gitlab/InsertGitLabIssuesDialog'
 import { buildFileFenceBody, buildIssuesFenceBody, type GitLabFileRef, type GitLabIssuesSpec } from '../gitlab/fenceBody'
 import type { GitLabIssueRef } from '../gitlab/issueScheme'
+import { InsertPageListDialog } from './pagelist/InsertPageListDialog'
+import { buildPageListFenceBody, type PageListSpec } from '../pagelist/fenceBody'
 import { EmojiPickerButton } from './emoji/EmojiPickerButton'
 
 export function EditorToolbar({ editor }: { editor: Editor | null }) {
@@ -47,6 +50,9 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const [diagramMenuAnchor, setDiagramMenuAnchor] = useState<HTMLElement | null>(null)
   const [gitlabMenuAnchor, setGitlabMenuAnchor] = useState<HTMLElement | null>(null)
   const [gitlabDialog, setGitlabDialog] = useState<'issue-link' | 'file' | 'issues' | null>(null)
+  // Not behind any integration flag, unlike the GitLab menu: RQL (design.md
+  // §22) is this instance's own query language, always present.
+  const [pageListDialogOpen, setPageListDialogOpen] = useState(false)
   // §15/§18 fail-closed extends to UI affordances: no GitLab:BaseUrl means
   // the feature is absent, so the whole GitLab menu is hidden, not disabled.
   const [{ data: gitlabStatusData }] = useGitLabStatusQuery()
@@ -129,7 +135,13 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
       .run()
   }
 
-  const insertGitlabFence = (language: 'gitlab-file' | 'gitlab-issues', body: string) => {
+  /**
+   * Every reserved fence is inserted the same way — as an ordinary
+   * `codeBlock` carrying a language. That is the whole storage design
+   * (design.md §22, §18): no bespoke node, so the Markdown pipeline needs no
+   * branch and the round trip is byte-exact for free.
+   */
+  const insertFence = (language: 'gitlab-file' | 'gitlab-issues' | 'page-list', body: string) => {
     editor
       .chain()
       .focus()
@@ -141,8 +153,9 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
       .run()
   }
 
-  const insertGitlabFile = (ref: GitLabFileRef) => insertGitlabFence('gitlab-file', buildFileFenceBody(ref))
-  const insertGitlabIssues = (spec: GitLabIssuesSpec) => insertGitlabFence('gitlab-issues', buildIssuesFenceBody(spec))
+  const insertGitlabFile = (ref: GitLabFileRef) => insertFence('gitlab-file', buildFileFenceBody(ref))
+  const insertGitlabIssues = (spec: GitLabIssuesSpec) => insertFence('gitlab-issues', buildIssuesFenceBody(spec))
+  const insertPageList = (spec: PageListSpec) => insertFence('page-list', buildPageListFenceBody(spec))
 
   return (
     <Box
@@ -394,6 +407,21 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
         <MenuItem onClick={insertMermaid}>Mermaid diagram</MenuItem>
         <MenuItem onClick={insertDrawio}>draw.io diagram</MenuItem>
       </Menu>
+      <Tooltip title="Page list">
+        <IconButton
+          size="small"
+          onClick={() => setPageListDialogOpen(true)}
+          aria-label="Insert page list"
+          aria-haspopup="dialog"
+        >
+          <FormatListBulletedAddIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <InsertPageListDialog
+        open={pageListDialogOpen}
+        onClose={() => setPageListDialogOpen(false)}
+        onInsert={insertPageList}
+      />
       {/* Hidden when the registry is empty (EmojiPickerButton) — same
           absent-not-disabled posture as the GitLab menu below. */}
       <EmojiPickerButton editor={editor} />

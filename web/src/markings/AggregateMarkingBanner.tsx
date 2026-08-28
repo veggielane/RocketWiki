@@ -2,7 +2,7 @@ import { Box, Typography } from '@mui/material'
 import type { AggregateMarkingFragment } from '../graphql/generated/graphql'
 import { MarkingBanner } from './MarkingBanner'
 
-export type AggregateMarkingPlacement = 'answer-head' | 'answer-foot' | 'results'
+export type AggregateMarkingPlacement = 'answer-head' | 'answer-foot' | 'results' | 'page-list'
 
 export interface AggregateMarkingBannerProps {
   /**
@@ -26,10 +26,18 @@ export interface AggregateMarkingBannerProps {
  * - A search aggregate spans the whole permission-filtered hit set, the same
  *   set `totalCount` counts, so a SECRET hit at position 95 correctly labels
  *   a screen showing only OFFICIAL rows.
+ * - A page-list widget's aggregate spans the whole permission-filtered result
+ *   set of its RQL query (§22.6), which the fence's own `limit` routinely cuts
+ *   short — so the label can out-rank every badge the widget drew.
  *
  * Deliberately says only what the label covers. Nothing here explains what a
  * classification permits, or whether anything may be shared — that meaning is
  * the reader's to know, and a wiki is not the place it gets taught.
+ *
+ * The notes speak about the QUERY's reach, never about the reader's: "not
+ * shown here" is about a limit and a page size, and must not drift into
+ * anything that would imply results were withheld (§6.7 — a page the reader
+ * cannot see is absent, and its absence must stay unremarkable).
  *
  * The foot repeat carries no note: it repeats the marking, and repeating the
  * explanation with it would read as a second, different statement.
@@ -38,6 +46,7 @@ const SCOPE_NOTE: Record<AggregateMarkingPlacement, string | null> = {
   'answer-head': 'Covers every page this answer drew on, including any not cited.',
   'answer-foot': null,
   results: 'Covers every result for this search, including any not shown here.',
+  'page-list': 'Covers every page matching this query, including any beyond the number listed.',
 }
 
 /**

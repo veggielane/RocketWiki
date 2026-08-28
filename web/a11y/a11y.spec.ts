@@ -27,8 +27,8 @@ const screens = existsSync(screensDir) ? readdirSync(screensDir).filter((f) => f
 test('capture set exists and is complete', () => {
   // Fail loudly if the generation step was skipped or silently produced
   // nothing — a green run over zero files would be a tier that doesn't exist.
-  // 16 screens × 2 themes; update alongside a11yScreens.test.tsx.
-  expect(screens.length, `no .html captures found in ${screensDir}`).toBeGreaterThanOrEqual(32)
+  // 17 screens × 2 themes; update alongside a11yScreens.test.tsx.
+  expect(screens.length, `no .html captures found in ${screensDir}`).toBeGreaterThanOrEqual(34)
   const stems = new Set(screens.map((f) => f.replace(/--(light|dark)\.html$/, '')))
   for (const stem of stems) {
     expect(screens, `${stem} is missing a theme variant`).toContain(`${stem}--light.html`)

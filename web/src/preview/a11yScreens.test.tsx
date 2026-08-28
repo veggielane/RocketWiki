@@ -39,6 +39,7 @@ import { PagePermissionsPage } from '../pages/PagePermissionsPage'
 import { SpaceBrowserPage } from '../pages/SpaceBrowserPage'
 import { TrashPage } from '../pages/TrashPage'
 import { AuditLogPage } from '../pages/AuditLogPage'
+import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from '../access/move/MovePageDialog'
 import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
 import { Box } from '@mui/material'
@@ -311,6 +312,26 @@ function mockClient() {
       }
     if (name === 'SearchFacets')
       return { spaces: spaces.map((s) => ({ key: s.key, name: s.name })), labels: ['anomaly', 'propulsion', 'ops'] }
+    if (name === 'PageListQuery')
+      return {
+        pageQuery: {
+          // §21.13 again, but on a surface nothing else in this set covers: an
+          // aggregate banner and marking badges rendered inside EDITOR CONTENT,
+          // which is plain CSS with its own theme variables rather than the MUI
+          // page chrome the search capture exercises.
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [UK/US EYES ONLY]' },
+          // Deliberately more than the two rows shown, so the capture includes
+          // the "Showing the first N of M" line — the sentence §6.7 constrains
+          // most tightly, and the one worth having a human look at.
+          totalCount: 9,
+          errors: [],
+          edges: [
+            { cursor: 'q1', node: { page: { id: 'page-1', title: 'Stage two ignition anomaly review', spaceKey: 'PROP', marking: page.marking } } },
+            { cursor: 'q2', node: { page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' } } } },
+          ],
+          pageInfo: { hasNextPage: true, endCursor: 'q2' },
+        },
+      }
     if (name === 'AskWiki')
       return {
         askWiki: {
@@ -585,6 +606,32 @@ const SCREENS: Screen[] = [
             </Box>
           ))}
         </Box>,
+      ),
+  },
+  {
+    // The page-list widget (design.md §22) rendered in READ mode, through the
+    // real editor. It earns its own capture rather than riding on page-view:
+    // it is the only place in the app where MUI marking components (an
+    // aggregate banner and level badges) sit inside editor-content's plain-CSS
+    // surface, so it is the only place where those two colour systems meet —
+    // and that meeting is exactly what a contrast check in both themes is for.
+    // Its own <ul> row list, link colour and muted space text are likewise not
+    // covered by any other screen.
+    name: 'page-list-widget',
+    render: (mode) =>
+      standalone(
+        mode,
+        <UrqlProvider value={mockClient().client}>
+          <Box sx={{ p: 3, maxWidth: 720 }}>
+            <RichTextEditor
+              initialMarkdown={
+                '```page-list\nquery = label = "anomaly" AND space IN ("PROP")\nlimit = 2\n```\n'
+              }
+              editable={false}
+              showToolbar={false}
+            />
+          </Box>
+        </UrqlProvider>,
       ),
   },
   {

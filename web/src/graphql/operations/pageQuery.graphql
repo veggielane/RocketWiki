@@ -1,0 +1,83 @@
+# RQL (design.md §22) — the two fields behind the `page-list` page widget.
+#
+# A row exposes `page` and nothing else, because that is all the schema gives
+# it: `PageQueryRow` projects nothing, so every field below is resolved
+# through the object-level-authorized DataLoader (§6.7/§8) rather than copied
+# onto the row by the query. Pages the viewer cannot see are ABSENT from
+# `edges` and uncounted by `totalCount` — there is no hidden-row marker to
+# render and the widget must not imply one.
+
+query PageListQuery($query: String!, $first: Int) {
+  pageQuery(query: $query, first: $first) {
+    # §21.13: a result list is a compilation and carries the classification of
+    # its most sensitive constituent. This one spans the WHOLE
+    # permission-filtered result set — which the widget's `limit` may well cut
+    # short — so the banner has to say what it covers.
+    aggregateMarking {
+      ...AggregateMarking
+    }
+    # §22.5: counts visible results only, saturating at the server's cap.
+    # Safe to show for exactly that reason; nothing else here is a count.
+    totalCount
+    # §22.6's one addition to search's connection shape. An unparseable RQL
+    # string is AUTHORED CONTENT — it lives in this page's own Markdown fence
+    # — not a server fault, so it arrives positioned in the payload where the
+    # widget can underline it, rather than as a top-level GraphQL error.
+    errors {
+      code
+      message
+      offset
+      length
+    }
+    edges {
+      cursor
+      node {
+        page {
+          id
+          title
+          spaceKey
+          marking {
+            ...PageMarking
+          }
+        }
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+
+# §22.6: pure. It executes nothing, resolves no space/label/user, and touches
+# no page data — which is why the insert dialog may call it on every
+# keystroke, and why its errors are about syntax and vocabulary and never
+# about existence (§22.4 — a "no such space" error would be a space-key
+# oracle). `canonical` is what the dialog STORES: the printer is a fixed
+# point, so a query saved through it serializes identically every time and the
+# fence's round trip stays stable across edits.
+# What the insert dialog's simple builder offers to pick from. Both lists are
+# already permission-filtered server-side, so the builder can only ever name
+# vocabulary the author can reach — and §22.4 means naming something outside
+# it is harmless anyway: an invisible space key compiles to the same
+# never-matches predicate an imaginary one does.
+query PageListVocabulary {
+  spaces {
+    key
+    name
+  }
+  labels
+}
+
+query ParseRql($query: String!) {
+  parseRql(query: $query) {
+    isValid
+    canonical
+    errors {
+      code
+      message
+      offset
+      length
+    }
+  }
+}

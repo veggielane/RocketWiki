@@ -30,7 +30,7 @@ export interface MarkingBannerProps {
    * heading already says "Protective marking" — a lead-in there would make a
    * screen reader say it twice in a row.
    */
-  placement: 'head' | 'foot' | 'section' | 'answer-head' | 'answer-foot' | 'results'
+  placement: 'head' | 'foot' | 'section' | 'answer-head' | 'answer-foot' | 'results' | 'page-list'
 }
 
 const SCREEN_READER_LEAD_IN: Record<MarkingBannerProps['placement'], string | null> = {
@@ -44,6 +44,7 @@ const SCREEN_READER_LEAD_IN: Record<MarkingBannerProps['placement'], string | nu
   'answer-head': 'Protective marking for this answer: ',
   'answer-foot': 'Protective marking, repeated at the end of this answer: ',
   results: 'Protective marking for these search results: ',
+  'page-list': 'Protective marking for the pages this list matches: ',
 }
 
 /**

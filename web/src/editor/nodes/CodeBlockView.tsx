@@ -4,9 +4,11 @@ import type { NodeViewProps } from '@tiptap/core'
 import { renderMermaid, type MermaidRenderResult } from '../diagrams/mermaidRenderer'
 import { hasMermaidAccDirectives, mermaidFallbackLabel } from '../diagrams/mermaidAccessibility'
 import { parseFileFence, parseIssuesFence } from '../../gitlab/fenceBody'
+import { parsePageListFence } from '../../pagelist/fenceBody'
 import { describeDiagramUnavailable } from '../../feedback/unavailableCopy'
 import { GitLabFileBlock } from '../../gitlab/GitLabFileBlock'
 import { GitLabIssuesBlock } from '../../gitlab/GitLabIssuesBlock'
+import { PageListBlock } from '../../pagelist/PageListBlock'
 import { useDebouncedValue } from '../useDebouncedValue'
 
 /**
@@ -16,6 +18,7 @@ import { useDebouncedValue } from '../useDebouncedValue'
  *   - ` ```mermaid ` — the diagram,
  *   - ` ```gitlab-file ` / ` ```gitlab-issues ` — live GitLab embeds
  *     (design.md §18), fetched through the API only,
+ *   - ` ```page-list ` — the pages matching an RQL query (design.md §22),
  * with the shared layout: editing shows source beside preview (stacked on
  * narrow screens, preview debounced as you type); read mode (page view —
  * same component, `editable: false`, per the one-renderer rule) shows the
@@ -23,7 +26,9 @@ import { useDebouncedValue } from '../useDebouncedValue'
  * comes back so the content is never invisible.
  *
  * The *Markdown* form stays a plain fenced code block for all of them —
- * this file changes rendering only, never serialization.
+ * this file changes rendering only, never serialization. This chain is the
+ * de-facto registry of reserved fence languages; adding one costs a branch
+ * here and nothing in the Markdown pipeline, which is the whole point.
  */
 export function CodeBlockView(props: NodeViewProps) {
   const language = (props.node.attrs.language as string | null) ?? null
@@ -35,6 +40,9 @@ export function CodeBlockView(props: NodeViewProps) {
   }
   if (language === 'gitlab-issues') {
     return <GitLabIssuesFence {...props} />
+  }
+  if (language === 'page-list') {
+    return <PageListFence {...props} />
   }
   return (
     <NodeViewWrapper>
@@ -121,13 +129,9 @@ function GitLabFileFence({ node, editor }: NodeViewProps) {
   const source = useDebouncedValue(node.textContent, editable ? PREVIEW_DEBOUNCE_MS : 0)
   const parsed = parseFileFence(source)
   return (
-    <GitLabFenceLayout editable={editable} ok={parsed.ok}>
-      {parsed.ok ? (
-        <GitLabFileBlock fileRef={parsed.ref} />
-      ) : (
-        <GitLabFenceIncomplete kind="gitlab-file" missing={parsed.missing} />
-      )}
-    </GitLabFenceLayout>
+    <FenceLayout editable={editable} ok={parsed.ok}>
+      {parsed.ok ? <GitLabFileBlock fileRef={parsed.ref} /> : <FenceIncomplete kind="gitlab-file" missing={parsed.missing} />}
+    </FenceLayout>
   )
 }
 
@@ -136,48 +140,52 @@ function GitLabIssuesFence({ node, editor }: NodeViewProps) {
   const source = useDebouncedValue(node.textContent, editable ? PREVIEW_DEBOUNCE_MS : 0)
   const parsed = parseIssuesFence(source)
   return (
-    <GitLabFenceLayout editable={editable} ok={parsed.ok}>
-      {parsed.ok ? (
-        <GitLabIssuesBlock spec={parsed.spec} />
-      ) : (
-        <GitLabFenceIncomplete kind="gitlab-issues" missing={parsed.missing} />
-      )}
-    </GitLabFenceLayout>
+    <FenceLayout editable={editable} ok={parsed.ok}>
+      {parsed.ok ? <GitLabIssuesBlock spec={parsed.spec} /> : <FenceIncomplete kind="gitlab-issues" missing={parsed.missing} />}
+    </FenceLayout>
+  )
+}
+
+function PageListFence({ node, editor }: NodeViewProps) {
+  const editable = editor.isEditable
+  const source = useDebouncedValue(node.textContent, editable ? PREVIEW_DEBOUNCE_MS : 0)
+  const parsed = parsePageListFence(source)
+  return (
+    <FenceLayout editable={editable} ok={parsed.ok}>
+      {parsed.ok ? <PageListBlock spec={parsed.spec} /> : <FenceIncomplete kind="page-list" missing={parsed.missing} />}
+    </FenceLayout>
   )
 }
 
 /**
- * Shared frame for both gitlab fences, mirroring MermaidBlock: the source
+ * Shared frame for every key=value fence, mirroring MermaidBlock: the source
  * (ProseMirror's contentDOM) always stays in the DOM; CSS shows it in edit
  * mode and hides it in read mode unless the fence doesn't parse
  * (`data-render-state="error"` brings it back so content is never
  * invisible).
+ *
+ * Named for the job rather than for GitLab, which built it: it now frames
+ * three fence languages from two unrelated features, and a shared component
+ * whose name claims one of its callers is the thing the next caller
+ * copy-pastes instead of importing. The CSS classes moved with it.
  */
-function GitLabFenceLayout({
-  editable,
-  ok,
-  children,
-}: {
-  editable: boolean
-  ok: boolean
-  children: ReactNode
-}) {
+function FenceLayout({ editable, ok, children }: { editable: boolean; ok: boolean; children: ReactNode }) {
   return (
     <NodeViewWrapper
-      className={`rw-gitlab-block ${editable ? 'rw-gitlab-block-editing' : 'rw-gitlab-block-readonly'}`}
+      className={`rw-fence-block ${editable ? 'rw-fence-block-editing' : 'rw-fence-block-readonly'}`}
       data-render-state={ok ? 'ok' : 'error'}
     >
-      <pre className="rw-code-block rw-gitlab-source" spellCheck={false}>
+      <pre className="rw-code-block rw-fence-source" spellCheck={false}>
         <NodeViewContent<'code'> as="code" />
       </pre>
-      <div className="rw-gitlab-preview" contentEditable={false}>
+      <div className="rw-fence-preview" contentEditable={false}>
         {children}
       </div>
     </NodeViewWrapper>
   )
 }
 
-function GitLabFenceIncomplete({ kind, missing }: { kind: string; missing: string[] }) {
+function FenceIncomplete({ kind, missing }: { kind: string; missing: string[] }) {
   return (
     <div className="rw-diagram-hint">
       Incomplete {kind} reference — missing {missing.join(', ')}. Body is key=value lines.

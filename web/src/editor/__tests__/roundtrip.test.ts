@@ -150,6 +150,21 @@ describe('Markdown round trip — required v1 feature set (design.md §4)', () =
       'gitlab-issues fence whose body is junk survives verbatim (validity is a rendering concern)',
       '```gitlab-issues\nthis is not key=value\n\nat all\n```\n',
     ],
+    // design.md §22's page-list widget. A reserved fence language and nothing
+    // more — the pipeline has no branch for it, which is exactly why these
+    // cases pass without one being added.
+    [
+      'page-list fence with a canonical RQL query and a limit',
+      '```page-list\nquery = label = "safety" AND space IN ("ENG", "OPS") ORDER BY updated DESC\nlimit = 20\n```\n',
+    ],
+    [
+      'page-list fence, minimal body plus an unknown key survives verbatim',
+      '```page-list\nquery = label = "safety"\nfuture-key = whatever\n```\n',
+    ],
+    [
+      'page-list fence whose body is junk survives verbatim (validity is a rendering concern)',
+      '```page-list\nthis is not key=value\n\nat all\n```\n',
+    ],
     ['task list', '- [ ] todo\n- [x] done\n'],
     ['image / attachment', '![diagram](attachment://file-123)\n'],
     ['image / attachment with title', '![diagram](attachment://file-123 "A diagram")\n'],
