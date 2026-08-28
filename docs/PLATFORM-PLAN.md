@@ -231,7 +231,9 @@ reuses the nodes above verbatim, because the actor **is** a `Principal`:
 Validators are the same family plus a message
 (`{ "when": {...}, "reject": "Set a resolution before closing." }`). Effects are
 a separate family — `setField`, `assign`, `addComment`, `addLabel`,
-`transitionLinked`.
+`transitionLinked` — and the vocabulary is closed: nothing that grants access,
+changes a marking, or manages principals is expressible (see "Automation" for
+why that closure is load-bearing rather than tidy).
 
 **Two deliberate exclusions.**
 
@@ -306,20 +308,51 @@ already implements. Second consumer, same pattern.
 `label = "review" AND updated < now("-30d")`" is a query that exists and is
 already permission-filtered.
 
-**The hard question is whose authority a rule runs as.** A post-function has an
-easy answer — the user who clicked. A scheduled rule at 03:00 has no such user,
-and the tempting answer, *the system*, is precisely the bypass §21 exists to
-prevent: a rule with process authority could read and relay content its author
-cannot see.
+**DECIDED: automation runs as a defined principal, never as the system.**
 
-Recommended shape: **a named automation principal per project**, with its own
-grants and clearance, subject to the same gate as any human. Everything then
-falls out — a rule triggering on "any issue created" fires only for what that
-principal can see, its actions audit under an identity a reviewer can name, and
-revoking a rule's power is revoking grants, a mechanism that already exists. The
-alternative (run as the author, re-resolved at execution) tracks the author's
-clearance nicely but makes rules die silently when someone changes role.
-**Never "system"**, and the execution log must record which identity acted.
+A post-function has an easy answer — the user who clicked. A scheduled rule at
+03:00 has no such user, and the tempting answer, *the system*, is precisely the
+bypass §21 exists to prevent: a rule with process authority could read and relay
+content its author cannot see. So each project gets a **named automation
+principal**, with its own grants and its own clearance, gated exactly like a
+human.
+
+The invariant that makes this safe is simple and worth stating outright: **a rule
+can never do more than its principal.** Everything else falls out of it — a rule
+triggering on "any issue created" fires only for issues that principal can see;
+its actions audit under an identity a reviewer can name; and disabling a runaway
+rule is revoking a principal's grants, a mechanism that already exists and is
+already audited.
+
+What that decision then requires:
+
+- **It is an execution identity, not a login.** No credentials, no OIDC session,
+  no JIT provisioning path — it must be impossible to *sign in as* the automation
+  principal and inherit its grants. It is created and configured by an instance
+  admin, not by a token arriving at the door.
+- **It carries the same attributes a human does** — clearance, and nationality
+  for eyes-only caveats — because §21 gates it through the same
+  `ClearanceGate`. Set deliberately: the principal's clearance is the ceiling on
+  everything every rule in that project can ever touch, which makes it the single
+  most useful knob an admin has.
+- **Per project, not per instance.** One instance-wide automation identity is
+  simpler and strictly more dangerous: its blast radius is every project and its
+  clearance is the maximum any project needs.
+- **Audit must distinguish a rule from a human.** The actor is the automation
+  principal and the row should also carry the rule id, so a reviewer reading the
+  log sees *which* rule acted rather than an anonymous service account. The
+  existing `AuditChannel` vocabulary is the natural place for an `Automation`
+  member.
+- **No effect may grant access.** Access-rule mutation, marking changes and
+  principal management are excluded from the effect vocabulary entirely —
+  otherwise privilege escalation is one post-function away: a rule running as a
+  principal that can edit access rules can grant that principal more access, and
+  the ceiling above stops being a ceiling.
+
+The rejected alternative was running as the rule's author, re-resolved at
+execution time. It tracks the author's clearance nicely, but rules then die
+silently when someone changes role or leaves — and "the automation stopped
+working because a person moved team" is a failure mode nobody diagnoses quickly.
 
 **Cascades are worse here than for workflows.** Post-functions cascade through
 explicit links; automation rules cascade through events they generate
@@ -421,9 +454,10 @@ over workflow states. Aggregate markings on columns.
 **Phase 3b — automation.**
 The rule engine from Phase 2 gains a trigger layer: subscribe to the
 domain-event stream, drain after commit through the outbox pattern, add
-scheduled rules scoped by RQL. Needs the authority decision (a named automation
-principal, never "system"), cascade limits, and an execution log recording the
-causal chain. Cheap *only* because the conditions and effects already exist —
+scheduled rules scoped by RQL. Runs as the project's named automation principal
+(decided — see "Automation"), which also means building the admin surface to
+create one and set its clearance. Needs cascade limits and an execution log
+recording the causal chain. Cheap *only* because the conditions and effects already exist —
 which is why the rule engine should be designed for both consumers in Phase 2
 rather than shaped around transitions.
 
