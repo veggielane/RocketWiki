@@ -73,4 +73,28 @@ public sealed class S3FileStorageTests
         Assert.Throws<InvalidOperationException>(() =>
             new S3FileStorage(client: null!, Options.Create(new FileStorageOptions())));
     }
+
+    /// <summary>
+    /// Payload signing may only be skipped over TLS — the AWS SDK throws
+    /// "When DisablePayloadSigning is true, the request must be sent over HTTPS"
+    /// otherwise. This was hard-coded to always-skip, so the first upload this provider
+    /// ever attempted against a real endpoint (MinIO over http://) returned a 500. The
+    /// http:// case is the one that regressed and the one most deployments hit: an
+    /// in-network S3 store behind design.md §9.4's boundary is commonly plain HTTP.
+    /// </summary>
+    [Theory]
+    // No ServiceUrl = real AWS via default endpoint resolution, which is HTTPS.
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("https://s3.example.internal", true)]
+    [InlineData("https://minio:9000", true)]
+    [InlineData("HTTPS://MINIO:9000", true)]
+    [InlineData("http://minio:9000", false)]
+    [InlineData("http://localhost:9000", false)]
+    // Unparseable: assume the unsafe case rather than emitting a request that throws.
+    [InlineData("minio:9000", false)]
+    public void PayloadSigningIsSkippedOnlyOverTls(string? serviceUrl, bool expected)
+    {
+        Assert.Equal(expected, S3FileStorage.CanDisablePayloadSigning(serviceUrl));
+    }
 }
