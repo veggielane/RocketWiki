@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { RichTextEditor } from '../RichTextEditor'
 
 const PAYLOAD = 'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNvbnRlbnQ9IiZsdDtteGZpbGUmZ3Q7Jmx0Oy9teGZpbGUmZ3Q7Ij48cmVjdCB3aWR0aD0iMTAiIGhlaWdodD0iMTAiLz48L3N2Zz4='
 const DRAWIO_MD = `\`\`\`drawio\n${PAYLOAD}\n\`\`\`\n`
+
+afterEach(() => {
+  vi.unstubAllEnvs()
+})
 
 describe('drawio diagram node — page view (read mode)', () => {
   it('renders the payload as an inert data-URI <img> (no iframe/object, no viewer JS)', () => {
@@ -57,8 +61,13 @@ describe('drawio diagram node — editing', () => {
   })
 
   it('with no VITE_DRAWIO_URL configured, Edit opens the fail-closed explainer instead of any external editor', async () => {
-    // Vitest does not define VITE_DRAWIO_URL, so this exercises the real
-    // default path: readDrawioConfig(import.meta.env) === null.
+    // Stated, not assumed. This used to rely on vitest simply never defining
+    // VITE_DRAWIO_URL — which stopped being true the moment a developer
+    // followed DEVELOPING.md and pointed the editor at the AppHost's draw.io
+    // container, because Vite loads .env.local in test mode too and the whole
+    // file then failed. A test about the unset case has to set it unset;
+    // readDrawioConfig treats blank as absent.
+    vi.stubEnv('VITE_DRAWIO_URL', '')
     render(<RichTextEditor initialMarkdown={DRAWIO_MD} editable showToolbar={false} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit diagram' }))
