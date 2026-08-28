@@ -24,6 +24,7 @@ public sealed class S3FileStorage : IFileStorage
 {
     private readonly IAmazonS3 _client;
     private readonly string _bucket;
+    private readonly bool _disablePayloadSigning;
 
     public S3FileStorage(IAmazonS3 client, IOptions<FileStorageOptions> options)
     {
@@ -31,7 +32,29 @@ public sealed class S3FileStorage : IFileStorage
         _bucket = options.Value.S3?.Bucket
             ?? throw new InvalidOperationException(
                 "FileStorage:S3:Bucket must be configured when using the S3 provider.");
+        _disablePayloadSigning = CanDisablePayloadSigning(options.Value.S3?.ServiceUrl);
     }
+
+    /// <summary>
+    /// Whether uploads may skip SigV4 payload signing — true only over TLS.
+    ///
+    /// <para>Unsigned payloads let a non-seekable stream upload without buffering the
+    /// whole object to hash it, which is why this provider asked for them. But the AWS
+    /// SDK refuses the combination over plain HTTP ("When DisablePayloadSigning is true,
+    /// the request must be sent over HTTPS") — without TLS there is nothing else binding
+    /// the body to the signature. Hard-coding it to true therefore made every upload
+    /// throw a 500 against any http:// endpoint, which is how MinIO and most in-network
+    /// S3-compatible stores are actually deployed (design.md §9.4 puts the boundary at
+    /// the network, not at TLS). Found the first time this provider ever ran against a
+    /// real endpoint rather than a wiring test.</para>
+    ///
+    /// <para>A null/empty ServiceUrl means real AWS via default endpoint resolution,
+    /// which is HTTPS.</para>
+    /// </summary>
+    internal static bool CanDisablePayloadSigning(string? serviceUrl) =>
+        string.IsNullOrEmpty(serviceUrl)
+        || (Uri.TryCreate(serviceUrl, UriKind.Absolute, out var uri)
+            && uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase));
 
     public async Task SaveAsync(string key, Stream content, string contentType, CancellationToken ct)
     {
@@ -46,7 +69,7 @@ public sealed class S3FileStorage : IFileStorage
                 InputStream = content,
                 ContentType = contentType,
                 AutoCloseStream = false,
-                DisablePayloadSigning = true,
+                DisablePayloadSigning = _disablePayloadSigning,
             };
 
             // Only a seekable stream can report its size without consuming it; a

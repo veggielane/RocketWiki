@@ -189,7 +189,8 @@ public sealed class PagePropertyTests(RocketWikiApiFactory factory) : IClassFixt
         // §7: the denial is audited, with its reason and the key it was refused for -
         // subject null, exactly like the emoji registry's admin gate.
         var denial = Assert.Single(
-            (await AuditRowsAsync("property_key.create")).Where(e => e.DetailsJson is not null && e.DetailsJson.Contains(keyName)));
+            await AuditRowsAsync("property_key.create"),
+            e => e.DetailsJson is not null && e.DetailsJson.Contains(keyName));
         Assert.Equal(AuditOutcome.Denied, denial.Outcome);
         Assert.Null(denial.SubjectType);
         Assert.Contains("instance admin required", denial.DetailsJson);
@@ -212,7 +213,7 @@ public sealed class PagePropertyTests(RocketWikiApiFactory factory) : IClassFixt
         Assert.Equal(JsonValueKind.Null, data.GetProperty("property").ValueKind);
         Assert.Equal("Forbidden", data.GetProperty("error").GetProperty("kind").GetString());
 
-        var denial = Assert.Single((await AuditRowsAsync("page.property.set")).Where(e => e.SubjectId == root.Id));
+        var denial = Assert.Single(await AuditRowsAsync("page.property.set"), e => e.SubjectId == root.Id);
         Assert.Equal(AuditOutcome.Denied, denial.Outcome);
         Assert.Equal(AuditSubjectType.Page, denial.SubjectType);
         Assert.Contains("canEdit required", denial.DetailsJson);

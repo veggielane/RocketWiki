@@ -27,14 +27,22 @@
     { "name": "export-cleared", "path": "/export-cleared" }
   ],
 
-  "clientScopes": [
+  "clients": [
     {
-      "name": "rocketwiki-claims",
-      "description": "Claims RocketWiki's ABAC rule engine evaluates: group membership and registered attributes (design.md §6).",
+      "clientId": "rocketwiki-web",
+      "name": "RocketWiki Web (SPA)",
+      "description": "Vite/React SPA. Authorization Code + PKCE, no client secret (design.md §11).",
+      "enabled": true,
       "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
       "attributes": {
-        "include.in.token.scope": "true",
-        "display.on.consent.screen": "false"
+        "pkce.code.challenge.method": "S256"
       },
       "protocolMappers": [
         {
@@ -107,28 +115,6 @@
           }
         }
       ]
-    }
-  ],
-
-  "clients": [
-    {
-      "clientId": "rocketwiki-web",
-      "name": "RocketWiki Web (SPA)",
-      "description": "Vite/React SPA. Authorization Code + PKCE, no client secret (design.md §11).",
-      "enabled": true,
-      "protocol": "openid-connect",
-      "publicClient": true,
-      "standardFlowEnabled": true,
-      "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false,
-      "redirectUris": ["http://localhost:5173/*"],
-      "webOrigins": ["http://localhost:5173"],
-      "attributes": {
-        "pkce.code.challenge.method": "S256"
-      },
-      "defaultClientScopes": ["acr", "basic", "email", "profile", "roles", "web-origins", "rocketwiki-claims"],
-      "optionalClientScopes": ["address", "microprofile-jwt", "offline_access", "phone"]
     },
     {
       "clientId": "rocketwiki-api",

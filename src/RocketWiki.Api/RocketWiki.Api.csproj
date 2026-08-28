@@ -8,49 +8,39 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="HotChocolate.AspNetCore" Version="16.6.1" />
+    <PackageReference Include="HotChocolate.AspNetCore" />
     <!-- Enables "dotnet run schema export" to keep schema.graphql in sync with
          code (design.md §8); CI drift check is a later hardening step. -->
-    <PackageReference Include="HotChocolate.AspNetCore.CommandLine" Version="16.6.1" />
-    <PackageReference Include="HotChocolate.Diagnostics" Version="16.6.1" />
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
+    <PackageReference Include="HotChocolate.AspNetCore.CommandLine" />
+    <PackageReference Include="HotChocolate.Diagnostics" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <!-- design.md §8/§16 milestone 8: the official MCP C# SDK's ASP.NET Core host —
          streamable HTTP at /mcp inside this process, so tools share the exact
-         service layer, JIT provisioning, and audit pipeline GraphQL uses. 2.2.0 is
-         the current stable release (nuget.org, 2026-08-13); brings
-         ModelContextProtocol + ModelContextProtocol.Core transitively. -->
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+         service layer, JIT provisioning, and audit pipeline GraphQL uses. -->
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <!-- design.md §8: SignalR's MessagePack protocol for /hubs/notifications - keeps
          high-frequency presence frames (pointer moves) small, and is the protocol the
          eventual Yjs binary co-editing updates will want anyway. -->
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" />
     <!-- design.md §9.2/§16 milestone 7: the OpenAI-compatible embedding client behind
          Microsoft.Extensions.AI's IEmbeddingGenerator abstraction — self-hosted or
          gateway endpoint, pure config (the Aspire "embeddings" connection string +
-         the Ai section). 10.9.0 is the current stable on nuget.org (verified
-         2026-08-23); brings Microsoft.Extensions.AI.Abstractions (which
+         the Ai section). Brings Microsoft.Extensions.AI.Abstractions (which
          RocketWiki.Data consumes) and the official OpenAI 2.x client transitively. -->
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
     <!-- Official Aspire client integration: AddSqlServerDbContext wires
          RocketWikiDbContext to the "rocketwiki" connection string injected by
          the AppHost via service discovery, plus health checks, retry, and
          OpenTelemetry for free (design.md §15) — the idiomatic Aspire path
          rather than hand-rolled AddDbContext/UseSqlServer. -->
-    <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.2" />
+    <PackageReference Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" />
     <!-- Image normalization for both binary-upload features: avatars
          (Avatars/ImageSharpAvatarProcessor — decode-with-limits, center-crop/resize
          to the canonical 512×512, re-encode to PNG) and custom emojis
          (Emojis/EmojiImageProcessor — square/downscale to 32–256, frame-preserving
-         for GIF, metadata scrubbed). Pinned to 3.1.12 (newest 3.x stable, verified
-         2026-08-23) deliberately, NOT 4.1.1 (current stable): ImageSharp 4's
-         build-time license validation hard-fails Release builds — CI's
-         configuration — without a provisioned SixLaborsLicenseKey. Upgrading is
-         this one line plus that key once the license question is settled. License
-         note either way: Six Labors Split License — Apache-2.0 terms for
-         open-source / small-organization use, commercial license otherwise; needs
-         a deliberate operator sign-off for this deployment. -->
-
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+         for GIF, metadata scrubbed). The 3.x pin is deliberate and licence-related —
+         see Directory.Packages.props before bumping it. -->
+    <PackageReference Include="SixLabors.ImageSharp" />
   </ItemGroup>
 
   <ItemGroup>

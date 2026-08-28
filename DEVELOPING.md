@@ -72,11 +72,27 @@ set `VITE_API_TARGET=http://localhost:<port>` before `npm run dev`. Point
 `VITE_OIDC_AUTHORITY` at the Keycloak the dashboard shows (realm
 `rocketwiki`). All frontend env vars are documented in `web/.env.example`.
 
-> **Standing caveat (design.md §16):** as of this writing, `aspire run` has
-> never actually been executed — no local machine with working Docker has
-> touched this repo. The topology is correct by inspection and its SQL Server
-> slice is CI-verified, but the first person to run this should expect to be
-> the first person to run this.
+Two things to know before the first run on a new machine:
+
+- **Trust the ASP.NET dev certificate first** (`dotnet dev-certs https
+  --trust`, then accept the Windows prompt). The Aspire CLI tries to do this
+  for you and will sit on a modal dialog until someone clicks it, which looks
+  exactly like a hung build if you started it from a script.
+- **The first start builds the SQL Server image** from `docker/mssql-fts`
+  (a few minutes; cached afterwards). Aspire's default `AddSqlServer` image
+  cannot run this application at all — see that Dockerfile's header.
+
+The Keycloak realm is imported only into a *fresh* data volume. After editing
+`rocketwiki-realm.json`, `docker volume rm` the keycloak volume or the old
+realm persists and your change appears to do nothing.
+
+> **Retired caveat (design.md §16):** this section used to warn that
+> `aspire run` had never actually been executed. It has, on 2026-08-28, from
+> empty volumes: containers up, migrations applied to a real SQL Server 2025,
+> every dev user logged in through PKCE, attachments round-tripped through
+> MinIO, telemetry captured off the wire. See the README's status section for
+> what that run verified — and for the eight defects it found, which is the
+> honest argument for doing it sooner.
 
 ### Backend standalone (no Docker)
 
@@ -116,7 +132,9 @@ better done through the vitest suites, which mock the urql exchange
    Server 2025, CONTAINSTABLE search, migrate-on-startup, dialect-sensitive
    service behavior. **Docker presence is the switch**: no daemon → the
    whole project skips visibly; with Docker it runs locally too (first run
-   builds the FTS image from `tests/RocketWiki.SqlServer.Tests/mssql-fts/`).
+   builds the FTS image from `docker/mssql-fts/` — the same image `aspire run`
+   uses, which is why that Dockerfile lives at the repo root rather than
+   inside this test project).
    CI's `sqlserver` job is its first-class home and fails if the tier skips.
 
 **Accessibility (two tiers).** The vitest suite runs axe (WCAG 2.2 AA,
@@ -150,6 +168,56 @@ cd ../../web && npm run codegen
 The drift test enforces the export; CI regenerates the web client from the
 committed `schema.graphql`. (`schema-settings.json` is an incidental export
 artifact and is gitignored.)
+
+## Adding or upgrading a NuGet package
+
+The solution uses **Central Package Management**: every version lives in
+`Directory.Packages.props` at the repo root, and project files reference
+packages with no `Version` attribute at all.
+
+```xml
+<!-- Directory.Packages.props -->
+<PackageVersion Include="Some.Package" Version="1.2.3" />
+
+<!-- the project that needs it -->
+<PackageReference Include="Some.Package" />
+```
+
+Putting a `Version` back on a `PackageReference` is a restore **error**
+(NU1008), so the two halves cannot drift. Upgrading a package shared by six
+projects is now one edit rather than six, and the rationale for a pin lives
+in one place next to the version it explains — read the comments there before
+bumping ImageSharp, SQLitePCLRaw or the `Microsoft.Extensions.*` line, each of
+which is pinned for a stated reason.
+
+Transitive pinning is deliberately **off**; the two security overrides stay
+direct references, because running the tier that references them is what
+proves the pinned version actually loads. Dependabot understands this layout
+and keeps raising the same grouped minor/patch PRs against it.
+
+One MSBuild trap, learned by shipping it: **`--` is illegal inside an XML
+comment.** Writing a double hyphen as an em-dash in `Directory.Packages.props`
+makes the file unparseable, and the failure does not name it — every project
+reports `NU1015: PackageReference items do not have a version specified`,
+because central package management stays switched on while the `PackageVersion`
+items silently vanish. If you ever see NU1015 across the whole solution at once,
+check the props file parses before checking anything else.
+
+### Upgrades that are currently blocked
+
+Both were attempted on 2026-08-28 and backed out; neither is stale-pin inertia.
+
+- **graphql 16 → 17** breaks codegen. `@graphql-codegen/typescript-urql`
+  (through `visitor-plugin-common`) declares a peer range topping out at
+  graphql ^16, npm dedupes 17 into that slot anyway, and `npm run codegen`
+  then dies with `Cannot read properties of undefined (reading 'some')`. It
+  unblocks when the codegen plugins ship graphql 17 support — nothing in this
+  repo needs changing.
+- **SixLabors.ImageSharp 3 → 4** fails the build from the package's own
+  targets: *"No Six Labors license found."* That is a licensing decision for
+  whoever operates this deployment (design.md §19), not a maintenance chore,
+  so the major is excluded in `.github/dependabot.yml` rather than re-proposed
+  every week.
 
 ## CI (`.github/workflows/ci.yml`)
 

@@ -687,43 +687,56 @@ bullet keeps its own sharper caveat where one exists):
   janitor that finds unreferenced objects requires an interface change
   across both providers first.
 
-**Explicitly unverified — needs a container runtime / live infra:**
-- **The entire Aspire container topology.** SQL Server, MinIO, and Keycloak
-  have never actually been started by `aspire run`. Resource wiring
-  (`WithReference`, service discovery, connection string injection) is
-  correct by inspection and compiles, but has not been observed working at
-  runtime. (The migrations themselves and `MigrateOnStartup`'s happy path
-  are no longer in this list — CI's `sqlserver` job now proves them against
-  a real engine; see the CI-verified section above. What remains unverified
-  here is the Aspire wiring itself.)
-- **The Keycloak dev realm import**
-  (`src/RocketWiki.AppHost/keycloak/rocketwiki-realm.json`). The JSON is
-  syntactically valid and was checked by decompiling the Aspire Keycloak
-  hosting package to confirm exactly how `--import-realm` and the bind mount
-  work, but no realm has actually been imported, no user has logged in, and
-  no token has been decoded to confirm the `groups`/`nationality`/`aud`
-  claims land as designed. Targets Keycloak `26.6.1` (the hosting package's
-  default image tag) — see that folder's own `README.md` for the full detail
-  and what production Keycloak needs to reproduce instead.
-- **`RocketWiki.Storage`'s S3 provider** against a real S3-compatible
-  endpoint. Only its DI/config wiring is tested; `PutObjectAsync`,
-  `GetObjectAsync`, etc. have never run against MinIO or anything else.
-- **That any of the OpenTelemetry above has ever left the process.** No OTLP
-  endpoint and no Aspire dashboard has ever received a single span or metric
-  from RocketWiki — the exporter only activates when
-  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, which requires `aspire run`, which
-  requires the container runtime this environment doesn't have. The tests
-  prove the instruments emit and that §15 holds at the `ActivitySource` /
-  `Meter` boundary; they say nothing about serialization, the OTLP exporter,
-  sampling under load, or what a dashboard actually renders. Two specific
-  things to check on the first real run: that ServiceDefaults' `RocketWiki.*`
-  wildcard actually picks the custom sources up (`AddSource`/`AddMeter`
-  wildcard subscription is documented by OpenTelemetry .NET, and a guard test
-  asserts every source and meter is named to match the pattern, but the two
-  halves have never been exercised together against a live SDK), and that
-  span volume is sane — GraphQL scopes are set to everything except per-field
-  resolvers, which is a judgement call made without ever having seen the
-  trace count.
+**Verified on real containers (2026-08-28).** The standing "nothing has ever
+run against real infrastructure" caveat is now retired. `aspire run` was
+executed on Docker Desktop 4.87.0 (engine 29.7.2, Linux containers) from
+*empty volumes*, and the following were observed rather than reasoned about:
+
+- **The whole Aspire topology boots** — SQL Server, Keycloak, MinIO and
+  draw.io containers plus the API project, with `WithReference`, service
+  discovery and connection-string injection doing what they were supposed to.
+- **Migrations apply from zero against a real SQL Server 2025**
+  (17.0.4075.5, Full-Text Search installed): all 10 migrations, 28 tables, the
+  full-text index present, and `PageEmbeddings.Embedding` bound to the native
+  `vector` type. `CONTAINSTABLE` returns real hits against real page content.
+- **The Keycloak dev realm imports and issues usable tokens.** All six dev
+  users complete an Authorization Code + PKCE flow; the decoded access tokens
+  carry `sub`, `preferred_username`, `email`, `name`, `aud: rocketwiki-api`,
+  `groups` as bare names, multivalued `nationality` (including the dual
+  national), `clearance`, and `roles` — with `carol.noattr` carrying no
+  attribute claims at all, which is §6.3's fail-closed case behaving.
+- **The full authentication path**: token → JWT validation → `PrincipalBuilder`
+  → JIT provisioning → GraphQL. An ABAC grant resolved from a real `groups`
+  claim and let its holder create a page; the instance-admin gate accepted
+  `frank.admin` and refused everyone else.
+- **The S3 provider against live MinIO** — upload, download and the object
+  present in the bucket under the expected `attachments/YYYY/MM/<id>` key.
+- **OpenTelemetry leaves the process.** Traces, metrics and logs were captured
+  off the wire at a real OTLP endpoint. Both previously-open questions are
+  answered: ServiceDefaults' `RocketWiki.*` wildcard **does** pick the custom
+  sources up against a live SDK (trace scope `RocketWiki.Storage`; metric
+  scopes `RocketWiki.Api`, `RocketWiki.Core`, `RocketWiki.Storage`, carrying
+  `rocketwiki.access.*`, `rocketwiki.audit.*`, `rocketwiki.domain_events.*`,
+  `rocketwiki.identity.*`, `rocketwiki.storage.*`), and span volume is modest —
+  roughly five GraphQL spans plus the ASP.NET span per request, with no
+  per-field resolver spans.
+
+That run found eight defects that every prior form of review had missed, three
+of them in shipped product code rather than dev scaffolding: the dev realm
+issued tokens with **no `sub` claim** (so nobody could authenticate at all),
+**no caller was ever an instance admin** (ASP.NET renames the `roles` claim to
+`ClaimTypes.Role` and only one lookup didn't know), and **every S3 upload
+failed over plain HTTP** (payload signing was unconditionally disabled, which
+the AWS SDK forbids without TLS — i.e. against exactly the in-network MinIO/Ceph
+deployments §9.4 describes). The remaining five were AppHost wiring: a stock
+SQL Server image with neither full-text search nor the `vector` type,
+unresolved AI connection strings that silently held the API in a pending state
+forever, no `WaitFor` on the database (so migrate-on-startup lost a race and
+crashed), a Keycloak reference that injected service-discovery variables while
+the API read a connection string, and a MinIO container nothing was configured
+to use. All eight are fixed.
+
+**Still explicitly unverified:**
 - **That any browser span has ever been exported to a real OTLP endpoint.**
   The exporter's transport is mocked in the web tests; the only evidence the
   export leg does anything at all is an early draft that let it run for real
@@ -733,6 +746,10 @@ bullet keeps its own sharper caveat where one exists):
   `web/.env.example` documents the variables for standalone `vite dev`,
   including the easily-missed detail that the dashboard's OTLP/HTTP port is
   18890, not the gRPC 18889.
-- Real login, real page CRUD, real search, real anything involving SQL
-  Server or Keycloak issuing a token — none of it exists yet at more than a
-  placeholder level (see design.md §16's milestone list for what's next).
+- **The SPA against this stack.** Everything above was driven over HTTP with
+  `curl`; `npm run dev` has not been pointed at a live API, so the browser
+  half of the login flow (redirect handling, token renewal, the SignalR hub
+  over a real connection) remains unobserved.
+- **Milestone 5, the migration trial**, still needs a real Confluence export.
+- **The k3s deployment.** `deploy/helm` is lint- and render-verified only; no
+  chart has been installed into a cluster. See `deploy/README.md`.

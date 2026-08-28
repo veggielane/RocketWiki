@@ -11,7 +11,9 @@ namespace RocketWiki.SqlServer.Tests;
 /// class shares this instance and isolates itself with its own database instead; see
 /// <see cref="SqlServerTestBase"/>).
 ///
-/// The image is the FTS-enabled derivative defined in mssql-fts/Dockerfile - the
+/// The image is the FTS-enabled derivative defined in docker/mssql-fts/Dockerfile
+/// at the repo root (linked into this project's output by the csproj, and shared
+/// with the AppHost, which needs the same image for `aspire run`) - the
 /// stock mssql/server image cannot even apply the InitialCreate migration (its
 /// FULLTEXT DDL needs Full-Text Search installed). Resolution order:
 ///  1. ROCKETWIKI_MSSQL_FTS_IMAGE, when set, names a pre-built image - CI builds the
@@ -74,6 +76,10 @@ public sealed class SqlServerContainerFixture : IAsyncLifetime
             .WithEnvironment("MSSQL_MEMORY_LIMIT_MB", "4096")
             .WithCreateParameterModifier(p =>
             {
+                // Testcontainers types HostConfig as nullable; it is always populated by
+                // the time a modifier runs, but assigning through it unchecked is a
+                // warning in a repo that builds warning-free.
+                p.HostConfig ??= new Docker.DotNet.Models.HostConfig();
                 p.HostConfig.PidsLimit = -1;
                 p.HostConfig.Ulimits =
                 [

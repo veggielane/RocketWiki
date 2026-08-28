@@ -10,28 +10,26 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Diagnostics.Testing" Version="10.9.0" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.Testing" />
     <!-- FakeTimeProvider, for the edit-session registry's deterministic
          empty-session-grace sweep tests (design.md §8 co-editing). -->
-    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.9.0" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
-    <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0">
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <!-- design.md §14 integration tier: real API over EF Core on SQLite. -->
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <!-- design.md §8: a real HubConnection against NotificationsHub, not a hand-rolled stand-in. -->
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.11" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.11" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
-    <!-- Direct override: EFCore.Sqlite pulls in SQLitePCLRaw 2.1.11, which NU1903 flags
-         for a known high-severity advisory. Held a major ahead of that transitive
-         version deliberately; the SQLite-backed tiers are what prove the native
-         bundle still loads. Keep in step with RocketWiki.Data.Tests and
-         RocketWiki.Sync.Tests, which pin it for the same reason. -->
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- Direct override of the version EFCore.Sqlite resolves; the advisory and the
+         reasoning live with the version in Directory.Packages.props. Running this
+         tier is what proves the 3.x native bundle still loads. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Configuration;
+
 // RocketWiki AppHost — the system topology in code (design.md §15).
 //
 // Deviations from the design.md §15 snippet (API shape only; intent unchanged):
@@ -9,22 +11,48 @@
 //     etc.) that generic `AddContainer` resources don't get. MinIO uses the generic
 //     `.WithVolume(name, target)` API instead, which is functionally identical.
 //   - MinIO has no dedicated Aspire hosting package either (a few third-party ones
-//     exist but are unmaintained/version-mismatched against Aspire 13.5.1), so it's
+//     exist but are unmaintained/version-mismatched against Aspire 13.5.x), so it's
 //     wired by hand: explicit S3 (9000) and console (9001) endpoints, dev-only root
-//     credentials, and the `server /data --console-address :9001` command.
+//     credentials, and the `server /data --console-address :9001` command (wrapped
+//     in a shell so the bucket directory exists first — see below).
 var builder = DistributedApplication.CreateBuilder(args);
 
+// Dev-only MinIO credentials and bucket name. Declared once because three places
+// have to agree on them: the container's root user, the bucket the container
+// pre-creates, and the API's FileStorage:S3 configuration.
+const string MinioRootUser = "minioadmin";
+const string MinioRootPassword = "minioadmin";
+const string MinioBucket = "rocketwiki";
+
+// AddSqlServer's default image is the STOCK mcr.microsoft.com/mssql/server, which
+// this application cannot run on - proven on the first real container run, not by
+// reading docs: the default resolved to 2022-latest, and that engine reported
+// IsFullTextInstalled = 0 and no `vector` type at all. InitialCreate's CREATE
+// FULLTEXT CATALOG dies with error 7609 on the first, and
+// AlterPageEmbeddingToNativeVector's vector(1536) has nothing to bind to on the
+// second. design.md §2 names SQL Server 2025 as the production engine for exactly
+// the second reason. So the same derived image the test tier has always used
+// (docker/mssql-fts/Dockerfile - 2025 base plus the mssql-server-fts package) is
+// built here too; the daemon caches it after the first run.
 var sql = builder.AddSqlServer("sql")
+    .WithDockerfile("../../docker/mssql-fts")
     .WithDataVolume()
     .AddDatabase("rocketwiki");
 
+// `mkdir -p /data/<name>` before starting the server is how a MinIO bucket gets
+// pre-created without a second container or an `mc` sidecar: MinIO treats each
+// top-level directory of its data dir as a bucket. It has to exist up front
+// because S3FileStorage deliberately never creates one (design.md §10 - the
+// bucket, its lifecycle policy and its retention are an operator's decision, not
+// something an app should conjure on first upload).
 var minio = builder.AddContainer("minio", "minio/minio")
     .WithVolume("minio-data", "/data")
     .WithHttpEndpoint(targetPort: 9000, name: "http")   // S3 API
     .WithHttpEndpoint(targetPort: 9001, name: "console") // MinIO console (dev only)
-    .WithEnvironment("MINIO_ROOT_USER", "minioadmin")
-    .WithEnvironment("MINIO_ROOT_PASSWORD", "minioadmin")
-    .WithArgs("server", "/data", "--console-address", ":9001");
+    .WithEnvironment("MINIO_ROOT_USER", MinioRootUser)
+    .WithEnvironment("MINIO_ROOT_PASSWORD", MinioRootPassword)
+    .WithEntrypoint("/bin/sh")
+    .WithArgs("-c", $"mkdir -p /data/{MinioBucket} && exec minio server /data --console-address :9001");
 
 // Dev-only convenience: a self-hosted draw.io (diagrams.net) instance for the
 // SPA's embedded diagram editor. Hand-wired like MinIO above (no Aspire hosting
@@ -49,22 +77,69 @@ var keycloak = builder.AddKeycloakContainer("keycloak")
     .WithDataVolume()
     .WithImport(Path.Combine(builder.AppHostDirectory, "keycloak"), isReadOnly: true);
 
-// External OpenAI-compatible embeddings endpoint (design.md §9.4) — always a
-// connection string, never a container Aspire runs, in every environment.
-var embeddings = builder.AddConnectionString("embeddings");
-
-// External OpenAI-compatible chat endpoint for "ask the wiki" (design.md §9) —
-// same rules as embeddings: connection string only, in-network by §9.4's boundary
-// requirement, fail-closed absent (askWiki answers NOT_CONFIGURED when unset).
-// Typically the same gateway as embeddings serving a second model.
-var assistant = builder.AddConnectionString("assistant");
+// External OpenAI-compatible embeddings endpoint (design.md §9.4) and chat endpoint
+// for "ask the wiki" (design.md §9) — always connection strings, never containers
+// Aspire runs, in every environment (§9.4's boundary requirement).
+//
+// Added ONLY when a value is actually configured. AddConnectionString creates a
+// parameter Aspire must resolve before anything referencing it can start, and an
+// unset one is not a warning — on the first real run it silently held the whole
+// `api` resource in a pending state, so the API never launched and no other part of
+// the topology could be exercised either. Both features are defined as fail-closed
+// when absent (semantic search degrades to keyword-only; askWiki answers
+// NOT_CONFIGURED and registers no chat client at all), so "unconfigured" is a
+// supported state that must not be able to stop the stack booting. Set them with
+// `dotnet user-secrets set ConnectionStrings:embeddings "..."` in this project.
+var embeddings = builder.AddOptionalConnectionString("embeddings");
+var assistant = builder.AddOptionalConnectionString("assistant");
 
 var api = builder.AddProject<Projects.RocketWiki_Api>("api")
     .WithReference(sql)
     .WithReference(minio.GetEndpoint("http"))
     .WithReference(keycloak)
-    .WithReference(embeddings)
-    .WithReference(assistant);
+    // WithReference on a container resource injects SERVICE DISCOVERY variables
+    // (services__keycloak__http__0), but Program.cs derives the JWT authority from
+    // GetConnectionString("keycloak") — two different mechanisms, and nothing bridged
+    // them. The result was silent and total: options.Authority stayed null, so the
+    // bearer handler had no metadata to validate against and rejected every token,
+    // leaving `me` reporting isAuthenticated:false for a perfectly good login. Passing
+    // the endpoint as the connection string keeps design.md §15's "config by
+    // reference" intent and leaves the realm composition in the API where it belongs.
+    .WithEnvironment("ConnectionStrings__keycloak", keycloak.GetEndpoint("http"))
+    // Dev-only MinIO credentials, matching the container above. Without these the
+    // API falls back to the FileSystem provider and the MinIO container is dead
+    // weight — which is exactly what the first real run found, and why the S3
+    // provider had still never executed a single request against a real endpoint.
+    .WithEnvironment("FileStorage__Provider", "S3")
+    .WithEnvironment("FileStorage__S3__ServiceUrl", minio.GetEndpoint("http"))
+    .WithEnvironment("FileStorage__S3__Bucket", MinioBucket)
+    .WithEnvironment("FileStorage__S3__ForcePathStyle", "true")
+    .WithEnvironment("FileStorage__S3__AccessKey", MinioRootUser)
+    .WithEnvironment("FileStorage__S3__SecretKey", MinioRootPassword)
+    // WithReference wires configuration; it does NOT imply waiting. Without these the
+    // API starts the moment its own dependencies are *described*, races SQL Server's
+    // boot, and dies — observed, not theorised: the first run that got this far
+    // crashed in Migrate() with "Error Number:-2 ... The wait operation timed out"
+    // while SQL Server was still starting. Database:MigrateOnStartup runs before the
+    // host is listening and has no connection retry, so losing that race is fatal
+    // rather than merely slow. SQL Server 2025 with Full-Text Search takes a while to
+    // report healthy, which makes the race one the API reliably loses on a cold start.
+    .WaitFor(sql)
+    // Keycloak is not needed to *boot* (OIDC metadata is fetched lazily on the first
+    // authenticated request), but waiting means the first login after `aspire run`
+    // works instead of failing against a realm that is still importing.
+    .WaitFor(keycloak)
+    .WaitFor(minio);
+
+if (embeddings is not null)
+{
+    api.WithReference(embeddings);
+}
+
+if (assistant is not null)
+{
+    api.WithReference(assistant);
+}
 
 // TODO(milestone 0): the Vite app is not wired into the AppHost yet — it runs
 // standalone via `npm run dev` (see DEVELOPING.md). Uncomment once confirmed
@@ -76,3 +151,24 @@ var api = builder.AddProject<Projects.RocketWiki_Api>("api")
 // RocketWiki.AppHost.csproj).
 
 builder.Build().Run();
+
+file static class OptionalConnectionStringExtensions
+{
+    /// <summary>
+    /// <see cref="ResourceBuilderExtensions.AddConnectionString(IDistributedApplicationBuilder, string)"/>
+    /// only when a value for it exists in the AppHost's own configuration, otherwise
+    /// <c>null</c>.
+    ///
+    /// <para>Aspire treats a connection string as a parameter it has to resolve before any
+    /// resource referencing it may start, and an unresolved one produces no error — it
+    /// just waits. For a feature that is genuinely optional that is the wrong trade:
+    /// leaving RocketWiki's AI endpoints unset should mean "that feature is off",
+    /// never "the API does not boot". Registering the resource conditionally is what
+    /// makes the AppHost agree with the application's own fail-closed semantics.</para>
+    /// </summary>
+    public static IResourceBuilder<IResourceWithConnectionString>? AddOptionalConnectionString(
+        this IDistributedApplicationBuilder builder, string name) =>
+        string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString(name))
+            ? null
+            : builder.AddConnectionString(name);
+}

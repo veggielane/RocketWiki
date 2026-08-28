@@ -1,4 +1,4 @@
-<Project Sdk="Aspire.AppHost.Sdk/13.5.1">
+<Project Sdk="Aspire.AppHost.Sdk/13.5.3">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -10,17 +10,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.AppHost" Version="13.5.2" />
-    <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.5.2" />
-    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.5.2" />
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.SqlServer" />
+    <PackageReference Include="Aspire.Hosting.JavaScript" />
     <!-- No official Microsoft Aspire hosting integration exists for Keycloak or MinIO.
          Keycloak.AuthServices.Aspire.Hosting (NikiforovAll) is the leading community
          package for Keycloak; MinIO is wired via the generic AddContainer API, which
          is what design.md §15 itself uses. See AppHost.cs for the exact deviations
          from the design.md snippet (method names / API shape only, not intent). -->
-    <PackageReference Include="Keycloak.AuthServices.Aspire.Hosting" Version="0.3.0" />
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageReference Include="Keycloak.AuthServices.Aspire.Hosting" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
   </ItemGroup>
 
   <ItemGroup>
