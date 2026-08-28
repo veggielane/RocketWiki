@@ -195,6 +195,30 @@ direct references, because running the tier that references them is what
 proves the pinned version actually loads. Dependabot understands this layout
 and keeps raising the same grouped minor/patch PRs against it.
 
+One MSBuild trap, learned by shipping it: **`--` is illegal inside an XML
+comment.** Writing a double hyphen as an em-dash in `Directory.Packages.props`
+makes the file unparseable, and the failure does not name it — every project
+reports `NU1015: PackageReference items do not have a version specified`,
+because central package management stays switched on while the `PackageVersion`
+items silently vanish. If you ever see NU1015 across the whole solution at once,
+check the props file parses before checking anything else.
+
+### Upgrades that are currently blocked
+
+Both were attempted on 2026-08-28 and backed out; neither is stale-pin inertia.
+
+- **graphql 16 → 17** breaks codegen. `@graphql-codegen/typescript-urql`
+  (through `visitor-plugin-common`) declares a peer range topping out at
+  graphql ^16, npm dedupes 17 into that slot anyway, and `npm run codegen`
+  then dies with `Cannot read properties of undefined (reading 'some')`. It
+  unblocks when the codegen plugins ship graphql 17 support — nothing in this
+  repo needs changing.
+- **SixLabors.ImageSharp 3 → 4** fails the build from the package's own
+  targets: *"No Six Labors license found."* That is a licensing decision for
+  whoever operates this deployment (design.md §19), not a maintenance chore,
+  so the major is excluded in `.github/dependabot.yml` rather than re-proposed
+  every week.
+
 ## CI (`.github/workflows/ci.yml`)
 
 Five jobs on every push: `backend` (Release build + the container-free
