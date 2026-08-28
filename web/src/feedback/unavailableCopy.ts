@@ -214,6 +214,31 @@ export function describeDiagramUnavailable(reason: DiagramUnavailableReason): Un
 }
 
 /**
+ * The `page-list` widget (design.md §22). Kept apart from `LoadFailureReason`
+ * because the interesting failure here is not a load at all: an RQL query
+ * that cannot run is AUTHORED CONTENT that came back refused, so the widget
+ * is reporting on the page's own Markdown rather than on the API.
+ *
+ * Neither reason may hint at pages the reader cannot see. §6.7 makes an
+ * invisible page indistinguishable from a nonexistent one, and §22.4 extends
+ * that to the query itself — an invisible space compiles to the same
+ * never-matches predicate an imaginary one does. A message that said "some
+ * results may be hidden" would undo both.
+ */
+export type PageListUnavailableReason = 'REQUEST_FAILED' | 'QUERY_INVALID'
+
+export function describePageListUnavailable(reason: PageListUnavailableReason): UnavailableCopy {
+  switch (reason) {
+    case 'REQUEST_FAILED':
+      return { summary: "Couldn't reach the API to run this page list.", pointsToSettings: false }
+    case 'QUERY_INVALID':
+      // Names the query, not the reader: the fix is an edit to this page, and
+      // the positioned errors that follow this sentence say what to edit.
+      return { summary: "This list's query can't run as written, so no pages are listed.", pointsToSettings: false }
+  }
+}
+
+/**
  * Replica spaces (design.md §12 — and §12's word IS "replica", so no
  * user-facing surface says "mirror"/"mirrored"). The badge form is shared
  * by the space-list chip, the tree secondary line, and the lead of every

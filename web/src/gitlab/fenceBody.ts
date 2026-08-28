@@ -6,27 +6,11 @@
  * the whole Markdown pipeline — these helpers only interpret its text for
  * rendering and build canonical bodies for the insert dialogs; they never
  * rewrite what an author typed.
+ *
+ * The line format itself is not GitLab's and no longer lives here: see
+ * `format/keyValueBody.ts`, which the `page-list` fence (§22) shares.
  */
-
-/**
- * Splits a fence body into key/value pairs: one `key=value` per line, split
- * at the first `=`, keys trimmed and case-sensitive, values taken verbatim
- * (trimmed). Blank lines and lines without `=` are ignored; a repeated key
- * keeps the last occurrence. Unknown keys are simply unused — never an
- * error, so future keys degrade gracefully on old clients.
- */
-export function parseKeyValueBody(body: string): Map<string, string> {
-  const entries = new Map<string, string>()
-  for (const line of body.split('\n')) {
-    const eq = line.indexOf('=')
-    if (eq <= 0) continue
-    const key = line.slice(0, eq).trim()
-    const value = line.slice(eq + 1).trim()
-    if (key.length === 0) continue
-    entries.set(key, value)
-  }
-  return entries
-}
+import { parseKeyValueBody } from '../format/keyValueBody'
 
 // --- gitlab-file ---------------------------------------------------------
 

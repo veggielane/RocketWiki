@@ -136,7 +136,7 @@ describe('gitlab-file block — degradation (§18: typed placeholder WITH the re
   it('a fence missing required keys shows the incomplete hint and (read mode) reveals the source', async () => {
     const { container } = renderBlock({ markdown: '```gitlab-file\nref=main\n```\n' })
     expect(await screen.findByText(/Incomplete gitlab-file reference — missing project, path/)).toBeInTheDocument()
-    expect(container.querySelector('.rw-gitlab-block')).toHaveAttribute('data-render-state', 'error')
+    expect(container.querySelector('.rw-fence-block')).toHaveAttribute('data-render-state', 'error')
   })
 })
 

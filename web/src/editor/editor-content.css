@@ -392,16 +392,18 @@
   white-space: nowrap;
 }
 
-/* Fence blocks: same editing/readonly frame as mermaid. */
-.rw-gitlab-block {
+/* Fence blocks: same editing/readonly frame as mermaid. Shared by every
+   key=value fence (gitlab-file, gitlab-issues, page-list) — named for the
+   frame, not for the feature that first needed it. */
+.rw-fence-block {
   margin: 0 0 0.75em;
 }
 
-.rw-gitlab-block .rw-gitlab-source {
+.rw-fence-block .rw-fence-source {
   margin: 0;
 }
 
-.rw-gitlab-block-editing {
+.rw-fence-block-editing {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.75em;
@@ -409,34 +411,37 @@
 }
 
 @media (max-width: 900px) {
-  .rw-gitlab-block-editing {
+  .rw-fence-block-editing {
     grid-template-columns: minmax(0, 1fr);
   }
 }
 
-.rw-gitlab-preview {
+.rw-fence-preview {
   min-width: 0;
 }
 
-.rw-gitlab-block-readonly .rw-gitlab-source {
+.rw-fence-block-readonly .rw-fence-source {
   display: none;
 }
 
-.rw-gitlab-block-readonly[data-render-state='error'] .rw-gitlab-source {
+.rw-fence-block-readonly[data-render-state='error'] .rw-fence-source {
   display: block;
   margin-bottom: 0.5em;
 }
 
 .rw-gitlab-file,
 .rw-gitlab-issues,
-.rw-gitlab-placeholder {
+.rw-gitlab-placeholder,
+.rw-page-list,
+.rw-page-list-placeholder {
   border: 1px solid var(--rw-border, #c9ccd1);
   border-radius: 6px;
   overflow: hidden;
 }
 
 .rw-gitlab-file-header,
-.rw-gitlab-issues-header {
+.rw-gitlab-issues-header,
+.rw-page-list-header {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
@@ -530,6 +535,74 @@
   background: var(--rw-code-bg, #f2f3f5);
   border-radius: 4px;
   padding: 0.1em 0.35em;
+}
+
+/* page-list widget (design.md §22). Rows are a real <ul>; the list-style and
+   padding resets are what let it look like a table without pretending to be
+   a pile of divs. */
+.rw-page-list-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.rw-page-list-rows li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.6em;
+  padding: 0.4em 0.9em;
+  border-top: 1px solid var(--rw-border, #c9ccd1);
+  font-size: 0.9em;
+}
+
+.rw-page-list-rows li:first-child {
+  border-top: 0;
+}
+
+.rw-page-list-link {
+  color: var(--rw-link, #1a56db);
+  text-decoration: none;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rw-page-list-link:hover {
+  text-decoration: underline;
+}
+
+.rw-page-list-space {
+  color: var(--rw-muted, #5b6270);
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+/* Degraded frame: the sentence, the query it is about, and (for a refused
+   query) the server's positioned messages. The query is already this page's
+   own Markdown, so echoing it discloses nothing new. */
+.rw-page-list-placeholder {
+  padding: 0.6em 0.9em;
+}
+
+.rw-page-list-reason {
+  color: var(--rw-muted, #5b6270);
+  font-size: 0.9em;
+  margin-bottom: 0.35em;
+}
+
+.rw-page-list-query,
+.rw-page-list-offending {
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--rw-code-bg, #f2f3f5);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+.rw-page-list-errors {
+  margin: 0.5em 0 0;
+  padding-left: 1.2em;
+  font-size: 0.9em;
 }
 
 @media (prefers-color-scheme: dark) {

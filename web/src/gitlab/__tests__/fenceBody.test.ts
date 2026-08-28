@@ -1,29 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import {
-  buildFileFenceBody,
-  buildIssuesFenceBody,
-  parseFileFence,
-  parseIssuesFence,
-  parseKeyValueBody,
-} from '../fenceBody'
+import { buildFileFenceBody, buildIssuesFenceBody, parseFileFence, parseIssuesFence } from '../fenceBody'
 
-describe('parseKeyValueBody', () => {
-  it('splits at the FIRST equals sign — values may contain =', () => {
-    const entries = parseKeyValueBody('search=a=b')
-    expect(entries.get('search')).toBe('a=b')
-  })
-
-  it('ignores blank lines and lines without =, keeps the last duplicate', () => {
-    const entries = parseKeyValueBody('project=one\n\nnot a pair\nproject=two')
-    expect(entries.get('project')).toBe('two')
-    expect(entries.size).toBe(1)
-  })
-
-  it('trims keys and values', () => {
-    const entries = parseKeyValueBody('  ref = main  ')
-    expect(entries.get('ref')).toBe('main')
-  })
-})
+// The `key=value` line format itself is shared with the page-list fence and
+// is tested at its own home: format/__tests__/keyValueBody.test.ts.
 
 describe('gitlab-file fence body', () => {
   it('parses project/path/ref', () => {
