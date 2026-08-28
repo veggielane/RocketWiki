@@ -109,6 +109,152 @@ Custom fields are mostly *not* new: the §20 property registry is admin-governed
 key/value with a normalized-key unique index, which is what a custom-field
 registry is. Reuse it rather than building a second one.
 
+## Admin configuration, at the site level
+
+Everything below is configured by instance admins through the UI, stored as
+data, and versioned. This is the shape Jira proved and there is little reason
+to deviate from it.
+
+### Issue types and their attributes
+
+An **issue type** is a name, an icon, a hierarchy level, and an ordered set of
+**field definitions**. The §20 property registry gets you most of the way — it
+is already an admin-governed, instance-level registry with a normalized-key
+unique index — but it needs two extensions:
+
+- **A type on the key.** Properties are plain text today. Fields need
+  `text | number | date | user | select | multiselect | checkbox`, because
+  sorting, validation and RQL comparisons all depend on it. This is the same
+  shape `AttributeDefinition` already has for the ABAC registry (`Type`,
+  `AllowedValuesJson`) — copy that, do not invent a third registry.
+- **Assignment to an issue type**, with per-assignment `required` and a default.
+
+Deleting a field definition in use must be **refused with the usage count**,
+exactly as deleting an in-use property key is (§20). Changing a field's *type*
+after data exists is the migration nobody plans for: either forbid it, or make
+it an explicit convert-with-preview operation. Forbidding is defensible for v1.
+
+### States and status categories
+
+A **state** is a name, a colour, and exactly one **status category** from a
+fixed three: `To Do`, `In Progress`, `Done`. The categories are deliberately
+not admin-editable — boards, "is this resolved", cycle-time and every future
+report key off them, and letting an admin invent a fourth breaks all of it.
+This is precisely Jira's model and its rigidity is the feature.
+
+`Done` is the one with semantics: it is what closes an issue, stops SLA clocks
+(Part 2), and removes a card from a board's active columns.
+
+### Hierarchy
+
+Levels are defined at site level as an ordered list — e.g. `Epic (2)`,
+`Story (1)`, `Sub-task (0)` — and each issue type sits at exactly one level. The
+rule is simply that a parent must be at a strictly higher level than its child.
+
+Note this is **typed hierarchy**, unlike the page tree: a page may parent any
+page, but an Epic may only parent types at a lower level. That is a domain
+constraint, not a permission one — the permission engine already handles a flat
+subject and a chain identically, so hierarchy costs nothing there.
+
+Cycle prevention is the one non-obvious requirement: reparenting must reject a
+move that would make an issue its own ancestor. The page tree solves this with
+`AncestorPath`; issues can do the same or walk parents on write.
+
+### Basic workflows
+
+A **workflow** is a set of states plus transitions between them, assigned to an
+issue type (per project, or site-wide with per-project override — pick one;
+site-wide-with-override is what Jira does and what people expect).
+
+A transition is: `from → to`, a name, and three hook points that Jira's model
+has proven and which are worth copying by name because they are genuinely
+distinct concerns:
+
+| Hook | Question it answers | Runs when |
+|---|---|---|
+| **Condition** | May this actor even see/attempt this transition? | Before the button is offered |
+| **Validator** | Is the submitted input acceptable? | On submit, before any change |
+| **Post-function** | What else happens as a result? | After the state change, same transaction |
+
+Declarative versions of all three cover the overwhelming majority of real use:
+condition on role/field value, validator on required-fields/regex, post-function
+to set a field, assign, add a comment, or transition a linked issue.
+
+**Two rules specific to this product:**
+
+1. **Transitions need their own permission verb.** `PageAction` has exactly two
+   members (`View`, `Edit`); a tracker needs at least `Transition` and `Assign`.
+   Adding members is additive — the values are tinyint and stored values do not
+   move — but the *name* `PageAction` leaks into denial reasons and GraphQL, so
+   rename it when the seam is extracted (Phase 0).
+2. **A post-function runs as the acting user, never elevated.** If a
+   post-function sets a field on a linked issue the actor cannot see, it must
+   fail — visibly — rather than succeed. Otherwise workflows become a permission
+   bypass, and the §21 invariant that no role reads around a classification is
+   defeated by a config screen. Audit rows for post-function effects carry the
+   acting user, not a system account, or §7's record stops being true.
+
+### Advanced workflows: admin-authored C#
+
+This is the request that needs its constraints stated before anyone starts,
+because the obvious implementation is unsafe in a way that is not obvious.
+
+**The hard fact: .NET has no supported in-process sandbox.** Code Access
+Security was removed in .NET Core, and `AppDomain` isolation went with it. There
+is no mechanism by which C# compiled and executed inside the API process can be
+prevented from opening a `DbContext`, reading any row, calling out over HTTP, or
+reading the process's configuration and secrets. Roslyn scripting compiles and
+runs code; it does not contain it.
+
+For this product that has a specific consequence. §21 establishes that **no
+role — including instance admin — reads around a classification**; the clearance
+gate has no admin bypass, and that invariant is enforced structurally and pinned
+by test. Admin-authored C# running in-process silently repeals it: the script
+runs with the process's authority, not the author's. An instance admin who
+cannot read a `TOP SECRET` page could write a post-function that emails its
+contents outside. Nothing in the current design would notice.
+
+So the real decision is not *"C# or not"* but *"what trust boundary"*. Three
+honest options:
+
+**(a) Declarative rules, no code.** A safe expression language over a curated
+context — field reads, comparisons, and a fixed set of effects. Covers the great
+majority of real post-functions, is statically analysable, has no sandbox
+problem, and can be validated in the UI as it is typed. *Recommended for the
+first advanced tier.*
+
+**(b) A developer-shipped catalogue.** Post-functions are real C#, written by
+developers, reviewed, and deployed with the application; admins compose and
+configure them through the UI but cannot author new ones. This is how most
+regulated deployments actually run ScriptRunner-style features once the security
+team looks at them. It gets you arbitrary power without an arbitrary-code
+surface.
+
+**(c) UI-authored C#, executed out-of-process.** If admins genuinely must write
+code in the browser, the only defensible execution model is an isolated worker
+with **no ambient authority**: a separate process or container, no database
+connection, no network egress, no secrets, communicating over an explicit
+`IWorkflowContext` boundary that exposes only what the acting user could do
+anyway. Add resource limits (CPU, memory, wall-clock), a hard timeout, and treat
+script changes as deployment-class events — versioned, diffable, audited, and
+ideally requiring a second approver.
+
+Even in (c), be honest in the docs that **authoring a script is equivalent in
+power to deploying code**, and that the boundary is the worker process, not the
+language.
+
+If (c) is the destination, (a) is still the right first step: it is a subset of
+the same UI, it defines the context object the sandbox would later expose, and
+it lets the workflow engine ship without waiting on the isolation work.
+
+### Configuration is instance-local
+
+Workflow definitions, issue types and field registries are configuration, not
+content — like the ABAC attribute registry and the emoji registry, they do not
+travel in sync bundles (§12). A replica materializes what it needs on import.
+Worth deciding explicitly, because the alternative (syncing workflow config)
+means a high-side instance's process being changed by a low-side push.
+
 ## The export-control work with no wiki equivalent
 
 This is the part a generic Jira-replacement plan would miss, and it is where
@@ -170,9 +316,13 @@ access control, classification and audit are the same reviewed machinery the
 wiki uses.
 
 **Phase 2 — workflow.**
-States, transitions, guards, assignment. New permission verbs. Transition
-history in the audit log — a state change is exactly the kind of thing §7
-exists to record.
+Admin configuration first: issue types with typed fields, states bound to the
+three fixed status categories, hierarchy levels, then transitions with
+declarative conditions/validators/post-functions. New permission verbs
+(`Transition`, `Assign`). Transition history in the audit log — a state change
+is exactly the kind of thing §7 exists to record. Scripted post-functions are
+**not** part of this phase: ship the declarative tier, then decide the
+execution model (see "Advanced workflows").
 
 **Phase 3 — links and boards.**
 Issue links with the permission-filtered rendering described above. Kanban board
@@ -197,15 +347,21 @@ If not, it is a second outbox and a bundle format bump.
    consumed by audit rows and the permission inspector. An issue rule leaving
    `PageId` null silently produces `restriction::{ruleId}` — a malformed
    contractual string, discovered late.
-3. **Column-per-subject-type, or a discriminator?** `AccessRule` has a nullable
+3. **What trust boundary for scripted workflows?** Declarative rules, a
+   developer-shipped catalogue, or UI-authored C# in an isolated worker. The
+   answer determines whether §21's "no role reads around a classification"
+   survives contact with the workflow engine, so it is a security decision, not
+   a feature decision. Deferring it is fine; deferring it *while shipping
+   in-process scripting* is not.
+4. **Column-per-subject-type, or a discriminator?** `AccessRule` has a nullable
    `PageId` plus a check constraint; `Watch` has a space-or-page XOR with two
    filtered unique indexes. Both are O(n) in columns and constraints per subject
    type. At two types this is fine; **at three it is the moment to switch to
    `(SubjectKind, SubjectId)`** rather than add another nullable column and
    another constraint arm. Adding issues *is* the third type.
-4. **One search index or two?** Federated ranking is a real design question, not
+5. **One search index or two?** Federated ranking is a real design question, not
    a mechanical one.
-5. **Name collision:** `GitLabIssue` already exists in the schema as a
+6. **Name collision:** `GitLabIssue` already exists in the schema as a
    read-only external type. Pick the internal name deliberately.
 
 ## What a v1 should not be
