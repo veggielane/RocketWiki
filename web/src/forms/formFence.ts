@@ -13,6 +13,9 @@ export interface FormFenceSpec {
   collection: string
   /** Empty means every field the definition declares, in its order. */
   columns: string[]
+  /** The raw `where =` text. Parsed by entryFilter.ts, not here — this module
+   *  only splits the fence body. */
+  where: string
 }
 
 export type FormFenceParse =
@@ -33,5 +36,5 @@ export function parseFormFence(body: string): FormFenceParse {
     .map((c) => c.trim())
     .filter((c) => c.length > 0)
 
-  return { ok: true, spec: { collection, columns } }
+  return { ok: true, spec: { collection, columns, where: entries.get('where')?.trim() ?? '' } }
 }

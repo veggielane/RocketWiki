@@ -47,7 +47,15 @@ submitted:
 ```form-list
 collection = incident-report
 columns = occurredAt, severity, summary
+where = severity IN (high, medium)
 ```
+
+`where` is optional. It supports `=`, `!=`, `>`, `>=`, `<`, `<=` and
+`IN (a, b)`, joined with `AND`. `OR` and parentheses are not supported and are
+refused rather than ignored — a filter that quietly did nothing would be worse
+than one that says it cannot be read. A field name the form does not declare is
+refused for the same reason: an empty table would look like a fact about the
+data rather than a typo.
 
 A page can hold as many collections as you like. Two things worth knowing:
 

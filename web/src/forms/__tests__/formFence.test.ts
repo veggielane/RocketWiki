@@ -10,7 +10,15 @@ import { parseFormFence } from '../formFence'
 describe('parseFormFence', () => {
   it('reads a collection', () => {
     const result = parseFormFence('collection = incident-report')
-    expect(result).toEqual({ ok: true, spec: { collection: 'incident-report', columns: [] } })
+    expect(result).toEqual({ ok: true, spec: { collection: 'incident-report', columns: [], where: '' } })
+  })
+
+  it('carries the where line through verbatim for entryFilter to read', () => {
+    // Split here, parsed there: this module knows about fence bodies, not about
+    // predicates. Previously `where` was dropped entirely, so a filter written
+    // from the documented example silently did nothing.
+    const result = parseFormFence('collection = notes\nwhere = severity IN (high, medium)')
+    expect(result.ok && result.spec.where).toBe('severity IN (high, medium)')
   })
 
   it('reads columns as an ordered list', () => {

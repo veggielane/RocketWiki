@@ -169,7 +169,11 @@ function FormFence({ node, editor, kind }: NodeViewProps & { kind: 'form-definit
         kind === 'form-definition' ? (
           <FormDefinitionBlock collection={parsed.spec.collection} />
         ) : (
-          <FormListBlock collection={parsed.spec.collection} columns={parsed.spec.columns} />
+          <FormListBlock
+            collection={parsed.spec.collection}
+            columns={parsed.spec.columns}
+            where={parsed.spec.where}
+          />
         )
       ) : (
         <FenceIncomplete kind={kind} missing={parsed.missing} />

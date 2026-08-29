@@ -240,6 +240,28 @@ describe('FormListBlock', () => {
     expect(screen.queryByText(/of \d+/)).toBeNull()
   })
 
+  it('applies a where filter to the rows it was given', async () => {
+    renderBlock(<FormListBlock collection="incident-report" columns={['summary']} where="severity = high" />)
+    const table = await screen.findByRole('table', { name: /incident-report records/ })
+    expect(within(table).getByText('Turbopump stall')).toBeInTheDocument()
+    expect(within(table).queryByText('Sensor drift')).toBeNull()
+  })
+
+  it('refuses a filter it cannot read rather than ignoring it', async () => {
+    // The bug this replaces: `where` was dropped entirely, so a filter written
+    // from the documented example silently returned everything and the author
+    // read the rows as though it had applied.
+    renderBlock(<FormListBlock collection="incident-report" columns={[]} where="severity = high OR severity = low" />)
+    expect(await screen.findByText(/OR is not supported/)).toBeInTheDocument()
+    expect(screen.queryByRole('table')).toBeNull()
+  })
+
+  it('names a field the form does not declare', async () => {
+    // A typo would otherwise match nothing and present as "no records yet".
+    renderBlock(<FormListBlock collection="incident-report" columns={[]} where="sevrity = high" />)
+    expect(await screen.findByText(/"sevrity" is not a field of incident-report/)).toBeInTheDocument()
+  })
+
   it('has no axe violations with rows present', async () => {
     renderBlock(<FormListBlock collection="incident-report" columns={[]} />)
     await screen.findByRole('table', { name: /incident-report records/ })

@@ -24,6 +24,7 @@ import {
 import { describeMutationError } from '../graphql/mutationError'
 import { useCurrentPageId } from '../pages/pageContext'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
+import { entryMatches, parseEntryFilter, unknownFields } from './entryFilter'
 
 /**
  * The two form fences (docs/ENTRIES-AND-FORMS-PLAN.md).
@@ -160,7 +161,15 @@ export function FormDefinitionBlock({ collection }: { collection: string }) {
  * Columns come from the definition rather than from the records, so a field nobody has
  * filled in still has a column and the table does not change shape as records arrive.
  */
-export function FormListBlock({ collection, columns }: { collection: string; columns: string[] }) {
+export function FormListBlock({
+  collection,
+  columns,
+  where = '',
+}: {
+  collection: string
+  columns: string[]
+  where?: string
+}) {
   const { pageId, fetching, definition, error } = useDefinition(collection)
   const [{ data, fetching: loadingEntries }] = usePageEntriesQuery({
     variables: { pageId: pageId ?? '', collection },
@@ -179,7 +188,40 @@ export function FormListBlock({ collection, columns }: { collection: string; col
   const shown = columns.length > 0
     ? definition.fields.filter((f) => columns.includes(f.name))
     : definition.fields
-  const entries = data?.pageEntries ?? []
+
+  // A filter that could not be read stops the table rather than being dropped.
+  // §22.3's rule: an ignored predicate is worse than a refused one, because the
+  // author believes it applied and reads the rows as if it had.
+  const filter = parseEntryFilter(where)
+  if (!filter.ok) {
+    return <Alert severity="warning">{filter.message}</Alert>
+  }
+  const unknown = unknownFields(filter.conditions, definition.fields.map((f) => f.name))
+  if (unknown.length > 0) {
+    // Named rather than silently matching nothing: an empty table would read as
+    // a fact about the data instead of a typo in the filter.
+    return (
+      <Alert severity="warning">
+        {`"${unknown.join('", "')}" ${unknown.length === 1 ? 'is not a field' : 'are not fields'} of ${definition.collection}.`}
+      </Alert>
+    )
+  }
+
+  const typeOf = (field: string) =>
+    definition.fields.find((f) => f.name.toLowerCase() === field.toLowerCase())?.type ?? 'TEXT'
+
+  const entries = (data?.pageEntries ?? []).filter((entry) => {
+    if (filter.conditions.length === 0) return true
+    try {
+      const parsed: unknown = JSON.parse(entry.data)
+      return parsed && typeof parsed === 'object'
+        ? entryMatches(parsed as Record<string, unknown>, filter.conditions, typeOf)
+        : false
+    } catch {
+      // A record that will not parse cannot satisfy a predicate about its fields.
+      return false
+    }
+  })
 
   if (entries.length === 0) {
     return (
