@@ -5,6 +5,23 @@ GraphQL client (`npm run codegen` — nothing compiles without it). The
 design source of truth is `../design.md`; §4 (round-trip rule), §6
 (permissions shape the UI), and §8 (API) matter most here.
 
+## Typechecking: use `npm run typecheck`, never `tsc --noEmit`
+
+`tsconfig.json` is solution-style — `files: []` plus project references — so
+**`npx tsc --noEmit` type-checks exactly zero files here and exits 0 no matter
+what is broken.** It looks like a passing typecheck and is not one. Only the
+build-mode form (`tsc -b`) follows the references.
+
+This is not hypothetical: it hid 23 real errors, including MUI v9 dropping the
+`Stack`/`Typography` system props, so `alignItems`, `flexWrap` and
+`whiteSpace` were silently ignored on five screens that genuinely were not
+laying out as written. CI (`npm run build`) caught it; a local `--noEmit` never
+would.
+
+```
+npm run typecheck   # tsc -b --force — the real one
+```
+
 ## UI feedback conventions
 
 One rule decides which surface a message uses — pick by what the user must
