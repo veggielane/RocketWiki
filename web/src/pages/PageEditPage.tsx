@@ -160,20 +160,34 @@ export function PageEditPage() {
     }
     if (savedRevisionNumber === null) return
 
-    if (!collabActive) {
-      navigate(`/pages/${page.id}`)
+    // Session bookkeeping happens either way, and before any navigation:
+    // advance the tracked base (the server advanced its copy in the same
+    // transaction) and settle a pending log-cap reseed with a fresh
+    // full-state snapshot, which the OTHER participants depend on.
+    if (collabActive) {
+      session.noteSaved(savedRevisionNumber)
+      if (session.reseedDemand !== null) {
+        await session.completeReseed(savedRevisionNumber)
+      }
+    }
+
+    // An automatic save must never move anyone: the log-cap reseed fires on
+    // the server's schedule, not the author's, and yanking someone out of the
+    // editor mid-sentence because of background housekeeping would be the
+    // worst possible moment to navigate.
+    if (options?.auto === true) {
+      setSessionSaved({ revisionNumber: savedRevisionNumber, contributors, auto: true })
       return
     }
 
-    // A session save is a checkpoint, not an exit: advance the tracked
-    // base (the server advanced its copy in the same transaction), settle
-    // any pending log-cap reseed with a fresh full-state snapshot, and
-    // stay in the live editor.
-    session.noteSaved(savedRevisionNumber)
-    if (session.reseedDemand !== null) {
-      await session.completeReseed(savedRevisionNumber)
-    }
-    setSessionSaved({ revisionNumber: savedRevisionNumber, contributors, auto: options?.auto === true })
+    // Pressing Save goes to the page, in a session or not. This used to be
+    // solo-only, on the reasoning that "a session save is a checkpoint, not an
+    // exit" — but `status` becomes 'collaborating' the moment the edit session
+    // is joined, whether or not anyone else is in it, so the ordinary case of
+    // one person editing alone never navigated and Save appeared to do nothing.
+    // Leaving is not destructive here: the save committed a revision, and the
+    // session's own Close button remains for stepping out without saving.
+    navigate(`/pages/${page.id}`)
   }
 
   // The log_cap flow (design.md §8, hub doc): the server named THIS client

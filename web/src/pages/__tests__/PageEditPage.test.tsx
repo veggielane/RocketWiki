@@ -314,7 +314,7 @@ describe('PageEditPage collaborative mode', () => {
     expect(jsonToMarkdown(yDocToProsemirrorJSON(joiner, 'default'))).toBe('Hello world.\n')
   })
 
-  it('save uses the SESSION base revision (not the page query snapshot), stays in the editor, and credits contributors', async () => {
+  it('save uses the SESSION base revision (not the page query snapshot) and then goes to the page', async () => {
     const mock = await renderCollabEditPage()
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -327,12 +327,12 @@ describe('PageEditPage collaborative mode', () => {
     })
     expect(mock.operations.filter((op) => op.name === 'UpdatePageContent')).toHaveLength(0)
 
-    // A session save is a checkpoint, not an exit: no navigation, and the
-    // toast names the server-resolved contributors (design.md §8 —
-    // resolved from the session registry, never client-supplied).
-    expect(await screen.findByText(/Saved revision 42 — contributors: Ada Lovelace, Grace Hopper/)).toBeInTheDocument()
-    expect(screen.queryByText('view route')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    // Pressing Save leaves the editor even in a session. It used not to, on the
+    // reasoning that a session save is a checkpoint rather than an exit — but
+    // the session status turns 'collaborating' the moment the edit session is
+    // joined, whether or not anyone else is in it, so the ordinary case of one
+    // person editing alone never navigated and Save looked like it did nothing.
+    expect(await screen.findByText('view route')).toBeInTheDocument()
   })
 
   it('log_cap ReseedRequired auto-saves with the demanded base, hands back the snapshot, and the NEXT save uses the advanced base', async () => {
@@ -351,6 +351,12 @@ describe('PageEditPage collaborative mode', () => {
     })
     await waitFor(() => expect(transport.reseeds).toHaveLength(1))
     expect(await screen.findByText(/Autosaved revision 42/)).toBeInTheDocument()
+
+    // An automatic save must NOT navigate, unlike pressing Save: the log-cap
+    // reseed fires on the server's schedule, so moving the author here would
+    // yank them out of the editor mid-sentence for background housekeeping.
+    expect(screen.queryByText('view route')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
 
     // Base tracking after the reseed: the next manual save must submit
     // against 42, not 41 (the server advanced its copy the same way).
