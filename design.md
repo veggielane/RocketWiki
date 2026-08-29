@@ -1959,9 +1959,10 @@ grants, whose DDL is not yet written (§7, §14). The k3s deployment (milestone
       tree and every link to it still resolves. The cost is that slug
       uniqueness widens from (space, parent) to (space) — enforced by a
       filtered unique index over live pages, so a trashed page's address
-      returns to the pool. Renaming a page does not touch its slug, so there is
-      no redirect problem to handle; changing a slug deliberately is the one
-      case that breaks old links, and it is the author's explicit act.
+      returns to the pool (and restoring re-checks it, since someone may have
+      taken it meanwhile). Renaming a page does not touch its slug, and no
+      mutation carries one after creation — the slug is immutable, which is why
+      there is no redirect problem to solve at all.
       Collisions with the SPA's own space routes are structurally impossible
       rather than policed by a list: every system page for a space lives under
       a `-` segment (`/spaces/ENG/-/admin`, `/-/grants`, `/-/trash`), so `-` is

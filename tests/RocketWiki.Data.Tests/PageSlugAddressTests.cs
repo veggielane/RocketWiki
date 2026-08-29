@@ -181,6 +181,63 @@ public class PageSlugAddressTests : SqliteTestBase
     }
 
     [Fact]
+    public async Task RestoringAPage_WhoseSlugWasTakenWhileItWasInTheTrash_IsRefused()
+    {
+        // The other half of "a trashed page's slug returns to the pool": someone can
+        // take it, and then the restore would put two live pages at one address. The
+        // filtered unique index would stop that at SaveChanges, but as an unhandled
+        // DbUpdateException - so this refuses first, naming the slug the person has to
+        // free up.
+        var (context, space, actor) = await SeedAsync();
+        using var _ = context;
+        var service = new PageService(context, LocalInstanceId);
+
+        var original = await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "contested", "Original", "# a"),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(original.IsSuccess);
+        Assert.True((await service.DeletePageAsync(
+            new DeletePageRequest(original.Value.Id), EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+
+        // Free, exactly as designed, while the original sits in the bin.
+        Assert.True((await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "contested", "Claimed since", "# b"),
+            EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+
+        var restored = await service.RestorePageAsync(
+            new RestorePageRequest(original.Value.Id), EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(restored.IsSuccess);
+        Assert.IsType<ValidationError>(restored.Error);
+        Assert.Contains("contested", ((ValidationError)restored.Error!).Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RestoringAPage_WhoseSlugIsStillFree_Succeeds()
+    {
+        // The guard above must not refuse the ordinary restore: the page's own trashed
+        // row still holds the slug, and matching against that would block every restore
+        // there has ever been.
+        var (context, space, actor) = await SeedAsync();
+        using var _ = context;
+        var service = new PageService(context, LocalInstanceId);
+
+        var created = await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "uncontested", "Original", "# a"),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+        Assert.True((await service.DeletePageAsync(
+            new DeletePageRequest(created.Value.Id), EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+
+        var restored = await service.RestorePageAsync(
+            new RestorePageRequest(created.Value.Id), EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.True(restored.IsSuccess);
+        var readService = new PageReadService(context);
+        Assert.Equal(created.Value.Id, await readService.FindPageIdBySlugAsync(space.Key, "uncontested"));
+    }
+
+    [Fact]
     public async Task FindPageIdBySlug_ForAnUnknownSpaceOrSlug_IsNull()
     {
         var (context, space, _) = await SeedAsync();
