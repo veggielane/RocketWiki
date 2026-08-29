@@ -56,7 +56,7 @@ data (same mock seams as the test suite) into one self-contained HTML file
 per screen **per theme** — dark-mode contrast is where audits usually
 bleed, so every screen exists as `--light` and `--dark`, with the
 `data-theme` attribute stamped exactly as `ColorModeProvider` stamps it in
-the live app. Captured screens (17 × 2 themes):
+the live app. Captured screens (23 × 2 themes):
 
 page view (with presence viewers), page edit (full editor + formatting
 toolbar), search, settings, ask (answered, citations + sources), admin
@@ -67,9 +67,13 @@ notification popover **open**, move dialog **open with the
 visibility-change warning**, stale-revision dialog **with the diff**, and marking levels (all four classification banners and
 badges in one render — the page-view and properties screens can each only
 stage one marking, so the rungs that are not staged there would otherwise
-never be contrast-checked), and a page-list widget — the only screen where
+never be contrast-checked), a page-list widget — the only screen where
 MUI marking components render inside editor-content's plain-CSS surface, so
-the only place those two colour systems are checked against each other.
+the only place those two colour systems are checked against each other —
+plus page history, analytics, help, forms, the admin index (its `Planned`
+treatment for unbuilt sections) and the **space list**, which is the first
+screen every user sees and the only one rendering the replica chip inside a
+card.
 
 `web/a11y/` (its own package, so Playwright and its browser downloads stay
 out of the SPA's dependency tree) loads each file in Chromium and runs axe
@@ -78,6 +82,19 @@ enforced against real layout. Any violation fails the `a11y` CI job; the
 JSON + HTML report and the capture set upload as an artifact on failure.
 The spec also fails if the capture set is missing or lost a theme variant —
 a green run over zero files would be a tier that doesn't exist.
+
+**Two Playwright projects, not one.** `chromium` runs every capture with the
+browser reporting `prefers-color-scheme: light` (Chromium's default);
+`os-dark` re-runs the **light** captures with it reporting dark. That second
+project exists for one combination the first cannot produce: an app rendering
+in light mode inside a dark-preference browser. `editor-content.css` themes on
+the media query *as well as* on `data-theme`, and because captures stamp
+`data-theme` while Chromium defaults to light, that pair was invisible here —
+it shipped with light chrome around a page body still wearing dark code
+blocks, dark table headers and a `#6b9bf7` link on white (~2.6:1). The fix is a
+`:root[data-theme='light']` reset in the stylesheet; this project is what
+keeps it honest. Running the dark captures under a dark OS would only re-test
+agreement, so `a11y.spec.ts` skips them there.
 
 ### Running both layers locally
 

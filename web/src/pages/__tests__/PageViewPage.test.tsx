@@ -173,27 +173,27 @@ describe('PageViewPage permission-driven affordances', () => {
     expect(screen.getByRole('button', { name: 'Why can I see this page?' })).toBeInTheDocument()
   })
 
-  it('offers Move/Edit/Delete and label editing when canEdit is true', async () => {
+  it('offers Edit, Delete and label editing when canEdit is true', async () => {
     renderPage({ pageOverrides: { canEdit: true } })
     // Edit is the one action promoted out of the menu: it is what most readers
     // came to do, and it is the screen's only emphasised button.
     expect(await screen.findByRole('link', { name: 'Edit' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Edit labels' })).toBeInTheDocument()
     await openMoreActions()
-    expect(screen.getByRole('menuitem', { name: 'Move' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
-    // Still no Permissions item — managing access is a separate right.
-    expect(screen.queryByRole('menuitem', { name: 'Permissions' })).not.toBeInTheDocument()
   })
 
-  it('offers the Permissions link only with canManageAccess', async () => {
-    renderPage({ pageOverrides: { canManageAccess: true } })
+  it('offers neither Move nor Permissions here — both moved to the details screen', async () => {
+    // Even with every right. The page view stopped being where unrelated page
+    // management accretes; Details is the single door to it.
+    renderPage({ pageOverrides: { canEdit: true, canManageAccess: true } })
     await openMoreActions()
-    expect(screen.getByRole('menuitem', { name: 'Permissions' })).toHaveAttribute(
-      'href',
-      '/pages/page-1/permissions',
-    )
+    expect(screen.queryByRole('menuitem', { name: 'Move' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Permissions' })).not.toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Details' })).toBeInTheDocument()
   })
+
+
 
   it('shows the composer when canComment is true', async () => {
     renderPage({ pageOverrides: { canComment: true } })
@@ -231,19 +231,14 @@ describe('PageViewPage server-resolved read state', () => {
 })
 
 describe('PageViewPage properties panel (design.md §20)', () => {
-  it('reads properties as a definition list, not free text, for any viewer', async () => {
+  it('renders no properties panel — they live on the details screen alone now', async () => {
+    // Two renderings of the same rows, one of them wedged above the content,
+    // was the clutter this move removed. Properties are still readable by any
+    // viewer; the details screen is where.
     renderPage()
-    const owner = await screen.findByText('Owner')
-    expect(owner.tagName).toBe('DT')
-    expect(screen.getByText('Propulsion team').tagName).toBe('DD')
-    expect(screen.getByText('Status').tagName).toBe('DT')
-    expect(screen.getByText('Draft').tagName).toBe('DD')
-  })
-
-  it('offers the properties screen only with canEdit', async () => {
-    renderPage()
-    await screen.findByText('Owner')
-    expect(screen.queryByRole('link', { name: /properties/i })).not.toBeInTheDocument()
+    await screen.findByRole('heading', { name: 'Runbook' })
+    expect(screen.queryByText('Owner')).not.toBeInTheDocument()
+    expect(screen.queryByText('Propulsion team')).not.toBeInTheDocument()
   })
 
   it('sends an editor to the details screen, not to a properties one', async () => {

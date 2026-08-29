@@ -318,7 +318,22 @@ function mockClient() {
         },
       }
     if (name === 'PagePropertiesForPage')
-      return { page: { id: page.id, title: page.title, spaceKey: page.spaceKey, canEdit: true, marking: page.marking, properties: page.properties } }
+      // `canManageAccess: true` so the capture includes the "Placement and
+      // access" section — Move and Permissions moved onto this screen, and an
+      // unstaged flag would drop both buttons out of the contrast and
+      // target-size checks entirely.
+      return {
+        page: {
+          id: page.id,
+          title: page.title,
+          spaceKey: page.spaceKey,
+          spaceId: page.spaceId,
+          canEdit: true,
+          canManageAccess: true,
+          marking: page.marking,
+          properties: page.properties,
+        },
+      }
     if (name === 'PagePropertyKeys')
       return {
         pagePropertyKeys: [

@@ -14,7 +14,18 @@ query PagePropertiesForPage($id: UUID!) {
     id
     title
     spaceKey
+    # The move dialog lives on this screen now, and the space tree it picks a
+    # destination from is keyed by space id.
+    spaceId
     canEdit
+    # Move and Permissions moved here from the page view, and they are gated
+    # differently on purpose. `canManageAccess` is instance-admin OR this
+    # space's own space-admin; `canEdit` is the rule-engine grant and is
+    # unconditionally false on a replica. An instance admin who holds no editor
+    # grant, and any space-admin on a replica, therefore have
+    # `canManageAccess` WITHOUT `canEdit` — they are exactly the audience for
+    # the permissions screen, so it cannot hang off the edit flag.
+    canManageAccess
     # The marking control lives on this screen (design.md §21 gives it no
     # screen of its own), so its current value comes back with the read that
     # already resolves `canEdit` — the one flag that decides whether the

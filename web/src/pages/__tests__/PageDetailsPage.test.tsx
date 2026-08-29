@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { PageDetailsPage } from '../PageDetailsPage'
@@ -36,6 +36,7 @@ const baseMarking = {
 
 interface Options {
   canEdit?: boolean
+  canManageAccess?: boolean
   marking?: typeof baseMarking
   properties?: typeof baseProperties
   registry?: typeof baseRegistry
@@ -48,6 +49,7 @@ interface Options {
 function renderPage(options: Options = {}) {
   const {
     canEdit = true,
+    canManageAccess = false,
     marking = baseMarking,
     properties = baseProperties,
     registry = baseRegistry,
@@ -59,9 +61,12 @@ function renderPage(options: Options = {}) {
   const mock = createMockUrqlClient((name) => {
     if (name === 'PagePropertiesForPage') {
       if (pageMissing) return { page: null }
-      return { page: { id: 'page-1', title: 'Runbook', spaceKey: 'ENG', canEdit, marking, properties } }
+      return { page: { id: 'page-1', title: 'Runbook', spaceKey: 'ENG', spaceId: 'space-1', canEdit, canManageAccess, marking, properties } }
     }
     if (name === 'PagePropertyKeys') return { pagePropertyKeys: registry }
+    // The move dialog's destination tree lives on this screen now.
+    if (name === 'SpaceTreeForMove') return { pageTree: [] }
+    if (name === 'MovePage') return { movePage: { page: { id: 'page-1' }, error: null } }
     // The marking section (design.md §21) reads the caller's own clearance and
     // the nationality vocabulary; both are staged so this screen's property
     // assertions aren't testing the marking control by accident.
@@ -121,23 +126,61 @@ describe('PageDetailsPage accessibility', () => {
     await expectNoAxeViolations()
   })
 
-  it('has no axe violations on the refusal a non-editor gets', async () => {
+  it('has no axe violations on the read-only view a non-editor gets', async () => {
     renderPage({ canEdit: false })
-    await screen.findByText(/managed by its editors/)
+    await screen.findByRole('table', { name: 'Page properties' })
     await expectNoAxeViolations()
   })
 })
 
 describe('PageDetailsPage permission-driven rendering (design.md §20.2)', () => {
-  it('is for editors: a viewer is told so, and shown nothing', async () => {
-    // The tightening this screen exists for. A non-editor sees no properties table
-    // here at all - the values are still on the page view, which is where a reader
-    // reads them. An editing surface that renders read-only for most of its
-    // visitors is a worse answer than one that says who it is for.
+  it('reads, but does not edit, for a viewer without canEdit', async () => {
+    // REVERSES the editors-only gate this screen shipped with. That gate was
+    // sound while the page view still rendered its own read-only properties
+    // panel; it stopped being sound when this became the ONLY place properties
+    // live, because it would then have taken them away from readers entirely.
+    // Properties carry no restriction of their own (design.md 20.2).
     renderPage({ canEdit: false })
-    expect(await screen.findByText(/managed by its editors/)).toBeInTheDocument()
-    expect(screen.queryByRole('table', { name: 'Page properties' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    const table = await screen.findByRole('table', { name: 'Page properties' })
+    expect(table).toHaveTextContent('Owner')
+    expect(table).toHaveTextContent('Ada Lovelace')
+    // Read-only: no value fields, no remove buttons, no add form.
+    expect(screen.queryByRole('textbox', { name: 'Value for Owner' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove Status' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Add a property' })).not.toBeInTheDocument()
+  })
+
+  it('offers Move only with canEdit', async () => {
+    renderPage({ canEdit: false })
+    await screen.findByRole('table', { name: 'Page properties' })
+    expect(screen.queryByRole('button', { name: 'Move page' })).not.toBeInTheDocument()
+
+    cleanup()
+    renderPage({ canEdit: true })
+    expect(await screen.findByRole('button', { name: 'Move page' })).toBeInTheDocument()
+  })
+
+  it('offers Permissions to a non-editor who can manage access', async () => {
+    // The regression this move risked. canManageAccess is instance-admin OR
+    // space-admin; canEdit is the rule-engine grant and is unconditionally false
+    // on a replica. An instance admin holding no editor grant, and any
+    // space-admin on a replica, have canManageAccess WITHOUT canEdit — and they
+    // are precisely the audience for the permissions screen. Gating it on
+    // canEdit would have locked out exactly those people.
+    renderPage({ canEdit: false, canManageAccess: true })
+    expect(await screen.findByRole('link', { name: 'Permissions' })).toHaveAttribute(
+      'href',
+      '/pages/page-1/permissions',
+    )
+    // Still no editing affordances — the two rights are separate.
+    expect(screen.queryByRole('button', { name: 'Move page' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: 'Value for Owner' })).not.toBeInTheDocument()
+  })
+
+  it('offers no Permissions entry without canManageAccess, even to an editor', async () => {
+    renderPage({ canEdit: true, canManageAccess: false })
+    await screen.findByRole('button', { name: 'Move page' })
+    expect(screen.queryByRole('link', { name: 'Permissions' })).not.toBeInTheDocument()
   })
 
   it('gives an editor a value field, a remove button and the add form', async () => {
@@ -279,11 +322,11 @@ describe('PageDetailsPage protective marking section (design.md §21)', () => {
     expect(table.textContent).not.toContain('OFFICIAL')
   })
 
-  it('shows a non-editor no marking control here — the banner on the page is where they read it', async () => {
+  it('shows a non-editor the marking but no control to change it', async () => {
     // The marking itself is not hidden from anyone who can view the page; §21's
-    // banners carry it. What a non-editor does not get is the screen for CHANGING it.
+    // banners carry it. What a non-editor does not get is the means to CHANGE it.
     renderPage({ canEdit: false })
-    await screen.findByText(/managed by its editors/)
+    await screen.findByRole('table', { name: 'Page properties' })
     expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
   })
 })
@@ -301,12 +344,18 @@ describe('PageDetailsPage empty states', () => {
     expect(await screen.findByText('No properties yet — pick a key below to add the first one.')).toBeInTheDocument()
   })
 
-  it('does not reach the empty state for a non-editor — the screen refuses first', async () => {
+  it('tells a non-editor why the page carries no properties', async () => {
     renderPage({ properties: [], canEdit: false })
-    expect(await screen.findByText(/managed by its editors/)).toBeInTheDocument()
     expect(
-      screen.queryByText('No properties on this page — only someone who can edit it can add them.'),
-    ).not.toBeInTheDocument()
+      await screen.findByText('No properties on this page — only someone who can edit it can add them.'),
+    ).toBeInTheDocument()
+  })
+
+  it('says something useful when there is nothing on the screen at all', async () => {
+    // No properties, no edit rights, no access rights: a bare header over blank
+    // space would read as a broken screen.
+    renderPage({ properties: [], canEdit: false, canManageAccess: false })
+    expect(await screen.findByText(/Nothing is kept beside this page yet/)).toBeInTheDocument()
   })
 
   it('says the space is a replica rather than calling its editors non-editors', async () => {
@@ -315,6 +364,9 @@ describe('PageDetailsPage empty states', () => {
     // and swallow the one screen that explains why the space is read-only.
     renderPage({ canEdit: false, isReplica: true })
     expect(await screen.findByText(/Replica of LOW/)).toBeInTheDocument()
+    // The screen renders read-only and the banner says WHY: "this is a replica"
+    // and "you are not an editor" are different facts.
     expect(screen.queryByText(/managed by its editors/)).not.toBeInTheDocument()
+    expect(screen.getByRole('table', { name: 'Page properties' })).toBeInTheDocument()
   })
 })

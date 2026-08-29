@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Navigate, useParams } from 'react-router-dom'
+import { useMemo, useState } from 'react'
+import { Link as RouterLink, Navigate, useParams } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -24,12 +24,16 @@ import {
 import { visuallyHidden } from '@mui/utils'
 import AddIcon from '@mui/icons-material/Add'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
+import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined'
+import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import {
   usePagePropertiesForPageQuery,
   usePagePropertyKeysQuery,
   useRemovePagePropertyMutation,
   useSetPagePropertyMutation,
   useSpaceReplicaBannerQuery,
+  useSpaceTreeForMoveQuery,
+  useMovePageMutation,
   type PagePropertiesForPageQuery,
   type PagePropertyKeysQuery,
 } from '../graphql/generated/graphql'
@@ -42,6 +46,8 @@ import {
 } from '../feedback/unavailableCopy'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { MovePageDialog } from '../access/move/MovePageDialog'
+import { ancestorRestrictionsOf, flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { PageMarkingSection } from '../markings/PageMarkingSection'
@@ -375,22 +381,37 @@ function PropertiesEditor({
 /**
  * A page's details: everything about the page that is not the page.
  *
- * Properties (design.md §20) are its first section and, for now, its only one —
- * the screen exists so that more can move here rather than accreting on the page
- * view, which is what it was already starting to do. Anything moved here should
- * be metadata ABOUT the page, never content of it.
+ * The screen exists so that page management can collect here rather than
+ * accreting on the page view. It now holds the marking (§21), properties (§20),
+ * the move dialog (§6.4.1) and the way through to page permissions (§6.6).
+ * Anything moved here should be metadata ABOUT the page, never content of it.
  *
- * **Editors only**, which is a deliberate tightening. The properties screen this
- * replaces was open to anyone with canView, on the reasoning that properties
- * carry no restriction of their own (§20.2) — still true, and the values remain
- * visible to every reader on the page view. What changes is that the screen for
- * MANAGING them is now an editing surface, and an editing surface that renders
- * read-only for most of its visitors is a worse answer than one that says who it
- * is for. The server is unmoved either way: every write is still gated on
- * canEdit, and this only decides what to offer.
+ * **Open to any viewer, read-only; editors additionally get the controls.**
+ * This REVERSES the editors-only gate this screen shipped with (b69a7b7), whose
+ * reasoning was that "an editing surface that renders read-only for most of its
+ * visitors is a worse answer than one that says who it is for". That was sound
+ * while the page view still rendered its own read-only properties panel — a
+ * reader had somewhere else to read them. It stopped being sound the moment
+ * this became the ONLY place properties live: the gate would then have taken
+ * properties away from readers entirely, which is not a tightening, it is a
+ * removal. Properties carry no restriction of their own (§20.2) and are
+ * readable by anyone who can read the page, so the screen follows the data.
  *
- * Replica spaces refuse every value write beneath every grant (§12) — that
- * refusal renders as the shared replica explainer, never a raw toast.
+ * The gates are therefore per SECTION, not per screen, and they genuinely
+ * differ:
+ *  - marking + properties: read-only without `canEdit`, editable with it. Both
+ *    components already take a `canEdit` prop and render both ways, so nothing
+ *    branches around them.
+ *  - move: `canEdit`, matching the source-side requirement the server enforces.
+ *  - permissions: `canManageAccess` — instance-admin OR this space's own
+ *    space-admin. That is NOT `canEdit`, and the difference is the point: an
+ *    instance admin holding no editor grant, and any space-admin on a replica
+ *    (where `canEdit` is false for everyone, §12), have `canManageAccess`
+ *    without `canEdit`. Hanging permissions off the edit flag would lock out
+ *    exactly the people the screen is for.
+ *
+ * §6.7 is untouched: a page this caller cannot view still returns null and
+ * renders the same "couldn't load" notice a nonexistent one does.
  */
 export function PageDetailsPage() {
   const { pageId } = useParams<{ pageId: string }>()
@@ -410,7 +431,29 @@ export function PageDetailsPage() {
   })
   const [feedback, setFeedback] = useState<Feedback>({ notice: null, error: null })
   const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
+  const [moveOpen, setMoveOpen] = useState(false)
   useDocumentTitle(data?.page ? `Details — ${data.page.title}` : 'Details')
+
+  // The move dialog's destination tree, with the restriction markers its
+  // visibility warning is built from (design.md §6.4). Only fetched for someone
+  // who can actually move the page.
+  const [{ data: treeData }] = useSpaceTreeForMoveQuery({
+    variables: { spaceId: data?.page?.spaceId ?? '' },
+    pause: !data?.page?.spaceId || data?.page?.canEdit !== true,
+  })
+  const [, movePage] = useMovePageMutation()
+
+  const targetOptions = useMemo(
+    () => (treeData?.pageTree && pageId ? flattenMoveTargets(treeData.pageTree, pageId) : []),
+    [treeData, pageId],
+  )
+  // The "before" side of the move dialog's visibility warning: what this page
+  // currently inherits from its ancestor chain.
+  const currentAncestorRestrictions = useMemo(
+    () => (treeData?.pageTree && pageId ? ancestorRestrictionsOf(treeData.pageTree, pageId) : []),
+    [treeData, pageId],
+  )
+  const sortOrders = useMemo(() => nextSortOrderByTarget(treeData?.pageTree ?? []), [treeData])
 
   if (fetching) {
     return (
@@ -431,24 +474,10 @@ export function PageDetailsPage() {
   const registry = keyData?.pagePropertyKeys ?? []
   const replicaSpace = spaceMeta?.space?.isReplica === true ? spaceMeta.space : null
 
-  // Editors only. Not a router guard: `canEdit` is server-computed and arrives with
-  // the page, so gating here needs no second round trip and no duplicated rule — and
-  // someone following a stale link gets a sentence rather than a blank. The server
-  // refuses every write regardless; this only decides what to offer.
-  //
-  // The replica arm is not a nicety. On a replica `canEdit` is false for EVERYONE
-  // (§12 refuses beneath every grant), so a bare canEdit gate would tell a space's
-  // own editors they are not editors — true of the flag, false of them, and it would
-  // also swallow the one screen that explains why the space is read-only.
-  if (!page.canEdit) {
-    return (
-      <Alert severity="info">
-        {replicaSpace
-          ? `${replicaBadgeLabel(replicaSpace.originInstanceId)} — ${REPLICA_EXPLANATION} Its details cannot be changed here.`
-          : "A page's details are managed by its editors. You can still read this page, and its properties, from the page itself."}
-      </Alert>
-    )
-  }
+  // Nothing to offer beyond the header: no properties, no marking control, no
+  // move, no permissions. Worth saying out loud rather than rendering a bare
+  // heading over blank space.
+  const hasAnything = page.properties.length > 0 || page.canEdit || page.canManageAccess
 
   return (
     <Stack spacing={2}>
@@ -458,6 +487,12 @@ export function PageDetailsPage() {
         description="Everything kept beside this page rather than written into it."
       />
 
+      {/* On a replica `canEdit` is false for EVERYONE (§12 refuses beneath
+          every grant), so without this the screen would simply render
+          read-only and a space's own editors would be left to infer they had
+          been demoted. "This is a replica" and "you are not an editor" are
+          different facts, and the gate this screen used to have conflated them
+          behind one sentence. */}
       {replicaSpace && (
         <Alert severity="info">
           {replicaBadgeLabel(replicaSpace.originInstanceId)}. {REPLICA_EXPLANATION}
@@ -511,6 +546,80 @@ export function PageDetailsPage() {
         onFeedback={setFeedback}
         onReplicaRefusal={setReplicaOrigin}
         onChanged={() => refetch({ requestPolicy: 'network-only' })}
+      />
+
+      {/* Where the page sits, and who may read it — the two management actions
+          that used to be buried in the page view's overflow menu. Separately
+          gated: see this component's doc comment on why permissions cannot
+          ride on `canEdit`. */}
+      {(page.canEdit || page.canManageAccess) && (
+        <>
+          <Divider />
+          <Box>
+            <Typography variant="h6" component="h2">
+              Placement and access
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              Where this page sits in the space, and the rules deciding who can reach it.
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
+            {page.canEdit && (
+              <Button
+                startIcon={<DriveFileMoveOutlinedIcon />}
+                variant="outlined"
+                size="small"
+                onClick={() => setMoveOpen(true)}
+              >
+                Move page
+              </Button>
+            )}
+            {page.canManageAccess && (
+              <Button
+                component={RouterLink}
+                to={`/pages/${page.id}/permissions`}
+                startIcon={<ShieldOutlinedIcon />}
+                variant="outlined"
+                size="small"
+              >
+                Permissions
+              </Button>
+            )}
+          </Stack>
+        </>
+      )}
+
+      {!hasAnything && (
+        <Typography color="text.secondary">
+          Nothing is kept beside this page yet, and managing what could be needs edit permission on it.
+        </Typography>
+      )}
+
+      <MovePageDialog
+        open={moveOpen}
+        onClose={() => setMoveOpen(false)}
+        pageTitle={page.title}
+        currentAncestorRestrictions={currentAncestorRestrictions}
+        targetOptions={targetOptions}
+        onConfirm={(newParentId) => {
+          setMoveOpen(false)
+          void movePage({
+            input: { pageId: page.id, newParentPageId: newParentId, newSortOrder: sortOrders.get(newParentId) ?? 0 },
+          }).then((result) => {
+            const replica = asReadOnlyReplica(result.data?.movePage.error)
+            if (replica) {
+              setReplicaOrigin(replica.originInstanceId ?? 'its origin instance')
+              return
+            }
+            const refused = describeMutationError(result.data?.movePage.error)
+            if (refused) {
+              setFeedback({ notice: null, error: refused })
+              return
+            }
+            setFeedback({ notice: `Moved "${page.title}".`, error: null })
+            refetch({ requestPolicy: 'network-only' })
+          })
+        }}
       />
 
       <Snackbar

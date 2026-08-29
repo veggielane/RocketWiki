@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useParams, useNavigate, useLocation, Link as RouterLink } from 'react-router-dom'
 import {
   Alert,
@@ -21,14 +21,12 @@ import {
 } from '@mui/material'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
-import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined'
 import NoteAddOutlinedIcon from '@mui/icons-material/NoteAddOutlined'
 import LocalOfferOutlinedIcon from '@mui/icons-material/LocalOfferOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined'
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined'
-import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined'
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined'
 import {
@@ -38,7 +36,6 @@ import {
   useSpaceLabelDetailsQuery,
   useSpaceTreeForMoveQuery,
   useCreatePageMutation,
-  useMovePageMutation,
   useAddCommentMutation,
   useDeleteCommentMutation,
   useDeletePageMutation,
@@ -54,20 +51,17 @@ import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { RichTextEditor } from '../editor/RichTextEditor'
-import { MovePageDialog } from '../access/move/MovePageDialog'
 import { CreatePageDialog, type CreatePageValues } from './CreatePageDialog'
 import { flattenParentOptions } from './parentOptions'
 import { lookupPageIcon } from './pageIcons'
 import { DeletePageDialog } from '../trash/DeletePageDialog'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
-import { ancestorRestrictionsOf, flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
 import { PermissionInspectorPanel } from '../access/permission/PermissionInspectorPanel'
 import { AttachmentList } from '../attachments/AttachmentList'
 import { AttachmentUploadButton } from '../attachments/AttachmentUploadButton'
 import { Comments } from '../comments/Comments'
 import { LabelEditor } from '../labels/LabelEditor'
 import { computeLabelOps } from '../labels/labelOps'
-import { PagePropertiesPanel } from '../properties/PagePropertiesPanel'
 import { ClassificationBanner } from '../markings/ClassificationBanner'
 import { useScrollToHash } from './useScrollToHash'
 import { PageIdContext } from './pageContext'
@@ -112,7 +106,6 @@ export function PageViewPage({
   const navigate = useNavigate()
   const [{ data, fetching, error }, refetchPage] = usePageByIdQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
   const [{ data: meData }] = useCurrentUserQuery()
-  const [moveOpen, setMoveOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [blockedCount, setBlockedCount] = useState<number | null>(null)
@@ -157,8 +150,9 @@ export function PageViewPage({
   const spaceId = data?.page?.spaceId
   const spaceKey = data?.page?.spaceKey
   const canEdit = data?.page?.canEdit === true
-  // The move dialog needs the tree (with restriction markers) only when
-  // this user can actually move the page.
+  // The "add child page" dialog needs the space's tree for its parent picker,
+  // and only an editor can create one. (The move dialog used to share this
+  // query; it has gone to the details screen and fetches its own.)
   const [{ data: treeData }] = useSpaceTreeForMoveQuery({
     variables: { spaceId: spaceId ?? '' },
     pause: !spaceId || !canEdit,
@@ -171,7 +165,6 @@ export function PageViewPage({
     pause: !spaceKey || !editingLabels,
   })
   const [{ fetching: creating }, createPage] = useCreatePageMutation()
-  const [, movePage] = useMovePageMutation()
   const [, addComment] = useAddCommentMutation()
   const [, deleteComment] = useDeleteCommentMutation()
   const [, deletePage] = useDeletePageMutation()
@@ -184,20 +177,6 @@ export function PageViewPage({
   // why route reuse (same component, different pageId) needs this. The
   // transport is the app-lifetime singleton from realtime/transports.ts.
   const { viewers, pointers, recordPointer } = usePresence(pageId ?? '', getDefaultPresenceTransport())
-
-  const targetOptions = useMemo(() => {
-    if (!treeData?.pageTree || !pageId) return []
-    return flattenMoveTargets(treeData.pageTree, pageId)
-  }, [treeData, pageId])
-
-  // The "before" side of the move dialog's visibility warning (design.md
-  // §6.4): what this page currently inherits from its ancestor chain.
-  const currentAncestorRestrictions = useMemo(() => {
-    if (!treeData?.pageTree || !pageId) return []
-    return ancestorRestrictionsOf(treeData.pageTree, pageId)
-  }, [treeData, pageId])
-
-  const sortOrders = useMemo(() => nextSortOrderByTarget(treeData?.pageTree ?? []), [treeData])
 
   /** Routes a mutation error to the right UX; returns true when there was one. */
   const surfaceError = (mutationError: Parameters<typeof asReadOnlyReplica>[0]): boolean => {
@@ -445,33 +424,12 @@ export function PageViewPage({
                     Add child page
                   </MenuItem>
                 )}
-                {/* design.md §6.4.1: move requires canEdit at the source (and
-                    the server re-checks the destination). */}
-                {page.canEdit && (
-                  <MenuItem
-                    onClick={() => {
-                      setActionsAnchor(null)
-                      setMoveOpen(true)
-                    }}
-                  >
-                    <ListItemIcon>
-                      <DriveFileMoveOutlinedIcon fontSize="small" />
-                    </ListItemIcon>
-                    Move
-                  </MenuItem>
-                )}
-                {page.canManageAccess && (
-                  <MenuItem
-                    component={RouterLink}
-                    to={`/pages/${page.id}/permissions`}
-                    onClick={() => setActionsAnchor(null)}
-                  >
-                    <ListItemIcon>
-                      <ShieldOutlinedIcon fontSize="small" />
-                    </ListItemIcon>
-                    Permissions
-                  </MenuItem>
-                )}
+                {/* Move and Permissions used to sit here. They live on the
+                    details screen now — that screen is "everything about this
+                    page that is not the page", and both are exactly that.
+                    Details is the one entry point, so this menu stays short
+                    and the page view stops being where unrelated management
+                    accretes. */}
                 {page.canEdit && <Divider />}
                 {page.canEdit && (
                   <MenuItem
@@ -531,18 +489,12 @@ export function PageViewPage({
         </Box>
       )}
 
-      {/* Properties still read beside the page rather than inside it (design.md
-          §20 — that is what keeps them out of the Markdown round trip), but the
-          panel is now read-only here and managing them happens on the details
-          screen. Shown only when there is something to show: an empty panel with
-          an edit link was chrome that every page carried whether or not it had
-          any properties at all. */}
-      {page.properties.length > 0 && (
-        <Box sx={{ mb: 2 }}>
-          <PagePropertiesPanel properties={page.properties} />
-        </Box>
-      )}
-
+      {/* No properties panel here any more. Properties are metadata BESIDE the
+          page (design.md §20 — that is what keeps them out of the Markdown
+          round trip), and they now live in exactly one place: the details
+          screen, which any viewer can open read-only. Two renderings of the
+          same rows, one of them a panel wedged above the content, was the
+          clutter this move exists to remove. */}
       <Box
         sx={{ position: 'relative' }}
         onMouseMove={(e) => {
@@ -609,24 +561,6 @@ export function PageViewPage({
         busy={creating}
         onCancel={() => setCreateOpen(false)}
         onConfirm={(values) => void handleCreateChild(values)}
-      />
-
-      <MovePageDialog
-        open={moveOpen}
-        onClose={() => setMoveOpen(false)}
-        pageTitle={page.title}
-        currentAncestorRestrictions={currentAncestorRestrictions}
-        targetOptions={targetOptions}
-        onConfirm={(newParentId) => {
-          setMoveOpen(false)
-          void movePage({
-            input: { pageId: page.id, newParentPageId: newParentId, newSortOrder: sortOrders.get(newParentId) ?? 0 },
-          }).then((result) => {
-            if (!surfaceError(result.data?.movePage.error)) {
-              refetchPage({ requestPolicy: 'network-only' })
-            }
-          })
-        }}
       />
 
       <DeletePageDialog
