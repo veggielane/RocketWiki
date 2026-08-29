@@ -32,6 +32,16 @@ public interface ISpaceService
     Task<PageMutationResult<Space>> RenameAsync(
         RenameSpaceRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Sets or clears the space's default page (design.md §6.5.1's same gate as Rename).
+    /// The target must be a LIVE page in THIS space: a homepage pointing at a trashed
+    /// page is a link that resolves to nothing, and one pointing into another space is a
+    /// cross-space reference the space's own admin was never authorized to make. Both are
+    /// refused with a <c>ValidationError</c> rather than silently ignored.
+    /// </summary>
+    Task<PageMutationResult<Space>> SetHomepageAsync(
+        SetSpaceHomepageRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
+
     Task<PageMutationResult<Space>> ArchiveAsync(
         ArchiveSpaceRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 

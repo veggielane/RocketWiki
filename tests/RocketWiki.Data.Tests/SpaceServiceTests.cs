@@ -226,6 +226,238 @@ public class SpaceServiceTests : SqliteTestBase
         Assert.IsType<NotFoundError>(result.Error);
     }
 
+    // --- Homepage ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Null is "clear it", not "leave it alone" — a dedicated setter whose entire payload
+    /// is the homepage has no other reading, and the alternative would make a space's
+    /// first homepage permanent. The audit row carries both ids because the column is a
+    /// single mutable value: after the write, nothing else records what it used to be.
+    /// </summary>
+    [Fact]
+    public async Task SetHomepage_SetsThePage_AndNullClearsIt()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        var page = TestData.NewPage(space, "welcome");
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+
+        var set = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, page.Id), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.True(set.IsSuccess);
+        Assert.Equal(page.Id, set.Value.HomepageId);
+
+        var cleared = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, null), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.True(cleared.IsSuccess);
+        Assert.Null(cleared.Value.HomepageId);
+
+        using var readContext = CreateContext();
+        Assert.Null(readContext.Spaces.Single(s => s.Id == space.Id).HomepageId);
+
+        var audits = context.AuditEvents.Where(e => e.Action == "space.homepage.set").OrderBy(e => e.Id).ToList();
+        Assert.Equal(2, audits.Count);
+        Assert.All(audits, e => Assert.Equal(AuditSubjectType.Space, e.SubjectType));
+        Assert.All(audits, e => Assert.Equal(space.Id, e.SubjectId));
+        Assert.Contains(page.Id.ToString(), audits[0].DetailsJson);
+        // The clearing row still names what was lost, which is the whole point of
+        // carrying the before-state.
+        Assert.Contains(page.Id.ToString(), audits[1].DetailsJson);
+    }
+
+    /// <summary>
+    /// A page in another space and a page id that exists nowhere collapse to one message
+    /// deliberately: telling them apart would answer "does this id exist?" for spaces the
+    /// caller administers nothing in.
+    /// </summary>
+    [Fact]
+    public async Task SetHomepage_PageInAnotherSpaceOrNoSuchPage_ReturnsValidationError_AndChangesNothing()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        var otherSpace = TestData.NewSpace("OPS");
+        var foreignPage = TestData.NewPage(otherSpace, "ops-home");
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Spaces.Add(otherSpace);
+        context.Pages.Add(foreignPage);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+
+        var crossSpace = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, foreignPage.Id), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.False(crossSpace.IsSuccess);
+        Assert.Contains("is not a page in space 'ENG'", Assert.IsType<ValidationError>(crossSpace.Error).Message);
+
+        var missingId = Guid.NewGuid();
+        var missing = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, missingId), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.False(missing.IsSuccess);
+        Assert.Contains("is not a page in space 'ENG'", Assert.IsType<ValidationError>(missing.Error).Message);
+
+        using var readContext = CreateContext();
+        Assert.Null(readContext.Spaces.Single(s => s.Id == space.Id).HomepageId);
+    }
+
+    /// <summary>
+    /// A trashed page is refused with its own message rather than the cross-space one:
+    /// the caller administers this space, can see its trash, and "restore it first" is
+    /// the actionable answer. Left as a homepage it would be a link to nothing, since
+    /// every read path filters deleted pages out.
+    /// </summary>
+    [Fact]
+    public async Task SetHomepage_TrashedPage_ReturnsValidationError()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        var page = TestData.NewPage(space, "gone");
+        page.IsDeleted = true;
+        page.DeletedAtUtc = DateTime.UtcNow;
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, page.Id), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("is in the trash", Assert.IsType<ValidationError>(result.Error).Message);
+    }
+
+    [Fact]
+    public async Task SetHomepage_BySpaceAdmin_WithoutInstanceAdmin_Succeeds()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        var page = TestData.NewPage(space, "welcome");
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, page.Id), SpaceAdminPrincipal(), isInstanceAdmin: false, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(page.Id, result.Value.HomepageId);
+    }
+
+    [Fact]
+    public async Task SetHomepage_ByNeitherInstanceNorSpaceAdmin_ReturnsForbidden()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        var page = TestData.NewPage(space, "welcome");
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, page.Id), AnyPrincipal(), isInstanceAdmin: false, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ForbiddenError>(result.Error);
+    }
+
+    [Fact]
+    public async Task SetHomepage_NonExistentSpace_ReturnsNotFound()
+    {
+        using var context = CreateContext();
+        var service = new SpaceService(context, LocalInstanceId);
+
+        var result = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(Guid.NewGuid(), null), AnyPrincipal(), isInstanceAdmin: true, Guid.NewGuid(), AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<NotFoundError>(result.Error);
+    }
+
+    /// <summary>
+    /// design.md §12's table puts space lifecycle and identity in the "stays local"
+    /// column, so a homepage change on an EXPORTED space journals nothing — each side
+    /// chooses its own default page. Pinned rather than left implicit because the absence
+    /// of a SyncEventType arm is invisible at the call site, and because a page reference
+    /// is the one kind of space metadata someone might reasonably try to sync later: the
+    /// high side may not hold the page the low side chose.
+    /// </summary>
+    [Fact]
+    public async Task SetHomepage_OnAnExportedSpace_JournalsNoOutboxEvent()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        space.IsExported = true; // native AND exported: page edits here DO journal
+        var page = TestData.NewPage(space, "welcome");
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, page.Id), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(context.SyncOutboxEvents.ToList());
+        Assert.Equal(0, context.Spaces.Single(s => s.Id == space.Id).LastOutboxSequence);
+        // Still audited, though - staying local is about sync, not about the §7 record.
+        Assert.Single(context.AuditEvents.Where(e => e.Action == "space.homepage.set"));
+    }
+
+    /// <summary>
+    /// The other half of the same §12 rule: a replica's admin may choose its default page,
+    /// exactly as they may rename or archive it. Deliberately NOT a ReadOnlyReplicaError -
+    /// that guard belongs to content writes, which would reach back across the boundary;
+    /// this is local curation of a value that never crosses in either direction. Page ids
+    /// survive sync, so the replicated page this points at is a real target.
+    /// </summary>
+    [Fact]
+    public async Task SetHomepage_OnAReplicaSpace_IsAllowedAsLocalCuration()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        space.OriginInstanceId = "the-low-side"; // != LocalInstanceId, so IsReplicaOf is true
+        var page = TestData.NewPage(space, "replicated");
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.SaveChanges();
+
+        Assert.True(space.IsReplicaOf(LocalInstanceId));
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetHomepageAsync(
+            new SetSpaceHomepageRequest(space.Id, page.Id), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(page.Id, result.Value.HomepageId);
+    }
+
     // --- Archive / Restore ------------------------------------------------------------
 
     [Fact]

@@ -121,6 +121,129 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
         Assert.Contains(key, keysAfterRestore);
     }
 
+    /// <summary>
+    /// The whole round trip the SPA's space settings screen needs: set a default page,
+    /// read it back through the permission-checked <c>space.homepage</c> resolver, then
+    /// clear it with a null <c>pageId</c>. Clearing is the half worth exercising through
+    /// the real schema — a nullable input field is what makes it expressible at all, and
+    /// a non-null one would have left a space's first homepage permanent.
+    /// </summary>
+    [Fact]
+    public async Task SetSpaceHomepage_SetsIt_ReadsBackThroughTheResolver_AndNullClearsIt()
+    {
+        var adminClient = AdminClient(factory);
+        var (spaceId, spaceKey) = await CreateSpaceAsync(adminClient, "HP");
+        var pageId = await CreatePageAsync(adminClient, spaceId, "welcome", "Welcome");
+
+        var set = await adminClient.PostGraphQLAsync($$"""
+            mutation { setSpaceHomepage(input: { spaceId: "{{spaceId}}", pageId: "{{pageId}}" }) { space { id } error { kind message } } }
+            """);
+        Assert.Equal(JsonValueKind.Null, set.RootElement.GetProperty("data").GetProperty("setSpaceHomepage").GetProperty("error").ValueKind);
+
+        var afterSet = await adminClient.PostGraphQLAsync($$"""
+            { space(key: "{{spaceKey}}") { homepageId homepage { id title } } }
+            """);
+        var space = afterSet.RootElement.GetProperty("data").GetProperty("space");
+        Assert.Equal(pageId, space.GetProperty("homepageId").GetGuid());
+        Assert.Equal("Welcome", space.GetProperty("homepage").GetProperty("title").GetString());
+
+        var cleared = await adminClient.PostGraphQLAsync($$"""
+            mutation { setSpaceHomepage(input: { spaceId: "{{spaceId}}", pageId: null }) { space { id } error { kind message } } }
+            """);
+        Assert.Equal(JsonValueKind.Null, cleared.RootElement.GetProperty("data").GetProperty("setSpaceHomepage").GetProperty("error").ValueKind);
+
+        var afterClear = await adminClient.PostGraphQLAsync($$"""
+            { space(key: "{{spaceKey}}") { homepageId homepage { id } } }
+            """);
+        var clearedSpace = afterClear.RootElement.GetProperty("data").GetProperty("space");
+        Assert.Equal(JsonValueKind.Null, clearedSpace.GetProperty("homepageId").ValueKind);
+        Assert.Equal(JsonValueKind.Null, clearedSpace.GetProperty("homepage").ValueKind);
+    }
+
+    [Fact]
+    public async Task SetSpaceHomepage_PageFromAnotherSpace_ReturnsValidationError_AndLeavesTheHomepageUnset()
+    {
+        var adminClient = AdminClient(factory);
+        var (spaceId, spaceKey) = await CreateSpaceAsync(adminClient, "HX");
+        var (otherSpaceId, _) = await CreateSpaceAsync(adminClient, "HY");
+        var foreignPageId = await CreatePageAsync(adminClient, otherSpaceId, "elsewhere", "Elsewhere");
+
+        var result = await adminClient.PostGraphQLAsync($$"""
+            mutation { setSpaceHomepage(input: { spaceId: "{{spaceId}}", pageId: "{{foreignPageId}}" }) { space { id } error { kind message } } }
+            """);
+
+        var error = result.RootElement.GetProperty("data").GetProperty("setSpaceHomepage").GetProperty("error");
+        Assert.Equal("Validation", error.GetProperty("kind").GetString());
+        Assert.Contains($"is not a page in space '{spaceKey}'", error.GetProperty("message").GetString());
+
+        var after = await adminClient.PostGraphQLAsync($$"""{ space(key: "{{spaceKey}}") { homepageId } }""");
+        Assert.Equal(
+            JsonValueKind.Null,
+            after.RootElement.GetProperty("data").GetProperty("space").GetProperty("homepageId").ValueKind);
+    }
+
+    [Fact]
+    public async Task SetSpaceHomepage_ByNonAdmin_ReturnsForbidden()
+    {
+        var adminClient = AdminClient(factory);
+        // EDITOR, not the helper's default SPACE_ADMIN: the plain caller has to be able to
+        // see the space and still be refused, which an everyone-space-admin grant would
+        // make impossible. Editor rather than Viewer because the setup below creates a
+        // page, and page creation is gated on canEdit - which an instance admin does not
+        // bypass (design.md §6.5).
+        var (spaceId, spaceKey) = await CreateSpaceAsync(adminClient, "HF", role: "EDITOR");
+        var pageId = await CreatePageAsync(adminClient, spaceId, "welcome", "Welcome");
+
+        var result = await PlainClient(factory).PostGraphQLAsync($$"""
+            mutation { setSpaceHomepage(input: { spaceId: "{{spaceId}}", pageId: "{{pageId}}" }) { space { id } error { kind } } }
+            """);
+
+        Assert.Equal(
+            "Forbidden",
+            result.RootElement.GetProperty("data").GetProperty("setSpaceHomepage").GetProperty("error").GetProperty("kind").GetString());
+
+        var after = await adminClient.PostGraphQLAsync($$"""{ space(key: "{{spaceKey}}") { homepageId } }""");
+        Assert.Equal(
+            JsonValueKind.Null,
+            after.RootElement.GetProperty("data").GetProperty("space").GetProperty("homepageId").ValueKind);
+    }
+
+    /// <summary>
+    /// <paramref name="role"/> is the role the everyone-grant confers. It matters for the
+    /// forbidden case: the default SPACE_ADMIN grant makes every caller an admin of the
+    /// space, so a "plain" client would legitimately be allowed to set the homepage.
+    /// </summary>
+    private static async Task<(Guid Id, string Key)> CreateSpaceAsync(
+        HttpClient adminClient, string prefix, string role = "SPACE_ADMIN")
+    {
+        var key = $"{prefix}{Guid.NewGuid():N}"[..8];
+        var result = await adminClient.PostGraphQLAsync($$"""
+            mutation {
+              createSpace(
+                input: { key: "{{key}}", name: "Homepage Space", description: null }
+                initialGrant: { role: {{role}}, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }
+              ) { space { id } error { kind } }
+            }
+            """);
+        var payload = result.RootElement.GetProperty("data").GetProperty("createSpace");
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("error").ValueKind);
+        return (payload.GetProperty("space").GetProperty("id").GetGuid(), key);
+    }
+
+    private static async Task<Guid> CreatePageAsync(HttpClient adminClient, Guid spaceId, string slug, string title)
+    {
+        var result = await adminClient.PostGraphQLAsync($$"""
+            mutation {
+              createPage(input: { spaceId: "{{spaceId}}", parentPageId: null, slug: "{{slug}}", title: "{{title}}", content: "# {{title}}" }) {
+                page { id } error { kind }
+              }
+            }
+            """);
+        var payload = result.RootElement.GetProperty("data").GetProperty("createPage");
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("error").ValueKind);
+        return payload.GetProperty("page").GetProperty("id").GetGuid();
+    }
+
     [Fact]
     public async Task CreateAccessRule_AsInstanceAdmin_RecoversASpaceWithZeroGrants()
     {

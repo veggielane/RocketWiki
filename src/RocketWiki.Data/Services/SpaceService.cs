@@ -109,6 +109,59 @@ public class SpaceService : ISpaceService
         return PageMutationResult<Space>.Success(space);
     }
 
+    public async Task<PageMutationResult<Space>> SetHomepageAsync(
+        SetSpaceHomepageRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == request.SpaceId, cancellationToken);
+        if (space is null)
+        {
+            return PageMutationResult<Space>.Failure(new NotFoundError(request.SpaceId));
+        }
+
+        if (!isInstanceAdmin && !await IsSpaceAdminAsync(space.Id, principal, cancellationToken))
+        {
+            return PageMutationResult<Space>.Failure(new ForbiddenError("instance admin or space admin required"));
+        }
+
+        // No ReadOnlyReplicaError arm, matching Rename/Archive/Restore rather than the
+        // page services: design.md §12's table puts space lifecycle and identity in the
+        // "stays local" column, so choosing a replica's own default page is local
+        // curation, not a content write reaching back across the boundary.
+        if (request.PageId is { } pageId)
+        {
+            // IgnoreQueryFilters so a trashed page is found rather than silently reading
+            // as "no such page" - the two deserve different answers, and only this query
+            // can tell them apart.
+            var page = await _db.Pages.IgnoreQueryFilters()
+                .FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);
+
+            // "Missing" and "belongs to another space" collapse into one message on
+            // purpose: distinguishing them would answer "does this page id exist?" for
+            // pages in spaces this caller administers nothing in (design.md §6.7's
+            // reasoning, applied to a mutation's refusal).
+            if (page is null || page.SpaceId != space.Id)
+            {
+                return PageMutationResult<Space>.Failure(new ValidationError(
+                    $"Page {pageId} is not a page in space '{space.Key}'."));
+            }
+
+            if (page.IsDeleted)
+            {
+                return PageMutationResult<Space>.Failure(new ValidationError(
+                    $"Page {pageId} is in the trash and cannot be the homepage of space '{space.Key}'."));
+            }
+        }
+
+        var oldPageId = space.HomepageId;
+        space.HomepageId = request.PageId;
+
+        _db.AuditContext = auditContext;
+        _db.RaiseDomainEvent(new SpaceHomepageSetEvent(space.Id, space.Key, actingUserId, oldPageId, request.PageId));
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return PageMutationResult<Space>.Success(space);
+    }
+
     public async Task<PageMutationResult<Space>> ArchiveAsync(
         ArchiveSpaceRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {

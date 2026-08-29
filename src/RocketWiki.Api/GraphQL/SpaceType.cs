@@ -21,7 +21,6 @@ public sealed class SpaceType : ObjectType<Space>
         descriptor.Ignore(s => s.Pages);
         descriptor.Ignore(s => s.AccessRules);
         descriptor.Ignore(s => s.Labels);
-        descriptor.Ignore(s => s.Homepage);
 
         // Implicit inference used to export the entity's IsReplicaOf(localInstanceId)
         // helper as an argument-taking field no browser could call - the client has no
@@ -46,7 +45,15 @@ public sealed class SpaceType : ObjectType<Space>
             .Type<NonNullType<BooleanType>>()
             .ResolveWith<SpaceFieldResolvers>(r => r.GetViewerIsWatchingAsync(default!, default!, default));
 
-        descriptor.Field("homepage")
+        // Bound to the property rather than declared by name, unlike `grants` and
+        // `trashedPages` below. Those re-expose an ignored navigation under a DIFFERENT
+        // field name, so the ignore and the declaration never collide. `Homepage` infers
+        // to the field name `homepage`, so ignoring the property and then declaring
+        // Field("homepage") was the same name twice and the ignore won: the field was
+        // absent from the schema entirely and this resolver was unreachable. Replacing
+        // the property's resolver keeps the authorization check that is the whole reason
+        // the navigation must not be served raw.
+        descriptor.Field(s => s.Homepage)
             .Type<PageType>()
             .ResolveWith<SpaceFieldResolvers>(r => r.GetHomepageAsync(default!, default!, default!, default!, default));
 

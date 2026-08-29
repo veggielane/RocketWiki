@@ -219,6 +219,13 @@ public static class DomainEventAuditMapper
         SpaceRenamedEvent e => ("space.rename", AuditSubjectType.Space, e.SpaceId, e.Key,
             JsonSerializer.Serialize(new { oldName = e.OldName, newName = e.NewName })),
 
+        // Both ids, not just the new one: the homepage is a single mutable column, so
+        // re-deriving what it used to be after the fact is impossible - the audit row is
+        // the only history there is (the same reason §21.7 records a marking's
+        // before-state). Page ids only, never titles: a title is content.
+        SpaceHomepageSetEvent e => ("space.homepage.set", AuditSubjectType.Space, e.SpaceId, e.Key,
+            JsonSerializer.Serialize(new { oldPageId = e.OldPageId, newPageId = e.NewPageId })),
+
         SpaceArchivedEvent e => ("space.archive", AuditSubjectType.Space, e.SpaceId, e.Key, null),
 
         SpaceRestoredEvent e => ("space.restore", AuditSubjectType.Space, e.SpaceId, e.Key, null),

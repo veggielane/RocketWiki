@@ -19,6 +19,15 @@ public sealed record InitialSpaceGrant(SpaceRole Role, string ExpressionJson);
 
 public sealed record RenameSpaceRequest(Guid SpaceId, string Name, string? Description);
 
+/// <summary>
+/// <paramref name="PageId"/> is the space's default page AFTER the call, null meaning it
+/// has none. Null is "clear it", never "leave it alone": this request's whole payload is
+/// the homepage, so reading null as "unspecified" would make the mutation a no-op and
+/// leave no way to remove a homepage once set — the same one-way door the page icon
+/// avoided by assigning unconditionally.
+/// </summary>
+public sealed record SetSpaceHomepageRequest(Guid SpaceId, Guid? PageId);
+
 public sealed record ArchiveSpaceRequest(Guid SpaceId);
 
 public sealed record RestoreSpaceRequest(Guid SpaceId);

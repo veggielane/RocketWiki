@@ -109,6 +109,8 @@ type Mutation {
   ): CreateSpacePayload! @cost(weight: "10")
   renameSpace(input: RenameSpaceRequestInput!): RenameSpacePayload!
     @cost(weight: "10")
+  setSpaceHomepage(input: SetSpaceHomepageRequestInput!): SetSpaceHomepagePayload!
+    @cost(weight: "10")
   archiveSpace(input: ArchiveSpaceRequestInput!): ArchiveSpacePayload!
     @cost(weight: "10")
   restoreSpace(input: RestoreSpaceRequestInput!): RestoreSpacePayload!
@@ -728,9 +730,15 @@ type SetPagePropertyPayload {
   error: PageMutationErrorView
 }
 
+type SetSpaceHomepagePayload {
+  space: Space
+  error: PageMutationErrorView
+}
+
 type Space {
   isReplica: Boolean!
   viewerIsWatching: Boolean! @cost(weight: "10")
+  homepage: Page @cost(weight: "10")
   grants: [AccessRule!]! @cost(weight: "10")
   trashedPages: [Page!]! @cost(weight: "10")
   id: UUID!
@@ -971,6 +979,11 @@ input SetPagePropertyRequestInput {
   pageId: UUID!
   pagePropertyKeyId: UUID!
   value: String!
+}
+
+input SetSpaceHomepageRequestInput {
+  spaceId: UUID!
+  pageId: UUID
 }
 
 input UnwatchPageRequestInput {

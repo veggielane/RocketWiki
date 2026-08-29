@@ -80,6 +80,42 @@ public partial class Mutation
         return new RenameSpacePayload(result.Value, null);
     }
 
+    /// <summary>
+    /// A dedicated mutation rather than another field on <c>renameSpace</c>, matching
+    /// <c>setPageMarking</c>/<c>setPageProperty</c>: a homepage is not a rename, and
+    /// folding it in would mean every rename had to restate the current homepage or
+    /// silently clear it — exactly the ambiguity a single-purpose setter removes.
+    /// A null <c>pageId</c> clears the homepage (see SetSpaceHomepageRequest).
+    /// </summary>
+    [AuditAction("space.homepage.set")]
+    public async Task<SetSpaceHomepagePayload> SetSpaceHomepage(
+        SetSpaceHomepageRequest input,
+        [Service] ISpaceService spaceService,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IActingUserAccessor actingUserAccessor,
+        [Service] ICurrentAuditContextAccessor auditContextAccessor,
+        [Service] IInstanceRoleAccessor instanceRoleAccessor,
+        [Service] IAuditSink auditSink,
+        CancellationToken cancellationToken)
+    {
+        var (principal, actingUserId, auditContext, unauthenticated) =
+            MutationAuthHelper.Authenticate(principalAccessor, actingUserAccessor, auditContextAccessor);
+        if (unauthenticated is not null)
+        {
+            return new SetSpaceHomepagePayload(null, unauthenticated);
+        }
+
+        var result = await spaceService.SetHomepageAsync(
+            input, principal!, instanceRoleAccessor.IsInstanceAdmin, actingUserId!.Value, auditContext!, cancellationToken);
+        if (!result.IsSuccess)
+        {
+            await MutationAuthHelper.AuditDenialIfApplicableAsync(auditSink, "space.homepage.set", result.Error, AuditSubjectType.Space, input.SpaceId, cancellationToken);
+            return new SetSpaceHomepagePayload(null, PageMutationErrorView.From(result.Error));
+        }
+
+        return new SetSpaceHomepagePayload(result.Value, null);
+    }
+
     [AuditAction("space.archive")]
     public async Task<ArchiveSpacePayload> ArchiveSpace(
         ArchiveSpaceRequest input,
@@ -141,5 +177,6 @@ public partial class Mutation
 
 public sealed record CreateSpacePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record RenameSpacePayload(Space? Space, PageMutationErrorView? Error);
+public sealed record SetSpaceHomepagePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record ArchiveSpacePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record RestoreSpacePayload(Space? Space, PageMutationErrorView? Error);
