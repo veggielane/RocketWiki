@@ -131,7 +131,7 @@ covered" cites an existing behavior test holding that slice in place.
 | 2.4.1 Bypass blocks | Skip link in `AppShell` ("Skip to main content") + `main`/`nav` landmarks; axe `bypass` checks presence, a human checks usefulness. |
 | 2.4.3 Focus order | Manual. DOM order matches visual order by construction (no CSS reordering); spot-checked. |
 | 2.4.7/2.4.13 Focus visible/appearance | MUI focus rings kept throughout; the custom task-list checkbox draws its own `:focus-visible` outline. Manual spot-check per release. |
-| 2.4.11 Focus not obscured | The fixed app bar overlays the scroll container, so `scroll-padding-top` on `main` keeps keyboard-focus targets from landing beneath it. Manual verification on long pages. |
+| 2.4.11 Focus not obscured | Nothing is fixed over the top of the scroll container — the header strip scrolls with the content — but the classification banner is fixed across its bottom, so `scroll-padding-bottom` on `main` keeps keyboard-focus targets from landing beneath it, and the drawer reserves the same strip for its account block. Manual verification on long pages. |
 | 2.5.7 Dragging movements | No drag-only operation in the wiki's own UI: table column resize is disabled (`resizable: false`), image drag-drop upload has the attachment-upload button as the non-drag path, presence pointers are output-only. Judged met; re-check when adding drag affordances (tree reordering!). |
 | 3.2.6 Consistent help | No help mechanism exists in the SPA, so there is nothing to be inconsistently located. Vacuously met; revisit if a help affordance ships. |
 | 3.3.7 Redundant entry | No multi-step flows re-request information (auth is OIDC redirect; forms are single-step). Judged met. |
@@ -162,7 +162,11 @@ covered" cites an existing behavior test holding that slice in place.
 - Palette: light `warning.main` → `#b45309` (default `#ed6c02` failed
   1.4.3 as text and under white contained-button text); dark
   `error.contrastText` → black (white-on-`#f44336` was 3.7:1 — the DENIED
-  audit chip). Rationale comments live in `web/src/theme/theme.ts`.
+  audit chip). Rationale comments live in `web/src/theme/palette.ts`,
+  alongside the two ramp values the MUI Dashboard template supplies that
+  this app cannot use as-is: its `primary` (4.14:1 on white in light mode,
+  4.62:1 on the dark paper) and its `warning`, whose orange is 2.8:1 under
+  white contained-button text — the same failure `#ed6c02` was replaced for.
 - `ColorModeProvider` now stamps `data-theme` on the root element — the
   editor's plain-CSS theming keyed on it but nothing ever set it, so
   app-toggled dark mode kept light code-block/table-header backgrounds

@@ -1,13 +1,35 @@
-import { createTheme, type ThemeOptions } from '@mui/material/styles'
+import { createTheme, type Shadows, type ThemeOptions } from '@mui/material/styles'
+import { componentCustomizations, softShadow } from './componentCustomizations'
+import { darkPalette, lightPalette } from './palette'
+
+const defaultTheme = createTheme()
 
 /**
- * Shared design tokens for both palettes. RocketWiki has no brand palette
- * yet, so this leans on MUI defaults with a slightly denser layout suited
- * to a documentation tool (lots of tree navigation + text).
+ * Shadow level 1 replaced by the template's soft, wide `baseShadow`; the rest
+ * of MUI's stack is left alone. Level 1 is what a default `Paper` and most
+ * floating surfaces land on, so it is the one that shows.
+ */
+const shadowsFor = (mode: 'light' | 'dark'): Shadows => {
+  const shadows = [...defaultTheme.shadows] as Shadows
+  shadows[1] = softShadow[mode]
+  return shadows
+}
+
+/**
+ * Shared design tokens for both palettes, following MUI's Dashboard template
+ * (v9.4.0): a 14px body, a compressed heading scale and an 8px radius, which
+ * together give the denser, flatter surface a documentation tool wants.
+ *
+ * The template asks for Inter and nothing more. No webfont is bundled here —
+ * an air-gapped deployment cannot fetch one and adding it as an asset is a
+ * separate decision — so the existing stack stays and Inter is used only where
+ * it is already installed. On a stock Windows or macOS client this renders in
+ * Segoe UI or San Francisco, which is a visible difference from the template's
+ * screenshots and the one part of its typography that is not adopted.
  */
 const baseOptions: ThemeOptions = {
   shape: {
-    borderRadius: 6,
+    borderRadius: 8,
   },
   typography: {
     fontFamily: [
@@ -20,68 +42,39 @@ const baseOptions: ThemeOptions = {
       'Arial',
       'sans-serif',
     ].join(','),
+    h1: { fontSize: defaultTheme.typography.pxToRem(48), fontWeight: 600, lineHeight: 1.2, letterSpacing: -0.5 },
+    h2: { fontSize: defaultTheme.typography.pxToRem(36), fontWeight: 600, lineHeight: 1.2 },
+    h3: { fontSize: defaultTheme.typography.pxToRem(30), lineHeight: 1.2 },
+    h4: { fontSize: defaultTheme.typography.pxToRem(24), fontWeight: 600, lineHeight: 1.5 },
+    h5: { fontSize: defaultTheme.typography.pxToRem(20), fontWeight: 600 },
+    h6: { fontSize: defaultTheme.typography.pxToRem(18), fontWeight: 600 },
+    subtitle1: { fontSize: defaultTheme.typography.pxToRem(18) },
+    subtitle2: { fontSize: defaultTheme.typography.pxToRem(14), fontWeight: 500 },
+    body1: { fontSize: defaultTheme.typography.pxToRem(14) },
+    body2: { fontSize: defaultTheme.typography.pxToRem(14), fontWeight: 400 },
+    caption: { fontSize: defaultTheme.typography.pxToRem(12), fontWeight: 400 },
   },
-  components: {
-    MuiButton: {
-      defaultProps: {
-        disableElevation: true,
-      },
-    },
-    MuiAppBar: {
-      defaultProps: {
-        elevation: 0,
-      },
-    },
-    // Flat surfaces in dark mode: MUI's dark elevation overlay is a
-    // background-image gradient, which (a) doesn't fit the app's flat look
-    // (AppBar/buttons already disable elevation) and (b) makes text on any
-    // elevated Paper unverifiable by contrast tooling — axe abstains on
-    // gradient backgrounds, so the app bar and drawer would silently drop
-    // out of the automated 1.4.3 checks (docs/ACCESSIBILITY.md).
-    MuiPaper: {
-      styleOverrides: {
-        root: {
-          backgroundImage: 'none',
-        },
-      },
-    },
-  },
+  components: componentCustomizations,
 }
 
+/**
+ * Two themes rather than the template's single `cssVariables` theme with a
+ * `colorSchemes` pair. The app's toggle stamps `data-theme` on the root
+ * element, which the plain-CSS editor layer (editor-content.css) and the a11y
+ * capture harness both key on; switching to MUI's colour-scheme selector would
+ * put the palette behind a different attribute and quietly leave the dark
+ * captures rendering light.
+ */
 export const lightTheme = createTheme({
   ...baseOptions,
-  palette: {
-    mode: 'light',
-    primary: { main: '#1a56db' },
-    // MUI's default light warning (#ed6c02) fails WCAG 1.4.3 both as text on
-    // light backgrounds (2.9:1) and as a contained-button background under
-    // white text (3.1:1) — the browser a11y layer (web/a11y) flagged the
-    // "Move anyway"/"Overwrite anyway"/"Archive" affordances. #b45309 keeps
-    // the amber intent at ≥4.5:1 in both roles (4.7:1 on #f7f8fa, 5.0:1
-    // under white text).
-    warning: { main: '#b45309' },
-    background: {
-      default: '#f7f8fa',
-      paper: '#ffffff',
-    },
-  },
+  palette: lightPalette,
+  shadows: shadowsFor('light'),
 })
 
 export const darkTheme = createTheme({
   ...baseOptions,
-  palette: {
-    mode: 'dark',
-    primary: { main: '#6b9bf7' },
-    // Default dark error (#f44336) with MUI's auto-picked WHITE contrast
-    // text is 3.7:1 (the filled DENIED chip in the audit log) — below WCAG
-    // 1.4.3. Black text on the same red is 5.7:1, and #f44336 itself stays
-    // (it still clears 4.5:1 as error TEXT on the dark backgrounds).
-    error: { main: '#f44336', contrastText: '#000000' },
-    background: {
-      default: '#0f1115',
-      paper: '#171a21',
-    },
-  },
+  palette: darkPalette,
+  shadows: shadowsFor('dark'),
 })
 
 export type ThemeMode = 'light' | 'dark'

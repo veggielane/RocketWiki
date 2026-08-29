@@ -36,6 +36,28 @@ An empty state and a *failed load* are different things and must not borrow
 each other's words — a query that errored says `describeLoadFailure(...)`,
 never "No spaces.".
 
+## Look and feel
+
+The design is MUI's Dashboard template (v9.4.0, the version this repo runs) —
+its layout and its elements, written in this repo's own structure rather than
+vendored from it. The **elements** are the theme: colour ramps in
+`src/theme/palette.ts`, component overrides in
+`src/theme/componentCustomizations.ts`, both of which list what was
+deliberately not adopted and why. The **layout** is the shell: a navigation
+rail (`src/app/SideMenu.tsx`) with identity at the top and the signed-in user
+at the bottom, and a content region whose own header strip
+(`src/app/AppHeader.tsx`) carries the breadcrumb and the global actions. There
+is no top app bar, which is what the template does at desktop widths.
+
+None of the template's dashboard content is here — no KPI cards, no charts,
+no sample grid — and none of its four `@mui/x-*` dependencies.
+
+Build from MUI components and this theme. A one-off `sx` for a genuinely
+one-off layout is fine; a one-off colour, radius or spacing value is a token
+that belongs in the theme. New palette values are not free — the browser a11y
+tier (`docs/ACCESSIBILITY.md`) measures contrast on real pixels in **both**
+themes, and a colour that reads well in light mode routinely fails in dark.
+
 ## Where a file goes
 
 `src/pages/` holds **route components only** — the things `app/router.tsx`

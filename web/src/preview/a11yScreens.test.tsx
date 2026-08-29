@@ -276,6 +276,10 @@ function mockClient() {
     if (name === 'SpaceReplicaBanner')
       return { space: { id: 'space-eng', key: 'PROP', isReplica: false, originInstanceId: 'LOW' } }
     if (name === 'SpaceList') return { spaces }
+    // What a `/pages/{id}` route resolves its space from — the drawer's tree
+    // and the header breadcrumb both ask, and without it those captures audit
+    // the "space not resolved yet" state rather than the one users see.
+    if (name === 'PageSpaceRef') return { page: { id: 'page-1', spaceId: 'space-eng', spaceKey: 'PROP' } }
     if (name === 'PersistedNotifications')
       return {
         notifications: [
