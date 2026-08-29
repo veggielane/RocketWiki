@@ -133,7 +133,11 @@ public sealed class EditSessionContributorAndCapTests(RocketWikiApiFactory facto
         // GraphQL surfaces the attribution (batched loader) - and the author byline
         // remains separate.
         var history = await bobClient.PostGraphQLAsync($$"""
-            query { page(id: "{{page.Id}}") { revisions { revisionNumber authorUserId contributors { id } } } }
+            query {
+              page(id: "{{page.Id}}") {
+                revisions { revisionNumber authorUserId author { id displayName } contributors { id } }
+              }
+            }
             """);
         var revisions = history.RootElement.GetProperty("data").GetProperty("page").GetProperty("revisions");
         var rev1 = revisions.EnumerateArray().Single(r => r.GetProperty("revisionNumber").GetInt32() == 1);
@@ -141,6 +145,14 @@ public sealed class EditSessionContributorAndCapTests(RocketWikiApiFactory facto
             .Select(c => Guid.Parse(c.GetProperty("id").GetString()!))
             .ToList();
         Assert.Equal(new[] { aliceId, bobId }.OrderBy(g => g), contributorsJson.OrderBy(g => g));
+
+        // `author` resolves to the same person as the raw `authorUserId`, with a
+        // name attached - the history screen lists people, not Guids, and it is
+        // the only field there that is always populated (a solo save has no
+        // contributor rows at all).
+        var author = rev1.GetProperty("author");
+        Assert.Equal(bobId, Guid.Parse(author.GetProperty("id").GetString()!));
+        Assert.False(string.IsNullOrWhiteSpace(author.GetProperty("displayName").GetString()));
     }
 
     [Fact]

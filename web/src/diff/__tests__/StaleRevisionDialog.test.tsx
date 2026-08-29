@@ -63,9 +63,11 @@ describe('StaleRevisionDialog', () => {
     expect(screen.getByRole('dialog')).not.toHaveTextContent('Their title:')
   })
 
-  it('says so plainly when their content is identical to the draft', () => {
+  it('says so plainly when there is nothing to compare', () => {
     renderDialog({ yourDraft: 'same\n', theirContent: 'same\n' })
-    expect(screen.getByRole('dialog')).toHaveTextContent('Their content is identical to your draft.')
+    // Worded for the comparison rather than for this dialog: the same view now
+    // also diffs two saved revisions, where neither side is anyone's draft.
+    expect(screen.getByRole('dialog')).toHaveTextContent('The two versions are identical.')
     expect(screen.queryByRole('region', { name: 'Their changes compared with your draft' })).toBeNull()
   })
 

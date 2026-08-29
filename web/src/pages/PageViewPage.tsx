@@ -26,6 +26,7 @@ import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined'
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined'
+import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined'
 import {
   usePageByIdQuery,
   useCurrentUserQuery,
@@ -382,6 +383,18 @@ export function PageViewPage({
                 Move
               </Button>
             )}
+            {/* Shown to everyone who can read the page, unlike Details: history is
+                the provenance of content already in front of them, and the page
+                read is the gate that already decided they may see it. */}
+            <Button
+              component={RouterLink}
+              to={`/pages/${page.id}/history`}
+              startIcon={<HistoryOutlinedIcon />}
+              variant="outlined"
+              size="small"
+            >
+              History
+            </Button>
             {/* Everything about the page that is not the page. Editors only,
                 matching the screen's own gate — offering a link that answers
                 "this is not for you" would be worse than not offering it. */}

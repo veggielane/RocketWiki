@@ -161,6 +161,17 @@ export const router = createBrowserRouter([
           return { Component: PageEditPage }
         },
       },
+      // Who changed the page, when, and what changed between any two revisions.
+      // Not gated on canEdit like /details: history is a read of content the
+      // caller can already see, and the gate that matters is the page read
+      // itself, which returns null for a page they may not view.
+      {
+        path: 'pages/:pageId/history',
+        lazy: async () => {
+          const { PageHistoryPage } = await import('../pages/PageHistoryPage')
+          return { Component: PageHistoryPage }
+        },
+      },
       // Everything about a page that is not the page. Self-gated on the
       // server-computed `canEdit` that arrives with the page rather than by a
       // router guard, so there is no second round trip and no second copy of the

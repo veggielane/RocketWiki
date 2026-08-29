@@ -75,8 +75,11 @@ export function StaleRevisionDialog({
 
         {theirContent !== null ? (
           <MarkdownDiffView
-            yourDraft={yourDraft}
-            theirContent={theirContent}
+            // Your draft is the BEFORE and their save the AFTER, so what is
+            // highlighted as added is THEIRS — which is what the label promises and
+            // what someone deciding whether to overwrite needs to see.
+            before={yourDraft}
+            after={theirContent}
             label="Their changes compared with your draft"
           />
         ) : (

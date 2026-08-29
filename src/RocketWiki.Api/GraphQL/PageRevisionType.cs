@@ -19,7 +19,18 @@ public sealed class PageRevisionType : ObjectType<PageRevision>
     protected override void Configure(IObjectTypeDescriptor<PageRevision> descriptor)
     {
         descriptor.Ignore(r => r.Page);
-        descriptor.Ignore(r => r.Author);
+
+        // Rebound rather than ignored: `Author` camelCases to the `author` field being
+        // defined, and Ignore() wins permanently over a later .Field() of the same name
+        // (the trap PageType and CommentType both document). The rebind replaces the raw
+        // User navigation with the display-safe slice — id and display name, batched.
+        //
+        // This is who pressed SAVE. `contributors` below is who typed, which for a solo
+        // save is nobody — so a history list that wanted one always-present name would
+        // have had only a Guid before this.
+        descriptor.Field(r => r.Author)
+            .Type<NonNullType<ObjectType<UserRef>>>()
+            .ResolveWith<UserRefFieldResolvers>(r => r.GetRevisionAuthorAsync(default!, default!, default));
 
         descriptor.Field("contributors")
             .Type<NonNullType<ListType<NonNullType<ObjectType<UserRef>>>>>()

@@ -248,6 +248,18 @@ describe('PageViewPage properties panel (design.md §20)', () => {
     expect(screen.queryByRole('link', { name: 'Details' })).not.toBeInTheDocument()
   })
 
+  it('offers History to a reader who cannot edit, unlike Details', async () => {
+    // The two links sit side by side and are gated differently on purpose:
+    // Details is an editor screen, History is provenance for content this
+    // reader is already looking at, so hiding it would withhold nothing they
+    // could not reconstruct from the page in front of them.
+    renderPage({ pageOverrides: { canEdit: false } })
+    expect(await screen.findByRole('link', { name: 'History' })).toHaveAttribute(
+      'href',
+      '/pages/page-1/history',
+    )
+  })
+
   it('shows the panel only when there is something in it', async () => {
     // Previously an editor saw an empty panel carrying an "Add properties" link, so
     // every page wore a box whether or not it had any properties. The panel is now

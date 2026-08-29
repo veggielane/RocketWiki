@@ -167,3 +167,37 @@ query PageBySlug($spaceKey: String!, $slug: String!) {
     id
   }
 }
+
+# A page's revision history (design.md §5). `author` is who pressed save —
+# always present — while `contributors` is who typed, which a co-edited
+# revision credits and a solo save leaves empty. The history list needs the
+# one name that is always there, so it leads with the author.
+#
+# `content` rides along because the diff is computed client-side from two
+# revisions the caller already holds. No pagination: `revisions` has none, and
+# adding it here would be pretending otherwise.
+query PageHistory($id: UUID!) {
+  page(id: $id) {
+    id
+    title
+    canEdit
+    revisions {
+      id
+      revisionNumber
+      title
+      content
+      editSummary
+      createdAtUtc
+      author {
+        id
+        displayName
+        hasAvatar
+      }
+      contributors {
+        id
+        displayName
+        hasAvatar
+      }
+    }
+  }
+}

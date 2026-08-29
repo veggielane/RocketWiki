@@ -690,6 +690,7 @@ type PageRestrictionDetail {
 }
 
 type PageRevision {
+  author: UserRef! @cost(weight: "10")
   contributors: [UserRef!]! @cost(weight: "10")
   id: UUID!
   pageId: UUID!

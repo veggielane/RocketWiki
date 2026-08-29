@@ -4,10 +4,16 @@ import { alpha, type Theme } from '@mui/material/styles'
 import { computeStaleDiff, isUnchanged, type DiffLine } from './staleDiff'
 
 export interface MarkdownDiffViewProps {
-  /** The user's editor content at conflict time — raw Markdown. */
-  yourDraft: string
-  /** The latest saved revision's content from StaleRevisionError — raw Markdown. */
-  theirContent: string
+  /**
+   * The BEFORE side — raw Markdown. Named for the comparison rather than for one
+   * of its callers: this started life showing "your draft" against "their save"
+   * during an edit conflict, and the history screen compares two saved revisions
+   * where neither is anyone's draft. A prop called `yourDraft` would have made
+   * the second caller read as though it were the first.
+   */
+  before: string
+  /** The AFTER side — raw Markdown. */
+  after: string
   /** Accessible name for the scrollable diff region. */
   label: string
 }
@@ -51,21 +57,22 @@ function DiffLineRow({ line }: { line: DiffLine }) {
 }
 
 /**
- * Read-only comparison of the user's draft against the latest saved
- * revision, for the StaleRevision merge flow. Line-based with word-level
- * marks inside changed lines (see staleDiff.ts).
+ * Read-only comparison of two pieces of Markdown, line-based with word-level
+ * marks inside changed lines (see staleDiff.ts). Two callers: the stale-revision
+ * merge flow, which sets a draft against the save that overtook it, and the
+ * history screen, which sets two saved revisions against each other.
  *
  * Both inputs are page content — inside the page-content trust boundary —
  * so every character is rendered as React text nodes; this component must
  * never interpret them as HTML or Markdown.
  */
-export function MarkdownDiffView({ yourDraft, theirContent, label }: MarkdownDiffViewProps) {
-  const lines = useMemo(() => computeStaleDiff(yourDraft, theirContent), [yourDraft, theirContent])
+export function MarkdownDiffView({ before, after, label }: MarkdownDiffViewProps) {
+  const lines = useMemo(() => computeStaleDiff(before, after), [before, after])
 
   if (isUnchanged(lines)) {
     return (
       <Typography variant="body2" color="text.secondary">
-        Their content is identical to your draft.
+        The two versions are identical.
       </Typography>
     )
   }

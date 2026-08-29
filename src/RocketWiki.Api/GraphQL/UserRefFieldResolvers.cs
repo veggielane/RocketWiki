@@ -28,6 +28,21 @@ public sealed class UserRefFieldResolvers
             ?? throw new InvalidOperationException(
                 $"Comment {comment.Id} references author user {comment.AuthorUserId}, which does not exist.");
 
+    /// <summary>
+    /// Who pressed save on this revision — non-null by FK, same reasoning as
+    /// <see cref="GetCommentAuthorAsync"/>.
+    ///
+    /// <para>Distinct from <c>contributors</c>, which is who TYPED: a co-edited
+    /// revision credits everyone whose live edits it carries, and a solo save credits
+    /// nobody at all. A history list needs the one name that is always there, so it
+    /// asks for the author and treats contributors as extra.</para>
+    /// </summary>
+    public async Task<UserRef> GetRevisionAuthorAsync(
+        [Parent] PageRevision revision, UserRefByIdDataLoader userLoader, CancellationToken cancellationToken) =>
+        await userLoader.LoadAsync(revision.AuthorUserId, cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"PageRevision {revision.Id} references author user {revision.AuthorUserId}, which does not exist.");
+
     /// <summary>Non-null by FK, same reasoning as <see cref="GetCommentAuthorAsync"/>.</summary>
     public async Task<UserRef> GetUploadedByAsync(
         [Parent] Attachment attachment, UserRefByIdDataLoader userLoader, CancellationToken cancellationToken) =>

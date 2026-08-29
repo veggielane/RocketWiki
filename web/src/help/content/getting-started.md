@@ -39,6 +39,22 @@ silently overwritten or silently discarded.
 
 Several people can edit the same page at once. You will see their cursors.
 
+## What changed, and who changed it
+
+**History** on any page lists every save: the revision number, who pressed
+save, when, and the summary they left. Where a save came out of a shared
+editing session it also names the other people who typed into it, so a
+co-edited revision is not credited to one person alone.
+
+Pick any two revisions with the **From** and **To** columns and the changes
+between them appear underneath — additions and removals marked line by line,
+and word by word within a changed line. It reads oldest-to-newest whichever
+order you picked them in.
+
+History is open to anyone who can read the page. It shows you past states of
+something already in front of you, so there is nothing there you could not
+already see.
+
 ## Finding things
 
 - **Search** (top of the screen) covers page titles and content.

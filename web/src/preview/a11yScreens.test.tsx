@@ -35,6 +35,7 @@ import { AskWikiPage } from '../pages/AskWikiPage'
 import { AdminEmojisPage } from '../pages/AdminEmojisPage'
 import { AdminPropertyKeysPage } from '../pages/AdminPropertyKeysPage'
 import { PageDetailsPage } from '../pages/PageDetailsPage'
+import { PageHistoryPage } from '../pages/PageHistoryPage'
 import { PagePermissionsPage } from '../pages/PagePermissionsPage'
 import { SpaceBrowserPage } from '../pages/SpaceBrowserPage'
 import { AnalyticsPage } from '../pages/AnalyticsPage'
@@ -263,6 +264,9 @@ const spaceTreeNodes = [
   { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', sortOrder: 1, hasRestrictions: false, labels: [], marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' }, children: [] },
 ]
 
+/** One unchanged line and one that moves, so the history capture has both fills. */
+const HISTORY_BODY = (cause: string) => `Stage two ignition held at T-4 seconds.\n\n${cause}\n`
+
 function mockClient() {
   return createMockUrqlClient((name) => {
     if (name === 'PageById') return { page }
@@ -295,6 +299,22 @@ function mockClient() {
     if (name === 'SpaceLabelDetails') return { labelDetails: page.labelDetails }
     if (name === 'CustomEmojis')
       return { customEmojis: [{ name: 'rocket', etag: '"r1"' }, { name: 'banana', etag: '"b1"' }] }
+    if (name === 'PageHistory')
+      return {
+        page: {
+          id: page.id,
+          title: page.title,
+          canEdit: true,
+          // Three revisions with two different authors and one co-edited save,
+          // so the capture exercises the avatar, the "with …" caption, and the
+          // em dash that stands in for a missing summary — plus a real diff.
+          revisions: [
+            { id: 'rev-1', revisionNumber: 1, title: page.title, content: HISTORY_BODY('Root cause unknown.'), editSummary: null, createdAtUtc: '2026-08-20T09:15:00Z', author: { id: 'user-ada', displayName: 'Ada Lovelace', hasAvatar: false }, contributors: [] },
+            { id: 'rev-2', revisionNumber: 2, title: page.title, content: HISTORY_BODY('Root cause: chill-in valve lag.'), editSummary: 'Recorded the root cause', createdAtUtc: '2026-08-22T14:02:00Z', author: { id: 'user-grace', displayName: 'Grace Hopper', hasAvatar: false }, contributors: [] },
+            { id: 'rev-3', revisionNumber: 3, title: page.title, content: HISTORY_BODY('Root cause: chill-in valve lag on the LOX side.'), editSummary: 'Narrowed it to the LOX side', createdAtUtc: '2026-08-23T08:40:00Z', author: { id: 'user-chris', displayName: 'Chris', hasAvatar: true }, contributors: [{ id: 'user-ada', displayName: 'Ada Lovelace', hasAvatar: false }, { id: 'user-chris', displayName: 'Chris', hasAvatar: true }] },
+          ],
+        },
+      }
     if (name === 'PagePropertiesForPage')
       return { page: { id: page.id, title: page.title, spaceKey: page.spaceKey, canEdit: true, marking: page.marking, properties: page.properties } }
     if (name === 'PagePropertyKeys')
@@ -625,6 +645,14 @@ const SCREENS: Screen[] = [
     // each and earn the browser layer's contrast/target-size coverage.
     name: 'page-details',
     render: (mode) => shell(mode, '/pages/page-1/details', 'pages/:pageId/details', <PageDetailsPage />),
+  },
+  {
+    // A dense table with two radio columns and a diff panel below it — the two
+    // things worth a real browser here are the radios' 2.5.8 target size and
+    // the added/removed fills, which are alpha-composited over the surface and
+    // so have a different contrast story in each theme.
+    name: 'page-history',
+    render: (mode) => shell(mode, '/pages/page-1/history', 'pages/:pageId/history', <PageHistoryPage />),
   },
   {
     name: 'admin-property-keys',
