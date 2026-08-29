@@ -187,7 +187,7 @@ committed to. They are listed here because an unlinked plan is indistinguishable
 from a plan nobody wrote, and each records choices that get expensive later:
 [issue tracking and service desk](docs/PLATFORM-PLAN.md),
 [restricted-page placeholders](docs/RESTRICTED-PLACEHOLDERS-PLAN.md), and
-[a page-scoped key/value store and forms on top of it](docs/KV-AND-FORMS-PLAN.md).
+[page entries and forms on top of them](docs/ENTRIES-AND-FORMS-PLAN.md).
 
 **Verified:**
 - `dotnet build RocketWiki.sln` / `dotnet test RocketWiki.sln`, run solution-wide,
