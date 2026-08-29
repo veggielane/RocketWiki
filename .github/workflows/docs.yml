@@ -1,4 +1,12 @@
-# Builds and deploys the documentation site (docs-site/) to GitHub Pages.
+# Builds and VALIDATES the documentation site (docs-site/). It no longer deploys
+# anywhere: publishing to GitHub Pages was removed deliberately, because the site
+# was public while the repository is private, and this project's docs describe a
+# system that holds classified content.
+#
+# The workflow is kept rather than deleted because the deploy was never the only
+# thing it did. `npm run check` fails on a broken §-reference or a missing source
+# document, and nothing in ci.yml does that — deleting the file would have quietly
+# retired the only guard design.md has against its own cross-references rotting.
 #
 # The site is GENERATED from the canonical repo docs at build time
 # (docs-site/scripts/generate.mjs) — hence the paths filter covers the
@@ -6,9 +14,10 @@
 # (design.md, README.md, DEVELOPING.md, data-model.md), deploy/, and the
 # Keycloak realm README.
 #
-# Deliberately a separate workflow from ci.yml: docs deploys and CI have
-# different triggers, permissions, and failure modes.
-name: Docs
+# Still separate from ci.yml: it triggers on a different set of paths (the
+# generation inputs above), so folding it in would run the whole test suite every
+# time a paragraph of design.md changed.
+name: Docs (build and check only — no deploy)
 
 on:
   push:
@@ -21,16 +30,16 @@ on:
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
+# Read-only. The Pages write and id-token permissions were removed with the deploy
+# job: a workflow that cannot publish should not hold the credential to.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# One Pages deployment at a time; don't cancel an in-flight production
-# deploy, just queue behind it.
+# Superseded runs are cancelled now that nothing is being deployed — there is no
+# in-flight production deploy left to queue behind.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -53,18 +62,6 @@ jobs:
         run: npm run check
       - name: Build site
         run: npm run build
-      - uses: actions/configure-pages@v6
-      - uses: actions/upload-pages-artifact@v5
-        with:
-          path: docs-site/dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5
+      # The build still runs: it is what proves the generated site compiles at all,
+      # and a check that only parsed the sources would miss a template that does not.
+      # The artifact is simply not uploaded anywhere.

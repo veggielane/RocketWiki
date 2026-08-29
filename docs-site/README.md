@@ -1,9 +1,15 @@
 # RocketWiki docs site
 
-Astro [Starlight](https://starlight.astro.build/) site, deployed to GitHub
-Pages at <https://veggielane.github.io/RocketWiki/> by
-`.github/workflows/docs.yml` on every push to `main` that touches the
-generation inputs.
+Astro [Starlight](https://starlight.astro.build/) site generated from the
+canonical repo docs.
+
+**Not published anywhere.** It used to deploy to GitHub Pages on every push to
+`main`, which put a public site describing a private repository's design on the
+internet. That was removed and the Pages site unpublished.
+`.github/workflows/docs.yml` still builds it and runs `--check` on every push
+that touches the generation inputs — the link check is the only thing guarding
+design.md's `§`-references from rotting — but it uploads nothing. Run the site
+locally with `npm run dev`.
 
 ## The one rule: the site never forks content
 
@@ -72,7 +78,9 @@ CI runs it before building. `npm test` unit-tests the transformation logic
 
 ## The base path (read before touching links)
 
-GitHub Pages serves this as a *project site* under `/RocketWiki/`.
+The site is built for a *project site* base path of `/RocketWiki/` — kept as it
+was rather than flattened to `/`, so that re-publishing is re-enabling a
+deployment rather than reworking every link.
 `scripts/site-constants.mjs` is the single source of truth for `site`,
 `base`, and the repo URL — `astro.config.mjs` and the generator both import
 it. Generated links are emitted base-prefixed; the two curated pages

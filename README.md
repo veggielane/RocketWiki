@@ -28,11 +28,17 @@ deployed or run end to end on a real machine — see
 [Current status](#current-status) before assuming anything works. To work
 on it, start with [DEVELOPING.md](DEVELOPING.md).
 
-A browsable version of all of these documents is published at
-<https://veggielane.github.io/RocketWiki/>, regenerated from this repo on
-every push to `main` — edit the canonical files here, never the site
-(`docs-site/README.md` explains the scheme). Note: the repo is private but
-the docs site is publicly readable by anyone with the URL.
+A browsable version of these documents can be generated from `docs-site/`
+(`docs-site/README.md` explains the scheme — edit the canonical files here,
+never the site). Run it locally with `npm run dev` in that directory.
+
+**It is no longer published.** The site used to deploy to GitHub Pages on
+every push to `main`, which meant a public site describing a private
+repository's design — including how its access control and protective
+markings work. That deployment has been removed and the Pages site
+unpublished. The workflow remains, because it also runs the generator's
+tests and a link check that fails on a broken `§`-reference, and nothing in
+`ci.yml` does that; it just no longer uploads anything.
 
 The source of truth for *why* things are built this way is
 [`design.md`](design.md) (architecture, access control, audit, deployment) and
