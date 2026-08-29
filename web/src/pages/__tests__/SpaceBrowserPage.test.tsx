@@ -123,10 +123,20 @@ describe('SpaceBrowserPage', () => {
   })
 
   it('offers space management when the server returns grant rows', async () => {
+    // One way in, not four buttons: rename, description, grants, trash and
+    // archiving all live on the space's settings page now.
     renderPage({ spaceOverrides: { grants: [{ id: 'g1' }] } })
-    expect(await screen.findByRole('link', { name: 'Grants' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Rename' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument()
+    const settings = await screen.findByRole('link', { name: 'Space settings' })
+    expect(settings).toHaveAttribute('href', '/spaces/ENG/admin')
+  })
+
+  it('offers no management entry when the server returns no grant rows', async () => {
+    // Grants come back only to instance/space admins ("absent, not forbidden"),
+    // and a space always has at least one by construction — so an empty list
+    // means this caller does not manage it.
+    renderPage({ spaceOverrides: { grants: [] } })
+    await screen.findByText('Restricted Page')
+    expect(screen.queryByRole('link', { name: 'Space settings' })).toBeNull()
   })
 
   it('has no axe violations with tree, lock badge, replica banner, and management affordances', async () => {

@@ -79,6 +79,19 @@ query PageById($id: UUID!) {
   }
 }
 
+# Just enough to answer "which space am I in?" from a page route, for the
+# navigation tree. Deliberately tiny and separate from PageById: the nav needs
+# this on every page view, including while the full page read is still in
+# flight, and it must not re-fetch a page's comments and attachments to find
+# out which space to expand.
+query PageSpaceRef($id: UUID!) {
+  page(id: $id) {
+    id
+    spaceId
+    spaceKey
+  }
+}
+
 # Creating a page. `parentPageId` null makes it a root page in the space;
 # supplying one nests it, which is the "add child page" entry point. The
 # selection is deliberately small — just enough to navigate to the new page —

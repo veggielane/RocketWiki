@@ -5,11 +5,6 @@ import {
   Autocomplete,
   Box,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   List,
   ListItem,
   ListItemButton,
@@ -21,17 +16,13 @@ import {
   Typography,
 } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
-import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
-import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
-import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined'
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import NoteAddOutlinedIcon from '@mui/icons-material/NoteAddOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined'
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import {
-  useArchiveSpaceMutation,
-  useRenameSpaceMutation,
   useSpaceTreeQuery,
   useSpacePageTreeQuery,
   useCreatePageMutation,
@@ -43,8 +34,8 @@ import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationErr
 import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { filterTreeByLabel } from '../labels/filterTreeByLabel'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
-import { RenameSpaceDialog } from '../spaces/RenameSpaceDialog'
 import { CreatePageDialog } from './CreatePageDialog'
+import { flattenParentOptions } from './parentOptions'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 
 /**
@@ -121,17 +112,12 @@ function distinctLabels(nodes: PageTreeNode[]): string[] {
 export function SpaceBrowserPage() {
   const { spaceKey } = useParams<{ spaceKey: string }>()
   const navigate = useNavigate()
-  const [{ data, fetching, error }, refetch] = useSpaceTreeQuery({ variables: { key: spaceKey ?? '' }, pause: !spaceKey })
+  const [{ data, fetching, error }] = useSpaceTreeQuery({ variables: { key: spaceKey ?? '' }, pause: !spaceKey })
   const spaceId = data?.space?.id
   const [{ data: treeData }] = useSpacePageTreeQuery({ variables: { spaceId: spaceId ?? '' }, pause: !spaceId })
-  const [, renameSpace] = useRenameSpaceMutation()
-  const [, archiveSpace] = useArchiveSpaceMutation()
   const [, watchSpace] = useWatchSpaceMutation()
   const [, unwatchSpace] = useUnwatchSpaceMutation()
   const [{ fetching: creating }, createPage] = useCreatePageMutation()
-  const [renameOpen, setRenameOpen] = useState(false)
-  const [renameValue, setRenameValue] = useState('')
-  const [archiveOpen, setArchiveOpen] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
   const [labelFilter, setLabelFilter] = useState<string | null>(null)
@@ -179,10 +165,16 @@ export function SpaceBrowserPage() {
     return false
   }
 
-  const handleCreatePage = async (values: { title: string; slug: string }) => {
+  const handleCreatePage = async (values: { title: string; slug: string; parentPageId: string | null }) => {
     setCreateError(null)
     const result = await createPage({
-      input: { spaceId: space.id, parentPageId: null, slug: values.slug, title: values.title, content: '' },
+      input: {
+        spaceId: space.id,
+        parentPageId: values.parentPageId,
+        slug: values.slug,
+        title: values.title,
+        content: '',
+      },
     })
     // A refusal keeps the dialog open with the typed values — the fix for a
     // duplicate slug or a missing permission is a correction, not a retype.
@@ -260,42 +252,21 @@ export function SpaceBrowserPage() {
           <Button component={RouterLink} to={`/spaces/${space.key}/trash`} startIcon={<DeleteOutlinedIcon />} variant="outlined" size="small">
             Trash
           </Button>
+          {/* Space management lives on its own page now (design.md §6.5.1):
+              rename, description, grants, trash and archiving were four
+              separate header buttons competing with the page actions. Same
+              `grants`-non-empty gate as before — the server returns grant rows
+              only to instance/space admins, so an empty list means "not yours
+              to manage". */}
           {canManage && (
             <Button
               component={RouterLink}
-              to={`/spaces/${space.key}/grants`}
-              startIcon={<ShieldOutlinedIcon />}
+              to={`/spaces/${space.key}/admin`}
+              startIcon={<SettingsOutlinedIcon />}
               variant="outlined"
               size="small"
             >
-              Grants
-            </Button>
-          )}
-          {/* design.md §6.5.1: rename/archive require instance admin OR
-              this space's own space-admin — the same server-computed
-              signal (non-empty grants) gates both. */}
-          {canManage && (
-            <Button
-              startIcon={<DriveFileRenameOutlineIcon />}
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                setRenameValue(space.name)
-                setRenameOpen(true)
-              }}
-            >
-              Rename
-            </Button>
-          )}
-          {canManage && (
-            <Button
-              startIcon={<ArchiveOutlinedIcon />}
-              variant="outlined"
-              color="warning"
-              size="small"
-              onClick={() => setArchiveOpen(true)}
-            >
-              Archive
+              Space settings
             </Button>
           )}
         </Stack>
@@ -358,59 +329,13 @@ export function SpaceBrowserPage() {
       <CreatePageDialog
         open={createOpen}
         parentLabel={space.name}
+        parentOptions={flattenParentOptions(tree)}
+        defaultParentId={null}
         error={createError}
         busy={creating}
         onCancel={() => setCreateOpen(false)}
         onConfirm={(values) => void handleCreatePage(values)}
       />
-
-      <RenameSpaceDialog
-        open={renameOpen}
-        spaceName={space.name}
-        value={renameValue}
-        onValueChange={setRenameValue}
-        onCancel={() => setRenameOpen(false)}
-        onConfirm={() => {
-          void (async () => {
-            const result = await renameSpace({
-              // Description passed through unchanged — the input replaces
-              // it wholesale, so omitting it would clear it.
-              input: { spaceId: space.id, name: renameValue.trim(), description: space.description },
-            })
-            setRenameOpen(false)
-            if (!surfaceError(result.data?.renameSpace.error)) {
-              refetch({ requestPolicy: 'network-only' })
-            }
-          })()
-        }}
-      />
-
-      <Dialog open={archiveOpen} onClose={() => setArchiveOpen(false)}>
-        <DialogTitle>Archive "{space.name}"?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            The space and its pages become read-only and disappear from the active spaces list.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button autoFocus onClick={() => setArchiveOpen(false)}>
-            Cancel
-          </Button>
-          <Button
-            color="warning"
-            variant="contained"
-            onClick={async () => {
-              const result = await archiveSpace({ input: { spaceId: space.id } })
-              setArchiveOpen(false)
-              if (!surfaceError(result.data?.archiveSpace.error)) {
-                navigate('/')
-              }
-            }}
-          >
-            Archive
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <ReadOnlyReplicaDialog
         open={replicaOrigin !== null}

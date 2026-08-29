@@ -71,6 +71,18 @@ export const router = createBrowserRouter([
       // `canManageAccess` check (instance admin OR *this* space's
       // space-admin), so a space-admin who isn't an instance admin can
       // still reach it (design.md §6.5).
+      // Per-space management in one place (design.md §6.5.1). Not gated by a
+      // route guard: the page itself decides what to offer from the same
+      // server-filtered `grants` signal the space browser uses, and a reader
+      // who lands here sees the space's details read-only rather than a
+      // forbidden screen.
+      {
+        path: 'spaces/:spaceKey/admin',
+        lazy: async () => {
+          const { SpaceSettingsPage } = await import('../pages/SpaceSettingsPage')
+          return { Component: SpaceSettingsPage }
+        },
+      },
       {
         path: 'spaces/:spaceKey/grants',
         lazy: async () => {

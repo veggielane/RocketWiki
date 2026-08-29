@@ -6,20 +6,34 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  MenuItem,
   Stack,
   TextField,
 } from '@mui/material'
 import { isUsableSlug, slugifyTitle } from './pageSlug'
+import type { ParentOption } from './parentOptions'
 
 export interface CreatePageDialogProps {
   open: boolean
-  /** Names what the new page will be created under, so the dialog can say so. */
+  /** Names where the dialog was opened from, so the title says so. */
   parentLabel: string
+  /**
+   * Every page in the space the new one could hang under, plus the space root.
+   * Omitted entirely (or a single root entry) hides the picker — there is
+   * nothing to choose between.
+   */
+  parentOptions?: ParentOption[]
+  /**
+   * Pre-selected parent: the page you opened this from, or null for a top-level
+   * page. Creating from a page should default to that page, which is the whole
+   * point of "Add child page".
+   */
+  defaultParentId?: string | null
   /** Server-side refusal to show inline; null clears it. */
   error?: string | null
   busy?: boolean
   onCancel: () => void
-  onConfirm: (values: { title: string; slug: string }) => void
+  onConfirm: (values: { title: string; slug: string; parentPageId: string | null }) => void
 }
 
 /**
@@ -35,6 +49,8 @@ export interface CreatePageDialogProps {
 export function CreatePageDialog({
   open,
   parentLabel,
+  parentOptions,
+  defaultParentId = null,
   error,
   busy = false,
   onCancel,
@@ -43,11 +59,23 @@ export function CreatePageDialog({
   const [title, setTitle] = useState('')
   const [slug, setSlug] = useState('')
   const [slugEdited, setSlugEdited] = useState(false)
+  const [parentPageId, setParentPageId] = useState<string | null>(defaultParentId)
+
+  // The caller's default can arrive after the first render (the tree loads
+  // asynchronously) and changes when a different page opens the dialog, so
+  // track it rather than only seeding initial state — React's documented
+  // "adjusting state when a prop changes" pattern, as used in UserAvatar.
+  const [trackedDefault, setTrackedDefault] = useState(defaultParentId)
+  if (trackedDefault !== defaultParentId) {
+    setTrackedDefault(defaultParentId)
+    setParentPageId(defaultParentId)
+  }
 
   const reset = () => {
     setTitle('')
     setSlug('')
     setSlugEdited(false)
+    setParentPageId(defaultParentId)
   }
 
   const handleCancel = () => {
@@ -74,6 +102,26 @@ export function CreatePageDialog({
             onChange={(e) => setTitle(e.target.value)}
             fullWidth
           />
+          {parentOptions && parentOptions.length > 1 && (
+            <TextField
+              select
+              label="Parent page"
+              value={parentPageId ?? ''}
+              onChange={(e) => setParentPageId(e.target.value === '' ? null : e.target.value)}
+              fullWidth
+              helperText="Where this page sits in the space's hierarchy."
+            >
+              {parentOptions.map((option) => (
+                <MenuItem key={option.id ?? '__root__'} value={option.id ?? ''}>
+                  {/* Non-breaking spaces, not padding: MUI renders the selected
+                      option's text into the closed field too, and indentation
+                      that lives in the row's styling would be lost there. */}
+                  {' '.repeat(option.depth * 2)}
+                  {option.title}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
           <TextField
             label="URL slug"
             value={effectiveSlug}
@@ -96,7 +144,7 @@ export function CreatePageDialog({
         <Button
           variant="contained"
           disabled={!canCreate}
-          onClick={() => onConfirm({ title: title.trim(), slug: effectiveSlug.trim() })}
+          onClick={() => onConfirm({ title: title.trim(), slug: effectiveSlug.trim(), parentPageId })}
         >
           Create
         </Button>

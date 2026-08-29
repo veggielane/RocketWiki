@@ -47,6 +47,7 @@ import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from '../access/move/MovePageDialog'
 import { CreatePageDialog } from './CreatePageDialog'
+import { flattenParentOptions } from './parentOptions'
 import { DeletePageDialog } from '../trash/DeletePageDialog'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { ancestorRestrictionsOf, flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
@@ -175,13 +176,13 @@ export function PageViewPage() {
 
   const watching = watchOverride ?? data?.page?.viewerIsWatching ?? false
 
-  const handleCreateChild = async (values: { title: string; slug: string }) => {
+  const handleCreateChild = async (values: { title: string; slug: string; parentPageId: string | null }) => {
     if (!page) return
     setCreateError(null)
     const result = await createPage({
       input: {
         spaceId: page.spaceId,
-        parentPageId: page.id,
+        parentPageId: values.parentPageId,
         slug: values.slug,
         title: values.title,
         content: '',
@@ -488,6 +489,8 @@ export function PageViewPage() {
       <CreatePageDialog
         open={createOpen}
         parentLabel={page.title}
+        parentOptions={flattenParentOptions(treeData?.pageTree ?? [])}
+        defaultParentId={page.id}
         error={createError}
         busy={creating}
         onCancel={() => setCreateOpen(false)}

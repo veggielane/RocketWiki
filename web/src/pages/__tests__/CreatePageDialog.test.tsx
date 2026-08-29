@@ -46,7 +46,7 @@ describe('CreatePageDialog', () => {
     const { onConfirm } = open()
     fireEvent.change(titleBox(), { target: { value: '  Launch notes  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
-    expect(onConfirm).toHaveBeenCalledWith({ title: 'Launch notes', slug: 'launch-notes' })
+    expect(onConfirm).toHaveBeenCalledWith({ title: 'Launch notes', slug: 'launch-notes', parentPageId: null })
   })
 
   it('cannot be submitted with no title', () => {
@@ -66,7 +66,7 @@ describe('CreatePageDialog', () => {
     fireEvent.change(titleBox(), { target: { value: '???' } })
     fireEvent.change(slugBox(), { target: { value: 'mystery' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
-    expect(onConfirm).toHaveBeenCalledWith({ title: '???', slug: 'mystery' })
+    expect(onConfirm).toHaveBeenCalledWith({ title: '???', slug: 'mystery', parentPageId: null })
   })
 
   it('shows a server refusal inline and keeps what was typed', () => {
