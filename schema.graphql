@@ -34,6 +34,7 @@ type Query {
   customEmojis: [CustomEmojiRef!]! @cost(weight: "10")
   effectivePermission(pageId: UUID!, subject: InspectedPrincipalInput): EffectivePermissionDetail
     @cost(weight: "10")
+  pageForms(pageId: UUID!): PageFormsView @cost(weight: "10")
   gitlabIssue(projectId: String!, iid: Int!): GitLabIssuePayload!
     @cost(weight: "10")
   gitlabIssues(projectId: String!, filter: GitLabIssueFilterInput, first: Int): GitLabIssuesPayload!
@@ -416,6 +417,23 @@ type ExportedSpaceSyncStatusView {
   lastExportedBundle: Int
 }
 
+type FormDefinitionErrorView {
+  collection: String!
+  message: String!
+}
+
+type FormDefinitionView {
+  collection: String!
+  fields: [FormFieldView!]!
+}
+
+type FormFieldView {
+  name: String!
+  type: FormFieldType!
+  required: Boolean!
+  options: [String!]!
+}
+
 type GitLabFile {
   project: String!
   filePath: String!
@@ -565,10 +583,15 @@ type PageEntryView {
   collection: String!
   data: String!
   version: Int!
-  marking: ProtectiveMarking!
+  marking: PageMarkingView! @cost(weight: "10")
   createdAtUtc: DateTime!
   updatedAtUtc: DateTime!
   updatedByUserId: UUID
+}
+
+type PageFormsView {
+  definitions: [FormDefinitionView!]!
+  errors: [FormDefinitionErrorView!]!
 }
 
 "Information about pagination in a connection."
@@ -1180,6 +1203,13 @@ enum ClassificationLevel {
   OFFICIAL_SENSITIVE
   SECRET
   TOP_SECRET
+}
+
+enum FormFieldType {
+  TEXT
+  NUMBER
+  DATE
+  SELECT
 }
 
 enum GitLabContentIssue {

@@ -321,6 +321,23 @@ builder.Services
     // ASP.NET Core hosting environment - a separate setting, deliberately opt-in only
     // for Development so a production error response never carries a stack trace.
     .ModifyRequestOptions(o => o.IncludeExceptionDetails = builder.Environment.IsDevelopment())
+    // Nitro, Hot Chocolate's built-in GraphQL IDE, served at /graphql to a browser.
+    // Set EXPLICITLY rather than left to the package default, and off outside
+    // Development, because the default is not a decision anyone here made: this
+    // instance holds classified content, and an IDE is a schema browser plus a query
+    // console handed to whoever can reach the endpoint. In Development that is exactly
+    // what you want; in production it is a starting point.
+    //
+    // It does not add authorization of its own and does not need to - the IDE is static
+    // UI, and every query it sends travels the same authenticated path as the SPA's.
+    // What it discloses beyond that is the SCHEMA, which introspection already serves
+    // unauthenticated. Whether introspection itself should be closed in production is a
+    // separate decision and is deliberately not made here.
+    .ModifyServerOptions(o =>
+    {
+        o.Tool.Enable = builder.Environment.IsDevelopment();
+        o.Tool.Title = "RocketWiki API";
+    })
     // --- GraphQL tracing (design.md §15) ---
     // HotChocolate.Diagnostics emits on the "HotChocolate.Diagnostics" ActivitySource,
     // which ServiceDefaults subscribes to. Every option below is set explicitly, even

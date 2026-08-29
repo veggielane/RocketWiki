@@ -31,6 +31,9 @@ public static class GraphQLConfiguration
             .AddType<PageQueryConnectionType>()
             // Extension rather than a PageTreeNode ObjectType: Core's record stays
             // shared with MCP get_page_tree unchanged (see the extension's doc).
-            .AddTypeExtension<PageTreeNodeTypeExtension>();
+            .AddTypeExtension<PageTreeNodeTypeExtension>()
+            // An entry's marking is published as the same PageMarkingView every other
+            // marking uses, so one badge component reads them all — see the extension.
+            .AddTypeExtension<PageEntryViewTypeExtension>();
     }
 }

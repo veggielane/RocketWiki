@@ -57,6 +57,18 @@ and a draw.io container for the diagram editor, then the API with connection
 strings injected. The Aspire dashboard URL is printed at startup; it also
 receives all OpenTelemetry (traces/metrics/logs) automatically.
 
+**The GraphQL IDE.** Nitro (Hot Chocolate's built-in IDE) is served at the API's
+`/graphql` in Development — open that URL in a browser and you get a schema
+browser and a query console. It is switched off in every other environment,
+explicitly rather than by relying on the package default, because this
+application holds classified content and an IDE is a schema browser plus a query
+console handed to whoever can reach the endpoint (`Program.cs`, `ModifyServerOptions`).
+
+Queries you run there travel the same authenticated path the SPA's do, so an
+unauthenticated session sees exactly what an unauthenticated SPA would: the
+absent-shaped empty answers. To run anything as a real user you need a token —
+see the PKCE note in the Keycloak section of this file.
+
 The Vite app is **not** in the AppHost yet (a commented TODO in
 `AppHost.cs`). Run it separately:
 

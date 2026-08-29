@@ -62,6 +62,7 @@ import { computeLabelOps } from '../labels/labelOps'
 import { PagePropertiesPanel } from '../properties/PagePropertiesPanel'
 import { ClassificationBanner } from '../markings/ClassificationBanner'
 import { useScrollToHash } from './useScrollToHash'
+import { PageIdContext } from './pageContext'
 import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
 import { PresencePointers } from '../presence/PresencePointers'
@@ -315,6 +316,9 @@ export function PageViewPage({
   }
 
   return (
+    // Fences rendered inside the content need the page they sit on, and cannot
+    // reach it through props or useParams (a slug route carries no id).
+    <PageIdContext value={page.id}>
     <Box>
       {/* design.md §21: the marking goes at the top AND the bottom. Both
           render the server-built `label` — someone printing or screenshotting
@@ -618,5 +622,6 @@ export function PageViewPage({
         onClose={() => setReplicaOrigin(null)}
       />
     </Box>
+    </PageIdContext>
   )
 }

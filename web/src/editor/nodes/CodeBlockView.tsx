@@ -9,6 +9,8 @@ import { describeDiagramUnavailable } from '../../feedback/unavailableCopy'
 import { GitLabFileBlock } from '../../gitlab/GitLabFileBlock'
 import { GitLabIssuesBlock } from '../../gitlab/GitLabIssuesBlock'
 import { PageListBlock } from '../../pagelist/PageListBlock'
+import { FormDefinitionBlock, FormListBlock } from '../../forms/FormBlocks'
+import { parseFormFence } from '../../forms/formFence'
 import { useDebouncedValue } from '../useDebouncedValue'
 
 /**
@@ -43,6 +45,12 @@ export function CodeBlockView(props: NodeViewProps) {
   }
   if (language === 'page-list') {
     return <PageListFence {...props} />
+  }
+  if (language === 'form-definition') {
+    return <FormFence {...props} kind="form-definition" />
+  }
+  if (language === 'form-list') {
+    return <FormFence {...props} kind="form-list" />
   }
   return (
     <NodeViewWrapper>
@@ -142,6 +150,30 @@ function GitLabIssuesFence({ node, editor }: NodeViewProps) {
   return (
     <FenceLayout editable={editable} ok={parsed.ok}>
       {parsed.ok ? <GitLabIssuesBlock spec={parsed.spec} /> : <FenceIncomplete kind="gitlab-issues" missing={parsed.missing} />}
+    </FenceLayout>
+  )
+}
+
+/**
+ * Both form fences, which differ only in what they render from the same spec: the
+ * definition fence draws the form to fill in, the list fence draws the records. Sharing
+ * the parse is what keeps `collection` meaning one thing in both.
+ */
+function FormFence({ node, editor, kind }: NodeViewProps & { kind: 'form-definition' | 'form-list' }) {
+  const editable = editor.isEditable
+  const source = useDebouncedValue(node.textContent, editable ? PREVIEW_DEBOUNCE_MS : 0)
+  const parsed = parseFormFence(source)
+  return (
+    <FenceLayout editable={editable} ok={parsed.ok}>
+      {parsed.ok ? (
+        kind === 'form-definition' ? (
+          <FormDefinitionBlock collection={parsed.spec.collection} />
+        ) : (
+          <FormListBlock collection={parsed.spec.collection} columns={parsed.spec.columns} />
+        )
+      ) : (
+        <FenceIncomplete kind={kind} missing={parsed.missing} />
+      )}
     </FenceLayout>
   )
 }

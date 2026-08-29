@@ -1,0 +1,63 @@
+# docs/ENTRIES-AND-FORMS-PLAN.md. The definition lives in page content, so the
+# SPA could parse it too — and then rendering and validation would be two
+# opinions about what a form is. Parsed server-side only, the same rule §22's
+# RQL follows.
+query PageForms($pageId: UUID!) {
+  pageForms(pageId: $pageId) {
+    definitions {
+      collection
+      fields {
+        name
+        type
+        required
+        options
+      }
+    }
+    errors {
+      collection
+      message
+    }
+  }
+}
+
+# Every entry of one collection this caller may see. An empty list means both
+# "nothing here" and "nothing here for you", and those must stay
+# indistinguishable — there is deliberately no count of what was pruned.
+query PageEntries($pageId: UUID!, $collection: String!) {
+  pageEntries(pageId: $pageId, collection: $collection) {
+    ...PageEntryRow
+  }
+}
+
+mutation CreatePageEntry($input: CreatePageEntryInput!) {
+  createPageEntry(input: $input) {
+    entry {
+      ...PageEntryRow
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
+mutation DeletePageEntry($input: DeletePageEntryInput!) {
+  deletePageEntry(input: $input) {
+    entry {
+      id
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
+fragment PageEntryRow on PageEntryView {
+  id
+  collection
+  data
+  version
+  createdAtUtc
+  marking {
+    ...PageMarking
+  }
+}
