@@ -182,6 +182,13 @@ object-level-authorization reasons design.md §6.7/§8 calls for.
 Being explicit about what has and hasn't been checked, rather than letting
 "it builds" stand in for "it works":
 
+**Proposals, written but not built.** Three documents describe work nobody has
+committed to. They are listed here because an unlinked plan is indistinguishable
+from a plan nobody wrote, and each records choices that get expensive later:
+[issue tracking and service desk](docs/PLATFORM-PLAN.md),
+[restricted-page placeholders](docs/RESTRICTED-PLACEHOLDERS-PLAN.md), and
+[a page-scoped key/value store and forms on top of it](docs/KV-AND-FORMS-PLAN.md).
+
 **Verified:**
 - `dotnet build RocketWiki.sln` / `dotnet test RocketWiki.sln`, run solution-wide,
   reflect whatever every agent's projects look like *right now* — with several
