@@ -479,6 +479,25 @@ public class PageService : IPageService
             return PageMutationResult<PageRestoreSummary>.Failure(new SubtreeOperationForbiddenError(blockedCount));
         }
 
+        // A trashed page's address goes back into the pool - the unique index is
+        // filtered on IsDeleted, deliberately, so the slug of something in the bin
+        // doesn't reserve a URL nobody can reach. The cost is this: somebody may have
+        // taken it since, and then restoring would put two live pages at one address.
+        // Caught here, as a refusal naming the slug, because the alternative is the
+        // index catching it at SaveChanges and surfacing as an unhandled DbUpdateException
+        // - a 500 for a situation the person restoring can actually resolve.
+        var subtreeSlugs = subtreePages.Select(p => p.Slug).ToList();
+        var takenSlug = await _db.Pages
+            .Where(p => p.SpaceId == space.Id && !p.IsDeleted && subtreeSlugs.Contains(p.Slug))
+            .Select(p => p.Slug)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (takenSlug is not null)
+        {
+            return PageMutationResult<PageRestoreSummary>.Failure(new ValidationError(
+                $"Slug '{takenSlug}' was taken by another page while this one was in the trash. " +
+                "Rename that page, then restore this one."));
+        }
+
         foreach (var subtreePage in subtreePages)
         {
             subtreePage.IsDeleted = false;
