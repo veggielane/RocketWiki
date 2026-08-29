@@ -163,6 +163,17 @@ describe('SpaceTreeNav', () => {
     expect(screen.getByRole('link', { name: 'Static fire' })).not.toHaveClass('Mui-selected')
   })
 
+  it('tells the cache what changes the tree, so a created page appears without a reload', async () => {
+    // The bug this pins: SpacePageTree returns PageTreeNode, no mutation returns
+    // one, and urql's document cache invalidates on shared typenames — so nothing
+    // could ever refresh the sidebar and a new page simply was not in it.
+    const mock = renderNav('/spaces/ENG')
+    await screen.findByRole('link', { name: 'Launch notes' })
+
+    const tree = mock.operations.find((op) => op.name === 'SpacePageTree')
+    expect(tree?.additionalTypenames).toContain('Page')
+  })
+
   it('has no axe violations with a nested tree', async () => {
     // The tree nests <li> inside <li>; a list item outside a list element is a
     // violation, and it is exactly what a first pass at this component shipped.

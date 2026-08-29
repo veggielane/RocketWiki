@@ -6,6 +6,14 @@ export interface RecordedOperation {
   name: string
   kind: Operation['kind']
   variables: Record<string, unknown>
+  /**
+   * `context.additionalTypenames` as the operation actually carried it. Recorded
+   * because a query that depends on types it does not select (the page tree, on
+   * every page mutation) is only correct if this reaches the exchange — and a
+   * missing declaration is invisible in the rendered output, which is how the
+   * sidebar shipped never refreshing after a page was created.
+   */
+  additionalTypenames: readonly string[]
 }
 
 export interface MockClient {
@@ -37,7 +45,12 @@ export function createMockUrqlClient(respond: (name: string, op: Operation) => R
       filter((op: Operation) => op.kind !== 'teardown'),
       map((op: Operation) => {
         const name = operationName(op)
-        operations.push({ name, kind: op.kind, variables: (op.variables ?? {}) as Record<string, unknown> })
+        operations.push({
+          name,
+          kind: op.kind,
+          variables: (op.variables ?? {}) as Record<string, unknown>,
+          additionalTypenames: op.context.additionalTypenames ?? [],
+        })
         return {
           operation: op,
           data: respond(name, op),

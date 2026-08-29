@@ -10,6 +10,7 @@ import {
 import { describeLoadFailure, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { lookupPageIcon } from '../pages/pageIcons'
 import { SYSTEM_SEGMENT } from '../pages/pageSlug'
+import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 
 /** One node of the nav tree. Only what the drawer renders — no labels, no markings. */
 interface NavNode {
@@ -140,9 +141,12 @@ export function SpaceTreeNav() {
   const activeSpaceKey = routeSpaceKey ?? pageRef?.page?.spaceKey ?? undefined
   const activeSpace = data?.spaces.find((s) => s.key === activeSpaceKey)
 
+  // The tree has to be told what changes it (graphql/treeDependencies.ts) —
+  // nothing the cache sees on its own connects a created page to this query.
   const [{ data: treeData }] = useSpacePageTreeQuery({
     variables: { spaceId: activeSpace?.id ?? '' },
     pause: !activeSpace,
+    context: PAGE_TREE_CONTEXT,
   })
 
   if (fetching) {

@@ -40,6 +40,7 @@ import { CreatePageDialog, type CreatePageValues } from './CreatePageDialog'
 import { flattenParentOptions } from './parentOptions'
 import { lookupPageIcon } from './pageIcons'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
+import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 
 /**
  * The generated query type only nests as deep as the `.graphql` operation
@@ -145,7 +146,14 @@ export function SpaceBrowserPage() {
   const navigate = useNavigate()
   const [{ data, fetching, error }] = useSpaceTreeQuery({ variables: { key: spaceKey ?? '' }, pause: !spaceKey })
   const spaceId = data?.space?.id
-  const [{ data: treeData }] = useSpacePageTreeQuery({ variables: { spaceId: spaceId ?? '' }, pause: !spaceId })
+  // Same declared dependencies as the sidebar's copy — this page creates pages
+  // too, and a browser that did not show the one you just made would be the
+  // same bug in a second place (graphql/treeDependencies.ts).
+  const [{ data: treeData }] = useSpacePageTreeQuery({
+    variables: { spaceId: spaceId ?? '' },
+    pause: !spaceId,
+    context: PAGE_TREE_CONTEXT,
+  })
   const [, watchSpace] = useWatchSpaceMutation()
   const [, unwatchSpace] = useUnwatchSpaceMutation()
   const [{ fetching: creating }, createPage] = useCreatePageMutation()

@@ -154,6 +154,14 @@ describe('SpaceBrowserPage', () => {
     expect(screen.queryByRole('link', { name: 'Space settings' })).toBeNull()
   })
 
+  it('declares the same tree dependencies as the sidebar — this page creates pages too', async () => {
+    const mock = renderPage()
+    await screen.findByText('Restricted Page')
+
+    const tree = mock.operations.find((op) => op.name === 'SpacePageTree')
+    expect(tree?.additionalTypenames).toContain('Page')
+  })
+
   it('has no axe violations with tree, lock badge, replica banner, and management affordances', async () => {
     renderPage({ spaceOverrides: { isReplica: true, originInstanceId: 'LOW', grants: [{ id: 'g1' }] } })
     await screen.findByText('Restricted Page')
