@@ -21,12 +21,11 @@
  * `PageLabel` and `PageMarkingView` cover the label chips and the
  * classification badge on every node.
  *
- * KNOWN GAP, not an oversight: `detachLabel` returns only a scalar id and an
- * error, so its response carries no object type for the cache to key on. No
- * `additionalTypenames` list can catch it, here or anywhere else — removing a
- * label leaves a stale chip until something else refetches. Fixing it means
- * changing that mutation's payload shape, which is a schema change and a
- * separate decision.
+ * `detachLabel` used to be a gap here and no longer is. It returned only a
+ * scalar id, so its response carried no object type for the cache to key on and
+ * no list here could catch it — removing a label left a stale chip until
+ * something else refetched. Its payload now returns the `PageLabel` it removed,
+ * symmetric with attach, which is why that entry below covers both directions.
  */
 export const PAGE_TREE_DEPENDENCIES = [
   'Page',

@@ -138,7 +138,7 @@ public sealed class LabelIdReadPathTests(RocketWikiApiFactory factory) : IClassF
 
         // 5. Detach by id; the page's label reads empty out again.
         var detachResult = await client.PostGraphQLAsync($$"""
-            mutation { detachLabel(input: { pageId: "{{root.Id}}", labelId: "{{labelId}}" }) { detachedLabelId error { kind } } }
+            mutation { detachLabel(input: { pageId: "{{root.Id}}", labelId: "{{labelId}}" }) { detachedLabel { pageId labelId } error { kind } } }
             """);
         Assert.Equal(JsonValueKind.Null,
             detachResult.RootElement.GetProperty("data").GetProperty("detachLabel").GetProperty("error").ValueKind);

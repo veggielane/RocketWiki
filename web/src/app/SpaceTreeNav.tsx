@@ -8,6 +8,7 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  Link,
   MenuItem,
   Select,
   Skeleton,
@@ -478,6 +479,26 @@ export function SpaceTreeNav() {
           </Select>
         </FormControl>
       </Box>
+
+      {/* Browse: the space's full page list and its label filter.
+          /spaces/{key} now lands on the space's default page when it has one,
+          so the browser needed an address of its own — and a link to it that is
+          not buried in space settings, which is where it lived and where nobody
+          would look for "show me this space's pages". Above the tree because it
+          is about the same thing the tree is, and outside the <nav> landmark for
+          the same reason the picker is: that landmark is the hierarchy itself. */}
+      {activeSpace && (
+        <Box sx={{ px: 2, pb: 1 }}>
+          <Link
+            component={RouterLink}
+            to={`/spaces/${activeSpace.key}/-/browse`}
+            variant="caption"
+            underline="hover"
+          >
+            Browse all pages
+          </Link>
+        </Box>
+      )}
 
       {/* The picker sits outside the <nav>: it is a form control that happens
           to move you, while this landmark is the page hierarchy itself. The

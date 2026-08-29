@@ -389,7 +389,7 @@ type DeletePagePropertyKeyPayload {
 }
 
 type DetachLabelPayload {
-  detachedLabelId: UUID
+  detachedLabel: PageLabel
   error: PageMutationErrorView
 }
 

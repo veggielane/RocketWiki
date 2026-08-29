@@ -170,6 +170,23 @@ describe('SpaceTreeNav space picker', () => {
     expect(treeQueries.every((op) => op.variables['spaceId'] === 'space-1')).toBe(true)
   })
 
+  it('offers a way into the space browser, since /spaces/{key} may not be it', async () => {
+    // The browser moved to its own address when the space route began landing on
+    // a default page, and its only entry point was space settings — which is not
+    // where anyone looks for "show me this space's pages".
+    renderNav('/spaces/ENG')
+    expect(await screen.findByRole('link', { name: 'Browse all pages' })).toHaveAttribute(
+      'href',
+      '/spaces/ENG/-/browse',
+    )
+  })
+
+  it('offers no browse link when no space is chosen', async () => {
+    renderNav('/settings')
+    await screen.findByRole('combobox', { name: 'Space' })
+    expect(screen.queryByRole('link', { name: 'Browse all pages' })).toBeNull()
+  })
+
   it('says so rather than showing nothing when the space has no pages', async () => {
     const mock = createMockUrqlClient((name) => {
       if (name === 'SpaceList') return SPACES

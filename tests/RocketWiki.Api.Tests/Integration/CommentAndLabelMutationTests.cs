@@ -126,10 +126,14 @@ public sealed class CommentAndLabelMutationTests(RocketWikiApiFactory factory) :
         Assert.Contains("important", labels);
 
         var detachResult = await client.PostGraphQLAsync($$"""
-            mutation { detachLabel(input: { pageId: "{{pageId}}", labelId: "{{labelId}}" }) { detachedLabelId error { kind } } }
+            mutation { detachLabel(input: { pageId: "{{pageId}}", labelId: "{{labelId}}" }) { detachedLabel { pageId labelId } error { kind } } }
             """);
         var detachData = detachResult.RootElement.GetProperty("data").GetProperty("detachLabel");
         Assert.Equal(System.Text.Json.JsonValueKind.Null, detachData.GetProperty("error").ValueKind);
+        // The association that was removed, not a bare id: a payload of scalars carries
+        // no __typename, so this mutation could invalidate nothing in the SPA's cache
+        // and a removed label left a stale chip behind.
+        Assert.Equal(labelId, detachData.GetProperty("detachedLabel").GetProperty("labelId").GetString());
 
         var pageResultAfter = await client.PostGraphQLAsync($$"""{ page(id: "{{pageId}}") { labels } }""");
         var labelsAfter = pageResultAfter.RootElement.GetProperty("data").GetProperty("page").GetProperty("labels")

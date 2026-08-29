@@ -91,10 +91,21 @@ public partial class Mutation
             return new DetachLabelPayload(null, PageMutationErrorView.From(result.Error));
         }
 
-        return new DetachLabelPayload(result.Value, null);
+        // The association that was removed, not a bare id.
+        //
+        // A payload of scalars carries no __typename, and urql's document cache
+        // invalidates on the typenames a mutation RETURNS — so this mutation could
+        // not invalidate anything, and removing a label left a stale chip in every
+        // cached tree until something else happened to refetch. No additionalTypenames
+        // list could fix that from the query side: there was nothing to match.
+        //
+        // Symmetric with attachLabel, which already returns the PageLabel it created.
+        // The row is gone by now; this describes what was removed, which is exactly
+        // what a cache needs to know.
+        return new DetachLabelPayload(new PageLabel { PageId = input.PageId, LabelId = result.Value }, null);
     }
 }
 
 public sealed record CreateLabelPayload(Label? Label, PageMutationErrorView? Error);
 public sealed record AttachLabelPayload(PageLabel? PageLabel, PageMutationErrorView? Error);
-public sealed record DetachLabelPayload(Guid? DetachedLabelId, PageMutationErrorView? Error);
+public sealed record DetachLabelPayload(PageLabel? DetachedLabel, PageMutationErrorView? Error);

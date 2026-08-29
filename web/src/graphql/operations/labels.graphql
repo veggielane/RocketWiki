@@ -39,7 +39,14 @@ mutation AttachLabel($input: AttachLabelRequestInput!) {
 
 mutation DetachLabel($input: DetachLabelRequestInput!) {
   detachLabel(input: $input) {
-    detachedLabelId
+    # The association that was removed, not a bare id. A payload of scalars
+    # carries no __typename, so this mutation could not invalidate any cached
+    # query — removing a label left a stale chip in every tree until something
+    # else refetched. `PageLabel` is a typename the page tree declares.
+    detachedLabel {
+      pageId
+      labelId
+    }
     error {
       ...MutationError
     }
