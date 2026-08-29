@@ -24,6 +24,20 @@ public sealed class PageTreeNodeTypeExtension : ObjectTypeExtension<PageTreeNode
 {
     protected override void Configure(IObjectTypeDescriptor<PageTreeNode> descriptor)
     {
+        // Whether this node has children AT ALL, independent of how many levels the
+        // caller's query selected.
+        //
+        // The walk builds the whole tree in memory, so this is free here — but the
+        // GraphQL DOCUMENT truncates it, and without this field the deepest selected
+        // level is indistinguishable from a leaf. A tree that draws a disclosure
+        // control only where children arrived was therefore asserting "this page has
+        // none" about pages that have several. Resolved from the built node rather
+        // than a query, so it cannot disagree with the pruning: a child the caller may
+        // not see is already absent from Children, and so does not count here either.
+        descriptor.Field("hasChildren")
+            .Type<NonNullType<BooleanType>>()
+            .Resolve(context => context.Parent<PageTreeNode>().Children.Count > 0);
+
         descriptor.Field("labels")
             .Type<NonNullType<ListType<NonNullType<StringType>>>>()
             .Resolve(async context =>

@@ -376,3 +376,92 @@ describe('SpaceTreeNav rows', () => {
     await expectNoAxeViolations()
   })
 })
+
+/**
+ * A GraphQL document has to stop at some depth, so the tree is always truncated
+ * somewhere. `hasChildren` is what keeps the truncation honest, and the subtree
+ * query is what makes the chevron it draws lead somewhere.
+ */
+describe('SpaceTreeNav deeper than the query reaches', () => {
+  const truncated = {
+    pageTree: [
+      {
+        id: 'deep-1',
+        title: 'Handbook',
+        slug: 'handbook',
+        icon: null,
+        // The server says there are children; the document did not carry them.
+        hasChildren: true,
+        children: [],
+        hasRestrictions: false,
+        labels: [],
+        marking: { level: 'OFFICIAL', levelName: 'Official' },
+      },
+    ],
+  }
+  const subtree = {
+    pageSubtree: [
+      {
+        id: 'deep-2',
+        title: 'Onboarding',
+        slug: 'onboarding',
+        icon: null,
+        hasChildren: false,
+        children: [],
+        hasRestrictions: false,
+        labels: [],
+        marking: { level: 'OFFICIAL', levelName: 'Official' },
+      },
+    ],
+  }
+
+  function renderTruncated(subtreeResult: unknown = subtree) {
+    const mock = createMockUrqlClient((name) => {
+      if (name === 'SpaceList') return SPACES
+      if (name === 'SpacePageTree') return truncated
+      if (name === 'PageSubtree') return subtreeResult
+      return undefined
+    })
+    render(
+      <Provider value={mock.client}>
+        <MemoryRouter initialEntries={['/spaces/ENG']}>
+          <SpaceTreeNav />
+        </MemoryRouter>
+      </Provider>,
+    )
+    return mock
+  }
+
+  it('draws a chevron from hasChildren, not from what arrived', async () => {
+    // The bug this replaces: with children absent, the tree drew no control at
+    // all — a positive claim that the page is a leaf, made about a page that
+    // has children the document simply did not reach.
+    renderTruncated()
+    expect(await screen.findByRole('button', { name: 'Expand Handbook' })).toBeInTheDocument()
+  })
+
+  it('fetches the children when the branch is opened', async () => {
+    const mock = renderTruncated()
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand Handbook' }))
+
+    expect(await screen.findByRole('link', { name: 'Onboarding' })).toBeInTheDocument()
+    const call = mock.operations.find((op) => op.name === 'PageSubtree')
+    expect(call?.variables).toEqual({ spaceId: 'space-1', pageId: 'deep-1' })
+  })
+
+  it('fetches nothing until the branch is actually opened', async () => {
+    // Lazily, or a shallow query would just become a deep one issued in pieces.
+    const mock = renderTruncated()
+    await screen.findByRole('button', { name: 'Expand Handbook' })
+    expect(mock.operations.some((op) => op.name === 'PageSubtree')).toBe(false)
+  })
+
+  it('renders nothing extra when the subtree comes back empty', async () => {
+    // Every child pruned reads the same as no children (§6.7) — it does not
+    // report having expected more than it got.
+    renderTruncated({ pageSubtree: [] })
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand Handbook' }))
+    expect(await screen.findByRole('button', { name: 'Collapse Handbook' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Onboarding' })).toBeNull()
+  })
+})

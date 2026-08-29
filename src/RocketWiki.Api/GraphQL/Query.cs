@@ -132,6 +132,66 @@ public partial class Query
     }
 
     /// <summary>
+    /// The children of one page, as tree nodes — what the SPA fetches when someone
+    /// expands a node whose children the original query did not reach.
+    ///
+    /// <para>A GraphQL document has to pick a nesting depth, so a tree query always
+    /// truncates somewhere. Selecting a very deep document instead would trade a
+    /// bounded number of small follow-ups for one large payload on every space open,
+    /// and would still truncate — just further down, where the bug is rarer and
+    /// therefore harder to notice.</para>
+    ///
+    /// <para>Runs the SAME pruned walk <see cref="PageTree"/> does and then picks the
+    /// node out of the result, rather than a second query rooted at the page. That is
+    /// what makes a subtree fetch inherit space grants, the accumulated restriction
+    /// chain and the §21 clearance gate exactly as the first fetch did — a walk written
+    /// separately for this path would be a second implementation of the rule engine
+    /// with nothing keeping the two in step.</para>
+    ///
+    /// <para>An empty list for a page that does not exist, one the caller cannot view,
+    /// and one that genuinely has no visible children — all three, indistinguishably
+    /// (§6.7). No audit row of its own: this is a continuation of the browse already
+    /// recorded by <see cref="PageTree"/>, not a distinct action.</para>
+    /// </summary>
+    [NoAudit("A continuation of the space.browse already recorded when the tree was first read; §7 audits actions, not each expansion of one.")]
+    public async Task<IReadOnlyList<PageTreeNode>> PageSubtree(
+        Guid spaceId,
+        Guid pageId,
+        [Service] IPageReadService readService,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        CancellationToken cancellationToken)
+    {
+        var principal = principalAccessor.Current;
+        if (principal is null)
+        {
+            return [];
+        }
+
+        var result = await readService.GetPageTreeAsync(spaceId, principal, cancellationToken);
+        var tree = result.ValueOrNull();
+        return tree is null ? [] : FindChildren(tree, pageId) ?? [];
+    }
+
+    private static IReadOnlyList<PageTreeNode>? FindChildren(IReadOnlyList<PageTreeNode> nodes, Guid pageId)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Id == pageId)
+            {
+                return node.Children;
+            }
+
+            var found = FindChildren(node.Children, pageId);
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Returns the caller's identity as seen by the API, built directly from the
     /// validated token claims — never from a local user mirror (design.md §6.1,
     /// §11). This is a read of "who am I", not a domain read, so it intentionally

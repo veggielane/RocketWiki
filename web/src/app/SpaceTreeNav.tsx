@@ -19,6 +19,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   usePageSpaceRefQuery,
+  usePageSubtreeQuery,
   useSpaceListQuery,
   useSpacePageTreeQuery,
 } from '../graphql/generated/graphql'
@@ -39,6 +40,14 @@ interface NavNode {
    */
   icon?: string | null
   slug: string
+  /**
+   * `PageTreeNode.hasChildren` — whether the page has any, independent of how
+   * many levels the query selected. The disclosure control is drawn from THIS,
+   * not from whether `children` arrived: a document has to stop at some depth,
+   * and drawing the chevron from what turned up made the tree assert that a
+   * page was a leaf when it was only past the boundary.
+   */
+  hasChildren?: boolean
   children?: NavNode[]
 }
 
@@ -115,8 +124,69 @@ function ancestorsOfActive(nodes: NavNode[], activePageId?: string, activeSlug?:
   return found
 }
 
+/**
+ * The children of one node, fetched because the tree query did not reach them.
+ *
+ * Mounted only when a branch is actually opened, so a space costs one small
+ * query on arrival plus one per branch someone chooses to look inside — rather
+ * than one large payload containing levels nobody expanded.
+ *
+ * An empty result renders nothing at all: the server prunes what the caller may
+ * not see, so "no visible children" and "no children" are the same answer here
+ * by design (§6.7). It does not report having found fewer than it expected.
+ */
+function LazyChildren({
+  spaceId,
+  spaceKey,
+  pageId,
+  activePageId,
+  activeSlug,
+  expanded,
+  onToggle,
+  depth,
+}: {
+  spaceId: string
+  spaceKey: string
+  pageId: string
+  activePageId?: string
+  activeSlug?: string
+  expanded: ReadonlySet<string>
+  onToggle: (id: string) => void
+  depth: number
+}) {
+  const [{ data, fetching }] = usePageSubtreeQuery({
+    variables: { spaceId, pageId },
+    context: PAGE_TREE_CONTEXT,
+  })
+
+  if (fetching) {
+    return (
+      <Box sx={{ pl: 2 + depth * 1.5, py: 0.5 }}>
+        <Skeleton variant="text" width="60%" />
+      </Box>
+    )
+  }
+
+  const nodes = (data?.pageSubtree ?? []) as NavNode[]
+  if (nodes.length === 0) return null
+
+  return (
+    <PageTree
+      nodes={nodes}
+      spaceId={spaceId}
+      spaceKey={spaceKey}
+      activePageId={activePageId}
+      activeSlug={activeSlug}
+      expanded={expanded}
+      onToggle={onToggle}
+      depth={depth}
+    />
+  )
+}
+
 function PageTree({
   nodes,
+  spaceId,
   spaceKey,
   activePageId,
   activeSlug,
@@ -125,6 +195,7 @@ function PageTree({
   depth = 0,
 }: {
   nodes: NavNode[]
+  spaceId: string
   spaceKey: string
   activePageId?: string
   activeSlug?: string
@@ -144,13 +215,17 @@ function PageTree({
         const Icon = lookupPageIcon(node.icon)?.Icon ?? ArticleOutlinedIcon
         const children = node.children ?? []
         const isExpanded = expanded.has(node.id)
+        // What the server says, falling back to what arrived — the fallback is
+        // only for a node built before hasChildren existed (a test fixture, an
+        // older cached response), never the normal path.
+        const hasChildren = node.hasChildren ?? children.length > 0
         return (
           <li key={node.id}>
             {/* The disclosure sits beside the link, never inside it: a button
                 nested in an anchor is an axe "nested-interactive" violation,
                 and clicking to unfold a branch must not also navigate. */}
             <Box sx={{ display: 'flex', alignItems: 'center', pl: 2 + depth * 1.5 }}>
-              {children.length > 0 ? (
+              {hasChildren ? (
                 <IconButton
                   size="small"
                   // Names the branch, not just the verb — several of these sit
@@ -197,17 +272,34 @@ function PageTree({
                 />
               </ListItemButton>
             </Box>
-            {children.length > 0 && isExpanded && (
-              <PageTree
-                nodes={children}
-                spaceKey={spaceKey}
-                activePageId={activePageId}
-                activeSlug={activeSlug}
-                expanded={expanded}
-                onToggle={onToggle}
-                depth={depth + 1}
-              />
-            )}
+            {isExpanded &&
+              (children.length > 0 ? (
+                <PageTree
+                  nodes={children}
+                  spaceId={spaceId}
+                  spaceKey={spaceKey}
+                  activePageId={activePageId}
+                  activeSlug={activeSlug}
+                  expanded={expanded}
+                  onToggle={onToggle}
+                  depth={depth + 1}
+                />
+              ) : (
+                // Expanded, but the tree query stopped short of these. Fetched by
+                // its own component rather than from state held up here, so each
+                // branch owns its request: several can be open at once without a
+                // queue, and none can overwrite another's result.
+                <LazyChildren
+                  spaceId={spaceId}
+                  spaceKey={spaceKey}
+                  pageId={node.id}
+                  activePageId={activePageId}
+                  activeSlug={activeSlug}
+                  expanded={expanded}
+                  onToggle={onToggle}
+                  depth={depth + 1}
+                />
+              ))}
           </li>
         )
       })}
@@ -397,6 +489,7 @@ export function SpaceTreeNav() {
           {tree.length > 0 ? (
             <PageTree
               nodes={tree}
+              spaceId={activeSpace.id}
               spaceKey={activeSpace.key}
               activePageId={pageId}
               activeSlug={slug}

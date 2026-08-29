@@ -30,6 +30,8 @@ type Query {
   page(id: UUID!): Page @cost(weight: "10")
   pageBySlug(spaceKey: String!, slug: String!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
+  pageSubtree(spaceId: UUID!, pageId: UUID!): [PageTreeNode!]!
+    @cost(weight: "10")
   me: CurrentUser! @cost(weight: "10")
   customEmojis: [CustomEmojiRef!]! @cost(weight: "10")
   effectivePermission(pageId: UUID!, subject: InspectedPrincipalInput): EffectivePermissionDetail
@@ -709,6 +711,7 @@ type PageTreeNode {
   ownViewRestrictions: [PageTreeRestriction!]!
   marking: PageMarkingView!
   children: [PageTreeNode!]!
+  hasChildren: Boolean! @cost(weight: "10")
   labels: [String!]! @cost(weight: "10")
 }
 

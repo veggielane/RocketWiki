@@ -46,16 +46,20 @@ query SpaceReplicaBanner($key: String!) {
   }
 }
 
-# The server builds the tree to full depth (PageReadService.BuildNodeIfVisible
-# recurses unbounded); this document is what truncates it, so the depth here is
-# a payload decision rather than a server cost.
+# The server builds the tree to full depth; this document is what truncates it,
+# so the depth here is a payload decision rather than a server cost.
 #
-# It matters more than it used to. The nav now draws a disclosure chevron only
-# when a node has children, so an unfetched level is no longer a tree that just
-# looks short - it is the UI positively asserting that a page is a leaf when it
-# is not. Eight levels puts that boundary past any hierarchy this wiki has, but
-# it does not remove it: a genuinely deeper tree needs `hasChildren` on the node
-# plus a fetch on expand, which is a schema change and its own decision.
+# THREE levels, not eight, now that `hasChildren` and `pageSubtree` exist. A
+# GraphQL document has to pick a depth, so a tree query always truncates
+# somewhere — and the previous fix (going deeper) only moved the boundary to
+# where the bug would be rarer and therefore harder to notice. Shallow on
+# purpose: it keeps the first payload small, and it makes fetch-on-expand the
+# ORDINARY path rather than one that only fires on unusually deep trees, which
+# would be a code path nobody exercises until it is broken.
+#
+# `hasChildren` is what makes the truncation honest. The disclosure control is
+# drawn from it rather than from whether children arrived, so the tree no longer
+# claims a page is a leaf when the document simply stopped short of it.
 query SpacePageTree($spaceId: UUID!) {
   pageTree(spaceId: $spaceId) {
     ...TreeNode
@@ -63,21 +67,21 @@ query SpacePageTree($spaceId: UUID!) {
       ...TreeNode
       children {
         ...TreeNode
-        children {
-          ...TreeNode
-          children {
-            ...TreeNode
-            children {
-              ...TreeNode
-              children {
-                ...TreeNode
-                children {
-                  ...TreeNode
-                }
-              }
-            }
-          }
-        }
+      }
+    }
+  }
+}
+
+# The children of one node, fetched when it is expanded and the query above did
+# not reach them. Same pruned walk on the server, so a subtree inherits the same
+# grants, restrictions and clearance gate the first fetch did.
+query PageSubtree($spaceId: UUID!, $pageId: UUID!) {
+  pageSubtree(spaceId: $spaceId, pageId: $pageId) {
+    ...TreeNode
+    children {
+      ...TreeNode
+      children {
+        ...TreeNode
       }
     }
   }
@@ -104,6 +108,7 @@ fragment TreeNode on PageTreeNode {
   title
   icon
   slug
+  hasChildren
   sortOrder
   hasRestrictions
   labels
