@@ -46,6 +46,16 @@ query SpaceReplicaBanner($key: String!) {
   }
 }
 
+# The server builds the tree to full depth (PageReadService.BuildNodeIfVisible
+# recurses unbounded); this document is what truncates it, so the depth here is
+# a payload decision rather than a server cost.
+#
+# It matters more than it used to. The nav now draws a disclosure chevron only
+# when a node has children, so an unfetched level is no longer a tree that just
+# looks short - it is the UI positively asserting that a page is a leaf when it
+# is not. Eight levels puts that boundary past any hierarchy this wiki has, but
+# it does not remove it: a genuinely deeper tree needs `hasChildren` on the node
+# plus a fetch on expand, which is a schema change and its own decision.
 query SpacePageTree($spaceId: UUID!) {
   pageTree(spaceId: $spaceId) {
     ...TreeNode
@@ -55,6 +65,18 @@ query SpacePageTree($spaceId: UUID!) {
         ...TreeNode
         children {
           ...TreeNode
+          children {
+            ...TreeNode
+            children {
+              ...TreeNode
+              children {
+                ...TreeNode
+                children {
+                  ...TreeNode
+                }
+              }
+            }
+          }
         }
       }
     }
