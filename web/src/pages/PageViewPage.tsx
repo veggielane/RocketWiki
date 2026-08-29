@@ -58,7 +58,7 @@ import { Comments } from '../comments/Comments'
 import { LabelEditor } from '../labels/LabelEditor'
 import { computeLabelOps } from '../labels/labelOps'
 import { PagePropertiesPanel } from '../properties/PagePropertiesPanel'
-import { MarkingBanner } from '../markings/MarkingBanner'
+import { ClassificationBanner } from '../markings/ClassificationBanner'
 import { useScrollToHash } from './useScrollToHash'
 import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
@@ -294,7 +294,6 @@ export function PageViewPage() {
           a long page has to meet the marking without knowing where to look,
           which is the whole reason for the pair. */}
       <Box sx={{ mb: 2 }}>
-        <MarkingBanner label={page.marking.label} level={page.marking.level} placement="head" />
       </Box>
 
       <Stack direction="row" sx={{ mb: 2, alignItems: 'center', justifyContent: 'space-between' }}>
@@ -483,7 +482,14 @@ export function PageViewPage() {
       />
 
       <Box sx={{ mt: 4 }}>
-        <MarkingBanner label={page.marking.label} level={page.marking.level} placement="foot" />
+        {/* ICDS: one banner, fixed to the bottom of the viewport, so the
+            classification of what you are reading stays on screen while you
+            scroll rather than only bracketing the content. */}
+        <ClassificationBanner
+          label={page.marking.label}
+          level={page.marking.level}
+          scopeLabel="Protective marking for this page"
+        />
       </Box>
 
       <CreatePageDialog

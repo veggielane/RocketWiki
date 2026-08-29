@@ -234,15 +234,29 @@ describe('PageViewPage protective marking (design.md §21)', () => {
       },
     })
     await screen.findByRole('heading', { name: 'Runbook' })
-    // The pair is the convention and it is deliberate: someone printing or
-    // screenshotting a long page must meet the marking without scrolling to a
-    // particular spot.
-    const banners = document.querySelectorAll('[data-marking-placement]')
-    expect(banners.length).toBe(2)
-    expect([...banners].map((banner) => banner.getAttribute('data-marking-placement'))).toEqual(['head', 'foot'])
+    // ICDS: ONE banner, fixed to the bottom of the viewport, so the marking
+    // stays on screen while scrolling instead of bracketing the content. The
+    // reason the old top-and-bottom pair existed — someone printing a long page
+    // has to meet the marking without knowing where to scroll — is kept as a
+    // print-only copy at the head of the document.
+    const banners = document.querySelectorAll('[data-classification-banner]')
+    expect([...banners].map((b) => b.getAttribute('data-classification-banner'))).toEqual([
+      'fixed',
+      'print-head',
+    ])
     for (const banner of banners) {
       expect(banner.textContent).toContain('UK SECRET [UK/US EYES ONLY]')
     }
+  })
+
+  it('announces the fixed banner as a landmark naming what it marks', async () => {
+    // "This page" and "this answer" are different claims, and a reader who
+    // cannot see where the banner sits has nothing else to tell them apart.
+    renderPage()
+    await screen.findByRole('heading', { name: 'Runbook' })
+    expect(
+      screen.getByRole('region', { name: 'Protective marking for this page' }),
+    ).toBeInTheDocument()
   })
 
   it("renders the server's label rather than composing prefix + level + caveat", async () => {
@@ -254,8 +268,8 @@ describe('PageViewPage protective marking (design.md §21)', () => {
       },
     })
     await screen.findByRole('heading', { name: 'Runbook' })
-    expect(document.querySelector('[data-marking-placement="head"]')?.textContent).toBe(
-      'Protective marking: TOP SECRET',
+    expect(document.querySelector('[data-classification-banner="fixed"]')?.textContent).toBe(
+      'Protective marking for this page: TOP SECRET',
     )
   })
 })

@@ -31,6 +31,7 @@ import { useAuth } from 'react-oidc-context'
 import { useNavigate } from 'react-router-dom'
 import { useColorMode } from '../theme/colorModeContext'
 import { SpaceTreeNav } from './SpaceTreeNav'
+import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
 import { NotificationBell } from '../notifications/NotificationBell'
 import { useCurrentUserQuery } from '../graphql/generated/graphql'
 import { UserAvatar } from '../avatars/UserAvatar'
@@ -230,7 +231,11 @@ export function AppShell() {
         }}
       >
         <Toolbar />
-        <Box sx={{ maxWidth: 960, mx: 'auto', p: 3 }}>
+        {/* Bottom padding reserves the fixed classification banner's strip so a
+            page's last line is never hidden underneath it. Applied here rather
+            than per-route because the banner is viewport-fixed: it overlaps
+            whatever is scrolled to the bottom, marked page or not. */}
+        <Box sx={{ maxWidth: 960, mx: 'auto', p: 3, pb: `${CLASSIFICATION_BANNER_HEIGHT + 24}px` }}>
           <Outlet />
         </Box>
       </Box>
