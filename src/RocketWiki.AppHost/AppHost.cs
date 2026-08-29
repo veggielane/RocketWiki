@@ -24,6 +24,18 @@ const string MinioRootUser = "minioadmin";
 const string MinioRootPassword = "minioadmin";
 const string MinioBucket = "rocketwiki";
 
+// The SA password is pinned rather than generated, for the same reason MinIO's
+// credentials above are: it is dev-only, and something outside this file has to
+// agree with it. That something is `WithDataVolume()` below. MSSQL_SA_PASSWORD is
+// read only when the engine initializes a fresh master database - on every later
+// start the copy already in the volume wins - so a generated password and a
+// persistent volume are quietly incompatible. Aspire caches the generated one in
+// user secrets, which hides that until the day the cached value changes; then the
+// engine comes up healthy, refuses every `sa` login, and the API waits on it
+// forever with the only clue buried in the container's own log. Pinning keeps the
+// volume's copy and the connection string the same fact.
+var sqlPassword = builder.AddParameter("sql-password", "RocketWiki-dev-sa-1", secret: true);
+
 // AddSqlServer's default image is the STOCK mcr.microsoft.com/mssql/server, which
 // this application cannot run on - proven on the first real container run, not by
 // reading docs: the default resolved to 2022-latest, and that engine reported
@@ -34,7 +46,7 @@ const string MinioBucket = "rocketwiki";
 // the second reason. So the same derived image the test tier has always used
 // (docker/mssql-fts/Dockerfile - 2025 base plus the mssql-server-fts package) is
 // built here too; the daemon caches it after the first run.
-var sql = builder.AddSqlServer("sql")
+var sql = builder.AddSqlServer("sql", sqlPassword)
     .WithDockerfile("../../docker/mssql-fts")
     .WithDataVolume()
     .AddDatabase("rocketwiki");

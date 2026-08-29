@@ -86,6 +86,25 @@ The Keycloak realm is imported only into a *fresh* data volume. After editing
 `rocketwiki-realm.json`, `docker volume rm` the keycloak volume or the old
 realm persists and your change appears to do nothing.
 
+SQL Server has the same "only on a fresh volume" rule about its `sa` password,
+which is why `AppHost.cs` pins one (`RocketWiki-dev-sa-1`) instead of letting
+Aspire generate it. `MSSQL_SA_PASSWORD` is read only when the engine
+initializes a new master database; after that the volume's copy wins. A
+generated password therefore works until the value Aspire cached in user
+secrets changes, and then the stack half-starts forever: SQL Server is
+"healthy", the API sits in `WaitFor(sql)`, and the only evidence is
+`Login failed for user 'sa'` inside the container's log. If you hit this on a
+volume whose data you want to keep, reset the password against the *stopped*
+volume rather than deleting it — `mssql-conf` refuses to run while `sqlservr`
+holds the instance, so it needs its own container:
+
+```bash
+docker run --rm --user root \
+  -v <the-sql-data-volume>:/var/opt/mssql \
+  -e MSSQL_SA_PASSWORD='RocketWiki-dev-sa-1' \
+  --entrypoint /opt/mssql/bin/mssql-conf <the-sql-image> set-sa-password
+```
+
 > **Retired caveat (design.md §16):** this section used to warn that
 > `aspire run` had never actually been executed. It has, on 2026-08-28, from
 > empty volumes: containers up, migrations applied to a real SQL Server 2025,
