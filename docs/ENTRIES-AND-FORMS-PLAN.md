@@ -88,7 +88,8 @@ An entry is:
   (`incident-report`). This is the one piece of structure beyond the id, and it
   earns its place: without it, "every record of this form on this page" means
   reaching into JSON, and the query that the whole forms feature rests on becomes
-  the awkward one;
+  the awkward one. **A page may hold as many collections as it likes** — see
+  §1.2;
 - **an object** — JSON, an object at the root (not a bare scalar or array), with
   a size cap. Suggest 64 KiB; anything larger is an attachment;
 - **a marking** — level, eyes-only country set, prefix. Mirrors `PageMarking`;
@@ -100,7 +101,39 @@ every existing caller is racy in the meantime. The page edit path already has th
 pattern (`ExpectedRevisionNumber` → `StaleRevisionError`); reuse the shape rather
 than inventing a second one.
 
-### 1.2 Scoping to pages
+### 1.2 Many collections per page
+
+A page holds any number of collections, and a collection holds any number of
+entries. An incident page can carry `incident-report`, `action-item` and
+`sign-off` side by side, each with its own form definition and its own rendered
+table. Nothing in the model constrains a page to one, and the `(PageId,
+Collection)` index is what makes several cheap.
+
+Three consequences, and the third is the one that bites:
+
+**A collection's identity is `(page, collection)`, not the name alone.** The same
+name on two pages is two independent sets with nothing shared — not one
+collection spread across pages. That follows from entries being page-scoped, but
+it is the opposite of what "collection" suggests to most people, so the
+form-authoring UI should say it rather than let someone discover it. Gathering
+one logical collection across pages is the cross-page query that §1.3 puts out of
+v1.
+
+**A collection name is unique within its page.** Two `form-definition` fences on
+one page naming the same collection is a conflict, not a merge — they would
+compete to define the fields of one record set. Refuse it at parse time, in the
+editor, with both locations named. Silently letting the last one win is how a
+form quietly changes shape.
+
+**Enumerate a page's collections from its definitions, never from its entries.**
+This is a §6.7 trap that only appears once a page can have several. `SELECT
+DISTINCT Collection WHERE PageId = @p` is the obvious implementation and it
+leaks: it reveals that a collection has *at least one entry*, to a reader who may
+be permitted to see none of them. The definitions are page content and visible to
+anyone who can read the page, so they are the safe source. An empty collection
+and one whose entries are all above your clearance must look identical.
+
+### 1.3 Scoping to pages
 
 Every entry belongs to exactly one page, which gives three things for free:
 
@@ -114,7 +147,7 @@ The cost: there is no cross-page entry space. "Every incident report in this
 space" is a spanning query, which is a permission-filtered read with all of
 §2.2's constraints, and it is deliberately out of v1.
 
-### 1.3 The proposed table
+### 1.4 The proposed table
 
 | Column | Notes |
 |---|---|
@@ -296,6 +329,25 @@ Rendering follows the widget precedent: permission-filtered server-side,
 per-viewer aggregate marking on the block, no counts, no "hidden rows"
 affordance.
 
+A page carries as many of these as it has collections — an incident page might
+define `incident-report`, `action-item` and `sign-off`, and render three tables
+between its prose. Each fence names its own collection and is parsed
+independently, so one malformed fence degrades to the existing
+`FenceIncomplete` state without taking the others down. Two questions the
+multiplicity raises, both worth deciding rather than discovering:
+
+- **the per-viewer aggregate marking is per block, not per page.** Three tables
+  drawn from three collections can legitimately carry three different labels, and
+  a reader needs to know which table a marking describes. The page's own banner
+  is the max over everything visible (§2.4); a block's is the max over that
+  block's rows;
+- **a `form-list` may name a collection this page has no definition for.** That
+  is not an error — a page could render a collection defined elsewhere once
+  cross-page queries exist — but in v1 it can only ever be empty, so it should
+  say "no such collection on this page" rather than showing an empty table that
+  looks like "no records yet". Those two states are different facts and a reader
+  will act on them differently.
+
 ### 3.4 What a v1 should not be
 
 - **No workflow.** ConfiForms has state transitions and actions; that is
@@ -341,8 +393,10 @@ Each phase should be independently shippable and independently abandonable.
    later and a wrong unification is not.
 3. **Are entries searchable?** — recommendation: no in v1, deliberately.
 4. **Do entries reach the assistant?** — recommendation: no in v1.
-5. **Size cap and per-page entry cap.** A store with no quota is a
-   denial-of-service surface and a sync-payload problem.
+5. **Size cap, per-page entry cap, and per-page collection cap.** A store with
+   no quota is a denial-of-service surface and a sync-payload problem, and now
+   that a page can hold many collections there are two dimensions to bound, not
+   one.
 6. **Does a record's author see their own record when it is marked above their
    clearance?** A genuine question with no obvious answer — someone can submit a
    form into a marking they cannot then read. §21.6's "may not set a marking you
