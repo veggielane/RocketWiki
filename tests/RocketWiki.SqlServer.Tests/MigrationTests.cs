@@ -1,5 +1,6 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Entities;
 using Xunit;
 
 namespace RocketWiki.SqlServer.Tests;
@@ -45,8 +46,48 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260829090727_AddPageIcon", applied);
         Assert.Contains("20260829092438_SpaceUniquePageSlug", applied);
         Assert.Contains("20260829134601_AddPageEntries", applied);
-        Assert.Equal(13, applied.Count);
+        Assert.Contains("20260829192825_BinaryCollationOnStringKeys", applied);
+        Assert.Equal(14, applied.Count);
         Assert.Empty(pending);
+    }
+
+    /// <summary>
+    /// "EF Core migrations are checked in and reviewed like code" (design.md §14) was,
+    /// until this test, protected only by whoever remembered to run
+    /// <c>dotnet ef migrations add</c>. Neither tier could see a forgotten one:
+    ///
+    /// <list type="bullet">
+    /// <item>The SQLite tier builds its schema from the LIVE C# model with
+    /// <c>EnsureCreated</c> (SqliteTestBase's own doc says so), so a model change with no
+    /// migration behind it is exactly what it tests against — green, always.</item>
+    /// <item>The sibling test above asserts <c>GetPendingMigrationsAsync()</c> is empty,
+    /// which is about migration FILES that have not been applied — the opposite
+    /// direction. A model change with no scaffolded migration leaves that set empty too.</item>
+    /// </list>
+    ///
+    /// <para><c>HasPendingModelChanges</c> is the one check that compares the live model
+    /// against the last migration's snapshot, so an added index, a changed
+    /// <c>HasMaxLength</c>, a new filter or a new collation cannot ship green here and
+    /// wrong in production. It belongs in this tier and only this tier: the comparison is
+    /// provider-specific (the snapshot is scaffolded on SQL Server via
+    /// RocketWikiDbContextFactory, and RocketWikiDbContext deliberately branches its model
+    /// by provider for the vector column and the PageEntry collation), so asking it on
+    /// SQLite would report drift that does not exist.</para>
+    ///
+    /// <para>If this fails: run <c>dotnet ef migrations add &lt;Name&gt; --project
+    /// src/RocketWiki.Data</c>, review the generated SQL like any other code, and update
+    /// the migration list in the test above.</para>
+    /// </summary>
+    [SqlServerFact]
+    public void Model_HasNoChangesTheCheckedInMigrationsDoNotDescribe()
+    {
+        using var context = CreateContext();
+
+        Assert.False(
+            context.Database.HasPendingModelChanges(),
+            "The EF model has changes no checked-in migration describes (design.md §14). " +
+            "Scaffold one with `dotnet ef migrations add <Name> --project src/RocketWiki.Data`, " +
+            "review its SQL, and add it to Migrate_FromZero_AppliesEveryCheckedInMigration_NothingPending's list.");
     }
 
     [SqlServerFact]
@@ -264,6 +305,70 @@ public sealed class MigrationTests : SqlServerTestBase
             ORDER BY col.name
             """);
         Assert.Equal(["CurrentContent", "Title"], indexedColumns);
+    }
+
+    /// <summary>
+    /// BinaryCollationOnStringKeys. Every string used as a LOOKUP KEY must mean the same
+    /// thing on both providers, and five of them did not: SQL Server's default collation
+    /// is case-INsensitive while SQLite's is case-sensitive for ASCII, so "ENG" and "eng"
+    /// were one space in production and two in the tier that runs on every commit — with
+    /// the looser rule being the tested one.
+    ///
+    /// <para>Structurally uncatchable below this tier, which is the whole point: SQLite
+    /// is already case-sensitive, so the *absence* of a collation looks identical to its
+    /// presence there. Only a real engine can tell. Both halves are asserted — the
+    /// declared collation on the column, and the behaviour that follows from it, since a
+    /// collation that landed on the column but not on its unique index would satisfy the
+    /// first and not the second.</para>
+    /// </summary>
+    [SqlServerFact]
+    public async Task StringLookupKeys_AreBinaryCollated_SoCaseMeansTheSameThingOnBothProviders()
+    {
+        foreach (var (table, column) in new[]
+        {
+            ("Spaces", "Key"),
+            ("Pages", "Slug"),
+            ("Labels", "Name"),
+            ("KnownGroups", "Name"),
+            ("AttributeDefinitions", "Key"),
+        })
+        {
+            Assert.Equal(
+                "Latin1_General_100_BIN2",
+                await ExecuteScalarAsync<string>(
+                    $"SELECT collation_name FROM sys.columns WHERE object_id = OBJECT_ID('{table}') AND name = '{column}'"));
+        }
+
+        // The behaviour, through the unique index that used to fold them together: two
+        // spaces differing only in key case now coexist here exactly as they do on
+        // SQLite. (Whether an instance SHOULD have both is a curation question; the point
+        // is that one answer holds everywhere, rather than the engine deciding.)
+        using var context = CreateContext();
+        var actor = Guid.NewGuid();
+        context.Users.Add(new User
+        {
+            Id = actor, Subject = $"collation-{actor}", DisplayName = "Seeder",
+            CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow,
+        });
+        context.Spaces.Add(new Space
+        {
+            Key = "ENG", Name = "Upper", OriginInstanceId = "local-instance",
+            CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = actor,
+        });
+        context.Spaces.Add(new Space
+        {
+            Key = "eng", Name = "Lower", OriginInstanceId = "local-instance",
+            CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = actor,
+        });
+
+        await context.SaveChangesAsync();
+
+        Assert.Equal(2, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM Spaces WHERE [Key] IN ('ENG', 'eng')"));
+        // And a lookup no longer folds: the ordinal predicate the application writes is
+        // now the ordinal predicate the engine runs (design.md §6.3).
+        Assert.Equal(1, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM Spaces WHERE [Key] = 'eng'"));
     }
 
     [SqlServerFact]

@@ -53,7 +53,7 @@ public sealed class PageType : ObjectType<Page>
 
         descriptor.Field("children")
             .Type<NonNullType<ListType<NonNullType<PageType>>>>()
-            .ResolveWith<PageFieldResolvers>(r => r.GetChildrenAsync(default!, default!, default!, default!, default!, default));
+            .ResolveWith<PageFieldResolvers>(r => r.GetChildrenAsync(default!, default!, default!, default!, default));
 
         descriptor.Field(p => p.Revisions)
             .Type<NonNullType<ListType<NonNullType<PageRevisionType>>>>()

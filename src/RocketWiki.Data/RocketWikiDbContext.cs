@@ -10,6 +10,16 @@ namespace RocketWiki.Data;
 
 public class RocketWikiDbContext : DbContext
 {
+    /// <summary>
+    /// The collation every string used as a LOOKUP KEY carries on SQL Server, so "same
+    /// key" means the same thing on both providers. SQLite's default is already
+    /// case-sensitive for ASCII and it has never heard of this collation name, which is
+    /// why it is applied in the provider branch below rather than in an entity
+    /// configuration (see PageEntryConfiguration and SqlServerFileStorage, where the same
+    /// lesson was learned the same way).
+    /// </summary>
+    private const string BinaryCollation = "Latin1_General_100_BIN2";
+
     private readonly List<IDomainEvent> _pendingDomainEvents = new();
 
     public RocketWikiDbContext(DbContextOptions<RocketWikiDbContext> options)
@@ -89,7 +99,34 @@ public class RocketWikiDbContext : DbContext
         {
             modelBuilder.Entity<PageEntry>()
                 .Property(e => e.Collection)
-                .UseCollation("Latin1_General_100_BIN2");
+                .UseCollation(BinaryCollation);
+
+            // The same trap, on the five other string natural keys that had neither a
+            // normalized column (PagePropertyKey.KeyNormalized) nor a lowercase-only
+            // grammar (CustomEmoji.Name) to protect them. Each is BOTH a unique index and
+            // a lookup predicate translated to SQL, so its case sensitivity was the
+            // provider's rather than the application's: "ENG" and "eng" were two spaces on
+            // SQLite and one on SQL Server, and /spaces/eng/x resolved a page in
+            // production that the test tier 404s. Two tiers enforcing different rules,
+            // with the looser one running on every commit.
+            //
+            // Binary rather than a normalized column, deliberately: design.md §6.3 already
+            // makes rule matching exact and ordinal ("guessing at what an admin meant is
+            // exactly the wrong instinct"), PageQueryService already documents ordinal
+            // space keys as the correct reading, and SQLite is case-sensitive here
+            // already — so this makes production agree with the behaviour the whole test
+            // suite already pins, rather than inventing a third one.
+            //
+            // KnownGroup.Name and AttributeDefinition.Key are the sharpest of the five:
+            // the rule engine compares group names and attribute keys ORDINALLY in memory
+            // (Principal.Create), so a case-folded registry could offer the rule builder
+            // an "engineering" that no token spelling ever matches — §21.4's
+            // fails-closed-while-looking-correct trap, one layer up.
+            modelBuilder.Entity<Space>().Property(s => s.Key).UseCollation(BinaryCollation);
+            modelBuilder.Entity<Page>().Property(p => p.Slug).UseCollation(BinaryCollation);
+            modelBuilder.Entity<Label>().Property(l => l.Name).UseCollation(BinaryCollation);
+            modelBuilder.Entity<KnownGroup>().Property(g => g.Name).UseCollation(BinaryCollation);
+            modelBuilder.Entity<AttributeDefinition>().Property(a => a.Key).UseCollation(BinaryCollation);
         }
 
         // Compared by provider name string (rather than the Database.IsSqlite()

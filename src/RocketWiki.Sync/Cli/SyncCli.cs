@@ -78,8 +78,9 @@ public static class SyncCli
             if (!space.IsExported)
             {
                 output.WriteLine(
-                    $"Space '{space.Key}' is not flagged exported. Flag it exported first - a baseline for a " +
-                    "non-exported space would start a sync stream nothing will ever continue.");
+                    $"Space '{space.Key}' is not flagged exported. Flag it with the setSpaceExported mutation " +
+                    "(instance admin) first - a baseline for a non-exported space would start a sync stream " +
+                    "nothing will ever continue, because the outbox only journals exported spaces.");
                 return 2;
             }
 

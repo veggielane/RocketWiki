@@ -70,6 +70,18 @@ public sealed class AnalyticsService(RocketWikiDbContext db, IPageReadService pa
         var pageIds = visiblePages.Keys.ToList();
         var spaceKeys = spaces.Select(s => s.Key).ToList();
 
+        // design.md §7/§15: "site-wide" is an INSTANCE-ADMIN scope, not "whatever a null
+        // spaceKey means". A space admin may ask for a null spaceKey - that is how they
+        // get a report across every space they administer (see ResolveAdministeredSpacesAsync)
+        // - but that must not silently promote them to the site-wide search panel below.
+        // The page/people panels are already safe by construction: they are computed from
+        // visiblePages, which came from the real canView gate. The search panels are not,
+        // because they read `search.query` audit rows directly, and those rows carry raw
+        // query text for EVERY user in EVERY space. §7 reserves the audit log to instance
+        // admins, and §15 names an unregulated who-searched-what record as exactly the
+        // thing not to build by accident.
+        var siteWide = isInstanceAdmin && spaceKey is null;
+
         // Page-subject events, restricted to the visible set. Materialized once and
         // sliced in memory: the alternative is six round trips over the same window
         // that must all agree about which pages count.
@@ -91,8 +103,8 @@ public sealed class AnalyticsService(RocketWikiDbContext db, IPageReadService pa
             await RankPeopleAsync(views, cancellationToken),
             await RankPeopleAsync(edits, cancellationToken),
             await BuildHealthAsync(visiblePages, views, cancellationToken),
-            await BuildSearchesAsync(spaceKeys, spaceKey, fromUtc, toUtc, zeroResultsOnly: false, cancellationToken),
-            await BuildSearchesAsync(spaceKeys, spaceKey, fromUtc, toUtc, zeroResultsOnly: true, cancellationToken));
+            await BuildSearchesAsync(spaceKeys, siteWide, fromUtc, toUtc, zeroResultsOnly: false, cancellationToken),
+            await BuildSearchesAsync(spaceKeys, siteWide, fromUtc, toUtc, zeroResultsOnly: true, cancellationToken));
 
         return new ReadResult<AnalyticsReport>.Found(report);
     }
@@ -239,13 +251,20 @@ public sealed class AnalyticsService(RocketWikiDbContext db, IPageReadService pa
     }
 
     /// <summary>
-    /// Search terms from `search.query` details. Filtered to the administered spaces:
-    /// a site-wide report counts every search, a space report counts only searches
-    /// scoped to that space, because a global search's terms are not that space's
-    /// business.
+    /// Search terms from `search.query` details, scoped to <paramref name="spaceKeys"/> —
+    /// the spaces the caller actually administers, never the spaces they asked about.
+    /// A space report counts only searches scoped to that space, because a global
+    /// search's terms are not that space's business.
+    ///
+    /// <para><paramref name="siteWide"/> — instance admin, no space key — is the ONE case
+    /// that drops the filter, and it is the only case entitled to: it also picks up
+    /// searches that named no space at all (<c>e.SpaceKey == null</c>), which no
+    /// per-space filter can ever match. Passing "the caller asked for null" here instead
+    /// of "the caller is an instance admin" is what let a space admin read every user's
+    /// search terms; see GetReportAsync's note.</para>
     /// </summary>
     private async Task<List<SearchActivity>> BuildSearchesAsync(
-        List<string> spaceKeys, string? spaceKey, DateTime fromUtc, DateTime toUtc,
+        List<string> spaceKeys, bool siteWide, DateTime fromUtc, DateTime toUtc,
         bool zeroResultsOnly, CancellationToken cancellationToken)
     {
         var rows = await db.AuditEvents.AsNoTracking()
@@ -253,7 +272,7 @@ public sealed class AnalyticsService(RocketWikiDbContext db, IPageReadService pa
                 && e.TimestampUtc >= fromUtc && e.TimestampUtc < toUtc
                 && e.Outcome == AuditOutcome.Success
                 && e.DetailsJson != null
-                && (spaceKey == null || (e.SpaceKey != null && spaceKeys.Contains(e.SpaceKey))))
+                && (siteWide || (e.SpaceKey != null && spaceKeys.Contains(e.SpaceKey))))
             .Select(e => e.DetailsJson!)
             .ToListAsync(cancellationToken);
 

@@ -66,50 +66,47 @@ public sealed class PageFieldResolvers
         return result.ValueOrNull();
     }
 
+    /// <summary>
+    /// This page's directly-visible children, in tree order.
+    ///
+    /// <para>Resolved through <see cref="VisibleChildIdsByPageIdDataLoader"/> over
+    /// <c>IPageReadService.GetVisibleChildIdsAsync</c>, which gates each child on its OWN
+    /// chain and marking. It used to locate this page inside the already-pruned space
+    /// tree instead, and that had two costs. It was wrong: a page whose ancestor sits
+    /// above the caller's clearance is pruned from the tree along with its whole subtree
+    /// (§21.5), so this page was absent from the tree and answered <c>children</c> with
+    /// an empty list — even though the design says such a page "stays reachable by id",
+    /// and its children were perfectly viewable. And it was expensive: the tree walk
+    /// materializes every page in the space, unmemoized, once per parent being resolved.
+    /// Both are the same fix.</para>
+    ///
+    /// <para>No denial audit here, and none is missing: a pruned listing is not a refused
+    /// request (IPageReadService.GetPageTreeAsync's contract says so for the tree, and
+    /// this is the same rule), and reaching this resolver at all means this Page already
+    /// passed canView and was audited where it was read.</para>
+    /// </summary>
     public async Task<IReadOnlyList<Page>> GetChildrenAsync(
         [Parent] Page page,
-        [Service] IPageReadService readService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
-        [Service] IAuditSink auditSink,
+        VisibleChildIdsByPageIdDataLoader childIdsLoader,
         PageByIdDataLoader pageByIdLoader,
         CancellationToken cancellationToken)
     {
-        var principal = principalAccessor.Current;
-        if (principal is null)
+        if (principalAccessor.Current is null)
         {
             return [];
         }
 
-        // IPageReadService has no direct "children of this page" method; the
-        // permission-safe source of child ids is the already-pruned space tree
-        // (design.md §6.7 - a hidden child is dropped there, never handed back here
-        // to filter ourselves). Materializing each child's full Page goes through
-        // PageByIdDataLoader, which dedupes/parallelizes across one request - see its
-        // own doc for what it does and doesn't optimize away.
-        //
-        // A Denied tree here means the caller lost their space role between this page
-        // resolving (which required canView, hence a role) and now - race-only, but a
-        // real denial of a real browse, so audited (§7) then collapsed to the same []
-        // as "no children". Individual children pruned from a Found tree are not
-        // denials - see IPageReadService.GetPageTreeAsync's doc.
-        var treeResult = await readService.GetPageTreeAsync(page.SpaceId, principal, cancellationToken);
-        if (treeResult is ReadResult<IReadOnlyList<PageTreeNode>>.Denied denied)
-        {
-            await ReadDenialAudit.RecordAsync(
-                auditSink, "space.browse", AuditSubjectType.Space, page.SpaceId, denied.Reason, cancellationToken);
-            return [];
-        }
-
-        var tree = treeResult.ValueOrNull() ?? [];
-        var node = FindNode(tree, page.Id);
-        if (node is null || node.Children.Count == 0)
+        var childIds = await childIdsLoader.LoadAsync(page.Id, cancellationToken);
+        if (childIds is not { Count: > 0 })
         {
             return [];
         }
 
-        var childIds = node.Children.Select(c => c.Id).ToArray();
-        var loaded = await pageByIdLoader.LoadRequiredAsync(childIds, cancellationToken);
-        return loaded;
+        // Materializing each child's full Page goes through PageByIdDataLoader, which
+        // dedupes/parallelizes across one request - see its own doc for what it does and
+        // doesn't optimize away.
+        return await pageByIdLoader.LoadRequiredAsync(childIds.ToArray(), cancellationToken);
     }
 
     [AuditAction("page.view")]
@@ -216,22 +213,4 @@ public sealed class PageFieldResolvers
         [Parent] Page page, ViewerWatchesPageDataLoader watchLoader, CancellationToken cancellationToken) =>
         await watchLoader.LoadAsync(page.Id, cancellationToken);
 
-    private static PageTreeNode? FindNode(IReadOnlyList<PageTreeNode> nodes, Guid id)
-    {
-        foreach (var node in nodes)
-        {
-            if (node.Id == id)
-            {
-                return node;
-            }
-
-            var found = FindNode(node.Children, id);
-            if (found is not null)
-            {
-                return found;
-            }
-        }
-
-        return null;
-    }
 }

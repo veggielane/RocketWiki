@@ -458,6 +458,155 @@ public class SpaceServiceTests : SqliteTestBase
         Assert.Equal(page.Id, result.Value.HomepageId);
     }
 
+    // --- Export flag (design.md §12) --------------------------------------------------
+
+    /// <summary>
+    /// The on-switch §12 always described and nothing implemented: before this, both
+    /// writers of <c>Space.IsExported</c> set it to <c>false</c> and no mutation, route or
+    /// CLI verb could set it true, so the outbox never journaled anything and
+    /// <c>RocketWiki.Sync export --baseline</c> refused every space — while telling the
+    /// operator to "flag it exported first". The only route was hand-editing the database.
+    ///
+    /// <para>Asserted end to end rather than on the flag alone: flipping it is only
+    /// meaningful if it is what makes the outbox start journaling, which is the whole
+    /// point of the flag.</para>
+    /// </summary>
+    [Fact]
+    public async Task SetExported_ByInstanceAdmin_FlagsTheSpace_AndTheOutboxStartsJournaling()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        space.IsExported = false;
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var pageService = new PageService(context, LocalInstanceId);
+        var before = await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "before", "Before", "# Before"),
+            SpaceAdminPrincipal(), actor.Id, AuditCtx);
+        Assert.True(before.IsSuccess);
+        Assert.Empty(context.SyncOutboxEvents.ToList()); // not exported yet
+
+        var result = await new SpaceService(context, LocalInstanceId).SetExportedAsync(
+            new SetSpaceExportedRequest(space.Id, Exported: true), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(context.Spaces.Single(s => s.Id == space.Id).IsExported);
+        Assert.Single(context.AuditEvents.Where(e => e.Action == "space.export.enabled"));
+
+        var after = await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "after", "After", "# After"),
+            SpaceAdminPrincipal(), actor.Id, AuditCtx);
+        Assert.True(after.IsSuccess);
+        Assert.Single(context.SyncOutboxEvents.ToList());
+
+        // The flag itself never crosses: §12 keeps space lifecycle local, and
+        // exported-ness is the LOW side's decision about its own space.
+        Assert.DoesNotContain(
+            context.SyncOutboxEvents.ToList(),
+            e => e.PayloadJson.Contains("exported", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Turning it off is the safe direction and gets the quieter action name —
+    /// the same set-vs-downgrade split §21.7 uses, so a reviewer can find every space
+    /// somebody opened for export with one query.</summary>
+    [Fact]
+    public async Task SetExported_Disabling_AuditsUnderItsOwnActionName()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        space.IsExported = true;
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        Assert.True((await service.SetExportedAsync(
+            new SetSpaceExportedRequest(space.Id, Exported: false), isInstanceAdmin: true, actor.Id, AuditCtx)).IsSuccess);
+
+        Assert.False(context.Spaces.Single(s => s.Id == space.Id).IsExported);
+        Assert.Single(context.AuditEvents.Where(e => e.Action == "space.export.disabled"));
+        Assert.Empty(context.AuditEvents.Where(e => e.Action == "space.export.enabled"));
+    }
+
+    /// <summary>Idempotent, and deliberately silent: an audit row claiming export was
+    /// "enabled" when it already was would put a widening in front of the reviewer §7
+    /// writes these rows for.</summary>
+    [Fact]
+    public async Task SetExported_AlreadyInThatState_SucceedsWithoutAnAuditRow()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        space.IsExported = true;
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.SaveChanges();
+
+        var result = await new SpaceService(context, LocalInstanceId).SetExportedAsync(
+            new SetSpaceExportedRequest(space.Id, Exported: true), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Empty(context.AuditEvents.ToList()
+            .Where(e => e.Action.StartsWith("space.export.", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// design.md §12: "Only a native space can be exported; a replica must never emit
+    /// sync events for content it doesn't own." The outbox writer already refuses to
+    /// journal a replica-flagged-exported space, calling it corrupt state; this refuses
+    /// to create that state at all.
+    /// </summary>
+    [Fact]
+    public async Task SetExported_OnAReplicaSpace_IsRefused()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        space.OriginInstanceId = "the-low-side"; // != LocalInstanceId, so IsReplicaOf is true
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.SaveChanges();
+
+        var result = await new SpaceService(context, LocalInstanceId).SetExportedAsync(
+            new SetSpaceExportedRequest(space.Id, Exported: true), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ReadOnlyReplicaError>(result.Error);
+        Assert.False(context.Spaces.Single(s => s.Id == space.Id).IsExported);
+    }
+
+    /// <summary>Instance admin only — NOT the "or space admin" arm rename/archive share.
+    /// Sending a space's content into another security domain is a judgement about the
+    /// boundary, not curation of the space.</summary>
+    [Fact]
+    public async Task SetExported_BySpaceAdminWithoutInstanceAdmin_ReturnsForbidden()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var result = await new SpaceService(context, LocalInstanceId).SetExportedAsync(
+            new SetSpaceExportedRequest(space.Id, Exported: true), isInstanceAdmin: false, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ForbiddenError>(result.Error);
+        Assert.False(context.Spaces.Single(s => s.Id == space.Id).IsExported);
+    }
+
     // --- Archive / Restore ------------------------------------------------------------
 
     [Fact]

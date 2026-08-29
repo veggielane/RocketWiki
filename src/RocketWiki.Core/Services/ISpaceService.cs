@@ -42,6 +42,32 @@ public interface ISpaceService
     Task<PageMutationResult<Space>> SetHomepageAsync(
         SetSpaceHomepageRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// design.md §12's low-side switch: flags this space for one-way export, which is
+    /// what makes the outbox writer start journaling its mutations and what
+    /// <c>RocketWiki.Sync export --baseline</c> requires before it will produce a
+    /// baseline bundle. Until this existed, nothing in the product could set
+    /// <c>Space.IsExported</c> at all — both writers set it to <c>false</c> — so the
+    /// whole §12 pipeline was reachable only by hand-editing the database, and the CLI's
+    /// own refusal message told operators to "flag it exported first" with no way to.
+    ///
+    /// <para><b>Instance admin only</b>, and deliberately NOT the "instance admin or
+    /// space admin" gate Rename/Archive/Restore use. Those curate a space inside this
+    /// instance; this one decides that a space's content starts crossing into another
+    /// security domain, which is an instance-level judgement about the boundary rather
+    /// than about the space. §6.5 gives instance admins "manage spaces" and this is the
+    /// sharpest thing in that category.</para>
+    ///
+    /// <para><b>A replica can never be flagged exported.</b> §12: "Only a native space
+    /// can be exported; a replica must never emit sync events for content it doesn't
+    /// own." The outbox writer already treats replica-flagged-exported as corrupt state
+    /// it refuses to journal; this refuses to create that state in the first place, with
+    /// a <c>ReadOnlyReplicaError</c> — the same answer every other write to a replica
+    /// gets.</para>
+    /// </summary>
+    Task<PageMutationResult<Space>> SetExportedAsync(
+        SetSpaceExportedRequest request, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
+
     Task<PageMutationResult<Space>> ArchiveAsync(
         ArchiveSpaceRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 

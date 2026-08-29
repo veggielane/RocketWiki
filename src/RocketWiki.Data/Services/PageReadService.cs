@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
+using RocketWiki.Core.Telemetry;
 using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
@@ -142,11 +144,15 @@ public class PageReadService : IPageReadService
         var restrictionsByPageId = restrictions
             .GroupBy(r => r.PageId!.Value)
             .ToDictionary(g => g.Key, g => g.ToList());
+        // SortOrder then Id, matching GetVisibleChildIdsAsync: siblings sharing a
+        // SortOrder (every bulk import produces plenty) must not reshuffle between
+        // requests, and the tree and the `children` field must agree about sibling order
+        // or the same subtree renders differently depending on how it was reached.
         var childrenByParentId = pages
             .Where(p => p.ParentPageId is not null)
             .GroupBy(p => p.ParentPageId!.Value)
-            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.SortOrder).ToList());
-        var rootPages = pages.Where(p => p.ParentPageId is null).OrderBy(p => p.SortOrder);
+            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.SortOrder).ThenBy(p => p.Id).ToList());
+        var rootPages = pages.Where(p => p.ParentPageId is null).OrderBy(p => p.SortOrder).ThenBy(p => p.Id);
 
         var result = new List<PageTreeNode>();
         foreach (var root in rootPages)
@@ -159,6 +165,60 @@ public class PageReadService : IPageReadService
         }
 
         return new ReadResult<IReadOnlyList<PageTreeNode>>.Found(result);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<Guid, IReadOnlyList<Guid>>> GetVisibleChildIdsAsync(
+        IReadOnlyCollection<Guid> parentPageIds, Principal principal, CancellationToken cancellationToken = default)
+    {
+        var parentIds = parentPageIds.Distinct().ToArray();
+        if (parentIds.Length == 0)
+        {
+            return new Dictionary<Guid, IReadOnlyList<Guid>>();
+        }
+
+        // Four queries for the whole batch regardless of how many parents are in it: the
+        // children, then the loader's three (grants, restriction chains, markings). The
+        // per-child work afterwards is pure in-memory rule evaluation.
+        var children = await _db.Pages
+            .Where(p => p.ParentPageId != null && parentIds.Contains(p.ParentPageId.Value))
+            .OrderBy(p => p.SortOrder).ThenBy(p => p.Id)
+            .ToListAsync(cancellationToken);
+
+        var result = parentIds.ToDictionary(id => id, _ => (IReadOnlyList<Guid>)Array.Empty<Guid>());
+        if (children.Count == 0)
+        {
+            return result;
+        }
+
+        var batch = await _permissions.LoadBatchAsync(
+            children.Select(PermissionSubject.For).ToList(), cancellationToken);
+
+        var visibleByParent = new Dictionary<Guid, List<Guid>>();
+        foreach (var child in children)
+        {
+            // Each child on its own terms - its own chain, its own marking. Replica status
+            // is irrelevant to canView (design.md §6.4), so false regardless of origin.
+            if (!batch.For(PermissionSubject.For(child), isReplicaSpace: false).Compute(principal).CanView)
+            {
+                continue;
+            }
+
+            if (!visibleByParent.TryGetValue(child.ParentPageId!.Value, out var siblings))
+            {
+                siblings = [];
+                visibleByParent[child.ParentPageId.Value] = siblings;
+            }
+
+            siblings.Add(child.Id);
+        }
+
+        foreach (var (parentId, visible) in visibleByParent)
+        {
+            result[parentId] = visible;
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -183,11 +243,25 @@ public class PageReadService : IPageReadService
         IReadOnlyDictionary<Guid, ProtectiveMarking> markingsByPageId,
         Principal principal)
     {
+        // design.md §15: this walk hand-rolls the evaluation EffectivePermissionCalculator
+        // would otherwise do, so it has to hand-roll that calculator's TELEMETRY too or
+        // the rule-engine metrics silently exclude the busiest read path in the product.
+        // They did: `rocketwiki.access.rule_evaluations` and
+        // `rocketwiki.access.permission_checks` counted every page fetch, search
+        // post-filter and label listing but not one node of a tree browse - so a
+        // "denials by category" dashboard showed none of the classification pruning
+        // happening here, which is exactly the signal an operator would look for.
+        // Duration is measured over the same span the calculator measures: one node's
+        // decision, not the whole walk.
+        var startTimestamp = Stopwatch.GetTimestamp();
+
         // Fail closed on a page with no marking row, the same substitution
         // PermissionContextBatch.MarkingFor makes (design.md §21).
         var marking = markingsByPageId.GetValueOrDefault(page.Id) ?? ProtectiveMarking.FailClosed;
-        if (!ClearanceGate.Check(marking, principal).IsAllowed)
+        var clearance = ClearanceGate.Check(marking, principal);
+        if (!clearance.IsAllowed)
         {
+            RecordNodeCheck(false, clearance.DenialReason, startTimestamp);
             return null;
         }
 
@@ -205,8 +279,11 @@ public class PageReadService : IPageReadService
                     continue;
                 }
 
-                if (!AccessRuleExpression.Evaluate(rule.ExpressionJson, principal).IsMatch)
+                var evaluation = AccessRuleExpression.Evaluate(rule.ExpressionJson, principal);
+                CoreTelemetry.RecordRuleEvaluation(AccessRuleKind.PageRestriction, evaluation);
+                if (!evaluation.IsMatch)
                 {
+                    RecordNodeCheck(false, $"restriction:{rule.PageId}:{rule.Id}", startTimestamp);
                     return null;
                 }
 
@@ -216,6 +293,10 @@ public class PageReadService : IPageReadService
                 ownViewRestrictions.Add(new PageTreeRestriction(rule.Id, rule.ExpressionJson));
             }
         }
+
+        // The node survived: recorded before recursing, so the duration is this node's
+        // own decision rather than its whole subtree's.
+        RecordNodeCheck(true, null, startTimestamp);
 
         var children = new List<PageTreeNode>();
         if (childrenByParentId.TryGetValue(page.Id, out var childPages))
@@ -238,6 +319,20 @@ public class PageReadService : IPageReadService
             page.Id, page.Title, page.Icon, page.Slug, page.SortOrder, hasRestrictions, ownViewRestrictions,
             PageMarkingView.From(marking), children);
     }
+
+    /// <summary>
+    /// One tree node's view decision, in the shape
+    /// <see cref="EffectivePermissionCalculator.Compute"/> would have recorded it. canEdit
+    /// is reported false throughout: the walk never computes it (pruning is a view
+    /// question), and claiming otherwise would put a fabricated edit verdict into a
+    /// metric operators read as fact. The denial reason is passed through
+    /// <c>CategorizeDenialReason</c> inside RecordPermissionCheck, so only the bounded
+    /// category reaches the tag - a rule id never becomes a metric dimension (§15).
+    /// </summary>
+    private static void RecordNodeCheck(bool canView, string? denialReason, long startTimestamp) =>
+        CoreTelemetry.RecordPermissionCheck(
+            new EffectivePermission(canView, false, canView ? null : denialReason, denialReason),
+            Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds);
 
     /// <summary>
     /// Replica status is irrelevant to canView (design.md §6.4: it only ever affects

@@ -124,6 +124,8 @@ type Mutation {
     @cost(weight: "10")
   setSpaceHomepage(input: SetSpaceHomepageRequestInput!): SetSpaceHomepagePayload!
     @cost(weight: "10")
+  setSpaceExported(input: SetSpaceExportedRequestInput!): SetSpaceExportedPayload!
+    @cost(weight: "10")
   archiveSpace(input: ArchiveSpaceRequestInput!): ArchiveSpacePayload!
     @cost(weight: "10")
   restoreSpace(input: RestoreSpaceRequestInput!): RestoreSpacePayload!
@@ -851,6 +853,11 @@ type SetPagePropertyPayload {
   error: PageMutationErrorView
 }
 
+type SetSpaceExportedPayload {
+  space: Space
+  error: PageMutationErrorView
+}
+
 type SetSpaceHomepagePayload {
   space: Space
   error: PageMutationErrorView
@@ -1123,6 +1130,11 @@ input SetPagePropertyRequestInput {
   pageId: UUID!
   pagePropertyKeyId: UUID!
   value: String!
+}
+
+input SetSpaceExportedRequestInput {
+  spaceId: UUID!
+  exported: Boolean!
 }
 
 input SetSpaceHomepageRequestInput {

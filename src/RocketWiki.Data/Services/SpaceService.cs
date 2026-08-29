@@ -162,6 +162,48 @@ public class SpaceService : ISpaceService
         return PageMutationResult<Space>.Success(space);
     }
 
+    public async Task<PageMutationResult<Space>> SetExportedAsync(
+        SetSpaceExportedRequest request, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        if (!isInstanceAdmin)
+        {
+            return PageMutationResult<Space>.Failure(new ForbiddenError("instance admin required"));
+        }
+
+        // IgnoreQueryFilters: an archived space can still legitimately be flagged (the
+        // sync CLI already reasons this way when producing its baseline — exported-ness
+        // and archival are independent properties).
+        var space = await _db.Spaces.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(s => s.Id == request.SpaceId, cancellationToken);
+        if (space is null)
+        {
+            return PageMutationResult<Space>.Failure(new NotFoundError(request.SpaceId));
+        }
+
+        // design.md §12: only a native space can be exported. Checked before the no-op
+        // shortcut below so a replica gets the same answer whichever state it is in.
+        if (space.IsReplicaOf(_localInstanceId))
+        {
+            return PageMutationResult<Space>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
+        }
+
+        if (space.IsExported == request.Exported)
+        {
+            // Already in the requested state. Idempotent success, and deliberately no
+            // event: an audit row saying export was "enabled" when it already was would
+            // put a false widening in front of the reviewer §7 writes these rows for.
+            return PageMutationResult<Space>.Success(space);
+        }
+
+        space.IsExported = request.Exported;
+
+        _db.AuditContext = auditContext;
+        _db.RaiseDomainEvent(new SpaceExportChangedEvent(space.Id, space.Key, actingUserId, request.Exported));
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return PageMutationResult<Space>.Success(space);
+    }
+
     public async Task<PageMutationResult<Space>> ArchiveAsync(
         ArchiveSpaceRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {

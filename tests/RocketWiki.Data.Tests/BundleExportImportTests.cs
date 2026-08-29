@@ -158,6 +158,132 @@ public class BundleExportImportTests : SqliteTestBase
         }
     }
 
+    /// <summary>
+    /// design.md §12 calls a baseline a "full snapshot", and for a long time it was not:
+    /// it carried pages and entries and nothing else. A space flagged for export after it
+    /// already had content therefore delivered that content stripped of everything §12's
+    /// "what travels" table says travels with it.
+    ///
+    /// <para><b>Page restrictions are the reason this test exists at the baseline tier
+    /// rather than only the incremental one.</b> Every other omission was a completeness
+    /// bug; a missing restriction is fail-OPEN — the page lands on the high side readable
+    /// by every viewer of the replica, which is the one direction §12 never takes
+    /// anywhere else. The rest are asserted alongside it because they were omitted by the
+    /// same line of code and would be re-omitted by the same edit.</para>
+    ///
+    /// <para>Everything here is built through the real services, so the baseline is
+    /// compared against content shaped exactly as a running instance would have shaped
+    /// it rather than against hand-inserted rows.</para>
+    /// </summary>
+    [Fact]
+    public async Task Baseline_CarriesRestrictionsCommentsAttachmentsLabelsAndProperties()
+    {
+        var actor = TestData.NewUser();
+        var space = NewExportedSpace();
+        // In the engineering group, because the restriction created below gates canView
+        // - and canView is what commenting, labelling and uploading all require (§6.4.2).
+        var author = EditorPrincipal("engineering");
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.Add(space);
+        lowContext.AccessRules.Add(SpaceAdminGrant(space.Id));
+        lowContext.SaveChanges();
+
+        var pageService = new PageService(lowContext, LowInstanceId);
+        var page = (await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "runbook", "Runbook", "# Runbook"),
+            author, actor.Id, AuditCtx)).Value;
+
+        // The restriction: the fail-open one if it does not cross.
+        var restriction = await new AccessRuleService(lowContext).CreateAsync(
+            new CreateAccessRuleRequest(
+                AccessRuleKind.PageRestriction, null, page.Id, null, PageAction.View,
+                """{ "group": "engineering" }"""),
+            author, isInstanceAdmin: false, actor.Id, AuditCtx);
+        Assert.True(restriction.IsSuccess, $"restriction failed: {restriction.Error}");
+
+        var commentService = new CommentService(lowContext, LowInstanceId);
+        var parent = (await commentService.AddCommentAsync(
+            new AddCommentRequest(page.Id, null, "Parent comment"), author, actor.Id, AuditCtx)).Value;
+        var reply = (await commentService.AddCommentAsync(
+            new AddCommentRequest(page.Id, parent.Id, "Reply"), author, actor.Id, AuditCtx)).Value;
+        // A tombstoned parent still has to cross, or the live reply's ParentCommentId FK
+        // would point at nothing on the high side.
+        Assert.True((await commentService.DeleteCommentAsync(
+            new DeleteCommentRequest(parent.Id), author, actor.Id, AuditCtx)).IsSuccess);
+
+        var labelService = new LabelService(lowContext, LowInstanceId);
+        var label = (await labelService.CreateLabelAsync(
+            new CreateLabelRequest(space.Id, "runbooks"), author, actor.Id, AuditCtx)).Value;
+        Assert.True((await labelService.AttachLabelAsync(
+            new AttachLabelRequest(page.Id, label.Id), author, actor.Id, AuditCtx)).IsSuccess);
+
+        var propertyService = new PagePropertyService(lowContext, LowInstanceId);
+        var key = (await propertyService.CreateKeyAsync(
+            new CreatePagePropertyKeyRequest("Status", null), isInstanceAdmin: true, actor.Id, AuditCtx)).Value;
+        Assert.True((await propertyService.SetAsync(
+            new SetPagePropertyRequest(page.Id, key.Id, "Draft"), author, actor.Id, AuditCtx)).IsSuccess);
+
+        var lowStorage = CreateFileStorage(out var lowStorageDir);
+        var highStorage = CreateFileStorage(out var highStorageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var uploaded = (await new AttachmentService(lowContext, lowStorage, LowInstanceId).UploadAsync(
+                new UploadAttachmentRequest(page.Id, "diagram.png", "image/png", new MemoryStream("blob-bytes"u8.ToArray())),
+                author, actor.Id, AuditCtx)).Value;
+
+            var bundleInfo = await new BundleExportService(lowContext, lowStorage)
+                .ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var result = await new BundleImportService(highContext, highStorage)
+                    .ImportAsync(bundleInfo.BundleFilePath, LowInstanceId, AuditCtx);
+                Assert.True(result.IsSuccess, $"import failed: {result.Error}");
+
+                // The restriction arrived, with the expression intact - a page restricted
+                // on low is restricted on high (§12), not merely present.
+                var landed = Assert.Single(highContext.AccessRules
+                    .Where(r => r.Kind == AccessRuleKind.PageRestriction && r.PageId == page.Id));
+                Assert.Equal(PageAction.View, landed.Action);
+                Assert.Contains("engineering", landed.ExpressionJson);
+
+                // Thread shape survives: the tombstoned parent crossed so its reply has
+                // something to hang off.
+                Assert.True(highContext.Comments.Single(c => c.Id == parent.Id).IsDeleted);
+                Assert.Equal(parent.Id, highContext.Comments.Single(c => c.Id == reply.Id).ParentCommentId);
+                Assert.Equal("Reply", highContext.Comments.Single(c => c.Id == reply.Id).Body);
+
+                // Label by name, property by normalized key name - both materialized on
+                // the high side from the payload, never by id.
+                Assert.Equal(
+                    "runbooks",
+                    highContext.PageLabels.Include(pl => pl.Label).Single(pl => pl.PageId == page.Id).Label!.Name);
+                var property = highContext.PageProperties.Include(p => p.PropertyKey).Single(p => p.PageId == page.Id);
+                Assert.Equal("Status", property.PropertyKey!.Key);
+                Assert.Equal("Draft", property.Value);
+
+                // And the attachment, bytes included - WriteBlobsAsync keys off
+                // Attachment lines, so a baseline that emitted none shipped no blobs either.
+                var importedAttachment = highContext.Attachments.Single(a => a.Id == uploaded.Id);
+                Assert.Equal("diagram.png", importedAttachment.FileName);
+                await using var readBack = await highStorage.OpenReadAsync(importedAttachment.StorageKey, CancellationToken.None);
+                using var reader = new StreamReader(readBack);
+                Assert.Equal("blob-bytes", await reader.ReadToEndAsync());
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(lowStorageDir)) Directory.Delete(lowStorageDir, recursive: true);
+            if (Directory.Exists(highStorageDir)) Directory.Delete(highStorageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Baseline_CarriesThePageIcon_ByWireName()
     {

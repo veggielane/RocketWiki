@@ -563,4 +563,150 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         Assert.Equal("Validation", error.GetProperty("kind").GetString());
         Assert.Contains("nationality", error.GetProperty("message").GetString()!, StringComparison.Ordinal);
     }
+
+    // --- Ancestor titles (§21.5 + §21.8 + §6.4.1) --------------------------------------
+
+    /// <summary>
+    /// Restrictions accumulate down the tree; markings do not (§21.5). So a caller can
+    /// legitimately view an OFFICIAL child whose parent is SECRET — the design says so
+    /// outright ("such a child stays reachable by id and through search") — and the two
+    /// surfaces that render a page's ANCESTOR restriction chain by name, the §6.6
+    /// inspector and the manage-gated restrictions listing, were handing that parent's
+    /// title over with it.
+    ///
+    /// <para>The parent is a page this caller cannot open, cannot find by search, and
+    /// cannot see in the tree. §6.4.1 already treats titles as the sensitive part of a
+    /// refusal ("not which ones, since their titles may themselves be restricted"), so the
+    /// title is withheld while everything the inspector exists to explain — the rule, its
+    /// expression, and whether the caller passed it — still travels.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnAncestorAboveTheCallersClearance_ContributesItsRuleButNeverItsTitle()
+    {
+        const string ancestorSentinel = "ZZANCESTORTITLEZZ";
+        Guid parentId;
+        Guid childId;
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+            var creator = new User
+            {
+                Subject = $"anc-{Guid.NewGuid()}", DisplayName = "Seeder",
+                CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow,
+            };
+            db.Users.Add(creator);
+            await db.SaveChangesAsync();
+
+            var now = DateTime.UtcNow;
+            var space = new Space
+            {
+                Key = $"ANC{Guid.NewGuid():N}"[..8], Name = "Ancestor Space",
+                OriginInstanceId = "standalone", CreatedAtUtc = now, CreatedByUserId = creator.Id,
+            };
+            db.Spaces.Add(space);
+
+            // SpaceAdmin for everyone: the caller is a rule manager, so the manage-gated
+            // `restrictions` listing is reachable too and both surfaces get asserted.
+            db.AccessRules.Add(new AccessRule
+            {
+                Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.SpaceAdmin,
+                ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
+                CreatedAtUtc = now, CreatedByUserId = creator.Id, UpdatedAtUtc = now, UpdatedByUserId = creator.Id,
+            });
+
+            var parent = new Page
+            {
+                SpaceId = space.Id, AncestorPath = "/", Slug = "sensitive-parent",
+                Title = $"Parent {ancestorSentinel}", CurrentContent = "# Parent",
+                CreatedAtUtc = now, UpdatedAtUtc = now,
+            };
+            // One SaveChanges for the whole graph: page ids are client-generated, so the
+            // child's AncestorPath can reference the parent before either row exists — and
+            // an intermediate save would let RocketWikiDbContext's every-page-is-marked
+            // backstop materialize a marking the explicit ones below would then collide with.
+            db.Pages.Add(parent);
+
+            var child = new Page
+            {
+                SpaceId = space.Id, ParentPageId = parent.Id, AncestorPath = $"/{parent.Id}/",
+                Slug = "ordinary-child", Title = "Ordinary child", CurrentContent = "# Child",
+                CreatedAtUtc = now, UpdatedAtUtc = now,
+            };
+            db.Pages.Add(child);
+
+            // The parent sits above the child's level - the ordinary way this arises,
+            // since re-marking a parent never re-marks its subtree (§21.5).
+            db.PageMarkings.Add(NewMarking(parent.Id, ClassificationLevel.Secret));
+            db.PageMarkings.Add(NewMarking(child.Id, ClassificationLevel.Official));
+
+            // A restriction the caller PASSES, so it cannot be what hides the parent -
+            // only the marking is. It is also what puts the parent in the child's chain.
+            db.AccessRules.Add(new AccessRule
+            {
+                Kind = AccessRuleKind.PageRestriction, PageId = parent.Id, Action = PageAction.View,
+                ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
+                CreatedAtUtc = now, CreatedByUserId = creator.Id, UpdatedAtUtc = now, UpdatedByUserId = creator.Id,
+            });
+            await db.SaveChangesAsync();
+
+            parentId = parent.Id;
+            childId = child.Id;
+        }
+
+        var client = ClientFor(clearance: null); // resolves to OFFICIAL (§21.3)
+
+        // Premises: the child is readable, the parent is not. Without both, the
+        // assertions below would prove nothing.
+        using (var childRead = await client.PostGraphQLAsync($$"""{ page(id: "{{childId}}") { id } }"""))
+        {
+            Assert.Equal(
+                childId.ToString(),
+                childRead.RootElement.GetProperty("data").GetProperty("page").GetProperty("id").GetString());
+        }
+
+        using (var parentRead = await client.PostGraphQLAsync($$"""{ page(id: "{{parentId}}") { id title } }"""))
+        {
+            Assert.Equal(
+                JsonValueKind.Null,
+                parentRead.RootElement.GetProperty("data").GetProperty("page").ValueKind);
+        }
+
+        // The inspector: the parent's rule is explained, its title is not disclosed.
+        using (var inspect = await client.PostGraphQLAsync($$"""
+            {
+              effectivePermission(pageId: "{{childId}}") {
+                canView
+                viewRestrictions { pageId pageTitle expressionJson passed }
+              }
+            }
+            """))
+        {
+            Assert.DoesNotContain(ancestorSentinel, inspect.RootElement.GetRawText(), StringComparison.Ordinal);
+
+            var inspected = inspect.RootElement.GetProperty("data").GetProperty("effectivePermission");
+            Assert.True(inspected.GetProperty("canView").GetBoolean());
+            var rule = Assert.Single(inspected.GetProperty("viewRestrictions").EnumerateArray());
+            Assert.Equal(parentId.ToString(), rule.GetProperty("pageId").GetString());
+            Assert.Equal(string.Empty, rule.GetProperty("pageTitle").GetString());
+            // Still explained: the rule and the caller's verdict on it are the whole point.
+            Assert.True(rule.GetProperty("passed").GetBoolean());
+            Assert.Contains("everyone", rule.GetProperty("expressionJson").GetString()!, StringComparison.Ordinal);
+        }
+
+        // The manage-gated listing takes the same rule - §6.5's no-read-around applies to
+        // an admin reading a chain exactly as it does to anyone else.
+        using (var listing = await client.PostGraphQLAsync($$"""
+            { page(id: "{{childId}}") { restrictions { pageId pageTitle inherited } } }
+            """))
+        {
+            Assert.DoesNotContain(ancestorSentinel, listing.RootElement.GetRawText(), StringComparison.Ordinal);
+
+            var row = Assert.Single(listing.RootElement.GetProperty("data").GetProperty("page")
+                .GetProperty("restrictions").EnumerateArray());
+            Assert.Equal(parentId.ToString(), row.GetProperty("pageId").GetString());
+            Assert.Equal(string.Empty, row.GetProperty("pageTitle").GetString());
+            Assert.True(row.GetProperty("inherited").GetBoolean());
+        }
+    }
 }

@@ -30,6 +30,13 @@ public class SearchService : ISearchService
     private const int SnippetLength = 200;
 
     /// <summary>
+    /// The ESCAPE character for the LIKE fallback below. Backslash rather than anything
+    /// cleverer because it is what every provider's LIKE accepts verbatim and what a
+    /// reader expects.
+    /// </summary>
+    private const string LikeEscapeCharacter = "\\";
+
+    /// <summary>
     /// The standard RRF constant (Cormack et al.): score = Σ 1/(60 + rank). Large enough
     /// that a page ranked well by BOTH signals beats a page ranked first by only one -
     /// which is the property the both-signals-beats-single-signal test pins down.
@@ -134,8 +141,10 @@ public class SearchService : ISearchService
     private async Task<List<SearchCandidate>> SearchViaLikeAsync(
         string query, string? spaceKey, int overFetchCount, CancellationToken cancellationToken)
     {
-        var pattern = $"%{query}%";
-        var pagesQuery = _db.Pages.Where(p => EF.Functions.Like(p.Title, pattern) || EF.Functions.Like(p.CurrentContent, pattern));
+        var pattern = $"%{EscapeLikePattern(query)}%";
+        var pagesQuery = _db.Pages.Where(p =>
+            EF.Functions.Like(p.Title, pattern, LikeEscapeCharacter)
+            || EF.Functions.Like(p.CurrentContent, pattern, LikeEscapeCharacter));
 
         if (spaceKey is not null)
         {
@@ -348,6 +357,27 @@ public class SearchService : ISearchService
 
         return (fused, chunkHints);
     }
+
+    /// <summary>
+    /// Neutralizes the LIKE metacharacters in raw user query text. Without this, a search
+    /// for <c>100%</c> matched everything containing "100", <c>a_b</c> matched "axb", and
+    /// a query of a bare <c>%</c> scanned the whole table — a search returning far MORE
+    /// than it should, silently. The escape character itself goes first, or escaping the
+    /// others would double-escape it.
+    ///
+    /// <para>Only the fallback path needs this: the SQL Server branch compiles the query
+    /// through <see cref="FullTextQueryBuilder"/>, which has its own (different) escaping
+    /// problem and already solves it. But this branch is what the entire §14 integration
+    /// tier exercises, so leaving it unescaped meant the tested behaviour and the
+    /// production behaviour differed for any query containing punctuation.</para>
+    /// </summary>
+    private static string EscapeLikePattern(string query) => query
+        .Replace(LikeEscapeCharacter, LikeEscapeCharacter + LikeEscapeCharacter, StringComparison.Ordinal)
+        .Replace("%", LikeEscapeCharacter + "%", StringComparison.Ordinal)
+        .Replace("_", LikeEscapeCharacter + "_", StringComparison.Ordinal)
+        // SQL Server treats [...] as a character class in LIKE; SQLite does not. Escaped
+        // for the same reason the collation work exists — one behaviour on both providers.
+        .Replace("[", LikeEscapeCharacter + "[", StringComparison.Ordinal);
 
     private static double CosineSimilarity(float[] a, float[] b)
     {

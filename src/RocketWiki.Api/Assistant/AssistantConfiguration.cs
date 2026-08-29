@@ -61,6 +61,20 @@ public static class AssistantConfiguration
         // (AiConnectionStringParser); the keys this feature reads are the class doc's
         // list: Ai:BaseUrl / Ai:ApiKey (shared with the embedding endpoint, since one
         // gateway serving both models is the expected deployment) and Ai:ChatModel.
+        //
+        // Read EAGERLY off the builder, unlike GitLabConfiguration which deliberately
+        // resolves its options from the container instead. The difference is real and
+        // worth stating rather than leaving as an apparent inconsistency: GitLab must
+        // register its resolvers either way (the schema cannot change shape with
+        // configuration), so it needs a value that can still be decided after
+        // WebApplicationFactory layers test configuration in during Build(). Here the
+        // configuration decides whether to register AT ALL, which has to happen before
+        // Build() by definition — and the test tier does not exercise this path anyway:
+        // AskWikiApiFixture injects IChatClient and AssistantOptions straight into the
+        // container, precisely because "is it configured" is not what those tests are
+        // about. If that ever changes, this needs the GitLab treatment (a wrapper type
+        // holding a nullable client/options, resolved from IConfiguration) rather than a
+        // second eager read somewhere else.
         var (endpoint, key, model, _) = AiConnectionStringParser.Resolve(
             builder.Configuration, connectionName: "assistant", modelConfigKey: "Ai:ChatModel");
         if (endpoint is null || model is null)

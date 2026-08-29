@@ -300,6 +300,48 @@ public class DataTelemetryTests : SqliteTestBase
         }
     }
 
+    /// <summary>
+    /// design.md §15's rule-engine instruments cover "effective-permission checks by
+    /// canView/canEdit and denial category" — and the page tree, the busiest read path in
+    /// the product, contributed nothing to them. It hand-rolls the evaluation
+    /// EffectivePermissionCalculator would otherwise do (that is the whole point of
+    /// walking a space in memory), and it hand-rolled its way past the calculator's
+    /// telemetry with it, so classification pruning was invisible to exactly the
+    /// dashboard an operator would consult about it.
+    /// </summary>
+    [Fact]
+    public async Task PageTreeWalk_RecordsAPermissionCheckPerNode_IncludingClassificationPrunes()
+    {
+        using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
+
+        var space = NewExportedSpace();
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.AccessRules.Add(EditorGrant(space.Id));
+
+        var visible = TestData.NewPage(space, "visible");
+        var secret = TestData.NewPage(space, "secret");
+        context.Pages.AddRange(visible, secret);
+        context.PageMarkings.Add(TestData.NewMarking(visible, ClassificationLevel.Official));
+        context.PageMarkings.Add(TestData.NewMarking(secret, ClassificationLevel.Secret));
+        context.SaveChanges();
+
+        // No clearance claim, so the caller is OFFICIAL (§21.3) and the SECRET page prunes.
+        var tree = await new PageReadService(context).GetPageTreeAsync(space.Id, EditorPrincipal());
+        Assert.Single(Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Found>(tree).Value);
+
+        var measurements = checks.GetMeasurementSnapshot();
+        Assert.Equal(2, measurements.Count); // one per node considered, pruned or not
+
+        // The prune is reported under the bounded `classification` category - never the
+        // level itself, which §21.8 keeps out of telemetry deliberately.
+        var pruned = Assert.Single(measurements.Where(m => Equals(m.Tags[CoreTelemetry.CanViewTag], false)));
+        Assert.Equal("classification", pruned.Tags[CoreTelemetry.DenialReasonTag]);
+
+        var admitted = Assert.Single(measurements.Where(m => Equals(m.Tags[CoreTelemetry.CanViewTag], true)));
+        Assert.Equal("none", admitted.Tags[CoreTelemetry.DenialReasonTag]);
+    }
+
     /// <summary>No attachments in these fixtures, so blob storage is never reached.</summary>
     private sealed class NullFileStorage : Storage.IFileStorage
     {

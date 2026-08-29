@@ -240,6 +240,16 @@ public static class DomainEventAuditMapper
         SpaceHomepageSetEvent e => ("space.homepage.set", AuditSubjectType.Space, e.SpaceId, e.Key,
             JsonSerializer.Serialize(new { oldPageId = e.OldPageId, newPageId = e.NewPageId })),
 
+        // design.md §12: two action names for one event, deriving which from the event
+        // rather than minting two event types with identical payloads — exactly how
+        // PageMarkingSetEvent splits set from downgrade. Enabling export is the direction
+        // that starts content crossing a security boundary, so it gets its own action
+        // name and a reviewer can find every one of them with a single query.
+        SpaceExportChangedEvent e => (
+            e.Exported ? "space.export.enabled" : "space.export.disabled",
+            AuditSubjectType.Space, e.SpaceId, e.Key,
+            JsonSerializer.Serialize(new { exported = e.Exported })),
+
         SpaceArchivedEvent e => ("space.archive", AuditSubjectType.Space, e.SpaceId, e.Key, null),
 
         SpaceRestoredEvent e => ("space.restore", AuditSubjectType.Space, e.SpaceId, e.Key, null),

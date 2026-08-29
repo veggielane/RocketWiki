@@ -28,6 +28,14 @@ public sealed record RenameSpaceRequest(Guid SpaceId, string Name, string? Descr
 /// </summary>
 public sealed record SetSpaceHomepageRequest(Guid SpaceId, Guid? PageId);
 
+/// <summary>
+/// design.md §12: flag (or unflag) this space for one-way export to a higher instance.
+/// <paramref name="Exported"/> is the state AFTER the call, never a toggle — a toggle
+/// makes the outcome depend on a value the caller read some time ago, which is the wrong
+/// shape for a switch that decides whether content starts crossing a security boundary.
+/// </summary>
+public sealed record SetSpaceExportedRequest(Guid SpaceId, bool Exported);
+
 public sealed record ArchiveSpaceRequest(Guid SpaceId);
 
 public sealed record RestoreSpaceRequest(Guid SpaceId);

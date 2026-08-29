@@ -53,6 +53,24 @@ public class AnalyticsServiceTests : SqliteTestBase
             ClientIp = "127.0.0.1",
         });
 
+    /// <summary>A `search.query` row in the shape Query.Search writes (design.md §7):
+    /// raw query text and result count in Details, the searched space in SpaceKey — or
+    /// null SpaceKey for a search that named no space at all.</summary>
+    private static void RecordSearch(
+        RocketWikiDbContext context, string? spaceKey, string query, int resultCount, Guid userId, DateTime at) =>
+        context.AuditEvents.Add(new AuditEvent
+        {
+            TimestampUtc = at,
+            UserId = userId,
+            Action = "search.query",
+            Outcome = AuditOutcome.Success,
+            Channel = AuditChannel.GraphQl,
+            SpaceKey = spaceKey,
+            RequestId = "req",
+            ClientIp = "127.0.0.1",
+            DetailsJson = $$"""{ "query": "{{query}}", "resultCount": {{resultCount}} }""",
+        });
+
     private AnalyticsService NewService(RocketWikiDbContext context) =>
         new(context, new PageReadService(context));
 
@@ -161,8 +179,21 @@ public class AnalyticsServiceTests : SqliteTestBase
         Assert.IsType<ReadResult<AnalyticsReport>.Denied>(unknown);
     }
 
+    /// <summary>
+    /// A null <c>spaceKey</c> means different things to the two callers who may pass it,
+    /// and the difference is the point: for an instance admin it is genuinely site-wide,
+    /// for a space admin it means "every space I administer". Every panel has to honour
+    /// that distinction — including the search panels, which read `search.query` audit
+    /// rows rather than the visible page set and so have no structural scoping of their
+    /// own (design.md §7 reserves the audit log to instance admins).
+    ///
+    /// <para>The previous version of this test was named for the invariant and only
+    /// checked the page panel, which is safe by construction; the search panel, which
+    /// was not, went unasserted and leaked every user's search terms to any space
+    /// admin who passed a null key.</para>
+    /// </summary>
     [Fact]
-    public async Task Report_SiteWide_NeedsInstanceAdmin_AndCoversEveryAdministeredSpace()
+    public async Task Report_SiteWide_ForASpaceAdmin_ScopesEveryPanelToTheSpacesTheyAdminister()
     {
         var actor = TestData.NewUser();
         var eng = TestData.NewSpace();
@@ -181,6 +212,12 @@ public class AnalyticsServiceTests : SqliteTestBase
             RecordView(context, page.Id, actor.Id, From.AddDays(1));
         }
 
+        // Three searches by somebody else: one in the space this caller administers, one
+        // in a space they merely view, and one that named no space at all.
+        RecordSearch(context, eng.Key, "eng-term", 2, actor.Id, From.AddDays(1));
+        RecordSearch(context, ops.Key, "ops-term", 0, actor.Id, From.AddDays(1));
+        RecordSearch(context, null, "global-term", 0, actor.Id, From.AddDays(1));
+
         context.SaveChanges();
         var service = NewService(context);
 
@@ -189,10 +226,20 @@ public class AnalyticsServiceTests : SqliteTestBase
             await service.GetReportAsync(null, From, To, Caller(), isInstanceAdmin: false)).Value;
         Assert.Equal("eng-page", Assert.Single(scoped.MostViewed).Slug);
 
-        // Instance admin: both.
+        // The search panels are scoped the same way. A space admin learns nothing about
+        // what was searched for in a space they do not administer, and nothing about
+        // searches that named no space — both are somebody else's business (§7/§15).
+        Assert.Equal("eng-term", Assert.Single(scoped.TopSearches).Query);
+        Assert.Empty(scoped.ZeroResultSearches);
+
+        // Instance admin: every space, and the unscoped search too.
         var siteWide = Assert.IsType<ReadResult<AnalyticsReport>.Found>(
             await service.GetReportAsync(null, From, To, Caller(), isInstanceAdmin: true)).Value;
         Assert.Equal(2, siteWide.MostViewed.Count);
+        Assert.Equal(3, siteWide.TopSearches.Count);
+        Assert.Equal(
+            new[] { "global-term", "ops-term" },
+            siteWide.ZeroResultSearches.Select(s => s.Query).OrderBy(q => q, StringComparer.Ordinal).ToArray());
     }
 
     [Fact]

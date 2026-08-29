@@ -116,6 +116,48 @@ public partial class Mutation
         return new SetSpaceHomepagePayload(result.Value, null);
     }
 
+    /// <summary>
+    /// design.md §12's low-side export switch — see <c>ISpaceService.SetExportedAsync</c>
+    /// for the gate and why it is instance-admin-only rather than sharing
+    /// archive/rename's "or space admin" arm.
+    ///
+    /// <para>The declared <c>[AuditAction]</c> is <c>space.export.enabled</c>, matching
+    /// how <c>setPageMarking</c> declares <c>page.marking.set</c> for a mutation that
+    /// emits one of two action names: the coverage guard and the denial rows need ONE
+    /// declared name, and the enabling direction is the one a reviewer is looking for, so
+    /// it is the honest choice for a refusal too. The success row's action is derived
+    /// from the event in DomainEventAuditMapper.</para>
+    /// </summary>
+    [AuditAction("space.export.enabled")]
+    public async Task<SetSpaceExportedPayload> SetSpaceExported(
+        SetSpaceExportedRequest input,
+        [Service] ISpaceService spaceService,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IActingUserAccessor actingUserAccessor,
+        [Service] ICurrentAuditContextAccessor auditContextAccessor,
+        [Service] IInstanceRoleAccessor instanceRoleAccessor,
+        [Service] IAuditSink auditSink,
+        CancellationToken cancellationToken)
+    {
+        var (_, actingUserId, auditContext, unauthenticated) =
+            MutationAuthHelper.Authenticate(principalAccessor, actingUserAccessor, auditContextAccessor);
+        if (unauthenticated is not null)
+        {
+            return new SetSpaceExportedPayload(null, unauthenticated);
+        }
+
+        var result = await spaceService.SetExportedAsync(
+            input, instanceRoleAccessor.IsInstanceAdmin, actingUserId!.Value, auditContext!, cancellationToken);
+        if (!result.IsSuccess)
+        {
+            await MutationAuthHelper.AuditDenialIfApplicableAsync(
+                auditSink, "space.export.enabled", result.Error, AuditSubjectType.Space, input.SpaceId, cancellationToken);
+            return new SetSpaceExportedPayload(null, PageMutationErrorView.From(result.Error));
+        }
+
+        return new SetSpaceExportedPayload(result.Value, null);
+    }
+
     [AuditAction("space.archive")]
     public async Task<ArchiveSpacePayload> ArchiveSpace(
         ArchiveSpaceRequest input,
@@ -178,5 +220,6 @@ public partial class Mutation
 public sealed record CreateSpacePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record RenameSpacePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record SetSpaceHomepagePayload(Space? Space, PageMutationErrorView? Error);
+public sealed record SetSpaceExportedPayload(Space? Space, PageMutationErrorView? Error);
 public sealed record ArchiveSpacePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record RestoreSpacePayload(Space? Space, PageMutationErrorView? Error);

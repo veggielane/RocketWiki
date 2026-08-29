@@ -783,10 +783,23 @@ bullet keeps its own sharper caveat where one exists):
   with `Status: Draft`" query and no property facet in search — the data
   model supports one without a migration, but the query surface does not
   exist (design.md §20.5). Related smaller gaps in the same feature:
-  registry keys can be created and deleted but not renamed or reordered, a
-  *baseline* sync bundle carries no properties (only incremental events do
-  — the same simplification labels have), and a local property change
-  dispatches no watcher notification while a synced one does.
+  registry keys can be created and deleted but not renamed or reordered,
+  and a local property change dispatches no watcher notification while a
+  synced one does. (The *baseline*-bundle gap that used to be listed here
+  is closed — see the sync note below.)
+- **Baseline sync bundles are complete now, and were not.** Until the
+  engineering-review round, a baseline carried pages and page entries and
+  nothing else: a space flagged for export *after* it already had content
+  delivered that content stripped of its restrictions, comments,
+  attachments, labels and properties. Restrictions were the sharp edge —
+  a page restricted on low landed on the high side with no restriction row
+  at all, readable by every viewer of the replica, which is fail-*open* and
+  the one direction §12 takes nowhere else. All five now cross
+  (design.md §12). Two deliberate asymmetries remain, both stated there:
+  comment tombstones cross (a live reply's `ParentCommentId` needs its
+  parent row) while soft-deleted attachments do not (nothing references
+  them, and shipping deleted bytes across a one-way boundary is the wrong
+  default).
 - **The design.md §10 storage janitor does not exist.** §10 promises "a
   nightly janitor deletes storage objects with no matching row" — that job
   has never been written, and this ledger previously didn't say so. What

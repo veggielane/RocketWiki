@@ -63,7 +63,7 @@ public static class EffectivePermissionCalculator
     {
         foreach (var rule in pageAndAncestorRestrictions)
         {
-            if (rule.Kind != AccessRuleKind.PageRestriction || rule.Action != action)
+            if (!AppliesTo(rule, action))
             {
                 continue;
             }
@@ -72,7 +72,7 @@ public static class EffectivePermissionCalculator
             CoreTelemetry.RecordRuleEvaluation(AccessRuleKind.PageRestriction, result);
             if (!result.IsMatch)
             {
-                return PermissionCheckResult.Deny($"restriction:{rule.PageId}:{rule.Id}");
+                return PermissionCheckResult.Deny(ReasonFor(rule));
             }
         }
 
@@ -164,18 +164,42 @@ public static class EffectivePermissionCalculator
         var checks = new List<RestrictionCheckDetail>();
         foreach (var rule in restrictions)
         {
-            if (rule.Kind != AccessRuleKind.PageRestriction || rule.Action != action || rule.PageId is null)
+            if (!AppliesTo(rule, action))
             {
                 continue;
             }
 
             var result = AccessRuleExpression.Evaluate(rule.ExpressionJson, principal);
             CoreTelemetry.RecordRuleEvaluation(AccessRuleKind.PageRestriction, result);
-            checks.Add(new RestrictionCheckDetail(rule.Id, rule.PageId.Value, action, rule.ExpressionJson, result.IsMatch));
+            checks.Add(new RestrictionCheckDetail(
+                rule.Id, rule.PageId ?? Guid.Empty, action, rule.ExpressionJson, result.IsMatch));
         }
 
         return checks;
     }
+
+    /// <summary>
+    /// THE filter deciding whether a rule participates in an action's chain, shared by the
+    /// gate and the inspector so the two cannot disagree about which rules exist.
+    ///
+    /// <para>It used to be written out twice, and the copies had drifted: the inspector
+    /// additionally skipped a restriction with a null <c>PageId</c> while the gate
+    /// evaluated it. Unreachable through the database — <c>CK_AccessRules_KindColumnPairing</c>
+    /// makes a PageRestriction without a PageId unrepresentable, and
+    /// <c>PermissionContextLoader</c> filters them out besides — but "the explanation can
+    /// never disagree with the gate" is an invariant pinned by test, and a divergence
+    /// living in two hand-copied conditions is how it would eventually stop being true.
+    /// Now a null PageId denies in the gate and appears as a failed check in the
+    /// inspector, which are the same verdict rendered two ways.</para>
+    /// </summary>
+    private static bool AppliesTo(AccessRule rule, PageAction action) =>
+        rule.Kind == AccessRuleKind.PageRestriction && rule.Action == action;
+
+    /// <summary>The one spelling of a failed restriction's reason (design.md §7):
+    /// <c>restriction:{pageId}:{ruleId}</c>. Shared so the gate's audit row and the
+    /// inspector's explanation are byte-identical, including for the corrupt-row case
+    /// <see cref="AppliesTo"/> describes.</summary>
+    private static string ReasonFor(AccessRule rule) => $"restriction:{rule.PageId ?? Guid.Empty}:{rule.Id}";
 
     /// <summary>Mirrors <see cref="ComputeCore"/>'s precedence exactly, over
     /// already-evaluated checks. Kept adjacent to ComputeCore on purpose; the

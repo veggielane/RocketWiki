@@ -92,8 +92,15 @@ public sealed class WikiMcpTools
         // design.md §7: the search query text belongs in the audit row's Details — the
         // audit table is the regulated record and the sanctioned home for content-ish
         // detail (it must NOT go to telemetry, §15).
+        //
+        // The key is `resultCount`, matching Query.Search's row EXACTLY. One action name
+        // must mean one Details shape: AnalyticsService.BuildSearchesAsync reads
+        // `resultCount` to decide whether a search found nothing, so an MCP-flavoured
+        // `results` key made every MCP search invisible to the zero-result panel while
+        // still counting in the top-terms one. A reader of the audit table should never
+        // have to know which channel wrote a row to parse it.
         auditState.SetDetails(System.Text.Json.JsonSerializer.Serialize(
-            new { query, spaceKey, results = hits.Count }));
+            new { query, spaceKey, resultCount = hits.Count }));
 
         // §21.13: per-hit markings and an aggregate over exactly the hits being returned
         // — which are already permission-filtered, so nothing the caller cannot view can

@@ -18,7 +18,8 @@ namespace RocketWiki.Api.Identity;
 /// </summary>
 public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
 {
-    public async Task InvokeAsync(HttpContext context, RocketWikiDbContext db, IActingUserAccessor actingUser)
+    public async Task InvokeAsync(
+        HttpContext context, RocketWikiDbContext db, IActingUserAccessor actingUser, KnownGroupRecorder knownGroups)
     {
         if (context.User.Identity?.IsAuthenticated == true)
         {
@@ -28,6 +29,16 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
             if (!string.IsNullOrEmpty(subject))
             {
                 actingUser.ActingUserId = await UpsertUserAsync(db, context.User, subject, context.RequestAborted);
+
+                // design.md §6.6's "accumulated from observed logins" — the rule builder's
+                // group picker, and the only thing on this instance that can learn a group
+                // name nobody has written a rule for yet. AFTER the user upsert's save, in
+                // its own unit of work, so picker bookkeeping can never fail a login; see
+                // KnownGroupRecorder for the cost model and why a losing race is swallowed.
+                // Never read back for an authorization decision (§6.1) — the Principal is
+                // still built from the token, every request.
+                await knownGroups.RecordAsync(
+                    db, context.User.FindAll("groups").Select(c => c.Value).ToList(), context.RequestAborted);
             }
         }
 

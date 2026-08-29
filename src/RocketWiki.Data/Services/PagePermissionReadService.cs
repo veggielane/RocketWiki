@@ -104,7 +104,7 @@ public class PagePermissionReadService : IPagePermissionReadService
         }
 
         var context = await _permissions.LoadAsync(page, space.IsReplicaOf(_localInstanceId), cancellationToken);
-        var titlesByPageId = await LoadChainTitlesAsync(page, cancellationToken);
+        var titlesByPageId = await LoadChainTitlesAsync(page, caller, cancellationToken);
 
         // The CALLER's gate first, via the enforcement path (Compute, not Explain):
         // an inspector the caller can point at a page they cannot view would be the
@@ -161,7 +161,7 @@ public class PagePermissionReadService : IPagePermissionReadService
 
         var rules = await _permissions.LoadOrderedRestrictionsAsync(
             PermissionSubject.For(page).ChainPageIds(), cancellationToken);
-        var titlesByPageId = await LoadChainTitlesAsync(page, cancellationToken);
+        var titlesByPageId = await LoadChainTitlesAsync(page, caller, cancellationToken);
 
         var editorIds = rules.Select(r => r.UpdatedByUserId).Distinct().ToArray();
         var editorNames = await _db.Users
@@ -190,15 +190,46 @@ public class PagePermissionReadService : IPagePermissionReadService
                 c.Action, c.ExpressionJson, c.Passed))
             .ToList();
 
-    /// <summary>Titles for the page + its ancestors, one query. Includes soft-deleted
-    /// ancestors' (IgnoreQueryFilters) so a rule row is never rendered with a blank
-    /// owner just because its page is in the trash — restriction accumulation itself
-    /// only ever runs over live pages.</summary>
-    private async Task<IReadOnlyDictionary<Guid, string>> LoadChainTitlesAsync(Page page, CancellationToken cancellationToken)
+    /// <summary>
+    /// Titles for the page + its ancestors, two queries. Includes soft-deleted ancestors'
+    /// (IgnoreQueryFilters) so a rule row is never rendered with a blank owner just
+    /// because its page is in the trash — restriction accumulation itself only ever runs
+    /// over live pages.
+    ///
+    /// <para><b>A chain page the caller fails clearance for contributes an EMPTY title</b>
+    /// (design.md §21.8/§6.4.1). Restrictions accumulate down the tree but markings do
+    /// not (§21.5 — "a child may legitimately sit above or below its parent", and
+    /// re-marking a parent does not re-mark the subtree), so passing canView on the
+    /// subject page says nothing about its ancestors' classifications. Without this, a
+    /// caller viewing an OFFICIAL child could read a SECRET parent's title straight off
+    /// the inspector or the restriction listing — a page the tree prunes and every other
+    /// read path treats as absent. §6.4.1 already treats titles as the sensitive part
+    /// ("the refusal says how many pages blocked it, not which ones, since their titles
+    /// may themselves be restricted"); this is that rule, applied to the one surface that
+    /// names an ancestor.</para>
+    ///
+    /// <para>Only the TITLE is withheld. The rule id, page id, action, expression and
+    /// pass/fail all still travel: they are what the inspector exists to explain, the
+    /// caller is already subject to that rule, and a rule the caller cannot see the
+    /// reasoning for is exactly the "least useful answer" §6.6 set out to avoid.</para>
+    /// </summary>
+    private async Task<IReadOnlyDictionary<Guid, string>> LoadChainTitlesAsync(
+        Page page, Principal caller, CancellationToken cancellationToken)
     {
         var chainIds = PermissionSubject.For(page).ChainPageIds().ToArray();
-        return await _db.Pages.IgnoreQueryFilters()
+        var titles = await _db.Pages.IgnoreQueryFilters()
             .Where(p => chainIds.Contains(p.Id))
             .ToDictionaryAsync(p => p.Id, p => p.Title, cancellationToken);
+
+        var markings = await _permissions.LoadMarkingsForAsync(chainIds, cancellationToken);
+        foreach (var chainId in chainIds)
+        {
+            if (titles.ContainsKey(chainId) && !ClearanceGate.Check(markings[chainId], caller).IsAllowed)
+            {
+                titles[chainId] = string.Empty;
+            }
+        }
+
+        return titles;
     }
 }

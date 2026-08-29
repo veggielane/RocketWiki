@@ -150,6 +150,24 @@ internal sealed class PermissionContextLoader
         return marking?.ToMarking() ?? ProtectiveMarking.FailClosed;
     }
 
+    /// <summary>
+    /// The markings of an arbitrary set of pages, countries included, in ONE query —
+    /// with <see cref="ProtectiveMarking.FailClosed"/> substituted for any page that has
+    /// no row, so a caller can never hold a nullable marking it might decide to ignore.
+    ///
+    /// <para>For callers that need to answer "may this principal be told about this page"
+    /// for pages they are not computing a full permission for — the restriction chain's
+    /// ANCESTORS, whose titles the §6.6 inspector renders. A marking does not accumulate
+    /// down the tree (§21.5), so passing the child's gate says nothing about the parent's,
+    /// and the ancestor has to be checked on its own.</para>
+    /// </summary>
+    public async Task<IReadOnlyDictionary<Guid, ProtectiveMarking>> LoadMarkingsForAsync(
+        IReadOnlyCollection<Guid> pageIds, CancellationToken cancellationToken)
+    {
+        var byPageId = await LoadMarkingsAsync(pageIds as Guid[] ?? pageIds.ToArray(), cancellationToken);
+        return pageIds.ToDictionary(id => id, id => byPageId.GetValueOrDefault(id) ?? ProtectiveMarking.FailClosed);
+    }
+
     /// <summary>Every SpaceGrant rule for one space — one query.</summary>
     public async Task<IReadOnlyList<AccessRule>> LoadSpaceGrantsAsync(Guid spaceId, CancellationToken cancellationToken) =>
         await Rules

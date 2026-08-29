@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Core.Sync;
 using RocketWiki.Data.Telemetry;
@@ -111,6 +112,35 @@ public class BundleExportService : IBundleExportService
                 DateTime.UtcNow))
             .ToList();
 
+        // --- Everything else that travels with content (design.md §12's table) --------
+        //
+        // A baseline is a "full snapshot" (§12), and for a long time it was not: it
+        // carried pages and entries and nothing else, so a space flagged for export after
+        // it already had content delivered that content stripped of its restrictions,
+        // comments, attachments, labels and properties. Restrictions were the sharp edge
+        // and are emitted first below for that reason — every other omission was a
+        // completeness bug, but a page that was restricted on low landing on high with NO
+        // restriction row is readable by every high-side viewer of the replica. That is
+        // fail-OPEN, the one direction §12 never takes anywhere else (an unknown group
+        // matches nobody; an unmarked upsert lands TOP SECRET).
+        //
+        // No format bump is needed and none is taken: every line below is an event type
+        // the import side has always understood, in the byte-identical payload shape the
+        // incremental writer produces, and baseline lines (SequenceNumber 0) are applied
+        // without advancing or gap-checking the per-space sequence
+        // (BundleImportService.ApplySpaceEventsAsync). An older format-2 importer reading
+        // one of these bundles applies MORE of the space correctly, never less — so
+        // replicas built by an earlier build stay compatible.
+        //
+        // Ordering within the bundle is deliberate: pages first (everything below
+        // references a pageId, and the import side's FindLocal lookups resolve against
+        // what earlier lines already tracked), then restrictions, then the rest.
+        lines.AddRange(await BaselineRestrictionLinesAsync(space, livePageIds, cancellationToken));
+        lines.AddRange(await BaselineLabelLinesAsync(space, livePageIds, cancellationToken));
+        lines.AddRange(await BaselinePagePropertyLinesAsync(space, livePageIds, cancellationToken));
+        lines.AddRange(await BaselineCommentLinesAsync(space, livePageIds, cancellationToken));
+        lines.AddRange(await BaselineAttachmentLinesAsync(space, livePageIds, cancellationToken));
+
         // Entries are a page's structured content, so a baseline that carried the pages
         // and not their entries would land a replica showing forms with no records —
         // and they would only ever appear later, for whichever entries happened to change
@@ -129,6 +159,219 @@ public class BundleExportService : IBundleExportService
 
         return await WriteBundleAsync(outputDirectory, localInstanceId, lines, cancellationToken);
     }
+
+    /// <summary>
+    /// Every page restriction on a live page in this space, as the same
+    /// <c>{ accessRuleId, before, after }</c> payload an <c>AccessRuleChangedEvent</c>
+    /// produces. <c>before</c> is null because a baseline is a snapshot, not a change —
+    /// the import side reads only <c>after</c>, and a fabricated before-state would be a
+    /// claim about history this bundle has no business making.
+    ///
+    /// <para>Space GRANTS are excluded, exactly as they are from the incremental journal
+    /// (SyncOutboxWriter.Classify): §12 keeps them local because the high side decides who
+    /// may read its own replica.</para>
+    /// </summary>
+    private async Task<List<BundleEventLine>> BaselineRestrictionLinesAsync(
+        Space space, List<Guid> livePageIds, CancellationToken cancellationToken)
+    {
+        var restrictions = await _db.AccessRules
+            .Where(r => r.Kind == AccessRuleKind.PageRestriction
+                && r.PageId != null && livePageIds.Contains(r.PageId.Value))
+            .OrderBy(r => r.CreatedAtUtc).ThenBy(r => r.Id)
+            .ToListAsync(cancellationToken);
+
+        return restrictions
+            .Select(r => Line(space, SyncEventType.Restrictions, JsonSerializer.Serialize(
+                new { accessRuleId = r.Id, before = (AccessRuleSnapshot?)null, after = r.ToSnapshot() },
+                JsonOptions)))
+            .ToList();
+    }
+
+    /// <summary>Every label attached to a live page, as the incremental writer's
+    /// attach payload. Labels are matched by NAME on import, so nothing here depends on
+    /// this instance's Label ids surviving the crossing.</summary>
+    private async Task<List<BundleEventLine>> BaselineLabelLinesAsync(
+        Space space, List<Guid> livePageIds, CancellationToken cancellationToken)
+    {
+        var pageLabels = await _db.PageLabels
+            .Where(pl => livePageIds.Contains(pl.PageId))
+            .Select(pl => new { pl.PageId, LabelName = pl.Label!.Name })
+            .OrderBy(pl => pl.PageId).ThenBy(pl => pl.LabelName)
+            .ToListAsync(cancellationToken);
+
+        return pageLabels
+            .Select(pl => Line(space, SyncEventType.Labels, JsonSerializer.Serialize(
+                new { pageId = pl.PageId, labelName = pl.LabelName, action = "attach" }, JsonOptions)))
+            .ToList();
+    }
+
+    /// <summary>Every property value on a live page (design.md §20.4). The key's NAME
+    /// crosses, never this instance's registry row id — the receiving instance
+    /// finds-or-creates the key by normalized name, exactly as it does for an incremental
+    /// property event.</summary>
+    private async Task<List<BundleEventLine>> BaselinePagePropertyLinesAsync(
+        Space space, List<Guid> livePageIds, CancellationToken cancellationToken)
+    {
+        var properties = await _db.PageProperties
+            .Where(p => livePageIds.Contains(p.PageId))
+            .Select(p => new { p.PageId, KeyName = p.PropertyKey!.Key, p.Value })
+            .OrderBy(p => p.PageId).ThenBy(p => p.KeyName)
+            .ToListAsync(cancellationToken);
+
+        return properties
+            .Select(p => Line(space, SyncEventType.PageProperties, JsonSerializer.Serialize(
+                new { pageId = p.PageId, key = p.KeyName, value = p.Value, action = "set" }, JsonOptions)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Every comment on a live page, authors resolved to shadow-user-creatable identity
+    /// the same way <see cref="EnrichAuthorPayloadsAsync"/> resolves an incremental one.
+    ///
+    /// <para><b>Tombstones included, deliberately</b>, unlike attachments below. A
+    /// deleted comment is a row, not an absence (design.md §5/§6.4.2 — "deletion is a
+    /// tombstone, never a row removal"), and dropping it would break the thread: a live
+    /// reply to a deleted comment carries a ParentCommentId FK that would have nothing to
+    /// point at on the high side. Ordered parents-before-children for the same reason the
+    /// pages go first.</para>
+    /// </summary>
+    private async Task<List<BundleEventLine>> BaselineCommentLinesAsync(
+        Space space, List<Guid> livePageIds, CancellationToken cancellationToken)
+    {
+        var comments = await _db.Comments
+            .Where(c => livePageIds.Contains(c.PageId))
+            .OrderBy(c => c.CreatedAtUtc).ThenBy(c => c.Id)
+            .ToListAsync(cancellationToken);
+        if (comments.Count == 0)
+        {
+            return [];
+        }
+
+        var authorsById = await LoadUsersAsync(comments.Select(c => c.AuthorUserId), cancellationToken);
+
+        // A reply can only be imported once its parent row exists, and CreatedAtUtc order
+        // gives that for anything created through the product - but a bundle must not
+        // depend on clock ordering for referential integrity, so parents are hoisted
+        // explicitly.
+        return ParentsFirst(comments)
+            .Select(c => Line(space, SyncEventType.Comment, WithAuthor(
+                new
+                {
+                    commentId = c.Id,
+                    pageId = c.PageId,
+                    parentCommentId = c.ParentCommentId,
+                    body = c.Body,
+                    authorUserId = c.AuthorUserId,
+                    isDeleted = c.IsDeleted,
+                },
+                authorsById.GetValueOrDefault(c.AuthorUserId))))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Every LIVE attachment on a live page, in the incremental writer's payload shape.
+    /// <see cref="WriteBlobsAsync"/> then packs their bytes automatically, since it keys
+    /// off Attachment-typed lines — which is why a baseline used to ship no blobs at all.
+    ///
+    /// <para>Soft-deleted attachments are excluded (the global query filter does it), and
+    /// that asymmetry with comments above is intentional: nothing references an attachment
+    /// by FK the way a reply references its parent, and shipping the BYTES of content
+    /// somebody deleted across a one-way boundary that cannot take them back is the wrong
+    /// default. A baseline is the live state; a deletion that happened before it simply
+    /// never crossed.</para>
+    /// </summary>
+    private async Task<List<BundleEventLine>> BaselineAttachmentLinesAsync(
+        Space space, List<Guid> livePageIds, CancellationToken cancellationToken)
+    {
+        var attachments = await _db.Attachments
+            .Where(a => livePageIds.Contains(a.PageId))
+            .OrderBy(a => a.CreatedAtUtc).ThenBy(a => a.Id)
+            .ToListAsync(cancellationToken);
+        if (attachments.Count == 0)
+        {
+            return [];
+        }
+
+        var uploadersById = await LoadUsersAsync(attachments.Select(a => a.UploadedByUserId), cancellationToken);
+
+        return attachments
+            .Select(a => Line(space, SyncEventType.Attachment, WithAuthor(
+                new
+                {
+                    attachmentId = a.Id,
+                    pageId = a.PageId,
+                    fileName = a.FileName,
+                    contentType = a.ContentType,
+                    sizeBytes = a.SizeBytes,
+                    contentHash = Convert.ToHexString(a.ContentHash),
+                    isDeleted = a.IsDeleted,
+                    uploadedByUserId = a.UploadedByUserId,
+                },
+                uploadersById.GetValueOrDefault(a.UploadedByUserId))))
+            .ToList();
+    }
+
+    /// <summary>Comments ordered so every parent precedes its children, whatever the
+    /// timestamps say. A cycle or a parent outside this space (neither reachable through
+    /// the product) degrades to "emit the leftovers in their original order" rather than
+    /// looping.</summary>
+    private static IEnumerable<Comment> ParentsFirst(List<Comment> comments)
+    {
+        var emitted = new HashSet<Guid>();
+        var remaining = new List<Comment>(comments);
+
+        while (remaining.Count > 0)
+        {
+            var ready = remaining
+                .Where(c => c.ParentCommentId is null || emitted.Contains(c.ParentCommentId.Value))
+                .ToList();
+            if (ready.Count == 0)
+            {
+                foreach (var leftover in remaining)
+                {
+                    yield return leftover;
+                }
+
+                yield break;
+            }
+
+            foreach (var comment in ready)
+            {
+                emitted.Add(comment.Id);
+                yield return comment;
+            }
+
+            remaining.RemoveAll(c => emitted.Contains(c.Id));
+        }
+    }
+
+    /// <summary>The generic authorDisplayName/authorEmail keys the import side's
+    /// EnsureShadowUserAsync reads, whatever kind of event carried them (design.md §12:
+    /// "authors arrive as shadow users"). Same keys EnrichAuthorPayloadsAsync writes onto
+    /// an incremental comment or attachment, so one import path serves both.</summary>
+    private static string WithAuthor(object payload, User? author)
+    {
+        var node = JsonSerializer.SerializeToNode(payload, JsonOptions)!.AsObject();
+        node["authorDisplayName"] = author?.DisplayName;
+        node["authorEmail"] = author?.Email;
+        return node.ToJsonString(JsonOptions);
+    }
+
+    /// <summary>One Users query for a whole baseline section, not one per row — the same
+    /// discipline EnrichAuthorPayloadsAsync applies to a drain.</summary>
+    private async Task<Dictionary<Guid, User>> LoadUsersAsync(
+        IEnumerable<Guid> userIds, CancellationToken cancellationToken)
+    {
+        var ids = userIds.Distinct().ToList();
+        return ids.Count == 0
+            ? []
+            : await _db.Users.Where(u => ids.Contains(u.Id)).ToDictionaryAsync(u => u.Id, cancellationToken);
+    }
+
+    /// <summary>A baseline line: sequence number 0, which is what tells the import side
+    /// to apply it without advancing or gap-checking the per-space sequence.</summary>
+    private static BundleEventLine Line(Space space, SyncEventType eventType, string payloadJson) =>
+        new(space.Key, space.Id, SequenceNumber: 0, eventType, payloadJson, DateTime.UtcNow);
 
     /// <summary>
     /// The shape an entry crosses in — identical to the incremental writer's, so the

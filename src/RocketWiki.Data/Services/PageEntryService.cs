@@ -314,6 +314,12 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
     private async Task<(PageEntry? Entry, Space? Space, PageMutationError? Error)> LoadEntryForWriteAsync(
         Guid entryId, int expectedVersion, Principal principal, CancellationToken cancellationToken)
     {
+        // A tombstoned entry is never found here, and that is load-bearing rather than
+        // incidental: PageEntryConfiguration's global query filter (!IsDeleted) is what
+        // stops an update or a second delete from resurrecting one. The guard lives in the
+        // model rather than in a check on this line on purpose - it then holds for every
+        // query in the service, present and future - but it is worth knowing that this
+        // method depends on it.
         var entry = await db.PageEntries
             .Include(e => e.Countries)
             .FirstOrDefaultAsync(e => e.Id == entryId, cancellationToken);

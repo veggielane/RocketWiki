@@ -58,4 +58,29 @@ public interface IPageReadService
 
     /// <summary>Found/NotFound/Denied under the exact same conditions as GetPageAsync for the same pageId - revision history requires nothing beyond canView on the page itself.</summary>
     Task<ReadResult<IReadOnlyList<PageRevision>>> GetRevisionHistoryAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The ids of each given page's directly-visible children, in tree order (SortOrder,
+    /// then Id), for MANY parents at once — a constant number of queries for the whole
+    /// batch, so a list of pages resolving <c>children</c> costs one round of work rather
+    /// than one per page.
+    ///
+    /// <para><b>Each child is gated on its own</b>, against its own ancestor restriction
+    /// chain and its own marking, rather than by locating the parent inside a pruned
+    /// space tree. That is the only reading consistent with §21.5: a marking does not
+    /// accumulate, so a page whose ANCESTOR is above the caller's clearance is pruned
+    /// from the tree along with its subtree — yet the design says that page "stays
+    /// reachable by id and through search, both of which check it on its own". Deriving
+    /// children from the tree made such a page answer <c>children</c> with an empty list
+    /// even though it and its children were perfectly viewable, so <c>page(id:)</c> and
+    /// the tree disagreed about the same subtree.</para>
+    ///
+    /// <para>A parent id that does not exist, or whose children are all hidden, maps to
+    /// an empty list — indistinguishably, per §6.7. No <see cref="ReadResult{T}"/> here
+    /// and no denial to audit: a pruned listing is not a refused request (see
+    /// <see cref="GetPageTreeAsync"/>'s contract), and every caller of this has already
+    /// resolved the parent Page through a gate that audited whatever it decided.</para>
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, IReadOnlyList<Guid>>> GetVisibleChildIdsAsync(
+        IReadOnlyCollection<Guid> parentPageIds, Principal principal, CancellationToken cancellationToken = default);
 }

@@ -142,6 +142,12 @@ builder.Services.AddScoped<IAuditSink, DbAuditSink>();
 // request, never from the local User mirror.
 builder.Services.AddScoped<ICurrentPrincipalAccessor, CurrentPrincipalAccessor>();
 
+// design.md §6.6: the rule builder's group picker, accumulated from observed logins by
+// JitUserProvisioningMiddleware. Singleton because its whole cost model is a process-wide
+// memo of names already known to exist — see KnownGroupRecorder. It holds no request
+// state and never participates in an authorization decision.
+builder.Services.AddSingleton<KnownGroupRecorder>();
+
 // design.md §6.5: Keycloak's realm-level "admin" role, surfaced via the "roles"
 // protocol mapper (rocketwiki-realm.json) — deliberately not part of the ABAC
 // Principal above (EffectivePermissionCalculator has no notion of "instance admin").

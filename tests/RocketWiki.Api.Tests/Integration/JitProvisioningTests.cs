@@ -75,4 +75,67 @@ public sealed class JitProvisioningTests(RocketWikiApiFactory factory) : IClassF
         var verifyDb = verifyScope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
         Assert.Equal(countBefore, await verifyDb.Users.CountAsync());
     }
+
+    /// <summary>
+    /// design.md §6.6: "known groups are accumulated from observed logins (plus manual
+    /// add)". The accumulation never existed — nothing in the source tree wrote a
+    /// KnownGroup row, so the table was permanently empty and the §6.6 picker could only
+    /// offer names already used in a rule or held by the caller's own token. A group
+    /// nobody had written a rule for yet was invisible to the admin trying to write the
+    /// first one.
+    ///
+    /// <para>Asserted through the picker rather than the table, because the picker is
+    /// what the feature is for: the observing user and the ADMIN reading the list are
+    /// deliberately different people, so a passing test cannot be explained by
+    /// Query.Groups' own "the caller's own token groups" arm.</para>
+    /// </summary>
+    [Fact]
+    public async Task GroupsOnAnObservedLogin_AreAccumulated_AndOfferedToTheRuleBuilder()
+    {
+        var observedGroup = $"observed-{Guid.NewGuid():N}";
+
+        var member = factory.CreateClient();
+        member.SetTestUser(sub: $"jit-{Guid.NewGuid()}", groups: [observedGroup]);
+        using (var _ = await member.PostGraphQLAsync("{ me { isAuthenticated } }"))
+        {
+        }
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+            var row = await db.KnownGroups.SingleAsync(g => g.Name == observedGroup);
+            Assert.Equal(Core.Enums.KnownGroupSource.ObservedAtLogin, row.Source);
+        }
+
+        // A DIFFERENT principal - an instance admin who is not in that group - now sees
+        // it in the picker. Without the accumulation there is nothing for them to see.
+        var admin = factory.CreateClient();
+        admin.SetTestUser(sub: $"jit-admin-{Guid.NewGuid()}", roles: ["admin"]);
+        using var groups = await admin.PostGraphQLAsync("{ groups }");
+
+        Assert.Contains(
+            observedGroup,
+            groups.RootElement.GetProperty("data").GetProperty("groups").EnumerateArray()
+                .Select(g => g.GetString()));
+    }
+
+    /// <summary>Repeated logins must not re-query or re-insert: the recorder's
+    /// process-wide memo is what keeps this off the hot path (see KnownGroupRecorder),
+    /// and a duplicate insert would hit the unique index rather than being idempotent.</summary>
+    [Fact]
+    public async Task TheSameGroupSeenRepeatedly_IsRecordedExactlyOnce()
+    {
+        var observedGroup = $"repeat-{Guid.NewGuid():N}";
+
+        for (var i = 0; i < 3; i++)
+        {
+            var client = factory.CreateClient();
+            client.SetTestUser(sub: $"jit-repeat-{i}-{Guid.NewGuid()}", groups: [observedGroup]);
+            using var _ = await client.PostGraphQLAsync("{ me { isAuthenticated } }");
+        }
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        Assert.Equal(1, await db.KnownGroups.CountAsync(g => g.Name == observedGroup));
+    }
 }

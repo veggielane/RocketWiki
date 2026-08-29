@@ -65,6 +65,65 @@ public class SearchServiceTests : SqliteTestBase
         Assert.Equal(space.Key, result[0].SpaceKey);
     }
 
+    /// <summary>
+    /// The LIKE fallback interpolates the raw query into a pattern, so its
+    /// metacharacters used to be live: <c>100%</c> matched anything containing "100",
+    /// <c>a_b</c> matched "axb", and a bare <c>%</c> matched the whole table. A search
+    /// returning far MORE than asked for is the quiet kind of wrong — nobody reports it —
+    /// and this is the branch the entire §14 integration tier runs on, so the tested
+    /// behaviour differed from production for any query with punctuation in it.
+    /// </summary>
+    [Theory]
+    [InlineData("100%")]
+    [InlineData("a_b")]
+    [InlineData("[abc]")]
+    public async Task Search_QueryContainingLikeMetacharacters_MatchesThemLiterally(string query)
+    {
+        var space = TestData.NewSpace();
+        var literal = TestData.NewPage(space, "literal");
+        literal.Title = "Thrust margin";
+        literal.CurrentContent = $"# Margin\n\nMeasured at {query} of nominal.";
+
+        // The page a live wildcard would have dragged in: it shares no literal substring
+        // with any of the queries above, so it can only match if the pattern is wild.
+        var decoy = TestData.NewPage(space, "decoy");
+        decoy.Title = "Unrelated";
+        decoy.CurrentContent = "# Unrelated\n\nNothing in common.";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.AddRange(literal, decoy);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
+        var result = await service.SearchAsync(new SearchRequest(query, null, null), ViewerPrincipal(), maxResults: 10);
+
+        Assert.Equal(literal.Id, Assert.Single(result).PageId);
+    }
+
+    /// <summary>A query that is nothing BUT wildcards used to match every page in the
+    /// instance; escaped, it matches only a page that literally contains it.</summary>
+    [Fact]
+    public async Task Search_QueryOfBareWildcards_DoesNotMatchEverything()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space, "ordinary");
+        page.Title = "Ordinary page";
+        page.CurrentContent = "# Ordinary\n\nNo wildcards here.";
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SearchService(context, NullLogger<SearchService>.Instance);
+        var result = await service.SearchAsync(new SearchRequest("%", null, null), ViewerPrincipal(), maxResults: 10);
+
+        Assert.Empty(result);
+    }
+
     [Fact]
     public async Task Search_NoMatch_ReturnsEmpty()
     {

@@ -18,6 +18,25 @@ public sealed record SpaceRenamedEvent(Guid SpaceId, string Key, Guid? ActorUser
 public sealed record SpaceHomepageSetEvent(
     Guid SpaceId, string Key, Guid? ActorUserId, Guid? OldPageId, Guid? NewPageId) : IDomainEvent;
 
+/// <summary>
+/// design.md §12: the space was flagged (or unflagged) <b>exported</b> — the low-side
+/// switch that starts content flowing across the boundary into another security domain.
+///
+/// <para>Two audit actions from one event, the same shape <c>PageMarkingSetEvent</c> uses
+/// for set-vs-downgrade and for the same reason: enabling export is the operationally
+/// risky direction, and its own action name is what lets a reviewer find every space
+/// somebody opened for export with one query. Disabling is the safe direction and gets
+/// the quieter name.</para>
+///
+/// <para>Like every other space event this is deliberately NOT a sync event
+/// (SyncOutboxWriter.Classify has no arm for it) — §12's table puts space lifecycle in
+/// the "stays local" column, and exported-ness is a property of the LOW side's decision
+/// about its own space, meaningless on the receiving instance (which always writes
+/// <c>IsExported = false</c> for a replica).</para>
+/// </summary>
+public sealed record SpaceExportChangedEvent(
+    Guid SpaceId, string Key, Guid? ActorUserId, bool Exported) : IDomainEvent;
+
 /// <summary>Soft delete - Space uses the same IsDeleted/DeletedAtUtc/DeletedByUserId pattern as Page (data-model.md).</summary>
 public sealed record SpaceArchivedEvent(Guid SpaceId, string Key, Guid? ActorUserId) : IDomainEvent;
 

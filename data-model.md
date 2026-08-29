@@ -176,6 +176,49 @@ guarantee free because its grammar admits lowercase only, and
 `SqlServerFileStorage`'s BIN2 key column, which solves the same class of
 problem in the opposite direction.)
 
+**The other five string lookup keys take the BIN2 route instead**, in the
+`BinaryCollationOnStringKeys` migration: `Space.Key`, `Page.Slug`,
+`Label.Name`, `KnownGroup.Name` and `AttributeDefinition.Key` are all declared
+`COLLATE Latin1_General_100_BIN2` on SQL Server (applied in
+`RocketWikiDbContext.OnModelCreating`'s provider branch, like
+`PageEntry.Collection`, because the collation *name* is SQL Server's and SQLite
+has never heard of it). Each is both a unique index and a lookup predicate
+translated to SQL, so its case sensitivity used to be the provider's rather
+than the application's: `ENG` and `eng` were two spaces on SQLite and one on
+SQL Server, and `/spaces/eng/x` resolved a page in production that the test
+tier 404s — two tiers enforcing different rules, with the looser one running on
+every commit.
+
+Binary rather than a normalized column, deliberately. §6.3 already makes rule
+matching exact and ordinal ("guessing at what an admin meant is exactly the
+wrong instinct"), `PageQueryService` already documents ordinal space keys as
+the correct reading, and SQLite is case-sensitive here already — so this makes
+production agree with the behaviour the whole suite already pins, rather than
+inventing a third. `KnownGroup.Name` and `AttributeDefinition.Key` are the
+sharpest of the five: the rule engine compares group names and attribute keys
+**ordinally in memory** (`Principal.Create`), so a case-folded registry could
+offer the rule builder an `engineering` that no token spelling ever matches —
+§21.4's fails-closed-while-looking-correct trap, one layer up.
+
+**On an existing database this migration cannot fail and cannot invalidate a
+row.** CI → BIN2 only ever *relaxes* uniqueness, and the unique index already
+prevented a colliding pair from existing, so there is nothing to reconcile. It
+does change *lookup* semantics on a live instance: a stored `ENG` stops
+matching a query for `eng`.
+
+For `Page.Slug` that costs almost nothing in practice, because both slug
+generators already emit lowercase — the SPA's `slugifyTitle`
+(`web/src/pages/pageSlug.ts`) lowercases and then strips everything outside
+`[a-z0-9-]`, and the Confluence importer's `Slugifier` does the same with
+`char.ToLowerInvariant` over ASCII letters and digits. No slug the product
+*derives* can contain an uppercase character, so no URL it produced can break.
+The residual case is a slug **typed by hand**: the create dialog lets the user
+override the derived value, and `PageService.CreatePageAsync` stores what it is
+given verbatim (no case normalization, no character validation beyond the
+reserved `-` segment). If case-insensitive page URLs are wanted, the place to
+decide it is slug *validation* on write — not a collation that would put the
+two tiers back out of step.
+
 Hard delete, no query filter — and a key in use cannot be deleted at all
 (the service refuses, naming the usage count), so there is nothing for a
 tombstone to protect. Never synced as a table.

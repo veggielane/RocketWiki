@@ -49,4 +49,7 @@ public sealed class FakeSpaceService : ISpaceService
 
     public Task<PageMutationResult<Space>> RestoreAsync(RestoreSpaceRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("ConfluenceSpaceImporter is not expected to call RestoreAsync.");
+
+    public Task<PageMutationResult<Space>> SetExportedAsync(SetSpaceExportedRequest request, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("ConfluenceSpaceImporter is not expected to call SetExportedAsync.");
 }

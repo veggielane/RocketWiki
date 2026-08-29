@@ -444,10 +444,37 @@ Rule systems fail in the UI, not the engine:
   gates every mode — the inspector is not a read-around, even for admins.
   Every inspection is audited as `permission.inspect` with the inspected
   principal's id (never their attribute values).*
+
+  **An ancestor the caller fails clearance for contributes its rule but not
+  its title** — the inspector, and the manage-gated `Page.restrictions`
+  listing, render an empty `pageTitle` for it. This is not a rough edge to
+  tidy away later: restrictions accumulate down the tree but markings do not
+  (§21.5), so passing `canView` on a page says nothing about its ancestors'
+  classifications, and both surfaces name every page in the chain. Without
+  the rule, a caller viewing an OFFICIAL child could read a SECRET parent's
+  title straight off a screen whose whole job is to explain rules — a page
+  the tree prunes and every other read path treats as absent. §6.4.1 already
+  treats titles as the sensitive part of a refusal ("not which ones, since
+  their titles may themselves be restricted"); this is the same rule applied
+  to the one surface that names an ancestor. Only the title is withheld: the
+  rule id, page id, action, expression and pass/fail all still travel,
+  because those are what the inspector exists to show and the caller is
+  already subject to that rule.
 - **Restriction banner** — a page with active restrictions shows a lock badge
   listing the effective rules, so authors know a page is limited.
-- Known groups are accumulated from observed logins (plus manual add), avoiding
-  a Keycloak admin-API dependency in v1.
+- Known groups are accumulated from observed logins, avoiding a Keycloak
+  admin-API dependency in v1. *Shipped: `KnownGroupRecorder`, called from the
+  JIT-provisioning middleware (§11.3), records each group name a validated
+  token carries the first time this instance sees it. It keeps a process-wide
+  set of names already known to exist, so the steady-state cost on the hottest
+  path in the system is a hash lookup and no query at all; a losing race on the
+  unique index is swallowed rather than failing a login, because this is
+  suggestion vocabulary and the rule engine accepts any string ordinally
+  anyway (§6.3). Nothing here is ever read back for an authorization
+  decision — the Principal is still built from the token, every request
+  (§6.1). The "plus manual add" half is **not built**: there is no mutation
+  for it, and the picker's other sources (groups named in existing rules, the
+  caller's own token) cover the gap in practice.*
 
 ### 6.7 Enforcement points
 
@@ -504,7 +531,7 @@ Append-only `AuditEvent` table:
 |---|---|
 | Timestamp (UTC) | `2026-08-21T03:14:07Z` |
 | User | local user id (from `sub`) |
-| Action | `page.view`, `page.edit`, `page.move`, `space.browse`, `attachment.download`, `search.query`, `page.query`, `permission.change`, `audit.view`, `sync.import`, … |
+| Action | `page.view`, `page.edit`, `page.move`, `space.browse`, `attachment.download`, `search.query`, `page.query`, `permission.change`, `audit.view`, `sync.import`, `space.export.enabled`, … |
 | Subject | type + id (page, space, attachment, comment, rule) + space key |
 | Outcome | `success` or `denied` |
 | Request context | request id, client IP, channel (`graphql` / `mcp` / `attachment`) + MCP client name |
@@ -561,6 +588,18 @@ retrieval already enforced by making restricted pages absent; the race-only
 mid-retrieval denial audits as an ordinary `page.view` Denied row.
 Anonymous asks are refused before any work with no row. Telemetry
 (`rocketwiki.assistant.*`) sees dispositions, counts and durations only.
+
+`space.export.enabled` / `space.export.disabled` (§12) — the low-side switch
+that starts (or stops) a space's content crossing the boundary, subject =
+space, details `{ exported }`. Two action names derived from one domain event,
+for the same reason `page.marking.set`/`.downgrade` split below: enabling is
+the operationally risky direction, and its own action name is what lets a
+reviewer find every space somebody opened for export with a single query. The
+GraphQL field declares `space.export.enabled` for the coverage guard and for
+denial rows — a refusal has no direction, and the enabling name is the one a
+reviewer is looking for. A no-op call (the flag already holds the requested
+value) writes nothing: a row claiming "enabled" when it already was would be a
+widening that never happened.
 
 `page.marking.set` / `page.marking.downgrade` (§21) — a page's protective
 marking changed, subject = page, details carrying the full before-and-after
@@ -1327,6 +1366,41 @@ bundle-000041.zip
 
 - A newly exported space first produces a **baseline bundle** (full snapshot
   including revision history), then incrementals.
+
+  **"Full snapshot" means the whole *What travels* table below, not just
+  pages.** A baseline emits pages (with their revision history and marking)
+  and page entries, and then — as their own lines, in the same payload shapes
+  the incremental writer produces — every page restriction, label, page
+  property, comment and live attachment in the space, with attachment bytes
+  packed into `blobs/` exactly as an incremental drain packs them. It did not,
+  for a long time, and the gap was not symmetric: a missing comment is a
+  completeness bug, whereas a page that was restricted on low landing on high
+  with *no restriction row* is readable by every viewer of the replica. That is
+  fail-open, which nothing else in this section is. Restrictions are therefore
+  emitted first, and the ordering is load-bearing in general: pages lead,
+  because everything after them references a `pageId` the import side resolves
+  against lines it has already seen.
+
+  Two asymmetries, both deliberate. **Comment tombstones cross** — a deleted
+  comment is a row, not an absence (§5/§6.4.2), and a live reply's
+  `ParentCommentId` would have nothing to point at without it, so parents are
+  emitted before children regardless of timestamp. **Soft-deleted attachments
+  do not** — nothing references them by FK, and shipping the bytes of content
+  somebody deleted across a boundary that cannot take them back is the wrong
+  default. A baseline is the live state.
+
+  **Extending a baseline this way needed no format bump, and the reason is
+  worth keeping** for whoever extends a bundle next. Every added line is an
+  event *type* the importer has always understood, in the byte-identical
+  payload shape the incremental writer already emitted, and baseline lines
+  carry `SequenceNumber` 0 — which the import side applies without advancing or
+  gap-checking the per-space sequence. So `formatVersion` stays 2 and the entry
+  stays `events.v2.ndjson`: an **older** importer reading a newer bundle
+  applies *more* of the space correctly and never refuses, and a newer importer
+  reads an older bundle exactly as before. A version bump is for changing what a
+  line *means* or where lines *live* (as format 2 did, renaming the entry so a
+  format-1 importer refused loudly rather than silently discarding history) —
+  not for emitting more of what a line already meant.
 - Import applies bundles **strictly in order and refuses gaps**: if bundle 41
   hasn't been applied, 42 waits. Apply is idempotent, so duplicate delivery
   is harmless.
@@ -1349,6 +1423,19 @@ current-state snapshots they always were, and refuses any newer
 data is attached at export time from the immutable PageRevisions table, so
 outbox rows journaled before format 2 existed still export with full
 history.
+
+**Flagging a space exported is `setSpaceExported`** (GraphQL mutation,
+**instance admin only**), audited as `space.export.enabled` /
+`space.export.disabled` (§7). Deliberately *not* the "instance admin **or**
+space-admin" gate rename/archive/restore share (§6.5.1): those curate a space
+inside this instance, whereas this one decides that a space's content starts
+crossing into another security domain — a judgement about the boundary, not
+about the space. It is idempotent and silent when the flag already holds the
+requested value (an audit row claiming export was "enabled" when it already was
+would put a false widening in front of the reviewer the row exists for), and it
+refuses a replica with `ReadOnlyReplicaError` for the reason immediately below.
+Setting it is what makes the outbox begin journaling; `--baseline` refuses
+until it is set.
 
 **Exported-ness is a low-side property.** Only a native space can be
 exported; a replica must never emit sync events for content it doesn't own.
@@ -2800,7 +2887,10 @@ batch), Ask-the-wiki retrieval (a page above the asker's clearance never enters
 the prompt, not merely the citation list), MCP tools, attachments, comments,
 labels, page properties, watch state, the notification read model, the co-editing
 hub's join check, and the §6.6 permission inspector (whose non-short-circuiting
-`Explain` mirrors the gate's classification verdict exactly, pinned by test).
+`Explain` mirrors the gate's classification verdict exactly, pinned by test —
+and which, because a chain names pages the caller may not be cleared for,
+withholds an over-classified ancestor's *title* while still explaining its rule;
+see §6.6).
 
 Two read paths assemble their own authorization inputs and therefore had to have
 the gate added by hand. Both now have it; both are worth knowing about:
