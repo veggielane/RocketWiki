@@ -3,24 +3,14 @@ obj/
 artifacts/
 TestResults/
 
-# Built docs site (the generated example PNGs under docs/examples/images ARE tracked,
-# so the site builds without a GPU -- only the rendered output is transient).
-docs/_site/
-docs/_apisite/
-docs/site/node_modules/
-docs/site/dist/
-docs/site/.astro/
-_site/
-wasm-publish/
-# The browser-runnable copies of the documentation examples: build output of
-# EngrCAD.DocsGen, picked up by the WebAssembly demo's publish as ordinary static assets.
-# The COMMITTED artifact of that pass is docs/examples/live-examples.json, which the site
-# reads to decide which screenshots get a Run button.
-samples/EngrCAD.WebDemo/wwwroot/examples/
-# docfx writes the API reference here from the XML docs; docs/api/index.md is hand-written
-# and stays tracked.
-docs/api/*.yml
-docs/api/.manifest
+# Node dependencies and tool caches, at every level. `web/`, `web/a11y/` and
+# `docs-site/` each ignore their own, but nothing covered a node_modules at the
+# REPO ROOT — which is how a vitest results cache
+# (node_modules/.vite/vitest/*/results.json) came to be tracked and show up as a
+# dirty file in every unrelated diff. One rule here covers all of them.
+node_modules/
+.vite/
+
 .vs/
 .idea/
 *.user
