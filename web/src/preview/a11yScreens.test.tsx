@@ -20,7 +20,7 @@
 //     CSS, color-contrast and target-size enforced there).
 //
 // Staged data only — no backend. Avatars/emojis are inline SVG data URIs.
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -845,6 +845,17 @@ afterAll(() => {
     readFileSync(new URL(rel, import.meta.url), 'utf8'),
   )
   mkdirSync(outDir, { recursive: true })
+  // Clear the directory first. A capture that is renamed or retired otherwise
+  // lingers in a developer's screens/ forever, because nothing ever deletes it
+  // — so a local run accumulates files a clean CI checkout will never produce,
+  // and the two disagree about how many screens exist. That is exactly how the
+  // completeness assertion in a11y/a11y.spec.ts came to be calibrated against a
+  // count only one machine could reach: page-properties was replaced by
+  // page-details, its two files stayed behind locally, and CI failed on a
+  // number that looked right here.
+  for (const stale of readdirSync(outDir).filter((f) => f.endsWith('.html'))) {
+    rmSync(join(outDir, stale))
+  }
   for (const s of captured) {
     // data-theme mirrors what ColorModeProvider stamps on the live
     // documentElement — editor-content.css themes on it, and the attribute
