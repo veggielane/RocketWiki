@@ -60,8 +60,22 @@ export const router = createBrowserRouter([
           return { Component: ArchivedSpacesPage }
         },
       },
+      // The space's default page when it has one, its browser when it does not
+      // (SpaceHomeRoute decides). A "default page" that nothing defaulted to
+      // would not be a setting, so this is where §6.5.1's homepage earns its
+      // name.
       {
         path: 'spaces/:spaceKey',
+        lazy: async () => {
+          const { SpaceHomeRoute } = await import('../pages/SpaceHomeRoute')
+          return { Component: SpaceHomeRoute }
+        },
+      },
+      // The browser did not move out of reach, it moved to a stable address.
+      // Under the reserved `-` segment with every other space-level screen, so
+      // it can never be shadowed by a page whose slug happens to be "browse".
+      {
+        path: 'spaces/:spaceKey/-/browse',
         lazy: async () => {
           const { SpaceBrowserPage } = await import('../pages/SpaceBrowserPage')
           return { Component: SpaceBrowserPage }

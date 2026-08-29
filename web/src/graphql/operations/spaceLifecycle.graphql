@@ -69,3 +69,22 @@ mutation RestoreSpace($input: RestoreSpaceRequestInput!) {
     }
   }
 }
+
+# The space's default page (design.md §12's "stays local" column). `pageId` is
+# nullable because clearing has to stay expressible — no default page is the
+# ordinary state, and a picker you can only ever set is a one-way door.
+#
+# Returns the space's own `homepageId` rather than the whole page: the settings
+# screen already holds the tree it chose from, so re-reading the page would be a
+# round trip for a title it can look up locally.
+mutation SetSpaceHomepage($input: SetSpaceHomepageRequestInput!) {
+  setSpaceHomepage(input: $input) {
+    space {
+      id
+      homepageId
+    }
+    error {
+      ...MutationError
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom'
 import {
   Alert,
@@ -79,7 +79,20 @@ import { getDefaultPresenceTransport } from '../realtime/transports'
  * enforcement point; the typed refusals (Forbidden / ReadOnlyReplica /
  * StaleRevision) still render as designed UX if they ever arrive.
  */
-export function PageViewPage({ pageId: pageIdFromRoute }: { pageId?: string } = {}) {
+export function PageViewPage({
+  pageId: pageIdFromRoute,
+  onUnavailable,
+}: {
+  pageId?: string
+  /**
+   * What to render instead of the "couldn't load this page" notice. Only the
+   * space-home route passes it: a space whose default page this caller cannot
+   * view should behave like a space without one, not become a dead end where
+   * the space used to be. The default stays the notice, so the ordinary page
+   * routes are unchanged.
+   */
+  onUnavailable?: ReactNode
+} = {}) {
   // Two addresses, one screen: /pages/{id} supplies the id as a route param, and
   // /spaces/{key}/{slug} resolves the slug first and passes the id in. Everything
   // below is identical either way — there is deliberately no second rendering path
@@ -238,8 +251,10 @@ export function PageViewPage({ pageId: pageIdFromRoute }: { pageId?: string } = 
 
   if (error || !data?.page) {
     // Same message for "doesn't exist", "not viewable" and "API down" —
-    // design.md §6.7's absent-not-forbidden applies client-side too.
-    return <Alert severity="info">{describeLoadFailure('PAGE').summary}</Alert>
+    // design.md §6.7's absent-not-forbidden applies client-side too, which is
+    // also why a caller can substitute its own fallback without learning which
+    // of the three it got.
+    return onUnavailable ?? <Alert severity="info">{describeLoadFailure('PAGE').summary}</Alert>
   }
 
   const page = data.page
