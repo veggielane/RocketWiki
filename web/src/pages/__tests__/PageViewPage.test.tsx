@@ -20,6 +20,8 @@ const basePage = {
   spaceKey: 'ENG',
   title: 'Runbook',
   slug: 'runbook',
+  /** Widened so an override can stage a name from a newer icon set (design.md §12). */
+  icon: null as string | null,
   content: 'Hello world.\n',
   currentRevisionNumber: 3,
   canEdit: false,
@@ -116,6 +118,31 @@ describe('PageViewPage accessibility', () => {
     await screen.findByRole('heading', { name: 'Runbook' })
     await screen.findByRole('button', { name: 'Move' })
     await expectNoAxeViolations()
+  })
+})
+
+describe('PageViewPage page icon', () => {
+  it('shows the page icon beside the title without adding it to the heading', async () => {
+    renderPage({ pageOverrides: { icon: 'ROCKET' } })
+    // The heading's accessible name stays the title alone — the glyph sits
+    // outside it and is decorative, so it is never read as part of the name.
+    const heading = await screen.findByRole('heading', { name: 'Runbook' })
+    expect(heading).toHaveTextContent('Runbook')
+    expect(screen.getByTestId('RocketLaunchOutlinedIcon')).toBeInTheDocument()
+  })
+
+  it('draws nothing beside the title for a page with no icon', async () => {
+    // Unlike a tree row, a heading has no neighbours to stay aligned with, so
+    // a generic glyph here would decorate every page and say nothing.
+    renderPage()
+    await screen.findByRole('heading', { name: 'Runbook' })
+    expect(screen.queryByTestId('ArticleOutlinedIcon')).toBeNull()
+  })
+
+  it('draws nothing for an icon this build has never heard of', async () => {
+    renderPage({ pageOverrides: { icon: 'SATELLITE' } })
+    await screen.findByRole('heading', { name: 'Runbook' })
+    expect(screen.queryByTestId('ArticleOutlinedIcon')).toBeNull()
   })
 })
 

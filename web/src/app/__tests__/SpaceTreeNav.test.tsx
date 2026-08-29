@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Provider } from 'urql'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
@@ -13,9 +13,17 @@ const SPACES = {
   ],
 }
 
-const node = (id: string, title: string, children: unknown[] = []) => ({
+const node = (
+  id: string,
+  title: string,
+  slug: string,
+  children: unknown[] = [],
+  icon: string | null = null,
+) => ({
   id,
   title,
+  slug,
+  icon,
   hasRestrictions: false,
   labels: [],
   marking: { level: 'OFFICIAL', levelName: 'Official' },
@@ -24,8 +32,10 @@ const node = (id: string, title: string, children: unknown[] = []) => ({
 
 const TREE = {
   pageTree: [
-    node('page-1', 'Launch notes', [node('page-2', 'Static fire')]),
-    node('page-3', 'Runbooks'),
+    node('page-1', 'Launch notes', 'launch-notes', [
+      node('page-2', 'Static fire', 'static-fire', [], 'SATELLITE'),
+    ], 'ROCKET'),
+    node('page-3', 'Runbooks', 'runbooks'),
   ],
 }
 
@@ -97,6 +107,60 @@ describe('SpaceTreeNav', () => {
       </Provider>,
     )
     expect(await screen.findByText('No pages yet')).toBeInTheDocument()
+  })
+
+  it("draws each page's own icon, and the generic page glyph for one without", async () => {
+    renderNav('/spaces/ENG')
+    const iconed = await screen.findByRole('link', { name: 'Launch notes' })
+    const plain = screen.getByRole('link', { name: 'Runbooks' })
+    // MUI's own dev-only test id: the glyph is deliberately decorative (the
+    // title beside it names the page), so there is no accessible name to
+    // query it by — and adding one purely for this assertion would make a
+    // screen reader read every row twice.
+    expect(within(iconed).getByTestId('RocketLaunchOutlinedIcon')).toBeInTheDocument()
+    expect(within(plain).getByTestId('ArticleOutlinedIcon')).toBeInTheDocument()
+  })
+
+  it('falls back to the generic glyph for an icon this build has never heard of', async () => {
+    // design.md §12: a page can arrive from an instance whose icon set is
+    // ahead of this build's. It renders as an ordinary page, not a hole.
+    renderNav('/spaces/ENG')
+    const unknown = await screen.findByRole('link', { name: 'Static fire' })
+    expect(within(unknown).getByTestId('ArticleOutlinedIcon')).toBeInTheDocument()
+  })
+
+  it('links every page by its readable address, at any depth', async () => {
+    renderNav('/spaces/ENG')
+    expect(await screen.findByRole('link', { name: 'Launch notes' }))
+      .toHaveAttribute('href', '/spaces/ENG/launch-notes')
+    // The hierarchy is absent from the URL on purpose, so a child's address is
+    // no longer than its parent's — that is what lets a page be moved.
+    expect(screen.getByRole('link', { name: 'Static fire' }))
+      .toHaveAttribute('href', '/spaces/ENG/static-fire')
+  })
+
+  it('marks the page you are on when you arrived by its slug', async () => {
+    // The ordinary route now. Matching on slug rather than id is what keeps
+    // this working without a second query to turn the slug into an id.
+    renderNav('/spaces/ENG/static-fire')
+    const active = await screen.findByRole('link', { name: 'Static fire' })
+    expect(active).toHaveClass('Mui-selected')
+    expect(screen.getByRole('link', { name: 'Runbooks' })).not.toHaveClass('Mui-selected')
+  })
+
+  it('still marks it when you arrived by id, which is what a search result links to', async () => {
+    renderNav('/pages/page-2')
+    const active = await screen.findByRole('link', { name: 'Static fire' })
+    expect(active).toHaveClass('Mui-selected')
+  })
+
+  it('marks nothing in the tree on a space system page', async () => {
+    // /spaces/ENG/-/admin is not a page, and `-` can never be a slug, so the
+    // slug arm must not go looking for a node to highlight.
+    renderNav('/spaces/ENG/-/admin')
+    const runbooks = await screen.findByRole('link', { name: 'Runbooks' })
+    expect(runbooks).not.toHaveClass('Mui-selected')
+    expect(screen.getByRole('link', { name: 'Static fire' })).not.toHaveClass('Mui-selected')
   })
 
   it('has no axe violations with a nested tree', async () => {

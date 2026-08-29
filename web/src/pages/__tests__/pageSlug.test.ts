@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isReservedSlug, isUsableSlug, slugifyTitle } from '../pageSlug'
+import { isReservedSlug, isUsableSlug, pageHref, slugifyTitle } from '../pageSlug'
 
 describe('slugifyTitle', () => {
   it('lowercases and hyphenates', () => {
@@ -65,5 +65,27 @@ describe('the reserved system segment', () => {
 
   it('is unreachable from a title, since slugify trims hyphens', () => {
     expect(slugifyTitle('---')).toBe('')
+  })
+})
+
+describe('pageHref', () => {
+  it('prefers the readable address', () => {
+    // The point of preferring it: this is the URL someone copies out of the
+    // address bar, so landing on the id form after a save would mean nobody
+    // ever sees the good one.
+    expect(pageHref('ENG', 'launch-notes', 'page-1')).toBe('/spaces/ENG/launch-notes')
+  })
+
+  it('falls back to the id route when there is no usable slug', () => {
+    // /pages/{id} always resolves, so the fallback is correctness rather than
+    // a degraded experience — better than guessing an address that 404s.
+    expect(pageHref('ENG', null, 'page-1')).toBe('/pages/page-1')
+    expect(pageHref(null, 'launch-notes', 'page-1')).toBe('/pages/page-1')
+    expect(pageHref('ENG', '', 'page-1')).toBe('/pages/page-1')
+    expect(pageHref('ENG', '-', 'page-1')).toBe('/pages/page-1')
+  })
+
+  it('encodes both segments', () => {
+    expect(pageHref('R&D', 'a b', 'page-1')).toBe('/spaces/R%26D/a%20b')
   })
 })

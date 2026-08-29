@@ -8,6 +8,7 @@ import {
   useUpdatePageContentInSessionMutation,
   useUpdatePageContentMutation,
   type MutationErrorFragment,
+  type PageIcon,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, asStaleRevision, describeMutationError, type StaleRevision } from '../graphql/mutationError'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
@@ -21,6 +22,8 @@ import { colourForUser } from '../presence/colourForUser'
 import { getDefaultCoEditTransport, getDefaultPresenceTransport } from '../realtime/transports'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
+import { PageIconPicker } from './PageIconPicker'
+import { pageHref } from './pageSlug'
 
 /**
  * Page edit. Two of the brief's non-negotiables live here, both driven by
@@ -81,6 +84,20 @@ export function PageEditPage() {
 
   const page = pageQuery.data?.page
 
+  // The icon is part of what a save writes, so the editor holds a draft of it
+  // exactly as it holds a draft of the text. Tracked against the server's
+  // value rather than only seeded, because the page read resolves after the
+  // first render — the same "adjust state when a prop changes" pattern as
+  // CreatePageDialog's parent default. Comparing against the server value (not
+  // the page id) is what keeps an in-flight pick: a refetch that returns the
+  // icon unchanged leaves the draft alone.
+  const [icon, setIcon] = useState<PageIcon | null>(page?.icon ?? null)
+  const [trackedIcon, setTrackedIcon] = useState<PageIcon | null>(page?.icon ?? null)
+  if (trackedIcon !== (page?.icon ?? null)) {
+    setTrackedIcon(page?.icon ?? null)
+    setIcon(page?.icon ?? null)
+  }
+
   const session = useCoEditSession(pageId ?? '', {
     enabled: page?.canEdit === true,
     seedMarkdown: page?.content ?? '',
@@ -115,7 +132,10 @@ export function PageEditPage() {
     setSaving(true)
     setSaveError(null)
     const draft = editorRef.current.getMarkdown()
-    const input = { pageId: page.id, expectedRevisionNumber, title: page.title, content: draft }
+    // `icon` is sent on every save, including when it is null: the server
+    // assigns the field unconditionally, so leaving it out of the input is not
+    // "don't touch it" — it clears the page's icon.
+    const input = { pageId: page.id, expectedRevisionNumber, title: page.title, icon, content: draft }
 
     // Session saves use the contributor-selecting document; the solo path
     // keeps the original one — see page.graphql on why they're separate.
@@ -187,7 +207,7 @@ export function PageEditPage() {
     // one person editing alone never navigated and Save appeared to do nothing.
     // Leaving is not destructive here: the save committed a revision, and the
     // session's own Close button remains for stepping out without saving.
-    navigate(`/pages/${page.id}`)
+    navigate(pageHref(page.spaceKey, page.slug, page.id))
   }
 
   // The log_cap flow (design.md §8, hub doc): the server named THIS client
@@ -232,7 +252,11 @@ export function PageEditPage() {
     return (
       <Stack spacing={2}>
         <Alert severity="info">You don't have permission to edit this page.</Alert>
-        <Button variant="outlined" onClick={() => navigate(`/pages/${page.id}`)} sx={{ alignSelf: 'flex-start' }}>
+        <Button
+          variant="outlined"
+          onClick={() => navigate(pageHref(page.spaceKey, page.slug, page.id))}
+          sx={{ alignSelf: 'flex-start' }}
+        >
           Back to page
         </Button>
       </Stack>
@@ -246,6 +270,14 @@ export function PageEditPage() {
           <Typography variant="h4" component="h1">
             Editing: {page.title}
           </Typography>
+          {/* Beside the title, because that is what it labels — and the same
+              control the create dialog uses, so the two cannot drift. */}
+          <PageIconPicker
+            value={icon}
+            onChange={setIcon}
+            size="small"
+            disabled={saving || session.status === 'evicted'}
+          />
           {collabActive && (
             <Chip
               size="small"
@@ -316,7 +348,7 @@ export function PageEditPage() {
         >
           Save
         </Button>
-        <Button variant="text" onClick={() => navigate(`/pages/${page.id}`)}>
+        <Button variant="text" onClick={() => navigate(pageHref(page.spaceKey, page.slug, page.id))}>
           {collabActive ? 'Close' : 'Cancel'}
         </Button>
       </Stack>
@@ -367,7 +399,7 @@ export function PageEditPage() {
               return
             }
             setConflict(null)
-            navigate(`/pages/${page.id}`)
+            navigate(pageHref(page.spaceKey, page.slug, page.id))
           })()
         }}
         onKeepEditing={() => setConflict(null)}

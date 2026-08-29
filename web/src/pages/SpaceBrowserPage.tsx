@@ -8,6 +8,7 @@ import {
   List,
   ListItem,
   ListItemButton,
+  ListItemIcon,
   ListItemText,
   Skeleton,
   Stack,
@@ -20,6 +21,7 @@ import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import NoteAddOutlinedIcon from '@mui/icons-material/NoteAddOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
+import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined'
 import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined'
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import {
@@ -34,8 +36,9 @@ import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationErr
 import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { filterTreeByLabel } from '../labels/filterTreeByLabel'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
-import { CreatePageDialog } from './CreatePageDialog'
+import { CreatePageDialog, type CreatePageValues } from './CreatePageDialog'
 import { flattenParentOptions } from './parentOptions'
+import { lookupPageIcon } from './pageIcons'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 
 /**
@@ -48,6 +51,8 @@ import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 interface PageTreeNode {
   id: string
   title: string
+  /** `PageTreeNode.icon` — null for most pages; the tree draws its generic glyph then. */
+  icon?: string | null
   /** The page's address within its space — /spaces/{key}/{slug}. */
   slug: string
   /** `PageTreeNode.hasRestrictions` — drives the lock badge (design.md §6.6). */
@@ -73,29 +78,41 @@ function PageTreeList({
 }) {
   return (
     <List dense disablePadding>
-      {nodes.map((node) => (
-        <li key={node.id}>
-          <ListItemButton
-            component={RouterLink}
-            to={`/spaces/${spaceKey}/${node.slug}`}
-            sx={{ pl: 2 + depth * 2, gap: 1 }}
-          >
-            <ListItemText primary={node.title} />
-            {/* §21.5: an over-classified node is pruned with its whole
-                subtree, so every node still here is one this caller may read —
-                the badge says how sensitive it is, not whether it is reachable. */}
-            <MarkingLevelBadge level={node.marking.level} levelName={node.marking.levelName} />
-            {node.hasRestrictions && (
-              <Tooltip title="This page has access restrictions">
-                <LockOutlinedIcon fontSize="small" color="action" aria-label="Has access restrictions" />
-              </Tooltip>
+      {nodes.map((node) => {
+        // The page's own icon, or the generic page glyph when it has none —
+        // and when it names one this build doesn't know. Every row gets one
+        // either way: an icon on only the pages that set one would indent
+        // those titles past the rest and read as a second hierarchy.
+        const Icon = lookupPageIcon(node.icon)?.Icon ?? ArticleOutlinedIcon
+        return (
+          <li key={node.id}>
+            <ListItemButton
+              component={RouterLink}
+              to={`/spaces/${spaceKey}/${node.slug}`}
+              sx={{ pl: 2 + depth * 2, gap: 1 }}
+            >
+              {/* Decorative: the title it sits beside already names the page,
+                  so a label here would have a screen reader read it twice. */}
+              <ListItemIcon sx={{ minWidth: 32 }}>
+                <Icon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary={node.title} />
+              {/* §21.5: an over-classified node is pruned with its whole
+                  subtree, so every node still here is one this caller may read —
+                  the badge says how sensitive it is, not whether it is reachable. */}
+              <MarkingLevelBadge level={node.marking.level} levelName={node.marking.levelName} />
+              {node.hasRestrictions && (
+                <Tooltip title="This page has access restrictions">
+                  <LockOutlinedIcon fontSize="small" color="action" aria-label="Has access restrictions" />
+                </Tooltip>
+              )}
+            </ListItemButton>
+            {node.children && node.children.length > 0 && (
+              <PageTreeList nodes={node.children} spaceKey={spaceKey} depth={depth + 1} />
             )}
-          </ListItemButton>
-          {node.children && node.children.length > 0 && (
-            <PageTreeList nodes={node.children} spaceKey={spaceKey} depth={depth + 1} />
-          )}
-        </li>
-      ))}
+          </li>
+        )
+      })}
     </List>
   )
 }
@@ -179,7 +196,7 @@ export function SpaceBrowserPage() {
     return false
   }
 
-  const handleCreatePage = async (values: { title: string; slug: string; parentPageId: string | null }) => {
+  const handleCreatePage = async (values: CreatePageValues) => {
     setCreateError(null)
     const result = await createPage({
       input: {
@@ -187,6 +204,7 @@ export function SpaceBrowserPage() {
         parentPageId: values.parentPageId,
         slug: values.slug,
         title: values.title,
+        icon: values.icon,
         content: '',
       },
     })

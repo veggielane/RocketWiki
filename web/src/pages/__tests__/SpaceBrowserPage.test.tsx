@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { SpaceBrowserPage } from '../SpaceBrowserPage'
@@ -23,6 +23,7 @@ const tree = [
     id: 'open',
     title: 'Open Page',
     slug: 'open',
+    icon: 'ROCKET',
     sortOrder: 0,
     hasRestrictions: false,
     labels: ['onboarding'],
@@ -34,6 +35,7 @@ const tree = [
         id: 'restricted',
         title: 'Restricted Page',
         slug: 'restricted',
+        icon: null,
         sortOrder: 0,
         hasRestrictions: true,
         labels: [],
@@ -89,6 +91,19 @@ describe('SpaceBrowserPage', () => {
     // The badge shows the level, not the marking — the caveat on the
     // restricted node stays on that page's own banners (§21.1's levelName).
     expect(restricted?.textContent).not.toContain('EYES ONLY')
+  })
+
+  it("draws each page's own icon, and the generic page glyph for one without", async () => {
+    renderPage()
+    await screen.findByText('Restricted Page')
+    const iconed = screen.getByText('Open Page').closest('a')
+    const plain = screen.getByText('Restricted Page').closest('a')
+    // MUI's dev-only test id: the glyph is decorative (the title beside it
+    // names the page), so it has no accessible name to query by. Every row
+    // gets one — a slot filled on only some rows would indent those titles
+    // past the rest and read as a hierarchy that isn't there.
+    expect(within(iconed as HTMLElement).getByTestId('RocketLaunchOutlinedIcon')).toBeInTheDocument()
+    expect(within(plain as HTMLElement).getByTestId('ArticleOutlinedIcon')).toBeInTheDocument()
   })
 
   it('filters the tree by label into a breadcrumbed result list', async () => {

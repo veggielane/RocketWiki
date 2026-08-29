@@ -60,3 +60,23 @@ export function isReservedSlug(slug: string): boolean {
 export function isUsableSlug(slug: string): boolean {
   return slug.trim().length > 0 && !isReservedSlug(slug)
 }
+
+/**
+ * Where to send someone who should end up looking at a page.
+ *
+ * Prefers the readable address, because that is what someone copies out of the
+ * address bar and pastes to a colleague — landing them on /pages/{id} after
+ * every save would mean they never see the good URL in ordinary use. Falls back
+ * to the id route rather than guessing when the caller has no slug or space key
+ * to hand: /pages/{id} always resolves, so the fallback is correctness, not a
+ * degraded experience.
+ */
+export function pageHref(
+  spaceKey: string | null | undefined,
+  slug: string | null | undefined,
+  pageId: string,
+): string {
+  return spaceKey && slug && isUsableSlug(slug)
+    ? `/spaces/${encodeURIComponent(spaceKey)}/${encodeURIComponent(slug.trim())}`
+    : `/pages/${pageId}`
+}

@@ -12,6 +12,16 @@ import {
 } from '@mui/material'
 import { isReservedSlug, isUsableSlug, slugifyTitle } from './pageSlug'
 import type { ParentOption } from './parentOptions'
+import { PageIconPicker } from './PageIconPicker'
+import type { PageIcon } from '../graphql/generated/graphql'
+
+/** What the dialog hands back, named so its two callers cannot drift from it. */
+export interface CreatePageValues {
+  title: string
+  slug: string
+  parentPageId: string | null
+  icon: PageIcon | null
+}
 
 export interface CreatePageDialogProps {
   open: boolean
@@ -33,7 +43,7 @@ export interface CreatePageDialogProps {
   error?: string | null
   busy?: boolean
   onCancel: () => void
-  onConfirm: (values: { title: string; slug: string; parentPageId: string | null }) => void
+  onConfirm: (values: CreatePageValues) => void
 }
 
 /**
@@ -60,6 +70,7 @@ export function CreatePageDialog({
   const [slug, setSlug] = useState('')
   const [slugEdited, setSlugEdited] = useState(false)
   const [parentPageId, setParentPageId] = useState<string | null>(defaultParentId)
+  const [icon, setIcon] = useState<PageIcon | null>(null)
 
   // The caller's default can arrive after the first render (the tree loads
   // asynchronously) and changes when a different page opens the dialog, so
@@ -76,6 +87,7 @@ export function CreatePageDialog({
     setSlug('')
     setSlugEdited(false)
     setParentPageId(defaultParentId)
+    setIcon(null)
   }
 
   const handleCancel = () => {
@@ -95,13 +107,19 @@ export function CreatePageDialog({
               dialog stays open with the typed values intact so the fix is a
               correction rather than a retype (web/README.md's feedback rule). */}
           {error && <Alert severity="error">{error}</Alert>}
-          <TextField
-            autoFocus
-            label="Title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            fullWidth
-          />
+          {/* Icon beside the title rather than under it: it is a property of
+              the title line, and a full-width row of its own would give a
+              two-field dialog the height of a form. */}
+          <Stack direction="row" spacing={2}>
+            <TextField
+              autoFocus
+              label="Title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              sx={{ flex: 1 }}
+            />
+            <PageIconPicker value={icon} onChange={setIcon} disabled={busy} />
+          </Stack>
           {parentOptions && parentOptions.length > 1 && (
             <TextField
               select
@@ -146,7 +164,7 @@ export function CreatePageDialog({
         <Button
           variant="contained"
           disabled={!canCreate}
-          onClick={() => onConfirm({ title: title.trim(), slug: effectiveSlug.trim(), parentPageId })}
+          onClick={() => onConfirm({ title: title.trim(), slug: effectiveSlug.trim(), parentPageId, icon })}
         >
           Create
         </Button>

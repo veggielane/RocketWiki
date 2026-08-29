@@ -161,6 +161,9 @@ const page = {
   spaceKey: 'PROP',
   title: 'Stage two ignition anomaly review',
   slug: 'stage-two-ignition-anomaly',
+  // Staged set, so the page header's glyph and the edit screen's icon picker
+  // both reach the browser layer's contrast check in both themes.
+  icon: 'ROCKET',
   content: pageContent,
   currentRevisionNumber: 7,
   canEdit: true,
@@ -233,6 +236,9 @@ const spaceTreeNodes = [
     id: 'page-1',
     title: 'Stage two ignition anomaly review',
     slug: 'stage-two-ignition-anomaly',
+    // One node with an icon and two without: the tree's fallback glyph and a
+    // page's own have to hold the same row height and alignment.
+    icon: 'ROCKET',
     sortOrder: 0,
     hasRestrictions: false,
     labels: ['anomaly'],

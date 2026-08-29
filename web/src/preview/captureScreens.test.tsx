@@ -124,6 +124,7 @@ const page = {
   spaceKey: 'PROP',
   title: 'Stage two ignition anomaly review',
   slug: 'stage-two-ignition-anomaly',
+  icon: 'ROCKET',
   content: pageContent,
   currentRevisionNumber: 7,
   canEdit: true,

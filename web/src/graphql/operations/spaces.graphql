@@ -65,6 +65,11 @@ query SpacePageTree($spaceId: UUID!) {
 # `labels` feeds the space browser's label-filter facet. Both are
 # permission-filtered server-side like the tree itself.
 #
+# `icon` is the page's own glyph in the tree (nullable — no icon is the
+# ordinary case, and the tree falls back to its generic page glyph). Selected
+# on the node rather than read per page: the drawer renders the whole tree at
+# once, and a lookup per row would be a query per row.
+#
 # `marking` is the value the tree's own pruning walk gated on (design.md
 # §21.9 — GetPageTreeAsync loads every marking for the space anyway, and a
 # node that displayed a marking other than the one that decided it was
@@ -75,6 +80,7 @@ query SpacePageTree($spaceId: UUID!) {
 fragment TreeNode on PageTreeNode {
   id
   title
+  icon
   slug
   sortOrder
   hasRestrictions

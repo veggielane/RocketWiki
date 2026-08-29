@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { CreatePageDialog } from '../CreatePageDialog'
+import { expectNoAxeViolations } from '../../test/axe'
 
 function open(overrides: Partial<React.ComponentProps<typeof CreatePageDialog>> = {}) {
   const onConfirm = vi.fn()
@@ -46,7 +47,12 @@ describe('CreatePageDialog', () => {
     const { onConfirm } = open()
     fireEvent.change(titleBox(), { target: { value: '  Launch notes  ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
-    expect(onConfirm).toHaveBeenCalledWith({ title: 'Launch notes', slug: 'launch-notes', parentPageId: null })
+    expect(onConfirm).toHaveBeenCalledWith({
+      title: 'Launch notes',
+      slug: 'launch-notes',
+      parentPageId: null,
+      icon: null,
+    })
   })
 
   it('cannot be submitted with no title', () => {
@@ -66,7 +72,23 @@ describe('CreatePageDialog', () => {
     fireEvent.change(titleBox(), { target: { value: '???' } })
     fireEvent.change(slugBox(), { target: { value: 'mystery' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
-    expect(onConfirm).toHaveBeenCalledWith({ title: '???', slug: 'mystery', parentPageId: null })
+    expect(onConfirm).toHaveBeenCalledWith({ title: '???', slug: 'mystery', parentPageId: null, icon: null })
+  })
+
+  it('creates with no icon unless one is picked', () => {
+    const { onConfirm } = open()
+    fireEvent.change(titleBox(), { target: { value: 'Launch notes' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ icon: null }))
+  })
+
+  it('carries a picked icon into the create', () => {
+    const { onConfirm } = open()
+    fireEvent.change(titleBox(), { target: { value: 'Launch notes' } })
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Icon' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Rocket' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ icon: 'ROCKET' }))
   })
 
   it('shows a server refusal inline and keeps what was typed', () => {
@@ -83,11 +105,30 @@ describe('CreatePageDialog', () => {
     expect(onConfirm).not.toHaveBeenCalled()
   })
 
+  it('has no axe violations open, with every field and a refusal showing', async () => {
+    // The policy is "every dialog passes axe in its OPEN state"
+    // (docs/ACCESSIBILITY.md); it lives here rather than in
+    // test/dialogsA11y.test.tsx because that suite is for the dialogs with no
+    // behaviour test file of their own.
+    open({
+      error: 'A page with that slug already exists in this space.',
+      parentOptions: [
+        { id: null, title: 'Engineering', depth: 0 },
+        { id: 'p1', title: 'Launch notes', depth: 1 },
+      ],
+    })
+    screen.getByRole('dialog')
+    await expectNoAxeViolations()
+  })
+
   it('clears its fields on cancel, so reopening starts fresh', () => {
     const { onCancel } = open()
     fireEvent.change(titleBox(), { target: { value: 'Discarded' } })
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Icon' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Rocket' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onCancel).toHaveBeenCalled()
     expect(titleBox()).toHaveValue('')
+    expect(screen.getByRole('combobox', { name: 'Icon' })).toHaveTextContent('No icon')
   })
 })

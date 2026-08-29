@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import * as Y from 'yjs'
 import { yDocToProsemirrorJSON } from '@tiptap/y-tiptap'
@@ -37,6 +37,9 @@ const page = {
   spaceKey: 'ENG',
   title: 'Runbook',
   slug: 'runbook',
+  // Widened so a test can stage an icon — and one this build doesn't know,
+  // which the generated `PageIcon` union by definition cannot express.
+  icon: null as string | null,
   content: 'Hello world.\n',
   currentRevisionNumber: 3,
   canEdit: true,
@@ -105,12 +108,24 @@ function renderEditPage(updateError: MutationErrorFragment | null, options: Rend
       <UrqlProvider value={mock.client}>
         <Routes>
           <Route path="/pages/:pageId/edit" element={<PageEditPage />} />
+          {/* Both addresses land on the same marker, so the many "did it leave
+              the editor?" assertions below stay about leaving the editor. Which
+              one it actually picks is pinned once, deliberately, in its own
+              test — the readable one, since that is what a user then copies. */}
           <Route path="/pages/:pageId" element={<div>view route</div>} />
+          <Route path="/spaces/:spaceKey/:slug" element={<div>view route</div>} />
         </Routes>
+        <CurrentPathname />
       </UrqlProvider>
     </MemoryRouter>,
   )
   return mock
+}
+
+/** Reports where navigation actually ended up, since both page addresses render
+ *  the same marker above. */
+function CurrentPathname() {
+  return <span data-testid="pathname">{useLocation().pathname}</span>
 }
 
 /**
@@ -239,6 +254,18 @@ describe('PageEditPage typed mutation errors', () => {
 
     expect(await screen.findByText('view route')).toBeInTheDocument()
   })
+
+  it('lands on the readable address, not the id one', async () => {
+    // Saving is the moment someone is most likely to copy the URL out of the
+    // address bar, so it has to be the address worth pasting. /pages/{id} still
+    // works; it is just not where an edit puts you.
+    renderEditPage(null)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+    await screen.findByText('view route')
+
+    expect(screen.getByTestId('pathname')).toHaveTextContent('/spaces/ENG/runbook')
+  })
 })
 
 describe('PageEditPage permission gating', () => {
@@ -248,6 +275,67 @@ describe('PageEditPage permission gating', () => {
     expect(await screen.findByText(/don't have permission to edit/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Back to page' })).toBeInTheDocument()
+  })
+})
+
+/**
+ * The icon is part of what a save writes, and the server assigns it
+ * unconditionally — including null. So the hazard is not "does the picker
+ * work" but "does every save carry the page's current value": leaving the
+ * field out, or seeding the draft before the page read resolves and never
+ * catching up, would clear the icon of anyone who edited the text.
+ */
+describe('PageEditPage page icon', () => {
+  const savedInput = (mock: ReturnType<typeof renderEditPage>) => {
+    const updates = mock.operations.filter((op) => op.name === 'UpdatePageContent')
+    expect(updates).toHaveLength(1)
+    return updates[0].variables['input'] as { icon: string | null }
+  }
+
+  it("initializes from the page's current icon, which the read resolves after the first render", async () => {
+    renderEditPage(null, { pageOverrides: { icon: 'ROCKET' } })
+    expect(await screen.findByRole('combobox', { name: 'Icon' })).toHaveTextContent('Rocket')
+  })
+
+  it('sends the current icon on a save that never touched it', async () => {
+    const mock = renderEditPage(null, { pageOverrides: { icon: 'ROCKET' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+    await screen.findByText('view route')
+    expect(savedInput(mock).icon).toBe('ROCKET')
+  })
+
+  it('sends null for a page that has no icon, rather than omitting the field', async () => {
+    const mock = renderEditPage(null)
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+    await screen.findByText('view route')
+    expect(savedInput(mock)).toHaveProperty('icon', null)
+  })
+
+  it('writes a newly picked icon', async () => {
+    const mock = renderEditPage(null)
+    fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Icon' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Flask' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('view route')
+    expect(savedInput(mock).icon).toBe('FLASK')
+  })
+
+  it('writes the removal when the icon is cleared back to none', async () => {
+    const mock = renderEditPage(null, { pageOverrides: { icon: 'ROCKET' } })
+    fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'Icon' }))
+    fireEvent.click(screen.getByRole('option', { name: 'No icon' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('view route')
+    expect(savedInput(mock).icon).toBeNull()
+  })
+
+  it('does not drop an icon this build has never heard of', async () => {
+    // design.md §12: a page synced from an instance with a newer icon set.
+    // The save must carry the name back unchanged, not the client's guess.
+    const mock = renderEditPage(null, { pageOverrides: { icon: 'SATELLITE' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+    await screen.findByText('view route')
+    expect(savedInput(mock).icon).toBe('SATELLITE')
   })
 })
 

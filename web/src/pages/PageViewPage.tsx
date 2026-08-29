@@ -46,8 +46,9 @@ import { asReadOnlyReplica, blockedPageCount, describeMutationError } from '../g
 import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from '../access/move/MovePageDialog'
-import { CreatePageDialog } from './CreatePageDialog'
+import { CreatePageDialog, type CreatePageValues } from './CreatePageDialog'
 import { flattenParentOptions } from './parentOptions'
+import { lookupPageIcon } from './pageIcons'
 import { DeletePageDialog } from '../trash/DeletePageDialog'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { ancestorRestrictionsOf, flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
@@ -181,7 +182,7 @@ export function PageViewPage({ pageId: pageIdFromRoute }: { pageId?: string } = 
 
   const watching = watchOverride ?? data?.page?.viewerIsWatching ?? false
 
-  const handleCreateChild = async (values: { title: string; slug: string; parentPageId: string | null }) => {
+  const handleCreateChild = async (values: CreatePageValues) => {
     if (!page) return
     setCreateError(null)
     const result = await createPage({
@@ -190,6 +191,7 @@ export function PageViewPage({ pageId: pageIdFromRoute }: { pageId?: string } = 
         parentPageId: values.parentPageId,
         slug: values.slug,
         title: values.title,
+        icon: values.icon,
         content: '',
       },
     })
@@ -242,6 +244,10 @@ export function PageViewPage({ pageId: pageIdFromRoute }: { pageId?: string } = 
 
   const page = data.page
   const replicaSpace = spaceMeta?.space?.isReplica === true ? spaceMeta.space : null
+  // No fallback glyph here, unlike the trees: a row in a list needs its icon
+  // slot filled to stay aligned with its neighbours, but a heading has no
+  // neighbours, and a generic page icon beside every title would say nothing.
+  const TitleIcon = lookupPageIcon(page.icon)?.Icon
 
   const comments = page.comments.map((c) => ({
     id: c.id,
@@ -302,9 +308,15 @@ export function PageViewPage({ pageId: pageIdFromRoute }: { pageId?: string } = 
       </Box>
 
       <Stack direction="row" sx={{ mb: 2, alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography variant="h4" component="h1">
-          {page.title}
-        </Typography>
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', minWidth: 0 }}>
+          {/* Decorative — the h1 it sits beside is the page's name. Outside
+              the heading rather than inside it so the accessible name of the
+              heading stays exactly the title. */}
+          {TitleIcon && <TitleIcon sx={{ fontSize: 32, color: 'text.secondary' }} />}
+          <Typography variant="h4" component="h1">
+            {page.title}
+          </Typography>
+        </Stack>
         <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
           <PresenceAvatars viewers={viewers} />
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
