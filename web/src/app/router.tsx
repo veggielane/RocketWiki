@@ -113,6 +113,17 @@ export const router = createBrowserRouter([
           return { Component: SlugPageRoute }
         },
       },
+      // Not router-gated: the server returns null to anyone who administers
+      // neither the instance nor this space, and to a key that does not resolve —
+      // the same answer for both (§6.7). A guard here would duplicate a decision
+      // the server has already made and is the only one able to enforce.
+      {
+        path: 'spaces/:spaceKey/-/analytics',
+        lazy: async () => {
+          const { AnalyticsPage } = await import('../pages/AnalyticsPage')
+          return { Component: AnalyticsPage }
+        },
+      },
       {
         path: 'spaces/:spaceKey/-/grants',
         lazy: async () => {
@@ -211,6 +222,16 @@ export const router = createBrowserRouter([
             lazy: async () => {
               const { AdminPage } = await import('../pages/AdminPage')
               return { Component: AdminPage }
+            },
+          },
+          // Site-wide: the same screen with no space key. Inside the
+          // RequireInstanceAdmin block like its neighbours, though the server
+          // gates it regardless.
+          {
+            path: 'analytics',
+            lazy: async () => {
+              const { AnalyticsPage } = await import('../pages/AnalyticsPage')
+              return { Component: AnalyticsPage }
             },
           },
           {

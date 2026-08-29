@@ -3,6 +3,11 @@ import { Alert, Card, CardActionArea, CardContent, Stack, Typography } from '@mu
 
 const LIVE_SECTIONS = [
   {
+    title: 'Analytics',
+    description: 'What is being read, edited and searched for, site-wide (§7).',
+    to: '/admin/analytics',
+  },
+  {
     title: 'Audit log',
     description: 'Filter by user/action/subject/outcome/date, CSV export (§7).',
     to: '/admin/audit',

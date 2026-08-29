@@ -21,6 +21,7 @@ import {
   Typography,
 } from '@mui/material'
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined'
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined'
@@ -314,6 +315,15 @@ export function SpaceSettingsPage() {
               <ListItemText
                 primary="Browse pages"
                 secondary="The full page tree, and filtering it by label."
+              />
+            </ListItemButton>
+          </ListItem>
+          <ListItem disablePadding>
+            <ListItemButton component={RouterLink} to={`/spaces/${space.key}/-/analytics`}>
+              <InsightsOutlinedIcon fontSize="small" sx={{ mr: 2 }} />
+              <ListItemText
+                primary="Analytics"
+                secondary="What is being read and edited, over the pages you can see."
               />
             </ListItemButton>
           </ListItem>

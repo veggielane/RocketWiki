@@ -37,6 +37,7 @@ import { AdminPropertyKeysPage } from '../pages/AdminPropertyKeysPage'
 import { PagePropertiesPage } from '../pages/PagePropertiesPage'
 import { PagePermissionsPage } from '../pages/PagePermissionsPage'
 import { SpaceBrowserPage } from '../pages/SpaceBrowserPage'
+import { AnalyticsPage } from '../pages/AnalyticsPage'
 import { TrashPage } from '../pages/TrashPage'
 import { AuditLogPage } from '../pages/AuditLogPage'
 import { RichTextEditor } from '../editor/RichTextEditor'
@@ -371,6 +372,39 @@ function mockClient() {
         },
       }
     if (name === 'SpacePageTree') return { pageTree: spaceTreeNodes }
+    // Analytics is the one screen whose whole content is colour-coded marks, so
+    // the browser tier (which alone can judge contrast on painted pixels) needs a
+    // populated report rather than an empty state.
+    if (name === 'Analytics')
+      return {
+        analytics: {
+          scope: { spaceKey: 'PROP', fromUtc: '2026-08-01T00:00:00Z', toUtc: '2026-08-31T00:00:00Z', visiblePageCount: 17 },
+          activity: Array.from({ length: 14 }, (_, i) => ({
+            day: `2026-08-${String(i + 1).padStart(2, '0')}`,
+            views: [12, 18, 9, 24, 31, 6, 4, 22, 27, 19, 14, 30, 25, 11][i],
+            edits: [2, 5, 1, 7, 4, 0, 0, 6, 3, 2, 5, 8, 4, 1][i],
+          })),
+          mostViewed: [
+            { pageId: 'p1', title: 'Stage two ignition anomaly review', slug: 'stage-two', spaceKey: 'PROP', count: 212 },
+            { pageId: 'p2', title: 'Turbopump chill-in procedure', slug: 'chill-in', spaceKey: 'PROP', count: 148 },
+          ],
+          mostEdited: [{ pageId: 'p2', title: 'Turbopump chill-in procedure', slug: 'chill-in', spaceKey: 'PROP', count: 24 }],
+          topReaders: [
+            { userId: 'u1', displayName: 'Ada Lovelace', count: 96 },
+            { userId: 'u2', displayName: 'Grace Hopper', count: 74 },
+          ],
+          topContributors: [{ userId: 'u2', displayName: 'Grace Hopper', count: 24 }],
+          health: {
+            stalePageCount: 3,
+            orphanPageCount: 2,
+            unlabelledPageCount: 6,
+            neverViewedPageCount: 4,
+            stalestPages: [{ pageId: 'p3', title: 'Legacy igniter notes', slug: 'legacy-igniter', spaceKey: 'PROP', count: 412 }],
+          },
+          topSearches: [{ query: 'chill-in', runCount: 31, zeroResultCount: 0 }],
+          zeroResultSearches: [{ query: 'pre-press hold', runCount: 9, zeroResultCount: 9 }],
+        },
+      }
     if (name === 'SpaceTrash')
       return {
         space: {
@@ -559,6 +593,7 @@ const SCREENS: Screen[] = [
     render: (mode) => shell(mode, '/pages/page-1/permissions', 'pages/:pageId/permissions', <PagePermissionsPage />),
   },
   { name: 'space-browser', render: (mode) => shell(mode, '/spaces/PROP/-/browse', 'spaces/:spaceKey/-/browse', <SpaceBrowserPage />) },
+  { name: 'analytics', render: (mode) => shell(mode, '/spaces/PROP/-/analytics', 'spaces/:spaceKey/-/analytics', <AnalyticsPage />) },
   { name: 'trash', render: (mode) => shell(mode, '/spaces/PROP/-/trash', 'spaces/:spaceKey/-/trash', <TrashPage />) },
   { name: 'audit-log', render: (mode) => shell(mode, '/admin/audit', 'admin/audit', <AuditLogPage />) },
   {

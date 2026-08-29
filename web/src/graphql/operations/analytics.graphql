@@ -1,0 +1,70 @@
+# design.md §7: usage reporting over the audit trail, for instance admins
+# site-wide (spaceKey null) and space admins within their own spaces. Null for
+# anyone else, and for a space key that does not resolve — one answer for both,
+# so this is not a way to ask which keys exist.
+#
+# Reading a report is itself an `analytics.view` audit event, because it names
+# who read what: the answer to building that record deliberately is that looking
+# at it is on the record too.
+query Analytics($spaceKey: String, $fromUtc: DateTime!, $toUtc: DateTime!) {
+  analytics(spaceKey: $spaceKey, fromUtc: $fromUtc, toUtc: $toUtc) {
+    scope {
+      spaceKey
+      fromUtc
+      toUtc
+      visiblePageCount
+    }
+    activity {
+      day
+      views
+      edits
+    }
+    mostViewed {
+      ...PageActivityRow
+    }
+    mostEdited {
+      ...PageActivityRow
+    }
+    topReaders {
+      ...PersonActivityRow
+    }
+    topContributors {
+      ...PersonActivityRow
+    }
+    health {
+      stalePageCount
+      orphanPageCount
+      unlabelledPageCount
+      neverViewedPageCount
+      stalestPages {
+        ...PageActivityRow
+      }
+    }
+    topSearches {
+      ...SearchActivityRow
+    }
+    zeroResultSearches {
+      ...SearchActivityRow
+    }
+  }
+}
+
+fragment PageActivityRow on PageActivity {
+  pageId
+  title
+  slug
+  spaceKey
+  count
+}
+
+fragment PersonActivityRow on PersonActivity {
+  userId
+  displayName
+  count
+}
+
+fragment SearchActivityRow on SearchActivity {
+  query
+  runCount
+  zeroResultCount
+}
