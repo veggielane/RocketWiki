@@ -65,6 +65,7 @@ Indexes: unique `Key` (filtered `IsDeleted = 0`).
 | AncestorPath | nvarchar(2600) | materialized path of ancestor ids, `/id1/id2/`; see below |
 | Slug | nvarchar(200) | from title; unique among live siblings |
 | Title | nvarchar(500) | denormalized from current revision |
+| Icon | nvarchar(32) null | optional decoration (`PageIcon`); null is "no icon", a real state. Stored by NAME, never by number — an integer column would make inserting an enum member repaint every existing page. An unrecognised name reads back as null |
 | SortOrder | int | position among siblings |
 | CurrentRevisionNumber | int | optimistic-concurrency anchor (`StaleRevisionError`) |
 | CurrentContent | nvarchar(max) | denormalized Markdown of latest revision, FTS-indexed |

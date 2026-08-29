@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using Xunit;
@@ -75,6 +76,63 @@ public class EntityRoundTripTests : SqliteTestBase
         var reloaded = readContext.Attachments.Single(a => a.Id == attachment.Id);
 
         Assert.Equal(hash, reloaded.ContentHash);
+    }
+
+    /// <summary>
+    /// The icon's value conversion, through a real provider. The stored form is asserted
+    /// with raw SQL on purpose: "by name, never by number" is the entire reason the
+    /// conversion exists — an integer column would make inserting a member in the middle
+    /// of the enum silently repaint every existing page — and a round trip through EF
+    /// alone would pass just as happily if the column held 12.
+    /// </summary>
+    [Fact]
+    public void Page_Icon_RoundTripsAsItsWireName_AndNullStaysNull()
+    {
+        var space = TestData.NewSpace();
+        var decorated = TestData.NewPage(space, "decorated");
+        decorated.Icon = PageIcon.Rocket;
+        var plain = TestData.NewPage(space, "plain");
+
+        using (var writeContext = CreateContext())
+        {
+            writeContext.Spaces.Add(space);
+            writeContext.Pages.Add(decorated);
+            writeContext.Pages.Add(plain);
+            writeContext.SaveChanges();
+        }
+
+        using var readContext = CreateContext();
+        Assert.Equal(PageIcon.Rocket, readContext.Pages.Single(p => p.Id == decorated.Id).Icon);
+        Assert.Null(readContext.Pages.Single(p => p.Id == plain.Id).Icon);
+
+        var stored = readContext.Database.SqlQuery<string>(
+            $"SELECT Icon AS Value FROM Pages WHERE Id = {decorated.Id}").Single();
+        Assert.Equal("ROCKET", stored);
+    }
+
+    /// <summary>
+    /// The degradation rule at the storage layer: a row written by a newer build carries
+    /// an icon name this one has never heard of, and reading it must cost the page its
+    /// decoration rather than throwing on every query that touches the table. Written
+    /// with raw SQL because the conversion is precisely what makes an unknown value
+    /// unreachable through EF.
+    /// </summary>
+    [Fact]
+    public void Page_Icon_UnrecognisedStoredName_ReadsBackAsNull()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+
+        using (var writeContext = CreateContext())
+        {
+            writeContext.Spaces.Add(space);
+            writeContext.Pages.Add(page);
+            writeContext.SaveChanges();
+            writeContext.Database.ExecuteSql($"UPDATE Pages SET Icon = 'SPACE_ELEVATOR' WHERE Id = {page.Id}");
+        }
+
+        using var readContext = CreateContext();
+        Assert.Null(readContext.Pages.Single(p => p.Id == page.Id).Icon);
     }
 
     [Fact]

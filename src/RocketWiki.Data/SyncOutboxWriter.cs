@@ -293,6 +293,11 @@ internal static class SyncOutboxWriter
             ancestorPath = page.AncestorPath,
             slug = page.Slug,
             title = page.Title,
+            // By NAME, exactly as the baseline exporter writes it, and written even when
+            // null. The import side reads an absent key as "no icon", so omitting it here
+            // did not merely fail to carry an icon change - it made every incremental
+            // page edit strip the icon a replica had received in its baseline.
+            icon = page.Icon is null ? null : PageIcons.ToWireName(page.Icon.Value),
             sortOrder = page.SortOrder,
             content = page.CurrentContent, // full Markdown, never a diff (design.md §12)
             revisionNumber = page.CurrentRevisionNumber,

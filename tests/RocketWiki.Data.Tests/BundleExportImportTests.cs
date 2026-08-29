@@ -148,6 +148,183 @@ public class BundleExportImportTests : SqliteTestBase
         }
     }
 
+    [Fact]
+    public async Task Baseline_CarriesThePageIcon_ByWireName()
+    {
+        var space = NewExportedSpace();
+        var decorated = TestData.NewPage(space, "decorated");
+        decorated.Icon = PageIcon.Rocket;
+        var plain = TestData.NewPage(space, "plain");
+
+        using var lowContext = CreateContext();
+        lowContext.Spaces.Add(space);
+        lowContext.Pages.Add(decorated);
+        lowContext.Pages.Add(plain);
+        lowContext.SaveChanges();
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var exportService = new BundleExportService(lowContext, storage);
+            var bundleInfo = await exportService.ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var importService = new BundleImportService(highContext, storage);
+                Assert.True((await importService.ImportAsync(bundleInfo.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                Assert.Equal(PageIcon.Rocket, highContext.Pages.Single(p => p.Id == decorated.Id).Icon);
+                Assert.Null(highContext.Pages.Single(p => p.Id == plain.Id).Icon);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The incremental half, which the baseline test above cannot stand in for: the two
+    /// sides serialize a PageUpsert from different code (BundleExportService for a
+    /// baseline, SyncOutboxWriter for a journalled event). Both directions are asserted
+    /// in one round trip because the second is what makes the first load-bearing — the
+    /// import side reads an absent `icon` key as "no icon", so a payload that simply
+    /// omitted the field would clear an icon the replica already held rather than
+    /// merely failing to deliver a new one.
+    /// </summary>
+    [Fact]
+    public async Task Incremental_SettingAndClearingAnIcon_BothReachTheReplica()
+    {
+        var actor = TestData.NewUser();
+        var space = NewExportedSpace();
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.Add(space);
+        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.SaveChanges();
+
+        var pageService = new PageService(lowContext, LowInstanceId);
+        var created = await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "home", "Home", "# Welcome", PageIcon.Rocket),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var exportService = new BundleExportService(lowContext, storage);
+            var first = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
+            Assert.NotNull(first);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var importService = new BundleImportService(highContext, storage);
+                Assert.True((await importService.ImportAsync(first!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+                Assert.Equal(PageIcon.Rocket, highContext.Pages.Single(p => p.Id == created.Value.Id).Icon);
+
+                // A later edit that clears the icon must land as a clear on the replica -
+                // and an edit that changed only the content must not clear it by accident,
+                // which is the same payload key doing both jobs.
+                var cleared = await pageService.UpdatePageContentAsync(
+                    new UpdatePageContentRequest(created.Value.Id, 1, "Home", "# Edited", null, Icon: null),
+                    EditorPrincipal(), actor.Id, AuditCtx);
+                Assert.True(cleared.IsSuccess);
+
+                var second = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
+                Assert.NotNull(second);
+                Assert.True((await importService.ImportAsync(second!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var replicated = highContext.Pages.Single(p => p.Id == created.Value.Id);
+                Assert.Equal("# Edited", replicated.CurrentContent);
+                Assert.Null(replicated.Icon);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// design.md §12's decoration-degrades rule, at the import boundary: a bundle from a
+    /// newer instance naming an icon this build has never heard of imports the page
+    /// without one. Refusing the bundle instead would strand every other change in it
+    /// behind a decoration. The SPA's picker keeps an unrecognised icon selected on the
+    /// strength of this, so it is a cross-component contract rather than an internal
+    /// nicety.
+    /// </summary>
+    [Fact]
+    public async Task Import_AnUnknownIconName_LandsThePageWithoutAnIcon_NotAnError()
+    {
+        var webOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var pageId = Guid.NewGuid();
+        var spaceId = Guid.NewGuid();
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            pageId,
+            spaceId,
+            parentPageId = (Guid?)null,
+            ancestorPath = "/",
+            slug = "from-the-future",
+            title = "From The Future",
+            icon = "SPACE_ELEVATOR", // no such member in this build's PageIcon
+            sortOrder = 0,
+            content = "# Newer",
+            revisionNumber = 1,
+        }, webOptions);
+        var ndjson = System.Text.Json.JsonSerializer.Serialize(
+            new NdjsonEventRecord("FUT", spaceId, 1, nameof(SyncEventType.PageUpsert), payload, DateTime.UtcNow), webOptions) + "\n";
+        var payloadHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(ndjson)));
+
+        var outputDir = CreateBundleOutputDir();
+        Directory.CreateDirectory(outputDir);
+        var storage = CreateFileStorage(out var storageDir);
+        try
+        {
+            var bundlePath = Path.Combine(outputDir, "bundle-000001.zip");
+            WriteRawBundle(bundlePath, new
+            {
+                instanceId = LowInstanceId,
+                bundleNumber = 1,
+                previousManifestHash = (string?)null,
+                payloadSha256 = payloadHash,
+                spaceEventRanges = new Dictionary<string, object>
+                {
+                    ["FUT"] = new { spaceId, fromSequence = 1, toSequence = 1, eventCount = 1 },
+                },
+                formatVersion = BundleFormat.CurrentVersion,
+            }, BundleFormat.EventsEntryName(BundleFormat.CurrentVersion), ndjson);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var importService = new BundleImportService(highContext, storage);
+                var result = await importService.ImportAsync(bundlePath, LowInstanceId, AuditCtx);
+
+                Assert.True(result.IsSuccess);
+                var page = highContext.Pages.Single(p => p.Id == pageId);
+                Assert.Equal("From The Future", page.Title);
+                Assert.Equal("# Newer", page.CurrentContent); // the rest of the payload still lands
+                Assert.Null(page.Icon);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
     // --- Incremental export/import: the full mixed-event round trip -------------------
 
     [Fact]

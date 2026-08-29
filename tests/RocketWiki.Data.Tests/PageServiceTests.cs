@@ -252,6 +252,87 @@ public class PageServiceTests : SqliteTestBase
         Assert.Contains(coAuthor.Id.ToString(), audit.DetailsJson);
     }
 
+    /// <summary>
+    /// The icon rides on the content save, and the request carries the icon the page
+    /// should HAVE afterwards — so null is "cleared", never "unspecified". The clearing
+    /// direction is the one worth pinning: an "only assign when non-null" tidy-up would
+    /// read as an improvement and would silently make removing an icon impossible
+    /// through the only mutation that can set one. The SPA sends the icon on every save
+    /// on the strength of exactly this.
+    /// </summary>
+    [Fact]
+    public async Task UpdatePageContent_AssignsTheIcon_AndNullClearsIt()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+        page.CurrentRevisionNumber = 1;
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.PageRevisions.Add(TestData.NewRevision(page, actor, revisionNumber: 1));
+        await GrantSpaceRoleAsync(context, space.Id, SpaceRole.Editor, actor.Id);
+        context.SaveChanges();
+
+        var service = new PageService(context, LocalInstanceId);
+
+        var set = await service.UpdatePageContentAsync(
+            new UpdatePageContentRequest(page.Id, 1, "Title", "# One", null, PageIcon.Rocket),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(set.IsSuccess);
+        Assert.Equal(PageIcon.Rocket, set.Value.Icon);
+
+        var changed = await service.UpdatePageContentAsync(
+            new UpdatePageContentRequest(page.Id, 2, "Title", "# Two", null, PageIcon.Bug),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(changed.IsSuccess);
+        Assert.Equal(PageIcon.Bug, changed.Value.Icon);
+
+        var cleared = await service.UpdatePageContentAsync(
+            new UpdatePageContentRequest(page.Id, 3, "Title", "# Three", null, Icon: null),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(cleared.IsSuccess);
+        Assert.Null(cleared.Value.Icon);
+
+        // Through a fresh context, so this is the persisted row rather than the tracked
+        // entity the service just mutated.
+        using var readContext = CreateContext();
+        Assert.Null(readContext.Pages.Single(p => p.Id == page.Id).Icon);
+    }
+
+    [Fact]
+    public async Task CreatePage_WithIcon_PersistsIt_AndWithoutOneLeavesItNull()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        await GrantSpaceRoleAsync(context, space.Id, SpaceRole.Editor, actor.Id);
+        context.SaveChanges();
+
+        var service = new PageService(context, LocalInstanceId);
+
+        var decorated = await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "decorated", "Decorated", "# D", PageIcon.Flask),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(decorated.IsSuccess);
+        Assert.Equal(PageIcon.Flask, decorated.Value.Icon);
+
+        var plain = await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "plain", "Plain", "# P"),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(plain.IsSuccess);
+        Assert.Null(plain.Value.Icon);
+
+        using var readContext = CreateContext();
+        Assert.Equal(PageIcon.Flask, readContext.Pages.Single(p => p.Id == decorated.Value.Id).Icon);
+        Assert.Null(readContext.Pages.Single(p => p.Id == plain.Value.Id).Icon);
+    }
+
     [Fact]
     public async Task UpdatePageContent_StaleRevision_ReturnsStaleRevisionErrorWithCurrentState()
     {
