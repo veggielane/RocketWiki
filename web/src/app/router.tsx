@@ -77,14 +77,30 @@ export const router = createBrowserRouter([
       // who lands here sees the space's details read-only rather than a
       // forbidden screen.
       {
-        path: 'spaces/:spaceKey/admin',
+        path: 'spaces/:spaceKey/-/admin',
         lazy: async () => {
           const { SpaceSettingsPage } = await import('../pages/SpaceSettingsPage')
           return { Component: SpaceSettingsPage }
         },
       },
+      // The readable page address: slugs are unique per space and the hierarchy is
+      // deliberately absent, so moving a page never changes its URL. /pages/{id}
+      // still works and is what anything holding only an id links to.
+      //
+      // Every system page for a space lives under a `-` segment
+      // (/spaces/{key}/-/admin) so this dynamic route can never collide with one.
+      // That leaves exactly ONE reserved slug, `-`, instead of a list that had to
+      // grow every time a space route was added — and where forgetting to grow it
+      // would silently shadow every page already using that word.
       {
-        path: 'spaces/:spaceKey/grants',
+        path: 'spaces/:spaceKey/:slug',
+        lazy: async () => {
+          const { SlugPageRoute } = await import('../pages/SlugPageRoute')
+          return { Component: SlugPageRoute }
+        },
+      },
+      {
+        path: 'spaces/:spaceKey/-/grants',
         lazy: async () => {
           const { SpaceGrantsPage } = await import('../pages/SpaceGrantsPage')
           return { Component: SpaceGrantsPage }
@@ -93,14 +109,14 @@ export const router = createBrowserRouter([
       // Not client-gated — the trash query is permission-filtered
       // server-side, same as the read paths generally (design.md §6.7).
       {
-        path: 'spaces/:spaceKey/trash',
+        path: 'spaces/:spaceKey/-/trash',
         lazy: async () => {
           const { TrashPage } = await import('../pages/TrashPage')
           return { Component: TrashPage }
         },
       },
       {
-        path: 'spaces/:spaceKey/import-report',
+        path: 'spaces/:spaceKey/-/import-report',
         lazy: async () => {
           const { ImportReportPage } = await import('../pages/ImportReportPage')
           return { Component: ImportReportPage }

@@ -13,6 +13,7 @@ import { describeLoadFailure, replicaBadgeLabel } from '../feedback/unavailableC
 interface NavNode {
   id: string
   title: string
+  slug: string
   children?: NavNode[]
 }
 
@@ -32,7 +33,17 @@ function routeContext(pathname: string): { spaceKey?: string; pageId?: string } 
   return {}
 }
 
-function PageTree({ nodes, activePageId, depth = 0 }: { nodes: NavNode[]; activePageId?: string; depth?: number }) {
+function PageTree({
+  nodes,
+  spaceKey,
+  activePageId,
+  depth = 0,
+}: {
+  nodes: NavNode[]
+  spaceKey: string
+  activePageId?: string
+  depth?: number
+}) {
   // A plain <ul>: the <li> children below need a list parent, and nesting a
   // sub-tree inside its parent's <li> is what makes the hierarchy real to a
   // screen reader rather than a flat run of links with decorative indentation.
@@ -42,7 +53,7 @@ function PageTree({ nodes, activePageId, depth = 0 }: { nodes: NavNode[]; active
         <li key={node.id}>
           <ListItemButton
             component={RouterLink}
-            to={`/pages/${node.id}`}
+            to={`/spaces/${spaceKey}/${node.slug}`}
             selected={node.id === activePageId}
             sx={{ pl: 4 + depth * 2, py: 0.25 }}
           >
@@ -55,7 +66,7 @@ function PageTree({ nodes, activePageId, depth = 0 }: { nodes: NavNode[]; active
             />
           </ListItemButton>
           {node.children && node.children.length > 0 && (
-            <PageTree nodes={node.children} activePageId={activePageId} depth={depth + 1} />
+            <PageTree nodes={node.children} spaceKey={spaceKey} activePageId={activePageId} depth={depth + 1} />
           )}
         </li>
       ))}
@@ -136,7 +147,7 @@ export function SpaceTreeNav() {
                   secondary={space.isReplica ? replicaBadgeLabel(space.originInstanceId) : undefined}
                 />
               </ListItemButton>
-              {isActive && tree.length > 0 && <PageTree nodes={tree} activePageId={pageId} />}
+              {isActive && tree.length > 0 && <PageTree nodes={tree} spaceKey={space.key} activePageId={pageId} />}
               {isActive && tree.length === 0 && (
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block', pl: 4, py: 0.5 }}>
                   No pages yet

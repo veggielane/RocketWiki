@@ -48,6 +48,8 @@ import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 interface PageTreeNode {
   id: string
   title: string
+  /** The page's address within its space — /spaces/{key}/{slug}. */
+  slug: string
   /** `PageTreeNode.hasRestrictions` — drives the lock badge (design.md §6.6). */
   hasRestrictions: boolean
   labels: string[]
@@ -60,12 +62,24 @@ interface PageTreeNode {
   children?: PageTreeNode[]
 }
 
-function PageTreeList({ nodes, depth = 0 }: { nodes: PageTreeNode[]; depth?: number }) {
+function PageTreeList({
+  nodes,
+  spaceKey,
+  depth = 0,
+}: {
+  nodes: PageTreeNode[]
+  spaceKey: string
+  depth?: number
+}) {
   return (
     <List dense disablePadding>
       {nodes.map((node) => (
         <li key={node.id}>
-          <ListItemButton component={RouterLink} to={`/pages/${node.id}`} sx={{ pl: 2 + depth * 2, gap: 1 }}>
+          <ListItemButton
+            component={RouterLink}
+            to={`/spaces/${spaceKey}/${node.slug}`}
+            sx={{ pl: 2 + depth * 2, gap: 1 }}
+          >
             <ListItemText primary={node.title} />
             {/* §21.5: an over-classified node is pruned with its whole
                 subtree, so every node still here is one this caller may read —
@@ -78,7 +92,7 @@ function PageTreeList({ nodes, depth = 0 }: { nodes: PageTreeNode[]; depth?: num
             )}
           </ListItemButton>
           {node.children && node.children.length > 0 && (
-            <PageTreeList nodes={node.children} depth={depth + 1} />
+            <PageTreeList nodes={node.children} spaceKey={spaceKey} depth={depth + 1} />
           )}
         </li>
       ))}
@@ -249,7 +263,7 @@ export function SpaceBrowserPage() {
               permission-filtered server-side, same "let the server decide
               what's visible" approach as everywhere else, rather than
               guessing who should see a Trash link. */}
-          <Button component={RouterLink} to={`/spaces/${space.key}/trash`} startIcon={<DeleteOutlinedIcon />} variant="outlined" size="small">
+          <Button component={RouterLink} to={`/spaces/${space.key}/-/trash`} startIcon={<DeleteOutlinedIcon />} variant="outlined" size="small">
             Trash
           </Button>
           {/* Space management lives on its own page now (design.md §6.5.1):
@@ -261,7 +275,7 @@ export function SpaceBrowserPage() {
           {canManage && (
             <Button
               component={RouterLink}
-              to={`/spaces/${space.key}/admin`}
+              to={`/spaces/${space.key}/-/admin`}
               startIcon={<SettingsOutlinedIcon />}
               variant="outlined"
               size="small"
@@ -322,7 +336,7 @@ export function SpaceBrowserPage() {
         </Box>
       ) : (
         <Box role="region" aria-label="Page tree">
-          <PageTreeList nodes={tree} />
+          <PageTreeList nodes={tree} spaceKey={space.key} />
         </Box>
       )}
 

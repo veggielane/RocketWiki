@@ -78,8 +78,13 @@ import { getDefaultPresenceTransport } from '../realtime/transports'
  * enforcement point; the typed refusals (Forbidden / ReadOnlyReplica /
  * StaleRevision) still render as designed UX if they ever arrive.
  */
-export function PageViewPage() {
-  const { pageId } = useParams<{ pageId: string }>()
+export function PageViewPage({ pageId: pageIdFromRoute }: { pageId?: string } = {}) {
+  // Two addresses, one screen: /pages/{id} supplies the id as a route param, and
+  // /spaces/{key}/{slug} resolves the slug first and passes the id in. Everything
+  // below is identical either way — there is deliberately no second rendering path
+  // that could drift from this one.
+  const params = useParams<{ pageId: string }>()
+  const pageId = pageIdFromRoute ?? params.pageId
   const navigate = useNavigate()
   const [{ data, fetching, error }, refetchPage] = usePageByIdQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
   const [{ data: meData }] = useCurrentUserQuery()

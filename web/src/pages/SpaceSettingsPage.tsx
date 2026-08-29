@@ -210,14 +210,14 @@ export function SpaceSettingsPage() {
           </Typography>
         </Stack>
         <List>
-          <ListItemButton component={RouterLink} to={`/spaces/${space.key}/grants`}>
+          <ListItemButton component={RouterLink} to={`/spaces/${space.key}/-/grants`}>
             <ShieldOutlinedIcon fontSize="small" sx={{ mr: 2 }} />
             <ListItemText
               primary="Grants"
               secondary="Who holds which role in this space (design.md §6.5)."
             />
           </ListItemButton>
-          <ListItemButton component={RouterLink} to={`/spaces/${space.key}/trash`}>
+          <ListItemButton component={RouterLink} to={`/spaces/${space.key}/-/trash`}>
             <DeleteOutlinedIcon fontSize="small" sx={{ mr: 2 }} />
             <ListItemText primary="Trash" secondary="Deleted pages, and restoring them." />
           </ListItemButton>

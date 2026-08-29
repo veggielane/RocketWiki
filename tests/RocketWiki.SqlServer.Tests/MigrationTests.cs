@@ -43,7 +43,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260825054144_AddPageMarkings", applied);
         Assert.Contains("20260825062334_AddPageMarkingPrefix", applied);
         Assert.Contains("20260829090727_AddPageIcon", applied);
-        Assert.Equal(11, applied.Count);
+        Assert.Contains("20260829092438_SpaceUniquePageSlug", applied);
+        Assert.Equal(12, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -278,8 +279,15 @@ public sealed class MigrationTests : SqlServerTestBase
         // partial indexes; here they must exist with has_filter actually set.
         Assert.Equal(1, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Pages_DeleteBatchId' AND has_filter = 1"));
+        // Slug uniqueness is per SPACE now, not per parent: the slug is a page's
+        // address (/spaces/{key}/{slug}) with the hierarchy deliberately left out, so a
+        // page keeps its URL when it moves. The old per-parent index must be GONE, not
+        // merely joined by a new one — two overlapping uniqueness rules would let a
+        // move silently fail on a constraint nobody remembered.
         Assert.Equal(1, await ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Pages_Space_Parent_Slug' AND has_filter = 1 AND is_unique = 1"));
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Pages_Space_Slug' AND has_filter = 1 AND is_unique = 1"));
+        Assert.Equal(0, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Pages_Space_Parent_Slug'"));
         Assert.Equal(1, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Notifications_Recipient_Unread' AND has_filter = 1"));
         Assert.Equal(1, await ExecuteScalarAsync<int>(

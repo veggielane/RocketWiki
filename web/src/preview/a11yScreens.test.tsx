@@ -549,7 +549,7 @@ const SCREENS: Screen[] = [
     render: (mode) => shell(mode, '/pages/page-1/permissions', 'pages/:pageId/permissions', <PagePermissionsPage />),
   },
   { name: 'space-browser', render: (mode) => shell(mode, '/spaces/PROP', 'spaces/:spaceKey', <SpaceBrowserPage />) },
-  { name: 'trash', render: (mode) => shell(mode, '/spaces/PROP/trash', 'spaces/:spaceKey/trash', <TrashPage />) },
+  { name: 'trash', render: (mode) => shell(mode, '/spaces/PROP/-/trash', 'spaces/:spaceKey/-/trash', <TrashPage />) },
   { name: 'audit-log', render: (mode) => shell(mode, '/admin/audit', 'admin/audit', <AuditLogPage />) },
   {
     name: 'notification-bell-open',

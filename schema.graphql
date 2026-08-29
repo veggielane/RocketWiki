@@ -26,6 +26,7 @@ type Query {
     )
     @cost(weight: "10")
   page(id: UUID!): Page @cost(weight: "10")
+  pageBySlug(spaceKey: String!, slug: String!): Page @cost(weight: "10")
   pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
   me: CurrentUser! @cost(weight: "10")
   customEmojis: [CustomEmojiRef!]! @cost(weight: "10")

@@ -67,12 +67,26 @@ public class PageService : IPageService
             return PageMutationResult<Page>.Failure(new ForbiddenError(permission.EditDenialReason ?? "forbidden"));
         }
 
-        var siblingSlugTaken = await _db.Pages.AnyAsync(
-            p => p.SpaceId == space.Id && p.ParentPageId == request.ParentPageId && p.Slug == request.Slug,
-            cancellationToken);
-        if (siblingSlugTaken)
+        // A slug that a route would swallow produces a page that is created and then
+        // permanently unreachable, so it is refused rather than accepted. Checked here,
+        // on the server, because a client that has not been updated must not be able to
+        // skip it.
+        if (PageSlugs.IsReserved(request.Slug))
         {
-            return PageMutationResult<Page>.Failure(new ValidationError($"Slug '{request.Slug}' is already used by a sibling page."));
+            return PageMutationResult<Page>.Failure(new ValidationError(
+                $"Slug '{request.Slug}' is reserved — a page cannot use it, because /spaces/{{key}}/{request.Slug} already addresses something else."));
+        }
+
+        // Unique per SPACE, not per parent: the slug is the page's address
+        // (/spaces/{key}/{slug}) and the hierarchy is deliberately absent from it, so
+        // that moving a page never changes its URL. Two pages under different parents
+        // sharing a slug would make that address ambiguous.
+        var slugTaken = await _db.Pages.AnyAsync(
+            p => p.SpaceId == space.Id && !p.IsDeleted && p.Slug == request.Slug,
+            cancellationToken);
+        if (slugTaken)
+        {
+            return PageMutationResult<Page>.Failure(new ValidationError($"Slug '{request.Slug}' is already used by another page in this space."));
         }
 
         var now = DateTime.UtcNow;

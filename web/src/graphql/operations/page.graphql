@@ -13,6 +13,7 @@ query PageById($id: UUID!) {
     spaceKey
     title
     slug
+    icon
     content
     currentRevisionNumber
     canEdit
@@ -152,5 +153,17 @@ mutation UpdatePageContentInSession($input: UpdatePageContentRequestInput!) {
     error {
       ...MutationError
     }
+  }
+}
+
+# The slug route: /spaces/{spaceKey}/{slug}. Resolves ONLY the id, on purpose —
+# the route then renders the same PageViewPage, which does its normal PageById
+# read. Selecting the whole page here instead would fetch it twice, once to learn
+# its id and again to render it. Null covers every failure alike (no such space,
+# no such slug, or a page this caller may not view) because the server collapses
+# them: a slug URL must not answer "does this page exist?" (design.md 6.7).
+query PageBySlug($spaceKey: String!, $slug: String!) {
+  pageBySlug(spaceKey: $spaceKey, slug: $slug) {
+    id
   }
 }

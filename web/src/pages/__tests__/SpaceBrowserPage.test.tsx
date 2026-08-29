@@ -127,7 +127,7 @@ describe('SpaceBrowserPage', () => {
     // archiving all live on the space's settings page now.
     renderPage({ spaceOverrides: { grants: [{ id: 'g1' }] } })
     const settings = await screen.findByRole('link', { name: 'Space settings' })
-    expect(settings).toHaveAttribute('href', '/spaces/ENG/admin')
+    expect(settings).toHaveAttribute('href', '/spaces/ENG/-/admin')
   })
 
   it('offers no management entry when the server returns no grant rows', async () => {

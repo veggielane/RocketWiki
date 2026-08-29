@@ -31,6 +31,20 @@ public class PageReadService : IPageReadService
         _permissions = new PermissionContextLoader(db);
     }
 
+    /// <inheritdoc />
+    public async Task<Guid?> FindPageIdBySlugAsync(
+        string spaceKey, string slug, CancellationToken cancellationToken = default)
+    {
+        // No permission filtering here by design — see the interface. The global query
+        // filters still apply, so an archived space's pages are not addressable, and
+        // IsDeleted keeps a trashed page's slug from resolving while the row survives
+        // for restore.
+        return await _db.Pages
+            .Where(p => !p.IsDeleted && p.Slug == slug && p.Space!.Key == spaceKey)
+            .Select(p => (Guid?)p.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<ReadResult<Page>> GetPageAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default)
     {
         var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);

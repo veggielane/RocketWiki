@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isUsableSlug, slugifyTitle } from '../pageSlug'
+import { isReservedSlug, isUsableSlug, slugifyTitle } from '../pageSlug'
 
 describe('slugifyTitle', () => {
   it('lowercases and hyphenates', () => {
@@ -44,5 +44,26 @@ describe('isUsableSlug', () => {
 
   it('accepts a real slug', () => {
     expect(isUsableSlug('launch-notes')).toBe(true)
+  })
+})
+
+describe('the reserved system segment', () => {
+  it('refuses the bare "-" a system route owns', () => {
+    expect(isReservedSlug('-')).toBe(true)
+    expect(isUsableSlug('-')).toBe(false)
+    expect(isReservedSlug('  -  ')).toBe(true)
+  })
+
+  it('allows everything that merely looks systemish', () => {
+    // Under the old per-word list these were all refused; with system pages behind
+    // /spaces/{key}/-/ only the segment itself collides.
+    for (const fine of ['admin', 'grants', 'trash', 'import-report', 'admin-guide', '--']) {
+      expect(isReservedSlug(fine)).toBe(false)
+      expect(isUsableSlug(fine)).toBe(true)
+    }
+  })
+
+  it('is unreachable from a title, since slugify trims hyphens', () => {
+    expect(slugifyTitle('---')).toBe('')
   })
 })

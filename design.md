@@ -177,8 +177,11 @@ PageEmbedding (per-chunk vectors for semantic search — see §9; derived, never
   editable, replicas of a lower instance are read-only (§12); native spaces
   on low can be flagged *exported*.
 - **Page** — belongs to a space, has a `ParentPageId` forming a tree. Carries a
-  slug, current title, sort position, and a denormalized `CurrentContent` column
-  (Markdown of latest revision) for full-text indexing.
+  slug, current title, sort position, an optional icon, and a denormalized
+  `CurrentContent` column (Markdown of latest revision) for full-text indexing.
+  The slug is the page's *address* — `/spaces/{spaceKey}/{slug}`, unique across
+  the whole space rather than among siblings, since the tree is absent from the
+  URL so that moving a page never breaks a link (§17).
 - **PageRevision** — immutable. `PageId`, revision number, Markdown content,
   title at time of save, author, timestamp, optional edit summary. Every save
   creates one. History UI diffs revisions as Markdown text diffs.
@@ -1949,8 +1952,22 @@ grants, whose DDL is not yet written (§7, §14). The k3s deployment (milestone
 ## 17. Open questions
 
 - [ ] Expected scale? (users, pages — affects whether SQL Server FTS is enough)
-- [ ] Page URLs: `/{spaceKey}/{page-slug}` (pretty, needs redirect handling on
-      rename) vs id-based `/pages/{id}/{slug}` (stable). Leaning id-based.
+- [x] Page URLs — resolved: both, with `/spaces/{spaceKey}/{slug}` as the
+      address people see and `/pages/{id}` kept working for anything holding
+      only an id. The hierarchy is deliberately *not* in the URL, which is what
+      makes the pretty form stable: a page can be moved anywhere in its space's
+      tree and every link to it still resolves. The cost is that slug
+      uniqueness widens from (space, parent) to (space) — enforced by a
+      filtered unique index over live pages, so a trashed page's address
+      returns to the pool. Renaming a page does not touch its slug, so there is
+      no redirect problem to handle; changing a slug deliberately is the one
+      case that breaks old links, and it is the author's explicit act.
+      Collisions with the SPA's own space routes are structurally impossible
+      rather than policed by a list: every system page for a space lives under
+      a `-` segment (`/spaces/ENG/-/admin`, `/-/grants`, `/-/trash`), so `-` is
+      the single reserved slug. A per-route word list (admin, grants, trash, …)
+      would have had to grow in lockstep with the router, and forgetting to
+      grow it would silently shadow every page already using that word.
 - [ ] Retention: keep every revision forever, or compact old history?
 - [ ] Do we need page templates (Confluence-style) in v1 or later?
 - [ ] Archived spaces (§6.5.1): read-only-but-visible to their existing

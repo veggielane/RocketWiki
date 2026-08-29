@@ -10,7 +10,7 @@ import {
   Stack,
   TextField,
 } from '@mui/material'
-import { isUsableSlug, slugifyTitle } from './pageSlug'
+import { isReservedSlug, isUsableSlug, slugifyTitle } from './pageSlug'
 import type { ParentOption } from './parentOptions'
 
 export interface CreatePageDialogProps {
@@ -131,9 +131,11 @@ export function CreatePageDialog({
             }}
             fullWidth
             helperText={
-              title.trim().length > 0 && !isUsableSlug(effectiveSlug)
-                ? 'This title has no characters a URL can use — type a slug.'
-                : 'Part of the page address. Derived from the title until you change it.'
+              title.trim().length > 0 && isReservedSlug(effectiveSlug)
+                ? `"-" is reserved for this space's own settings pages — pick another slug.`
+                : title.trim().length > 0 && !isUsableSlug(effectiveSlug)
+                  ? 'This title has no characters a URL can use — type a slug.'
+                  : 'The page address: /spaces/{key}/{slug}. Derived from the title until you change it.'
             }
             error={title.trim().length > 0 && !isUsableSlug(effectiveSlug)}
           />

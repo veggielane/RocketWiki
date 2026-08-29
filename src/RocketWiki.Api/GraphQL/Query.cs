@@ -51,6 +51,50 @@ public partial class Query
     }
 
     /// <summary>
+    /// The page addressed by <c>/spaces/{spaceKey}/{slug}</c>. Slugs are unique per
+    /// space and the hierarchy is deliberately absent from that URL, so a page keeps
+    /// its address when it is moved.
+    ///
+    /// <para>Resolves the slug to an id and then goes through the SAME
+    /// <c>GetPageAsync</c> path as <see cref="Page"/> — canView, the clearance gate and
+    /// the §7 denial audit are not reimplemented here, they are the identical code.
+    /// Every failure collapses to the same null: no such space, no such slug, and a
+    /// page the caller may not view are indistinguishable to the caller, or the URL
+    /// would answer "does this page exist?" for pages §6.7 says must be invisible.</para>
+    /// </summary>
+    [AuditAction("page.view")]
+    [UseAuditDispatch]
+    public async Task<Page?> PageBySlug(
+        string spaceKey,
+        string slug,
+        [Service] IPageReadService readService,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
+        CancellationToken cancellationToken)
+    {
+        var principal = principalAccessor.Current;
+        if (principal is null)
+        {
+            return null;
+        }
+
+        var pageId = await readService.FindPageIdBySlugAsync(spaceKey, slug, cancellationToken);
+        if (pageId is null)
+        {
+            return null;
+        }
+
+        var result = await readService.GetPageAsync(pageId.Value, principal, cancellationToken);
+        if (result is ReadResult<Page>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "page.view", AuditSubjectType.Page, pageId.Value, denied.Reason, cancellationToken);
+        }
+
+        return result.ValueOrNull();
+    }
+
+    /// <summary>
     /// design.md §6.7/§8: the space's page tree, already pruned to what the caller
     /// can view — a restricted subtree is simply absent, not flagged. Stands in for
     /// design.md's `Space.tree` field until a space read service exists to resolve

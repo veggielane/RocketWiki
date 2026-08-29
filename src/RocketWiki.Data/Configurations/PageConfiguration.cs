@@ -38,10 +38,16 @@ public class PageConfiguration : IEntityTypeConfiguration<Page>
         builder.HasIndex(p => new { p.SpaceId, p.ParentPageId, p.SortOrder })
             .HasDatabaseName("IX_Pages_Space_Parent_Sort");
 
-        builder.HasIndex(p => new { p.SpaceId, p.ParentPageId, p.Slug })
+        // Unique per SPACE, not per parent. The slug is the page's address —
+        // /spaces/{key}/{slug} — and the hierarchy is deliberately not in that URL, so
+        // a page keeps its address when it moves. Uniqueness has to match the thing
+        // being addressed, or the same URL could resolve to two pages under different
+        // parents. Filtered on IsDeleted so a slug returns to the pool when its page
+        // goes to the trash.
+        builder.HasIndex(p => new { p.SpaceId, p.Slug })
             .IsUnique()
             .HasFilter("[IsDeleted] = 0")
-            .HasDatabaseName("IX_Pages_Space_Parent_Slug");
+            .HasDatabaseName("IX_Pages_Space_Slug");
 
         builder.HasIndex(p => p.AncestorPath)
             .HasDatabaseName("IX_Pages_AncestorPath");

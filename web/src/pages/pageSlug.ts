@@ -35,11 +35,28 @@ export function slugifyTitle(title: string): string {
 }
 
 /**
+ * The one slug a page may not take. Every system page for a space lives under a `-`
+ * segment (/spaces/{key}/-/admin), so that segment is the only thing a page address
+ * can collide with — one reserved token instead of a list that had to grow with the
+ * router and would silently shadow pages when someone forgot.
+ *
+ * The SERVER is the enforcement point (Core's PageSlugs); this exists so the dialog
+ * can say so before the round trip. Only the exact string: "admin-guide" is fine, and
+ * slugifyTitle can never produce a bare "-" because it trims leading and trailing
+ * hyphens.
+ */
+export const SYSTEM_SEGMENT = '-'
+
+export function isReservedSlug(slug: string): boolean {
+  return slug.trim() === SYSTEM_SEGMENT
+}
+
+/**
  * Whether a slug the user typed (or one we derived) is usable. Empty is the case
  * that actually happens: a title of only punctuation or non-Latin characters
  * slugifies to nothing, and the create button must be disabled rather than sending a
  * request the server will refuse.
  */
 export function isUsableSlug(slug: string): boolean {
-  return slug.trim().length > 0
+  return slug.trim().length > 0 && !isReservedSlug(slug)
 }

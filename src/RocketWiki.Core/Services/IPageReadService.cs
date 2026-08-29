@@ -30,6 +30,19 @@ public interface IPageReadService
     Task<ReadResult<Page>> GetPageAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The id of the live page addressed by <c>/spaces/{spaceKey}/{slug}</c>, or null
+    /// if no such page exists. Slugs are unique per space, so this is unambiguous.
+    ///
+    /// <para>Deliberately returns an ID and makes NO access decision: the caller feeds
+    /// it straight to <see cref="GetPageAsync"/>, which is the one place canView and
+    /// the clearance gate live. Resolving the slug and authorizing it in one method
+    /// would be a second enforcement path to keep in step with the first — and the
+    /// caller collapsing "no such slug" and "denied" to the same null is what keeps a
+    /// slug URL from becoming an existence oracle (§6.7).</para>
+    /// </summary>
+    Task<Guid?> FindPageIdBySlugAsync(string spaceKey, string slug, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The space's page tree, restricted to nodes the principal can view. A node that
     /// fails canView is pruned along with its entire subtree (restrictions only ever
     /// accumulate going down, so a hidden ancestor implies every descendant is hidden
