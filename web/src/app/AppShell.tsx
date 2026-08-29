@@ -1,10 +1,14 @@
-import { useState } from 'react'
-import { Outlet, useNavigation } from 'react-router-dom'
-import { Box, LinearProgress, Stack } from '@mui/material'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Outlet, useLocation, useNavigation } from 'react-router-dom'
+import { Box, LinearProgress, Stack, useMediaQuery, useTheme } from '@mui/material'
+import { visuallyHidden } from '@mui/utils'
 import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
 import { useEmojiRegistryFeed } from '../emoji/useEmojiRegistry'
+import { usePageSpaceRefQuery } from '../graphql/generated/graphql'
 import { AppHeader } from './AppHeader'
 import { SideMenu } from './SideMenu'
+import { PageTitleContext, composeDocumentTitle } from './documentTitle'
+import { routeTitleFor } from './routeCrumbs'
 
 /**
  * The reading measure for everything in the content region. The template's
@@ -15,6 +19,19 @@ import { SideMenu } from './SideMenu'
 const CONTENT_MAX_WIDTH = 960
 
 /**
+ * The measure for screens that are tables rather than prose. The audit log's
+ * columns alone sum past 1100px, so at 960 it horizontally scrolled at every
+ * viewport size — a scan-across-columns screen inside a measure designed for a
+ * 90-character line. Matched by prefix so a new admin table inherits it.
+ */
+const WIDE_MAX_WIDTH = 1400
+const WIDE_ROUTES = ['/admin/audit', '/admin/analytics', '/admin/sync']
+
+function measureFor(pathname: string): number {
+  return WIDE_ROUTES.some((route) => pathname.startsWith(route)) ? WIDE_MAX_WIDTH : CONTENT_MAX_WIDTH
+}
+
+/**
  * The app's frame, following the MUI Dashboard template's layout: a navigation
  * rail down the left, and a content region whose own header strip carries the
  * breadcrumb and the global actions. There is no top app bar — the template has
@@ -22,7 +39,13 @@ const CONTENT_MAX_WIDTH = 960
  * search, notifications) are in the rail and the header strip instead.
  */
 export function AppShell() {
-  const [navOpen, setNavOpen] = useState(true)
+  const theme = useTheme()
+  // The rail is 240px of a 375px phone. `persistent` at every width left about
+  // 87px of content, so below `md` it becomes an overlay that starts closed —
+  // and the desktop open/closed choice is remembered, which it never was.
+  const isCompact = useMediaQuery(theme.breakpoints.down('md'))
+  const [navOpen, setNavOpen] = useState(() => !isCompact && readStoredNavOpen())
+  const { pathname } = useLocation()
   // Routes load their page component lazily (router.tsx) so the initial bundle
   // isn't paying for every route up front — this is the visible trade-off for
   // that: a route whose chunk isn't cached yet has a brief gap between click
@@ -32,6 +55,59 @@ export function AppShell() {
   // One feed for the custom-emoji registry (emoji/registry.ts) — every
   // editor/picker below the shell reads the module store.
   useEmojiRegistryFeed()
+
+  const mainRef = useRef<HTMLElement>(null)
+  // The subject a screen registered for itself (documentTitle.ts). The shell is
+  // the only writer of `document.title`; screens only supply the noun.
+  const [pageTitle, setPageTitle] = useState<string | null>(null)
+  // Identity-stable so `useDocumentTitle`'s effect does not re-fire every render.
+  const registerPageTitle = useCallback((title: string | null) => setPageTitle(title), [])
+
+  // A `/pages/{id}` route names no space in its URL. The breadcrumb asks the
+  // same question for the same route, and urql serves the second caller from
+  // cache rather than issuing a request.
+  const pageId = /^\/pages\/([^/]+)/.exec(pathname)?.[1]
+  const [{ data: pageRef }] = usePageSpaceRefQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
+  const title = pageTitle ?? routeTitleFor(pathname, pageRef?.page?.spaceKey ?? undefined)
+
+  useEffect(() => {
+    document.title = composeDocumentTitle(title)
+  }, [title])
+
+  // Crossing the breakpoint closes the overlay rather than leaving a 240px
+  // drawer sitting over a phone-width screen. Adjusted during render against a
+  // tracked copy rather than in an effect — the repo's idiom for "react to a
+  // changed input" (SpaceTreeNav's path key, PageViewPage's page id), and it
+  // avoids the extra render an effect-then-setState pass costs.
+  const [trackedCompact, setTrackedCompact] = useState(isCompact)
+  if (trackedCompact !== isCompact) {
+    setTrackedCompact(isCompact)
+    setNavOpen(isCompact ? false : readStoredNavOpen())
+  }
+
+  // Focus moves to the content region on every navigation, which is the whole
+  // reason `#main-content` is `tabIndex={-1}`. Without it a client-side route
+  // change leaves focus on the link that was activated, the accessible page name
+  // never changes, and a screen-reader user is told nothing at all happened
+  // (WCAG 2.4.3, and 2.4.2 via the title above). Skipped on first render: the
+  // browser's own initial focus is correct, and stealing it would fight the
+  // skip link.
+  const firstRender = useRef(true)
+  useEffect(() => {
+    if (firstRender.current) {
+      firstRender.current = false
+      return
+    }
+    mainRef.current?.focus()
+  }, [pathname])
+
+  const toggleNav = () => {
+    setNavOpen((open) => {
+      const next = !open
+      if (!isCompact) storeNavOpen(next)
+      return next
+    })
+  }
 
   return (
     <Box sx={{ display: 'flex', height: '100vh' }}>
@@ -45,7 +121,7 @@ export function AppShell() {
           position: 'absolute',
           left: -9999,
           top: 'auto',
-          zIndex: (theme) => theme.zIndex.tooltip + 1,
+          zIndex: (t) => t.zIndex.tooltip + 1,
           p: 1.5,
           bgcolor: 'background.paper',
           color: 'text.primary',
@@ -55,11 +131,12 @@ export function AppShell() {
         Skip to main content
       </Box>
 
-      <SideMenu open={navOpen} />
+      <SideMenu open={navOpen} temporary={isCompact} onClose={() => setNavOpen(false)} />
 
       <Box
         component="main"
         id="main-content"
+        ref={mainRef}
         tabIndex={-1}
         sx={{
           flexGrow: 1,
@@ -78,11 +155,17 @@ export function AppShell() {
         {navigation.state !== 'idle' && (
           <LinearProgress sx={{ position: 'sticky', top: 0, zIndex: 1 }} aria-label="Loading page" />
         )}
+        {/* Focusing `<main>` moves the reading cursor but announces nothing on
+            its own. This is what says where you landed — the same
+            visually-hidden status region the ask page uses for its answers. */}
+        <Box role="status" aria-live="polite" sx={visuallyHidden}>
+          {title}
+        </Box>
         <Stack
           spacing={2}
           sx={{
             alignItems: 'center',
-            mx: 3,
+            mx: { xs: 2, sm: 3 },
             // Bottom padding reserves the fixed classification banner's strip so
             // a page's last line is never hidden underneath it. Applied here
             // rather than per-route because the banner is viewport-fixed: it
@@ -90,14 +173,36 @@ export function AppShell() {
             pb: `${CLASSIFICATION_BANNER_HEIGHT + 32}px`,
           }}
         >
-          <Box sx={{ width: '100%', maxWidth: CONTENT_MAX_WIDTH }}>
-            <AppHeader navOpen={navOpen} onToggleNav={() => setNavOpen((v) => !v)} />
+          <Box sx={{ width: '100%', maxWidth: measureFor(pathname) }}>
+            <AppHeader navOpen={navOpen} onToggleNav={toggleNav} />
           </Box>
-          <Box sx={{ width: '100%', maxWidth: CONTENT_MAX_WIDTH }}>
-            <Outlet />
+          <Box sx={{ width: '100%', maxWidth: measureFor(pathname) }}>
+            <PageTitleContext value={registerPageTitle}>
+              <Outlet />
+            </PageTitleContext>
           </Box>
         </Stack>
       </Box>
     </Box>
   )
+}
+
+const NAV_OPEN_KEY = 'rocketwiki:nav-open'
+
+function readStoredNavOpen(): boolean {
+  try {
+    return window.localStorage.getItem(NAV_OPEN_KEY) !== 'false'
+  } catch {
+    // Storage can throw outright (private modes, blocked third-party contexts).
+    // The rail being open is the better default, so failure reads as "open".
+    return true
+  }
+}
+
+function storeNavOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(NAV_OPEN_KEY, String(open))
+  } catch {
+    // Remembering the rail is a nicety; failing to is not worth an error.
+  }
 }

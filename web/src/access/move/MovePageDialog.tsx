@@ -18,6 +18,7 @@ import {
   type RestrictionSummary,
 } from './visibilityChange'
 import { RuleExpressionOrUnreadable } from '../RuleExpressionSummary'
+import { useDialogFullScreen } from '../../app/useDialogFullScreen'
 
 export type { MoveTargetOption }
 
@@ -46,6 +47,7 @@ export function MovePageDialog({
   targetOptions,
   onConfirm,
 }: MovePageDialogProps) {
+  const fullScreen = useDialogFullScreen()
   const [selectedId, setSelectedId] = useState<string | 'root' | null>(null)
 
   const selectedOption = targetOptions.find((t) => (t.id ?? 'root') === selectedId) ?? null
@@ -62,7 +64,7 @@ export function MovePageDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={fullScreen}>
       <DialogTitle>Move "{pageTitle}"</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>Choose the new parent page.</DialogContentText>

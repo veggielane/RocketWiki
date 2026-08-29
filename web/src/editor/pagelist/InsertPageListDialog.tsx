@@ -23,7 +23,8 @@ import { usePageListVocabularyQuery, useParseRqlQuery } from '../../graphql/gene
 import type { PageListSpec } from '../../pagelist/fenceBody'
 import { buildRqlFromBuilder, type PageListBuilderState, type PageListSort } from '../../pagelist/rqlBuilder'
 import { querySpans } from '../../pagelist/rqlErrorSpans'
-import { useDebouncedValue } from '../useDebouncedValue'
+import { useDebouncedValue } from '../../useDebouncedValue'
+import { useDialogFullScreen } from '../../app/useDialogFullScreen'
 
 export interface InsertPageListDialogProps {
   open: boolean
@@ -70,6 +71,7 @@ const EMPTY_BUILDER: PageListBuilderState = { labels: [], labelMode: 'all', spac
  * anything real.
  */
 export function InsertPageListDialog({ open, onClose, onInsert }: InsertPageListDialogProps) {
+  const fullScreen = useDialogFullScreen()
   const [mode, setMode] = useState<'builder' | 'query'>('builder')
   const [builder, setBuilder] = useState<PageListBuilderState>(EMPTY_BUILDER)
   const [rawQuery, setRawQuery] = useState('')
@@ -114,7 +116,7 @@ export function InsertPageListDialog({ open, onClose, onInsert }: InsertPageList
   }
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={fullScreen}>
       <DialogTitle>Insert page list</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>

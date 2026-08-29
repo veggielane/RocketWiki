@@ -44,6 +44,8 @@ import { FormDefinitionBlock, FormListBlock } from '../forms/FormBlocks'
 import { PageIdContext } from '../pages/pageContext'
 import { TrashPage } from '../pages/TrashPage'
 import { AuditLogPage } from '../pages/AuditLogPage'
+import { SpaceListPage } from '../pages/SpaceListPage'
+import { AdminPage } from '../pages/AdminPage'
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from '../access/move/MovePageDialog'
 import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
@@ -686,6 +688,13 @@ const SCREENS: Screen[] = [
   },
   { name: 'trash', render: (mode) => shell(mode, '/spaces/PROP/-/trash', 'spaces/:spaceKey/-/trash', <TrashPage />) },
   { name: 'audit-log', render: (mode) => shell(mode, '/admin/audit', 'admin/audit', <AuditLogPage />) },
+  // The LANDING page — the first screen every user sees, and the only one
+  // rendering the replica chip inside a card. It had no capture at all, so
+  // none of that was ever contrast- or target-size-checked.
+  { name: 'space-list', render: (mode) => shell(mode, '/', '/', <SpaceListPage />) },
+  // Carries the 'Planned' treatment for the not-built-yet sections, which is a
+  // dashed border plus a chip — exactly the kind of thing worth painting.
+  { name: 'admin', render: (mode) => shell(mode, '/admin', 'admin', <AdminPage />) },
   {
     name: 'notification-bell-open',
     render: (mode) => shell(mode, '/pages/page-1', 'pages/:pageId', <PageViewPage />),

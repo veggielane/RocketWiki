@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Provider as UrqlProvider } from 'urql'
 import { SettingsPage } from '../SettingsPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
@@ -136,11 +136,31 @@ describe('SettingsPage — clear token flow', () => {
     const { mock } = renderPage({ hasTokenInitially: true })
     expect(await screen.findByText('Token saved')).toBeInTheDocument()
 
+    // Confirmed first, like every other destructive action in the app.
     fireEvent.click(screen.getByRole('button', { name: 'Clear token' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Clear your GitLab token?' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Clear token' }))
+
     expect(await screen.findByText('GitLab token cleared.')).toBeInTheDocument()
     expect(mock.operations.map((o) => o.name)).toContain('ClearGitLabToken')
     await waitFor(() => expect(screen.getByText('No token')).toBeInTheDocument())
-    expect(screen.queryByRole('button', { name: 'Clear token' })).not.toBeInTheDocument()
+    // `waitFor`, because the dialog's own confirm button carries the same label
+    // and lingers for the length of MUI's exit transition.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Clear token' })).not.toBeInTheDocument(),
+    )
+  })
+
+  it('cancelling the confirmation clears nothing', async () => {
+    const { mock } = renderPage({ hasTokenInitially: true })
+    await screen.findByText('Token saved')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear token' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Clear your GitLab token?' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(mock.operations.map((o) => o.name)).not.toContain('ClearGitLabToken')
+    expect(screen.getByText('Token saved')).toBeInTheDocument()
   })
 
   it('no clear button is offered when there is no token to clear', async () => {

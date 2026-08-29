@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { PageViewPage } from '../PageViewPage'
@@ -112,11 +112,24 @@ function renderPage({
  * canEdit/canComment/canManageAccess fields decide what's offered, so the
  * page never offers what the server would refuse.
  */
+/**
+ * The secondary page actions (History, Details, Add child page, Move,
+ * Permissions, Delete) live behind one overflow menu rather than in a row of
+ * eight equally-weighted buttons — see PageViewPage's own comment. Tests that
+ * are about *which* actions are offered have to open it first.
+ */
+async function openMoreActions() {
+  fireEvent.click(await screen.findByRole('button', { name: 'More actions' }))
+  return screen.findByRole('menu')
+}
+
 describe('PageViewPage accessibility', () => {
   it('has no axe violations with full edit affordances, comments, and attachments', async () => {
     renderPage({ pageOverrides: { canEdit: true, canComment: true, canManageAccess: true } })
     await screen.findByRole('heading', { name: 'Runbook' })
-    await screen.findByRole('button', { name: 'Move' })
+    // With the menu OPEN — the affordances it holds are otherwise unrendered
+    // and would drop out of the sweep entirely.
+    await openMoreActions()
     await expectNoAxeViolations()
   })
 })
@@ -150,7 +163,7 @@ describe('PageViewPage permission-driven affordances', () => {
   it('hides Move/Edit/Delete/Permissions and the composer from a viewer-only user', async () => {
     renderPage()
     expect(await screen.findByRole('heading', { name: 'Runbook' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Move' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Move' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /edit/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /permissions/i })).not.toBeInTheDocument()
@@ -162,17 +175,21 @@ describe('PageViewPage permission-driven affordances', () => {
 
   it('offers Move/Edit/Delete and label editing when canEdit is true', async () => {
     renderPage({ pageOverrides: { canEdit: true } })
-    expect(await screen.findByRole('button', { name: 'Move' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Edit' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+    // Edit is the one action promoted out of the menu: it is what most readers
+    // came to do, and it is the screen's only emphasised button.
+    expect(await screen.findByRole('link', { name: 'Edit' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Edit labels' })).toBeInTheDocument()
-    // Still no Permissions link — managing access is a separate right.
-    expect(screen.queryByRole('link', { name: 'Permissions' })).not.toBeInTheDocument()
+    await openMoreActions()
+    expect(screen.getByRole('menuitem', { name: 'Move' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
+    // Still no Permissions item — managing access is a separate right.
+    expect(screen.queryByRole('menuitem', { name: 'Permissions' })).not.toBeInTheDocument()
   })
 
   it('offers the Permissions link only with canManageAccess', async () => {
     renderPage({ pageOverrides: { canManageAccess: true } })
-    expect(await screen.findByRole('link', { name: 'Permissions' })).toHaveAttribute(
+    await openMoreActions()
+    expect(screen.getByRole('menuitem', { name: 'Permissions' })).toHaveAttribute(
       'href',
       '/pages/page-1/permissions',
     )
@@ -233,7 +250,8 @@ describe('PageViewPage properties panel (design.md §20)', () => {
     // Managing properties moved off the page. The link an editor gets is to
     // everything-about-the-page, which is where the rest of the chrome is headed.
     renderPage({ pageOverrides: { canEdit: true } })
-    expect(await screen.findByRole('link', { name: 'Details' })).toHaveAttribute(
+    await openMoreActions()
+    expect(screen.getByRole('menuitem', { name: 'Details' })).toHaveAttribute(
       'href',
       '/pages/page-1/details',
     )
@@ -245,7 +263,8 @@ describe('PageViewPage properties panel (design.md §20)', () => {
     // move affordances already follow.
     renderPage({ pageOverrides: { canEdit: false } })
     await screen.findByRole('heading', { name: 'Runbook' })
-    expect(screen.queryByRole('link', { name: 'Details' })).not.toBeInTheDocument()
+    await openMoreActions()
+    expect(screen.queryByRole('menuitem', { name: 'Details' })).not.toBeInTheDocument()
   })
 
   it('offers History to a reader who cannot edit, unlike Details', async () => {
@@ -254,7 +273,8 @@ describe('PageViewPage properties panel (design.md §20)', () => {
     // reader is already looking at, so hiding it would withhold nothing they
     // could not reconstruct from the page in front of them.
     renderPage({ pageOverrides: { canEdit: false } })
-    expect(await screen.findByRole('link', { name: 'History' })).toHaveAttribute(
+    await openMoreActions()
+    expect(screen.getByRole('menuitem', { name: 'History' })).toHaveAttribute(
       'href',
       '/pages/page-1/history',
     )

@@ -239,6 +239,34 @@ export function describePageListUnavailable(reason: PageListUnavailableReason): 
 }
 
 /**
+ * The instance with no spaces in it yet.
+ *
+ * Two surfaces say this — the space list and the rail's tree — and they had
+ * drifted: the list branched on whether the reader could actually create a
+ * space, and the rail told everyone "create one to start writing" while hiding
+ * the button that would (design.md §6.5.1 makes creation instance-admin-only).
+ * Telling a reader to do something they cannot is worse than telling them
+ * nothing, so the branch lives here and both surfaces read it.
+ *
+ * Follows web/README.md's empty-state rule: the fact AND the consequence.
+ */
+export function describeNoSpaces(isInstanceAdmin: boolean): string {
+  return isInstanceAdmin
+    ? 'No spaces yet — create one to start writing.'
+    : 'No spaces yet — an instance admin can create the first one.'
+}
+
+/**
+ * A space with no pages in it yet. The space browser rendered an empty list and
+ * nothing else, which is the first thing anyone sees after making a space.
+ */
+export function describeNoPages(canCreate: boolean): string {
+  return canCreate
+    ? 'No pages yet — use New page to write the first one.'
+    : 'No pages yet in this space.'
+}
+
+/**
  * Replica spaces (design.md §12 — and §12's word IS "replica", so no
  * user-facing surface says "mirror"/"mirrored"). The badge form is shared
  * by the space-list chip, the tree secondary line, and the lead of every
@@ -250,4 +278,4 @@ export function replicaBadgeLabel(originInstanceId: string | null | undefined): 
 }
 
 export const REPLICA_EXPLANATION =
-  'Content arrives via one-way sync; editing happens on the origin instance (design.md §12).'
+  'Content arrives via one-way sync; editing happens on the origin instance.'

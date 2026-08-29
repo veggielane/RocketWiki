@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
 import { useArchivedSpacesQuery, useRestoreSpaceMutation } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { formatTimestamp } from '../format/dateTime'
 import { describeMutationError } from '../graphql/mutationError'
 
@@ -14,6 +16,7 @@ import { describeMutationError } from '../graphql/mutationError'
  * is what the empty state says.
  */
 export function ArchivedSpacesPage() {
+  useDocumentTitle('Archived spaces')
   const [{ data, fetching, error }, refetch] = useArchivedSpacesQuery()
   const [, restoreSpace] = useRestoreSpaceMutation()
   const [restoringId, setRestoringId] = useState<string | null>(null)
@@ -38,11 +41,13 @@ export function ArchivedSpacesPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h4" component="h1">
-        Archived spaces
-      </Typography>
+      <PageHeader title="Archived spaces" subject={{ label: 'Spaces', to: '/' }} />
 
-      {message && <Alert severity={message.severity}>{message.text}</Alert>}
+      {message && (
+        <Alert severity={message.severity} onClose={() => setMessage(null)}>
+          {message.text}
+        </Alert>
+      )}
 
       {fetching && <Skeleton variant="rectangular" height={200} />}
 

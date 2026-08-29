@@ -81,6 +81,21 @@ export interface RichTextEditorProps {
    * accompanied by visible helper text saying the shortcut exists.
    */
   onSubmitShortcut?: () => void
+  /**
+   * Ctrl/Cmd+S. Registered in the keymap for the same reason as the submit
+   * shortcut, and it returns `true` so the browser's own Save Page dialog never
+   * opens over the editor.
+   */
+  onSaveShortcut?: () => void
+  /**
+   * Fired the first time (and every time) the document changes.
+   *
+   * Separate from `onChange`, which serializes the whole document to Markdown
+   * on every keystroke. A caller that only needs to know "this has been edited"
+   * — the unsaved-changes guard — must not pay for a full serialization per
+   * character on a long page.
+   */
+  onDocChanged?: () => void
   /** Accessible name for the editable region. Defaults to 'Page content'. */
   ariaLabel?: string
   /**
@@ -98,45 +113,71 @@ export interface RichTextEditorProps {
  * so there is never a second Markdown rendering path to drift out of sync).
  */
 export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(function RichTextEditor(
-  { initialMarkdown, editable = true, onChange, showToolbar = true, pageId, collab, onSubmitShortcut, ariaLabel, ariaDescribedBy },
+  {
+    initialMarkdown,
+    editable = true,
+    onChange,
+    showToolbar = true,
+    pageId,
+    collab,
+    onSubmitShortcut,
+    onSaveShortcut,
+    onDocChanged,
+    ariaLabel,
+    ariaDescribedBy,
+  },
   ref,
 ) {
   const [uploadError, setUploadError] = useState<string | null>(null)
 
-  // The shortcut extension is created once (useEditor's extension list is
-  // fixed at mount) — the ref keeps the latest callback reachable without
+  // The shortcut extensions are created once (useEditor's extension list is
+  // fixed at mount) — the refs keep the latest callbacks reachable without
   // rebuilding the editor, same latest-value-in-a-ref pattern as
   // useCoEditSession's seedMarkdownRef (updated in an effect, not during
   // render).
   const submitShortcutRef = useRef(onSubmitShortcut)
+  const saveShortcutRef = useRef(onSaveShortcut)
+  const docChangedRef = useRef(onDocChanged)
   useEffect(() => {
     submitShortcutRef.current = onSubmitShortcut
+    saveShortcutRef.current = onSaveShortcut
+    docChangedRef.current = onDocChanged
   })
 
   // The collab extension builder rides the binding (see CollabBinding's
   // comment) so this file never statically imports the CRDT chunk.
   const baseExtensions = collab ? collab.extensionsModule.buildCollabExtensions(collab) : richTextExtensions
   const editor = useEditor({
-    extensions: onSubmitShortcut
-      ? [
-          ...baseExtensions,
-          // priority above StarterKit's HardBreak ('Mod-Enter' inserts a
-          // hard break) and CodeBlock ('Mod-Enter' exits the block) — in a
-          // composer, submit wins everywhere, matching Ask and search.
-          Extension.create({
-            name: 'composerSubmitShortcut',
-            priority: 1000,
-            addKeyboardShortcuts() {
-              return {
-                'Mod-Enter': () => {
-                  submitShortcutRef.current?.()
-                  return true
-                },
-              }
+    extensions: [
+      ...baseExtensions,
+      // priority above StarterKit's HardBreak ('Mod-Enter' inserts a
+      // hard break) and CodeBlock ('Mod-Enter' exits the block) — in a
+      // composer, submit wins everywhere, matching Ask and search.
+      Extension.create({
+        name: 'editorShortcuts',
+        priority: 1000,
+        addKeyboardShortcuts() {
+          return {
+            'Mod-Enter': () => {
+              // Unbound in page mode: falling through leaves HardBreak's own
+              // binding intact, which is what Mod-Enter should do there.
+              if (!submitShortcutRef.current) return false
+              submitShortcutRef.current()
+              return true
             },
-          }),
-        ]
-      : baseExtensions,
+            // Returning true even when nothing is bound would swallow the
+            // browser's Save Page for no reason; returning true when something
+            // IS bound is the point, so the native dialog never opens over the
+            // editor.
+            'Mod-s': () => {
+              if (!saveShortcutRef.current) return false
+              saveShortcutRef.current()
+              return true
+            },
+          }
+        },
+      }),
+    ],
     // Collaborative mode: content comes from the Y.Doc fragment, never
     // from here — a second content source would duplicate the document.
     ...(collab ? {} : { content: markdownToJson(initialMarkdown) }),
@@ -144,10 +185,32 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     editorProps: {
       attributes: {
         class: 'rw-editor-content',
-        role: 'textbox',
-        'aria-multiline': 'true',
-        'aria-label': ariaLabel ?? 'Page content',
-        ...(ariaDescribedBy ? { 'aria-describedby': ariaDescribedBy } : {}),
+        // The textbox role belongs to the EDITING surface only.
+        //
+        // `editorProps.attributes` land on the ProseMirror element whether or
+        // not it is editable, so applying these unconditionally made every page
+        // VIEW — and every rendered comment, and every help topic — announce as
+        // a single flat form field: `role="textbox"` overrides the descendant
+        // semantics, so the headings, lists, tables and links inside stop being
+        // navigable structures, and the heading anchors this file computes below
+        // stop being reachable. axe cannot see it (aria-multiline is permitted
+        // on textbox), which is why the read-only assertion in
+        // __tests__/readOnlyRendering.test.tsx exists.
+        //
+        // A read-only render is a document, so it gets a document's markup: no
+        // role at all. The name still has somewhere to live when a caller
+        // supplies one — `aria-label` on a plain div is inert, so it moves onto
+        // a labelled `region` instead, which is a landmark a reader can jump to.
+        ...(editable
+          ? {
+              role: 'textbox',
+              'aria-multiline': 'true',
+              'aria-label': ariaLabel ?? 'Page content',
+              ...(ariaDescribedBy ? { 'aria-describedby': ariaDescribedBy } : {}),
+            }
+          : ariaLabel
+            ? { role: 'region', 'aria-label': ariaLabel }
+            : {}),
       },
       handleDrop: (view, event, _slice, moved) => {
         if (moved || !pageId) return false
@@ -172,6 +235,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       },
     },
     onUpdate: ({ editor: updated }) => {
+      docChangedRef.current?.()
       onChange?.(jsonToMarkdown(updated.getJSON()))
     },
   })

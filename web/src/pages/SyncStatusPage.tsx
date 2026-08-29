@@ -1,7 +1,10 @@
-import { Alert, Box, Chip, Paper, Stack, Typography } from '@mui/material'
-import { DataGrid, type GridColDef } from '@mui/x-data-grid'
+import { Alert, Chip, Paper, Stack, Typography } from '@mui/material'
+import { type GridColDef } from '@mui/x-data-grid'
 import { useSyncStatusQuery, type SyncStatusQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { PageHeader } from '../app/PageHeader'
+import { RegistryDataGrid } from '../app/RegistryDataGrid'
+import { useDocumentTitle } from '../app/documentTitle'
 import { formatTimestamp } from '../format/dateTime'
 
 type ExportedRow = SyncStatusQuery['syncStatus']['exportedSpaces'][number]
@@ -41,7 +44,9 @@ function OriginCard({ origin }: { origin: Origin }) {
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Stack spacing={1}>
         <Stack direction="row" spacing={1} sx={{ alignItems: 'baseline', flexWrap: 'wrap' }}>
-          <Typography variant="h6">Origin: {origin.originInstanceId}</Typography>
+          <Typography variant="h6" component="h3">
+            Origin: {origin.originInstanceId}
+          </Typography>
           <Typography variant="body2" color="text.secondary">
             last bundle #{origin.lastBundleNumber} · imported {formatTimestamp(origin.lastImportAtUtc)}
           </Typography>
@@ -49,17 +54,13 @@ function OriginCard({ origin }: { origin: Origin }) {
         <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-all' }}>
           Manifest hash (the link the next bundle must chain from): {origin.lastManifestHash}
         </Typography>
-        <Box sx={{ height: 52 + 40 * Math.max(origin.spaces.length, 1) }}>
-          <DataGrid
-            aria-label={`Applied sequences from ${origin.originInstanceId}`}
-            rows={origin.spaces}
-            columns={originSpaceColumns}
-            getRowId={(row) => row.spaceId}
-            hideFooter
-            disableRowSelectionOnClick
-            density="compact"
-          />
-        </Box>
+        <RegistryDataGrid
+          aria-label={`Applied sequences from ${origin.originInstanceId}`}
+          rowCount={origin.spaces.length}
+          rows={origin.spaces}
+          columns={originSpaceColumns}
+          getRowId={(row) => row.spaceId}
+        />
       </Stack>
     </Paper>
   )
@@ -75,6 +76,7 @@ function OriginCard({ origin }: { origin: Origin }) {
  * un-exported pending work and how stale each origin's last import is.
  */
 export function SyncStatusPage() {
+  useDocumentTitle('Sync status')
   const [{ data, fetching, error }] = useSyncStatusQuery()
 
   if (error) {
@@ -85,38 +87,35 @@ export function SyncStatusPage() {
 
   return (
     <Stack spacing={3}>
-      <Stack direction="row" spacing={2} sx={{ alignItems: 'baseline' }}>
-        <Typography variant="h4" component="h1">
-          Sync status
-        </Typography>
-        {status && (
-          <Typography variant="body2" color="text.secondary">
-            this instance: <strong>{status.localInstanceId}</strong>
-          </Typography>
-        )}
-      </Stack>
+      <PageHeader
+        title="Sync status"
+        description={status ? <>This instance: <strong>{status.localInstanceId}</strong></> : undefined}
+      />
 
       <Stack spacing={1}>
-        <Typography variant="h6">Exported spaces (low → high outbox)</Typography>
+        {/* `component="h2"` — a bare `variant="h6"` renders an <h6> element, so
+            these sections were jumping the document straight from h1 to h6.
+            Same fix on every section heading in this file. */}
+        <Typography variant="h6" component="h2">
+          Exported spaces (low → high outbox)
+        </Typography>
         {status && status.exportedSpaces.length === 0 && (
           <Typography color="text.secondary">No spaces are flagged for export from this instance.</Typography>
         )}
-        <Box sx={{ height: 52 + 40 * Math.max(status?.exportedSpaces.length ?? 0, 1) }}>
-          <DataGrid
-            aria-label="Exported spaces"
-            rows={status?.exportedSpaces ?? []}
-            columns={exportedColumns}
-            getRowId={(row) => row.spaceId}
-            loading={fetching}
-            hideFooter
-            disableRowSelectionOnClick
-            density="compact"
-          />
-        </Box>
+        <RegistryDataGrid
+          aria-label="Exported spaces"
+          rowCount={status?.exportedSpaces.length ?? 0}
+          rows={status?.exportedSpaces ?? []}
+          columns={exportedColumns}
+          getRowId={(row) => row.spaceId}
+          loading={fetching}
+        />
       </Stack>
 
       <Stack spacing={1}>
-        <Typography variant="h6">Imported origins (bundles applied here)</Typography>
+        <Typography variant="h6" component="h2">
+          Imported origins (bundles applied here)
+        </Typography>
         {status && status.origins.length === 0 && (
           <Typography color="text.secondary">No sync bundles have been imported into this instance.</Typography>
         )}

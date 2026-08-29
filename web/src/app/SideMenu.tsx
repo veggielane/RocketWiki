@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Box,
   Divider,
@@ -41,8 +41,22 @@ export const SIDE_MENU_WIDTH = 240
  * `persistent` rather than the template's `permanent`, because collapsing the
  * rail is an affordance this app already had and the template simply has no
  * equivalent of; the toggle lives in the header strip (AppHeader.tsx).
+ *
+ * Below `md` it becomes `temporary` instead — an overlay with a backdrop that
+ * closes on selection. A persistent 240px rail on a 375px phone left about 87px
+ * of content beside it, which is not a narrow layout so much as an unusable one.
+ * The variant is decided by the shell (AppShell.tsx owns the media query) rather
+ * than here, so there is one answer to "are we compact" for the whole frame.
  */
-export function SideMenu({ open }: { open: boolean }) {
+export function SideMenu({
+  open,
+  temporary = false,
+  onClose,
+}: {
+  open: boolean
+  temporary?: boolean
+  onClose?: () => void
+}) {
   const location = useLocation()
   const navigate = useNavigate()
   const auth = useAuth()
@@ -54,12 +68,30 @@ export function SideMenu({ open }: { open: boolean }) {
   const displayName = meData?.me.name ?? auth.user?.profile.name ?? 'Account'
   const email = auth.user?.profile.email
 
+  // An overlay that stayed open over the page you just chose would hide it.
+  // Keyed on the route rather than on a click handler: the rail is full of
+  // controls that are NOT navigation (every disclosure chevron in the tree), and
+  // a click handler on the drawer would fold the overlay away every time someone
+  // expanded a branch to look for the page they wanted.
+  useEffect(() => {
+    if (temporary && open) onClose?.()
+    // `onClose` is not a dependency: the shell recreates it per render, and
+    // including it would close the drawer immediately on every re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
+
   return (
     <Drawer
-      variant="persistent"
+      variant={temporary ? 'temporary' : 'persistent'}
       open={open}
+      onClose={onClose}
+      // Keeps the rail's DOM (and its tree state) mounted across a phone-width
+      // open/close cycle rather than refetching every expanded branch.
+      ModalProps={{ keepMounted: true }}
       sx={{
-        width: open ? SIDE_MENU_WIDTH : 0,
+        // A temporary drawer sits over the content and must not also reserve
+        // width beside it.
+        width: !temporary && open ? SIDE_MENU_WIDTH : 0,
         flexShrink: 0,
         '& .MuiDrawer-paper': {
           width: SIDE_MENU_WIDTH,

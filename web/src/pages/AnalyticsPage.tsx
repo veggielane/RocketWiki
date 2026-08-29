@@ -12,7 +12,9 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { useAnalyticsQuery } from '../graphql/generated/graphql'
+import { useAnalyticsQuery, useSpaceListQuery } from '../graphql/generated/graphql'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { ActivityChart } from '../analytics/ActivityChart'
 
 /** Windows offered, in days. Kept short and round — a date-range picker invites
@@ -57,6 +59,12 @@ export function AnalyticsPage() {
     variables: { spaceKey: spaceKey ?? null, fromUtc, toUtc },
   })
 
+  // Names the space in the heading. The same query the rail runs on every
+  // route, so urql answers it from cache rather than issuing a request.
+  const [{ data: spaceList }] = useSpaceListQuery({ pause: !spaceKey })
+  const spaceName = spaceList?.spaces.find((s) => s.key === spaceKey)?.name
+  useDocumentTitle(spaceKey ? `Analytics — ${spaceName ?? spaceKey}` : 'Site analytics')
+
   if (fetching) {
     return <Skeleton variant="rectangular" height={420} />
   }
@@ -77,21 +85,28 @@ export function AnalyticsPage() {
 
   return (
     <Stack spacing={3}>
-      <Stack direction="row" spacing={2} alignItems="flex-start" justifyContent="space-between" flexWrap="wrap">
+      <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap" }}>
         {/* flexGrow on the title, not just space-between: with both children
             sized to their content the selector sat mid-header rather than at the
             right edge. */}
-        <Stack spacing={0.5} sx={{ flexGrow: 1, minWidth: 240 }}>
-          <Typography variant="h4" component="h1">
-            {spaceKey ? `Analytics: ${spaceKey}` : 'Site analytics'}
-          </Typography>
-          {/* Says what the numbers are OF. A report filtered by clearance that
-              presented itself as the whole space would be quietly misleading. */}
-          <Typography variant="body2" color="text.secondary">
-            Counted over the {report.scope.visiblePageCount} page
-            {report.scope.visiblePageCount === 1 ? '' : 's'} you can view.
-          </Typography>
-        </Stack>
+        <Box sx={{ flexGrow: 1, minWidth: 240 }}>
+          <PageHeader
+            title={spaceKey ? 'Analytics' : 'Site analytics'}
+            // The space's NAME, from the space list the rail already has
+            // cached — this heading used to read `Analytics: PROP` while its
+            // siblings said `Trash — Propulsion`, the same space under two
+            // names on adjacent screens. Falls back to the key only while the
+            // list is still in flight.
+            subject={
+              spaceKey ? { label: spaceName ?? spaceKey, to: `/spaces/${spaceKey}` } : undefined
+            }
+            // Says what the numbers are OF. A report filtered by clearance that
+            // presented itself as the whole space would be quietly misleading.
+            description={`Counted over the ${report.scope.visiblePageCount} page${
+              report.scope.visiblePageCount === 1 ? '' : 's'
+            } you can view.`}
+          />
+        </Box>
         <TextField
           select
           size="small"
@@ -108,7 +123,7 @@ export function AnalyticsPage() {
         </TextField>
       </Stack>
 
-      <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: "wrap" }}>
         <StatTile label="Views" value={totalViews} />
         <StatTile label="Edits" value={totalEdits} />
         <StatTile label="Readers" value={report.topReaders.length} hint="in the top ten" />
@@ -119,7 +134,7 @@ export function AnalyticsPage() {
         <ActivityChart data={report.activity.map((p) => ({ day: p.day as string, views: p.views, edits: p.edits }))} />
       </Panel>
 
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} alignItems="stretch">
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} sx={{ alignItems: "stretch" }}>
         <Panel title="Most viewed" grow>
           <PageList rows={report.mostViewed} unit="views" />
         </Panel>
@@ -128,7 +143,7 @@ export function AnalyticsPage() {
         </Panel>
       </Stack>
 
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} alignItems="stretch">
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} sx={{ alignItems: "stretch" }}>
         <Panel title="Top readers" grow>
           {/* Named at the instance owner's direction. Reading this page is itself
               an audited event — see Query.Analytics. */}
@@ -140,7 +155,7 @@ export function AnalyticsPage() {
       </Stack>
 
       <Panel title="Content health">
-        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
+        <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: "wrap", mb: 2 }}>
           <StatTile label="Stale" value={report.health.stalePageCount} hint="no edit in 6 months" />
           <StatTile label="Top level" value={report.health.orphanPageCount} hint="no parent page" />
           <StatTile label="Unlabelled" value={report.health.unlabelledPageCount} />
@@ -157,7 +172,7 @@ export function AnalyticsPage() {
         )}
       </Panel>
 
-      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} alignItems="stretch">
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} sx={{ alignItems: "stretch" }}>
         <Panel title="Top searches" grow>
           <SearchList rows={report.topSearches} />
         </Panel>
@@ -232,13 +247,13 @@ function PageList({
   return (
     <Stack component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }} spacing={0.75}>
       {rows.map((row) => (
-        <Stack key={row.pageId} component="li" direction="row" justifyContent="space-between" spacing={2}>
+        <Stack key={row.pageId} component="li" direction="row" spacing={2} sx={{ justifyContent: "space-between" }}>
           {/* The readable address, so a row is somewhere you can go rather than a
               name you have to search for. */}
           <Link component={RouterLink} to={`/spaces/${row.spaceKey}/${row.slug}`} noWrap sx={{ minWidth: 0 }}>
             {row.title}
           </Link>
-          <Typography variant="body2" color="text.secondary" whiteSpace="nowrap">
+          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
             {row.count.toLocaleString()} {unit}
           </Typography>
         </Stack>
@@ -252,11 +267,11 @@ function PersonList({ rows, unit }: { rows: readonly { userId: string; displayNa
   return (
     <Stack component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }} spacing={0.75}>
       {rows.map((row) => (
-        <Stack key={row.userId} component="li" direction="row" justifyContent="space-between" spacing={2}>
+        <Stack key={row.userId} component="li" direction="row" spacing={2} sx={{ justifyContent: "space-between" }}>
           <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
             {row.displayName}
           </Typography>
-          <Typography variant="body2" color="text.secondary" whiteSpace="nowrap">
+          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
             {row.count.toLocaleString()} {unit}
           </Typography>
         </Stack>
@@ -276,13 +291,13 @@ function SearchList({
   return (
     <Stack component="ol" sx={{ listStyle: 'none', m: 0, p: 0 }} spacing={0.75}>
       {rows.map((row) => (
-        <Stack key={row.query} component="li" direction="row" justifyContent="space-between" spacing={2}>
+        <Stack key={row.query} component="li" direction="row" spacing={2} sx={{ justifyContent: "space-between" }}>
           <Box component="span" sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             <Typography variant="body2" component="span">
               {row.query}
             </Typography>
           </Box>
-          <Typography variant="body2" color="text.secondary" whiteSpace="nowrap">
+          <Typography variant="body2" color="text.secondary" sx={{ whiteSpace: "nowrap" }}>
             {row.runCount.toLocaleString()}
           </Typography>
         </Stack>

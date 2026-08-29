@@ -10,6 +10,7 @@ import {
   MenuItem,
   Paper,
   Select,
+  Snackbar,
   Stack,
   Tooltip,
   Typography,
@@ -27,6 +28,9 @@ import {
   type PagePermissionsQuery,
 } from '../graphql/generated/graphql'
 import { describeMutationError } from '../graphql/mutationError'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { AccessGate } from '../auth/AccessGate'
 import { RuleBuilder } from '../access/RuleBuilder'
 import { RuleExpressionOrUnreadable } from '../access/RuleExpressionSummary'
@@ -227,8 +231,21 @@ function RestrictionsEditor({ pageId, ownRestrictions, groups, attributes, onSav
         )}
       </Stack>
 
-      {saveError && <Alert severity="error">{saveError}</Alert>}
-      {saved && <Alert severity="success">Saved.</Alert>}
+      {/* `warning` + dismissible, matching every other action-failure surface. */}
+      {saveError && (
+        <Alert severity="warning" onClose={() => setSaveError(null)}>
+          {saveError}
+        </Alert>
+      )}
+      {/* A Snackbar, not a permanent Alert (web/README.md: "transient success
+          that requires no action"). The banner version never cleared — `saved`
+          was only reset at the START of the next save — so "Saved." sat on the
+          screen while the user made further edits it no longer described. */}
+      <Snackbar open={saved} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setSaved(false)}>
+        <Alert severity="success" onClose={() => setSaved(false)}>
+          Restrictions saved.
+        </Alert>
+      </Snackbar>
     </Stack>
   )
 }
@@ -290,6 +307,7 @@ export function PagePermissionsPage() {
   // manage-gated server-side; an error just means typing group names by
   // hand (the picker is freeSolo), never a blocked editor.
   const [{ data: vocabulary }] = useRuleVocabularyQuery()
+  useDocumentTitle(data?.page ? `Permissions — ${data.page.title}` : 'Permissions')
 
   if (!pageId) return null
 
@@ -306,16 +324,21 @@ export function PagePermissionsPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h4" component="h1">
-        Permissions: {page?.title ?? ''}
-      </Typography>
+      {/*
+        The heading lives INSIDE the gate. Outside it, a reader who can view the
+        page but not manage its access got "Permissions: Stage two ignition
+        anomaly" sitting directly above "404 — this page doesn't exist, or you
+        don't have access to it": a screen contradicting itself. When the query
+        failed outright it was worse — a heading ending in a bare colon.
+      */}
       <AccessGate allowed={!error && page?.canManageAccess} loading={fetching}>
         {page && (
           <Stack spacing={3}>
+            <PageHeader title="Permissions" subject={{ label: page.title, to: `/pages/${page.id}` }} />
             <Alert severity="info" variant="outlined">
               Restrictions never widen access — they add conditions on top of the space role, and accumulate down
               the page tree: acting on this page requires satisfying its restrictions <em>and</em> every
-              ancestor's (design.md §6.4).
+              ancestor's.
             </Alert>
 
             <Stack spacing={1.5}>

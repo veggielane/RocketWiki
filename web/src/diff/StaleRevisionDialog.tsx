@@ -10,6 +10,7 @@ import {
   Typography,
 } from '@mui/material'
 import { MarkdownDiffView } from './MarkdownDiffView'
+import { useDialogFullScreen } from '../app/useDialogFullScreen'
 
 export interface StaleRevisionDialogProps {
   open: boolean
@@ -46,9 +47,10 @@ export function StaleRevisionDialog({
   onCopyAndCancel,
   onKeepEditing,
 }: StaleRevisionDialogProps) {
+  const fullScreen = useDialogFullScreen()
   const titlesDiffer = theirTitle !== null && theirTitle !== yourTitle
   return (
-    <Dialog open={open} onClose={onKeepEditing} maxWidth="md" fullWidth>
+    <Dialog open={open} onClose={onKeepEditing} maxWidth="md" fullWidth fullScreen={fullScreen}>
       <DialogTitle>Someone else saved changes first</DialogTitle>
       <DialogContent>
         <DialogContentText sx={{ mb: 2 }}>

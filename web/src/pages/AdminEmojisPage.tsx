@@ -3,11 +3,6 @@ import {
   Alert,
   Box,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   IconButton,
   Paper,
   Stack,
@@ -16,9 +11,13 @@ import {
   Typography,
 } from '@mui/material'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
-import { DataGrid, type GridColDef } from '@mui/x-data-grid'
+import { type GridColDef } from '@mui/x-data-grid'
 import { useCustomEmojisQuery, type CustomEmojisQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { ConfirmDialog } from '../feedback/ConfirmDialog'
+import { PageHeader } from '../app/PageHeader'
+import { RegistryDataGrid } from '../app/RegistryDataGrid'
+import { useDocumentTitle } from '../app/documentTitle'
 import { EMOJI_NAME_MAX_LENGTH, isValidEmojiName } from '../emoji/grammar'
 import { EMOJI_ACCEPTED_TYPES, EmojiMutationFailure, deleteEmoji, uploadEmoji } from '../emoji/emojiApi'
 import { EmojiImg } from '../emoji/EmojiImg'
@@ -44,6 +43,7 @@ const NAME_RULES = `Lowercase letters, digits, "_" and "-" only (1–${EMOJI_NAM
  * construction, which is also why the server hard-deletes.
  */
 export function AdminEmojisPage() {
+  useDocumentTitle('Custom emojis')
   const [{ data, fetching, error }, refetch] = useCustomEmojisQuery()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [name, setName] = useState('')
@@ -145,14 +145,16 @@ export function AdminEmojisPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h4" component="h1">
-        Custom emojis
-      </Typography>
-      <Typography variant="body2" color="text.secondary">
-        Anyone signed in can use these as <code>:name:</code> in pages and comments. PNG, JPEG, WebP, or GIF
-        (animated GIFs keep their frames); images are squared and re-encoded server-side. Definitions are
-        instance-local — synced content falls back to the literal text where a name isn't defined (design.md §19).
-      </Typography>
+      <PageHeader
+        title="Custom emojis"
+        description={
+          <>
+            Anyone signed in can use these as <code>:name:</code> in pages and comments. PNG, JPEG, WebP, or GIF
+            (animated GIFs keep their frames); images are squared and re-encoded server-side. Definitions are
+            instance-local — synced content falls back to the literal text where a name isn't defined.
+          </>
+        }
+      />
 
       {feedback && (
         <Alert severity={feedback.severity} onClose={() => setFeedback(null)}>
@@ -212,35 +214,28 @@ export function AdminEmojisPage() {
         </Typography>
       )}
       {rows.length > 0 && (
-        <Box sx={{ height: 52 + 40 * rows.length, maxWidth: 640 }}>
-          <DataGrid
+        <Box sx={{ maxWidth: 640 }}>
+          <RegistryDataGrid
             aria-label="Custom emoji registry"
+            rowCount={rows.length}
             rows={rows}
             columns={columns}
             getRowId={(row) => row.name}
             loading={fetching}
-            hideFooter
-            disableRowSelectionOnClick
-            density="compact"
           />
         </Box>
       )}
 
-      <Dialog open={confirmDelete !== null} onClose={() => setConfirmDelete(null)}>
-        <DialogTitle>Delete :{confirmDelete}:?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            Pages and comments using it will show the literal <code>:{confirmDelete}:</code> text instead. The
-            name becomes available again immediately.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
-          <Button color="error" onClick={() => confirmDelete && void handleDelete(confirmDelete)}>
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={`Delete :${confirmDelete}:?`}
+        confirmLabel="Delete"
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => confirmDelete && void handleDelete(confirmDelete)}
+      >
+        Pages and comments using it will show the literal <code>:{confirmDelete}:</code> text instead. The name
+        becomes available again immediately.
+      </ConfirmDialog>
     </Stack>
   )
 }

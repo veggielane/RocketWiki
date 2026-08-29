@@ -1,5 +1,7 @@
 import { useParams } from 'react-router-dom'
-import { Alert, Stack, Typography } from '@mui/material'
+import { Alert, Stack } from '@mui/material'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 
 /**
  * design.md §13: per-page lossy-conversion findings from the Confluence
@@ -10,18 +12,17 @@ import { Alert, Stack, Typography } from '@mui/material'
  * than showing a permanently-empty report.
  */
 export function ImportReportPage() {
+  useDocumentTitle('Import report')
   const { spaceKey } = useParams<{ spaceKey: string }>()
 
   if (!spaceKey) return null
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h4" component="h1">
-        Import report: {spaceKey}
-      </Typography>
+      <PageHeader title="Import report" subject={{ label: spaceKey, to: `/spaces/${spaceKey}` }} />
       <Alert severity="info">
-        Confluence migration (design.md §13) hasn't started yet — there's no importer, and no import-report API.
-        This page will show per-page lossy-conversion findings once milestone 5 lands.
+        Confluence migration hasn't started yet — there's no importer, and no import-report API. This page will
+        show per-page lossy-conversion findings once it lands.
       </Alert>
     </Stack>
   )

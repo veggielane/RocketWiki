@@ -10,6 +10,7 @@ import {
   Typography,
 } from '@mui/material'
 import { parseGitLabIssueUrl, type GitLabIssueRef } from '../../gitlab/issueScheme'
+import { useDialogFullScreen } from '../../app/useDialogFullScreen'
 
 export interface InsertGitLabIssueLinkDialogProps {
   open: boolean
@@ -26,6 +27,7 @@ export interface InsertGitLabIssueLinkDialogProps {
  * and only project + iid survive — the stored form is scheme-only.
  */
 export function InsertGitLabIssueLinkDialog({ open, initialText, onClose, onInsert }: InsertGitLabIssueLinkDialogProps) {
+  const fullScreen = useDialogFullScreen()
   const [url, setUrl] = useState('')
   const [project, setProject] = useState('')
   const [iid, setIid] = useState('')
@@ -62,7 +64,7 @@ export function InsertGitLabIssueLinkDialog({ open, initialText, onClose, onInse
   }
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={fullScreen}>
       <DialogTitle>Insert GitLab issue link</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>

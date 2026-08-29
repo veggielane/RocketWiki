@@ -17,11 +17,17 @@ import {
 } from '@mui/material'
 import { useSearchFacetsQuery, useSearchPagesQuery, type SearchPagesQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
+import { useDebouncedValue } from '../useDebouncedValue'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 import { AggregateMarkingBanner } from '../markings/AggregateMarkingBanner'
 import { AskWikiSearchNudge } from '../ask/AskWikiSearchNudge'
 
 type SearchEdge = SearchPagesQuery['search']['edges'][number]
+
+/** Long enough that a typed word is one request, short enough to feel live. */
+const SEARCH_DEBOUNCE_MS = 300
 
 /**
  * design.md §9: hybrid keyword + semantic ranking is entirely a server
@@ -33,10 +39,32 @@ type SearchEdge = SearchPagesQuery['search']['edges'][number]
 export function SearchPage() {
   const [params, setParams] = useSearchParams()
   const query = params.get('q') ?? ''
+  useDocumentTitle(query ? `Search — ${query}` : 'Search')
+
+  // What is typed, versus what has been committed to the URL. The field is
+  // uncontrolled by the URL so typing stays instant; the debounced value is
+  // what becomes a history entry and a request.
+  const [draft, setDraft] = useState(query)
+  const debouncedDraft = useDebouncedValue(draft, SEARCH_DEBOUNCE_MS)
   const [spaceKey, setSpaceKey] = useState<string | null>(null)
   const [labels, setLabels] = useState<string[]>([])
   const [after, setAfter] = useState<string | undefined>(undefined)
   const [edges, setEdges] = useState<SearchEdge[]>([])
+
+  // The settled draft becomes the URL. `replace` so a search is ONE history
+  // entry rather than one per keystroke, and only when it actually differs —
+  // otherwise arriving with `?q=` from the header would immediately rewrite it.
+  useEffect(() => {
+    if (debouncedDraft === query) return
+    setParams(debouncedDraft ? { q: debouncedDraft } : {}, { replace: true })
+  }, [debouncedDraft, query, setParams])
+
+  // Someone else changed the query — the header's search box, or a back/forward
+  // that landed on a different one. The field follows the URL in that direction
+  // too, or it would keep showing what was typed here.
+  useEffect(() => {
+    setDraft((current) => (current === query ? current : query))
+  }, [query])
 
   // A genuinely new search (query/space/labels changed) starts pagination
   // over — otherwise "Load more" would keep paging through stale results
@@ -60,14 +88,16 @@ export function SearchPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h4" component="h1">
-        Search
-      </Typography>
+      <PageHeader title="Search" />
 
       <TextField
         label="Query"
-        value={query}
-        onChange={(e) => setParams(e.target.value ? { q: e.target.value } : {})}
+        value={draft}
+        // `replace`, not the default push. Every keystroke used to add a history
+        // entry, so pressing Back after typing "ignition" walked backwards
+        // through i-g-n-i-t-i-o-n. The debounce (useDebouncedValue) is what
+        // stops one request per character.
+        onChange={(e) => setDraft(e.target.value)}
         fullWidth
       />
 
@@ -105,7 +135,10 @@ export function SearchPage() {
 
       {data && (
         <>
-          <Typography variant="body2" color="text.secondary">
+          {/* A live region, so the result count reaches someone who is still in
+              the query field and cannot see the list change. The ask page
+              already does this for its answers; search did not. */}
+          <Typography variant="body2" color="text.secondary" role="status" aria-live="polite">
             {data.search.totalCount} result{data.search.totalCount === 1 ? '' : 's'}
           </Typography>
           {/* design.md §21.13: a result list is a compilation and carries the

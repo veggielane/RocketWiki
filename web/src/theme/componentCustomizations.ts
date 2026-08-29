@@ -37,8 +37,8 @@ export const softShadow = {
  *   failure (`link-in-text-block`, enforced in the browser a11y tier).
  * - **`MuiIconButton`** gives every icon button a border and a filled box. That
  *   suits the template, whose only icon buttons sit in the header; here it
- *   would also box every tree chevron and every remove-row button. The app bar
- *   cluster gets that treatment locally instead (AppShell.tsx).
+ *   would also box every tree chevron and every remove-row button. The header
+ *   cluster gets that treatment locally instead (AppHeader.tsx).
  * - **`MuiCheckbox`**, **`MuiSelect`** (a second bordered box around an already
  *   bordered input), **`MuiFormLabel`**, **`MuiLinearProgress`**, `MuiTab*`,
  *   `MuiStep*` and `MuiPagination*` are dropped as unused or redundant here.

@@ -7,6 +7,8 @@ import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../
 import { groupTrashBatches } from '../trash/groupTrashBatches'
 import { describeExpiry } from '../trash/trashCountdown'
 import { UserAvatar } from '../avatars/UserAvatar'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 
 /**
  * design.md §6.4.1: a cascade delete trashes a whole subtree as one
@@ -40,6 +42,8 @@ export function TrashPage() {
     [data],
   )
 
+  useDocumentTitle(data?.space ? `Trash — ${data.space.name}` : 'Trash')
+
   if (!spaceKey) return null
 
   const handleRestore = async (batchId: string, rootPageId: string) => {
@@ -69,7 +73,12 @@ export function TrashPage() {
   }
 
   if (fetching) {
-    return <Skeleton variant="rectangular" height={300} />
+    return (
+      <Stack spacing={1}>
+        <Skeleton variant="text" width="40%" height={48} />
+        <Skeleton variant="rectangular" height={300} />
+      </Stack>
+    )
   }
 
   if (error || !data?.space) {
@@ -78,11 +87,13 @@ export function TrashPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h4" component="h1">
-        Trash: {data.space.name}
-      </Typography>
+      <PageHeader title="Trash" subject={{ label: data.space.name, to: `/spaces/${data.space.key}` }} />
 
-      {message && <Alert severity={message.severity}>{message.text}</Alert>}
+      {message && (
+        <Alert severity={message.severity} onClose={() => setMessage(null)}>
+          {message.text}
+        </Alert>
+      )}
 
       {batches.length === 0 ? (
         <Typography color="text.secondary">

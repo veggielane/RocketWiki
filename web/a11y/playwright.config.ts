@@ -25,5 +25,15 @@ export default defineConfig({
   use: {
     ...devices['Desktop Chrome'],
   },
-  projects: [{ name: 'chromium' }],
+  projects: [
+    // Chromium's default: `prefers-color-scheme: light`. Both themes' captures
+    // run here, each carrying its own `data-theme`.
+    { name: 'chromium', use: { colorScheme: 'light' } },
+    // The same LIGHT captures under a dark OS preference. editor-content.css
+    // themes on the media query as well as on `data-theme`, so "app light, OS
+    // dark" is a distinct rendering that the default project cannot produce and
+    // that shipped broken. a11y.spec.ts skips the dark captures here — those
+    // would only re-check agreement.
+    { name: 'os-dark', use: { colorScheme: 'dark' } },
+  ],
 })

@@ -71,6 +71,12 @@ describe('filterTreeByLabel', () => {
     const apiNode: SpacePageTreeQuery['pageTree'][number] = {
       id: 'api-a',
       title: 'From API',
+      // `icon` and `hasChildren` joined the TreeNode fragment when the rail
+      // gained per-page glyphs and truncation-honest disclosure; this fixture
+      // is a compile-time assertion against the real generated type, so it has
+      // to carry them.
+      icon: null,
+      hasChildren: false,
       slug: 'from-api',
       sortOrder: 0,
       hasRestrictions: false,

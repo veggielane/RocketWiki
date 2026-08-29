@@ -27,8 +27,8 @@ const screens = existsSync(screensDir) ? readdirSync(screensDir).filter((f) => f
 test('capture set exists and is complete', () => {
   // Fail loudly if the generation step was skipped or silently produced
   // nothing — a green run over zero files would be a tier that doesn't exist.
-  // 22 screens × 2 themes; update alongside a11yScreens.test.tsx.
-  expect(screens.length, `no .html captures found in ${screensDir}`).toBeGreaterThanOrEqual(44)
+  // 24 screens × 2 themes; update alongside a11yScreens.test.tsx.
+  expect(screens.length, `no .html captures found in ${screensDir}`).toBeGreaterThanOrEqual(48)
   const stems = new Set(screens.map((f) => f.replace(/--(light|dark)\.html$/, '')))
   for (const stem of stems) {
     expect(screens, `${stem} is missing a theme variant`).toContain(`${stem}--light.html`)
@@ -37,7 +37,19 @@ test('capture set exists and is complete', () => {
 })
 
 for (const file of screens) {
-  test(`axe WCAG 2.2 AA: ${file}`, async ({ page }) => {
+  test(`axe WCAG 2.2 AA: ${file}`, async ({ page }, testInfo) => {
+    // The `os-dark` project exists for ONE combination: an app rendering in
+    // light mode inside a browser whose `prefers-color-scheme` is dark. The
+    // plain-CSS layer (editor-content.css) themes on both the media query and
+    // `data-theme`, so before its light reset existed that pair produced light
+    // chrome around a dark-variabled page body — a real 1.4.3 failure that no
+    // capture could show, because captures stamp `data-theme` and Chromium
+    // reports the media query as light unless told otherwise. Running the DARK
+    // captures under a dark OS would just re-test agreement; the light ones are
+    // the disagreement.
+    if (testInfo.project.name === 'os-dark' && !file.endsWith('--light.html')) {
+      test.skip()
+    }
     await page.goto(pathToFileURL(join(screensDir, file)).href)
     // Fonts/layout settle — axe reads computed geometry for target-size.
     await page.waitForLoadState('load')

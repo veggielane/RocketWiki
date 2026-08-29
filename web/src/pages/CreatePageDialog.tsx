@@ -14,6 +14,7 @@ import { isReservedSlug, isUsableSlug, slugifyTitle } from './pageSlug'
 import type { ParentOption } from './parentOptions'
 import { PageIconPicker } from './PageIconPicker'
 import type { PageIcon } from '../graphql/generated/graphql'
+import { useDialogFullScreen } from '../app/useDialogFullScreen'
 
 /** What the dialog hands back, named so its two callers cannot drift from it. */
 export interface CreatePageValues {
@@ -66,6 +67,7 @@ export function CreatePageDialog({
   onCancel,
   onConfirm,
 }: CreatePageDialogProps) {
+  const fullScreen = useDialogFullScreen()
   const [title, setTitle] = useState('')
   const [slug, setSlug] = useState('')
   const [slugEdited, setSlugEdited] = useState(false)
@@ -99,7 +101,7 @@ export function CreatePageDialog({
   const canCreate = title.trim().length > 0 && isUsableSlug(effectiveSlug) && !busy
 
   return (
-    <Dialog open={open} onClose={handleCancel} fullWidth maxWidth="sm">
+    <Dialog open={open} onClose={handleCancel} fullWidth maxWidth="sm" fullScreen={fullScreen}>
       <DialogTitle>New page in {parentLabel}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>

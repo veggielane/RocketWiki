@@ -18,6 +18,9 @@ import {
   useSetGitLabTokenMutation,
 } from '../graphql/generated/graphql'
 import { describeMutationError } from '../graphql/mutationError'
+import { ConfirmDialog } from '../feedback/ConfirmDialog'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { AvatarSettingsSection } from '../avatars/AvatarSettingsSection'
 
 /**
@@ -42,6 +45,8 @@ export function SettingsPage() {
   const [{ fetching: clearing }, clearGitLabToken] = useClearGitLabTokenMutation()
   const [tokenInput, setTokenInput] = useState('')
   const [feedback, setFeedback] = useState<{ severity: 'success' | 'warning'; message: string } | null>(null)
+  const [confirmClear, setConfirmClear] = useState(false)
+  useDocumentTitle('Settings')
 
   const status = data?.gitlabStatus
 
@@ -81,21 +86,15 @@ export function SettingsPage() {
     refetchStatus({ requestPolicy: 'network-only' })
   }
 
-  if (fetching) {
-    return (
-      <Stack spacing={1}>
-        <Skeleton variant="text" width="30%" height={48} />
-        <Skeleton variant="rectangular" height={160} />
-      </Stack>
-    )
-  }
-
   return (
     <Box>
-      <Typography variant="h4" component="h1" sx={{ mb: 3 }}>
-        Settings
-      </Typography>
+      <Box sx={{ mb: 3 }}>
+        <PageHeader title="Settings" />
+      </Box>
 
+      {/* The avatar section depends only on `me`, so it renders immediately.
+          The whole page used to wait on the GitLab status query — an unrelated
+          request — and skeleton out the one section that was already ready. */}
       <Box sx={{ mb: 3 }}>
         <AvatarSettingsSection
           localUserId={meData?.me.localUserId}
@@ -105,7 +104,9 @@ export function SettingsPage() {
         />
       </Box>
 
-      {status?.configured === true && (
+      {fetching && <Skeleton variant="rectangular" height={200} sx={{ maxWidth: 640 }} />}
+
+      {!fetching && status?.configured === true && (
         <Paper variant="outlined" sx={{ p: 3, maxWidth: 640 }}>
           <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
             <Typography variant="h6" component="h2">
@@ -151,12 +152,31 @@ export function SettingsPage() {
               color="error"
               size="small"
               sx={{ mt: 2 }}
-              onClick={() => void handleClear()}
+              onClick={() => setConfirmClear(true)}
               disabled={clearing}
             >
               Clear token
             </Button>
           )}
+
+          {/* Confirmed like every other destructive action in the app. It is
+              recoverable — paste the token again — but the recovery needs a
+              trip to GitLab to mint a new one, since this page (correctly)
+              cannot show you the old one. */}
+          <ConfirmDialog
+            open={confirmClear}
+            title="Clear your GitLab token?"
+            confirmLabel="Clear token"
+            busy={clearing}
+            onCancel={() => setConfirmClear(false)}
+            onConfirm={() => {
+              setConfirmClear(false)
+              void handleClear()
+            }}
+          >
+            GitLab embeds on wiki pages stop resolving for you until you paste a new one. The token is stored
+            encrypted and is never shown back, so clearing it means creating a fresh one in GitLab.
+          </ConfirmDialog>
         </Paper>
       )}
     </Box>

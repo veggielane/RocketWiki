@@ -34,7 +34,26 @@ Empty states say the fact **and** the consequence:
 "No spaces yet — create one to start writing", not "No spaces.".
 An empty state and a *failed load* are different things and must not borrow
 each other's words — a query that errored says `describeLoadFailure(...)`,
-never "No spaces.".
+never "No spaces.". Where the consequence depends on who is looking, the
+branch lives in `unavailableCopy.ts` (`describeNoSpaces`) rather than at each
+surface: the rail and the space list drifted apart once, and the rail ended up
+telling readers to press a button that is hidden from them.
+
+An **action that failed** uses `severity="warning"` and is dismissible
+(`onClose`). `severity="error"` is for the genuinely exceptional — a failed
+sign-in, an upload whose file is now nowhere. Two screens used `error` for an
+ordinary refused mutation and gave no way to clear it.
+
+A **destructive confirmation** is `feedback/ConfirmDialog.tsx`: the safe option
+takes focus, the destructive one is filled. Do not hand-roll one — the three
+that existed disagreed about both, and the quietest button on the screen was
+the irreversible one. Dialogs carrying a **form** go full-screen below `sm`
+(`app/useDialogFullScreen.ts`); confirmations stay centred.
+
+Every screen's `<h1>` comes from `app/PageHeader.tsx` — the screen's name as
+the heading, the subject on the line below as a link back to it. Nine screens
+had grown five spellings of that idea and four had no way back at all. The
+heading also names the browser tab, via `app/documentTitle.ts`.
 
 ## Look and feel
 

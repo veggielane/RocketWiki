@@ -614,6 +614,27 @@
   font-size: 0.9em;
 }
 
+/*
+ * Dark values, reachable two ways, and a light reset that MUST outlive both.
+ *
+ * The media query serves a first paint before ColorModeProvider has stamped
+ * `data-theme` on <html>; the attribute selector is the app's own toggle, which
+ * has to beat the OS preference.
+ *
+ * The light block below is NOT redundant with the declarations at the top of
+ * this file. Those are `var(--rw-x, fallback)` fallbacks, which only apply when
+ * the variable is *unset* — once the media query has set `--rw-code-bg` because
+ * the OS is dark, nothing unsets it. Without this reset, a user whose OS is dark
+ * who toggles the app to light got MUI's light chrome wrapped around a page body
+ * still wearing dark code blocks, dark table headers and a #6b9bf7 link on white
+ * (~2.6:1, a 1.4.3 failure) — on every page view, comment and help topic.
+ *
+ * It is also invisible to the capture tier by construction: those files stamp
+ * `data-theme` and Chromium reports `prefers-color-scheme: light` by default, so
+ * the media query never fires there. web/a11y runs a second Playwright project
+ * with `colorScheme: 'dark'` over the LIGHT captures for exactly this pair.
+ * Deleting either half of that arrangement re-hides the bug.
+ */
 @media (prefers-color-scheme: dark) {
   .rw-editor-content {
     --rw-border: #383c46;
@@ -632,6 +653,15 @@
   --rw-link: #6b9bf7;
   --rw-mention-bg: rgba(107, 155, 247, 0.22);
   --rw-selected-cell-bg: rgba(107, 155, 247, 0.28);
+}
+
+:root[data-theme='light'] .rw-editor-content {
+  --rw-border: #c9ccd1;
+  --rw-muted: #5b6270;
+  --rw-code-bg: #f2f3f5;
+  --rw-link: #1a56db;
+  --rw-mention-bg: rgba(107, 155, 247, 0.15);
+  --rw-selected-cell-bg: rgba(107, 155, 247, 0.18);
 }
 
 /* Collaboration carets (design.md §8 co-editing) — the DOM produced by

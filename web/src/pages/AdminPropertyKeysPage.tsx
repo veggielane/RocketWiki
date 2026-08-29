@@ -3,11 +3,6 @@ import {
   Alert,
   Box,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   IconButton,
   Paper,
   Snackbar,
@@ -17,7 +12,7 @@ import {
   Typography,
 } from '@mui/material'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
-import { DataGrid, type GridColDef } from '@mui/x-data-grid'
+import { type GridColDef } from '@mui/x-data-grid'
 import {
   useCreatePagePropertyKeyMutation,
   useDeletePagePropertyKeyMutation,
@@ -27,6 +22,10 @@ import {
 import { describeMutationError } from '../graphql/mutationError'
 import { describeLoadFailure, describeWriteFailure } from '../feedback/unavailableCopy'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { ConfirmDialog } from '../feedback/ConfirmDialog'
+import { PageHeader } from '../app/PageHeader'
+import { RegistryDataGrid } from '../app/RegistryDataGrid'
+import { useDocumentTitle } from '../app/documentTitle'
 import { MAX_PROPERTY_KEY_DESCRIPTION_LENGTH, MAX_PROPERTY_KEY_LENGTH } from '../properties/propertyLimits'
 
 type KeyRow = PagePropertyKeysQuery['pagePropertyKeys'][number]
@@ -46,6 +45,7 @@ type KeyRow = PagePropertyKeysQuery['pagePropertyKeys'][number]
  * shown verbatim.
  */
 export function AdminPropertyKeysPage() {
+  useDocumentTitle('Page property keys')
   const [{ data, fetching, error }, refetch] = usePagePropertyKeysQuery()
   const [, createKey] = useCreatePagePropertyKeyMutation()
   const [, deleteKey] = useDeletePagePropertyKeyMutation()
@@ -147,15 +147,10 @@ export function AdminPropertyKeysPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h4" component="h1">
-        Page property keys
-      </Typography>
-      <Typography variant="body2" color="text.secondary">
-        The vocabulary page editors pick from when they add key/value metadata to a page. Anyone signed in can see
-        the key list — a key's existence says nothing about which pages use it — but only instance admins change it.
-        Keys are unique case-insensitively, and values live on each page's properties screen, never in its text
-        (design.md §20).
-      </Typography>
+      <PageHeader
+        title="Page property keys"
+        description="The vocabulary page editors pick from when they add key/value metadata to a page. Anyone signed in can see the key list — a key's existence says nothing about which pages use it — but only instance admins change it. Keys are unique case-insensitively, and values live on each page's properties screen, never in its text."
+      />
 
       {refusal && (
         <Alert severity="warning" onClose={() => setRefusal(null)}>
@@ -215,35 +210,28 @@ export function AdminPropertyKeysPage() {
         </Typography>
       )}
       {rows.length > 0 && (
-        <Box sx={{ height: 52 + 40 * rows.length, maxWidth: 720 }}>
-          <DataGrid
+        <Box sx={{ maxWidth: 720 }}>
+          <RegistryDataGrid
             aria-label="Page property key registry"
+            rowCount={rows.length}
             rows={rows}
             columns={columns}
             getRowId={(row) => row.id}
             loading={fetching}
-            hideFooter
-            disableRowSelectionOnClick
-            density="compact"
           />
         </Box>
       )}
 
-      <Dialog open={confirmDelete !== null} onClose={() => setConfirmDelete(null)}>
-        <DialogTitle>Delete {confirmDelete?.key}?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            The key disappears from every editor's picker. If pages still carry a value for it, the delete is refused
-            rather than taking those values with it — remove them first.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setConfirmDelete(null)}>Cancel</Button>
-          <Button color="error" onClick={() => confirmDelete && void handleDelete(confirmDelete)}>
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={`Delete ${confirmDelete?.key}?`}
+        confirmLabel="Delete"
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => confirmDelete && void handleDelete(confirmDelete)}
+      >
+        The key disappears from every editor's picker. If pages still carry a value for it, the delete is refused
+        rather than taking those values with it — remove them first.
+      </ConfirmDialog>
 
       <Snackbar open={notice !== null} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setNotice(null)}>
         <Alert severity="success" onClose={() => setNotice(null)}>

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import * as Y from 'yjs'
 import { yDocToProsemirrorJSON } from '@tiptap/y-tiptap'
@@ -103,23 +103,42 @@ function renderEditPage(updateError: MutationErrorFragment | null, options: Rend
     return undefined
   })
 
-  render(
-    <MemoryRouter initialEntries={['/pages/page-1/edit']}>
-      <UrqlProvider value={mock.client}>
-        <Routes>
-          <Route path="/pages/:pageId/edit" element={<PageEditPage />} />
-          {/* Both addresses land on the same marker, so the many "did it leave
-              the editor?" assertions below stay about leaving the editor. Which
-              one it actually picks is pinned once, deliberately, in its own
-              test — the readable one, since that is what a user then copies. */}
-          <Route path="/pages/:pageId" element={<div>view route</div>} />
-          <Route path="/spaces/:spaceKey/:slug" element={<div>view route</div>} />
-        </Routes>
-        <CurrentPathname />
-      </UrqlProvider>
-    </MemoryRouter>,
-  )
+  render(<UrqlProvider value={mock.client}>{editorRouter()}</UrqlProvider>)
   return mock
+}
+
+/**
+ * A DATA router, not `MemoryRouter`.
+ *
+ * The unsaved-changes guard uses `useBlocker` (editor/useUnsavedChangesGuard.ts),
+ * which react-router only implements on a data router — and `app/router.tsx`
+ * builds one with `createBrowserRouter`, so this is what the app actually does.
+ * Rendering the editor under a plain `MemoryRouter` here would be testing an
+ * arrangement that does not exist in production, and would have hidden the
+ * guard entirely.
+ */
+function editorRouter() {
+  const router = createMemoryRouter(
+    [
+      {
+        path: '/pages/:pageId/edit',
+        element: (
+          <>
+            <PageEditPage />
+            <CurrentPathname />
+          </>
+        ),
+      },
+      // Both addresses land on the same marker, so the many "did it leave the
+      // editor?" assertions below stay about leaving the editor. Which one it
+      // actually picks is pinned once, deliberately, in its own test — the
+      // readable one, since that is what a user then copies.
+      { path: '/pages/:pageId', element: <><div>view route</div><CurrentPathname /></> },
+      { path: '/spaces/:spaceKey/:slug', element: <><div>view route</div><CurrentPathname /></> },
+    ],
+    { initialEntries: ['/pages/page-1/edit'] },
+  )
+  return <RouterProvider router={router} />
 }
 
 /** Reports where navigation actually ended up, since both page addresses render
@@ -253,6 +272,99 @@ describe('PageEditPage typed mutation errors', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
 
     expect(await screen.findByText('view route')).toBeInTheDocument()
+  })
+
+  it('Ctrl+S saves without reaching for the button', async () => {
+    // The Save button sits below the editor, which grows with the document —
+    // on a long page it was below everything, and there was no shortcut.
+    const mock = renderEditPage(null)
+    const surface = await screen.findByRole('textbox', { name: 'Page content' })
+
+    fireEvent.keyDown(surface, { key: 's', ctrlKey: true })
+
+    await waitFor(() =>
+      expect(mock.operations.filter((op) => op.name === 'UpdatePageContent')).toHaveLength(1),
+    )
+  })
+
+  /**
+   * Cancel navigated immediately, and so did the sidebar tree, the breadcrumb,
+   * the search box and the browser's back button — every one of them live while
+   * editing. For a wiki that is data loss, not a polish item.
+   */
+  describe('unsaved changes', () => {
+    /** Types into the editing surface so the page has something to lose. */
+    async function makeDirty() {
+      const surface = await screen.findByRole('textbox', { name: 'Page content' })
+      fireEvent.input(surface, { target: { textContent: 'Hello world. Edited.' } })
+      // The dirty flag rides ProseMirror's own update, which `fireEvent.input`
+      // on a contenteditable does not always trigger in jsdom — typing a
+      // character through the keymap does.
+      fireEvent.keyDown(surface, { key: 'a' })
+      fireEvent.input(surface)
+      return surface
+    }
+
+    it('lets a clean editor leave without asking', async () => {
+      renderEditPage(null)
+      fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+      expect(await screen.findByText('view route')).toBeInTheDocument()
+    })
+
+    it('asks before discarding an edited draft, and stays put when you keep editing', async () => {
+      renderEditPage(null)
+      await makeDirty()
+      await screen.findByText(/Unsaved changes/)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      const dialog = await screen.findByRole('dialog', { name: 'Leave without saving?' })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Keep editing' }))
+
+      // Still in the editor, draft intact. `findByRole` because MUI marks the
+      // background `aria-hidden` while a modal is up, and the flag outlives the
+      // click by the length of the dialog's exit transition.
+      expect(screen.queryByText('view route')).not.toBeInTheDocument()
+      expect(await screen.findByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    it('discards only when the user says so', async () => {
+      renderEditPage(null)
+      await makeDirty()
+      await screen.findByText(/Unsaved changes/)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Leave without saving?' })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Discard changes' }))
+
+      expect(await screen.findByText('view route')).toBeInTheDocument()
+    })
+
+    it('offers saving as the third way out, which the browser prompt cannot', async () => {
+      const mock = renderEditPage(null)
+      await makeDirty()
+      await screen.findByText(/Unsaved changes/)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      const dialog = await screen.findByRole('dialog', { name: 'Leave without saving?' })
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save and leave' }))
+
+      await waitFor(() =>
+        expect(mock.operations.filter((op) => op.name === 'UpdatePageContent')).toHaveLength(1),
+      )
+      expect(await screen.findByText('view route')).toBeInTheDocument()
+    })
+
+    it('does not ask after a save — the draft is on the server', async () => {
+      renderEditPage(null)
+      await makeDirty()
+      await screen.findByText(/Unsaved changes/)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+      // Straight through: saving must not pop the discard dialog on its way out.
+      expect(await screen.findByText('view route')).toBeInTheDocument()
+    })
   })
 
   it('lands on the readable address, not the id one', async () => {

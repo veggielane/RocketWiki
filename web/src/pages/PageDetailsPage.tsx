@@ -1,12 +1,11 @@
 import { useState } from 'react'
-import { Link as RouterLink, Navigate, useParams } from 'react-router-dom'
+import { Navigate, useParams } from 'react-router-dom'
 import {
   Alert,
   Box,
   Button,
   Divider,
   IconButton,
-  Link,
   MenuItem,
   Paper,
   Skeleton,
@@ -43,6 +42,8 @@ import {
 } from '../feedback/unavailableCopy'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { PageMarkingSection } from '../markings/PageMarkingSection'
 import { hasPendingEdits, resolvePropertyEdit } from '../properties/propertyEdit'
 import { MAX_PROPERTY_VALUE_LENGTH } from '../properties/propertyLimits'
@@ -409,6 +410,7 @@ export function PageDetailsPage() {
   })
   const [feedback, setFeedback] = useState<Feedback>({ notice: null, error: null })
   const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
+  useDocumentTitle(data?.page ? `Details — ${data.page.title}` : 'Details')
 
   if (fetching) {
     return (
@@ -450,18 +452,11 @@ export function PageDetailsPage() {
 
   return (
     <Stack spacing={2}>
-      <Box>
-        <Typography variant="h4" component="h1">
-          Details: {page.title}
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Everything kept beside{' '}
-          <Link component={RouterLink} to={`/pages/${page.id}`}>
-            {page.title}
-          </Link>{' '}
-          rather than written into it.
-        </Typography>
-      </Box>
+      <PageHeader
+        title="Details"
+        subject={{ label: page.title, to: `/pages/${page.id}` }}
+        description="Everything kept beside this page rather than written into it."
+      />
 
       {replicaSpace && (
         <Alert severity="info">
@@ -500,7 +495,7 @@ export function PageDetailsPage() {
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Key/value metadata — properties stay out of the page text, so they are also invisible to search and are not
-          carried by a Markdown export (design.md §20).
+          carried by a Markdown export.
         </Typography>
       </Box>
 

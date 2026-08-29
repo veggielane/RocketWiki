@@ -1,6 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Alert, Box, Button, Chip, Skeleton, Snackbar, Stack, Typography } from '@mui/material'
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Skeleton,
+  Snackbar,
+  Stack,
+  Typography,
+} from '@mui/material'
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined'
 import {
   useCurrentUserQuery,
@@ -22,6 +36,11 @@ import { colourForUser } from '../presence/colourForUser'
 import { getDefaultCoEditTransport, getDefaultPresenceTransport } from '../realtime/transports'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
+import { useUnsavedChangesGuard } from '../editor/useUnsavedChangesGuard'
+import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
+import { describeSave, type SaveOutcome } from '../editor/describeSave'
 import { PageIconPicker } from './PageIconPicker'
 import { pageHref } from './pageSlug'
 
@@ -48,10 +67,13 @@ import { pageHref } from './pageSlug'
  * path above, indistinguishable from before co-editing existed. In
  * collaborative mode:
  *  - Save uses the SESSION's base revision (from the join, advanced by
- *    each successful save/reseed), not the page query's snapshot — and a
- *    successful save stays in the editor (a checkpoint in a live session,
- *    not an exit) with a toast crediting the revision's contributors,
- *    which the server resolved from its session registry.
+ *    each successful save/reseed), not the page query's snapshot. Pressing
+ *    Save then goes to the page, in a session or not — this used to be
+ *    solo-only, but `status` becomes 'collaborating' the moment the session
+ *    is joined whether or not anyone else is in it, so the ordinary case of
+ *    one person editing alone never navigated and Save appeared to do
+ *    nothing. The toast crediting the revision's contributors (which the
+ *    server resolved from its session registry) rides along to the page.
  *  - A `log_cap` reseed demand auto-saves and hands back a snapshot,
  *    surfaced only as the same save toast (marked autosaved): prompting
  *    would stall the session while the log kept growing, and the write is
@@ -76,13 +98,11 @@ export function PageEditPage() {
   const [conflict, setConflict] = useState<{ stale: StaleRevision; draft: string } | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [sessionSaved, setSessionSaved] = useState<{
-    revisionNumber: number
-    contributors: string[]
-    auto: boolean
-  } | null>(null)
+  const [sessionSaved, setSessionSaved] = useState<SaveOutcome | null>(null)
+  const [dirty, setDirty] = useState(false)
 
   const page = pageQuery.data?.page
+  useDocumentTitle(page?.title)
 
   // The icon is part of what a save writes, so the editor holds a draft of it
   // exactly as it holds a draft of the text. Tracked against the server's
@@ -108,6 +128,23 @@ export function PageEditPage() {
   // Same presence join + pointer overlay as the view page; keyed on pageId
   // (route reuse — see usePresence.ts).
   const { viewers, pointers, recordPointer } = usePresence(pageId ?? '', getDefaultPresenceTransport())
+
+  // Solo edits only. In a live session the text is in the shared CRDT the
+  // moment it is typed — the other participants have it, and the log-cap flow
+  // will persist it — so leaving loses nothing and a confirmation would be
+  // asking about a risk that does not exist. A solo draft lives only in this
+  // browser tab until Save.
+  //
+  // Mirrored into a ref because `save` clears it and navigates in the same
+  // handler: React batches the state write, so a blocker reading the state
+  // would still see "dirty" and challenge a successful save.
+  const dirtyRef = useRef(false)
+  const markDirty = (next: boolean) => {
+    dirtyRef.current = next
+    setDirty(next)
+  }
+  const guardActive = dirty && !collabActive
+  const blocker = useUnsavedChangesGuard(() => dirtyRef.current && !collabActive, guardActive)
 
   const collabBinding = useMemo<CollabBinding | undefined>(() => {
     if ((session.status !== 'collaborating' && session.status !== 'evicted') || !session.provider) return undefined
@@ -191,6 +228,11 @@ export function PageEditPage() {
       }
     }
 
+    // The draft is now on the server, so nothing is at risk of being lost and
+    // the guard must stand down before any navigation below — otherwise saving
+    // would pop the "discard your changes?" dialog on the way out.
+    markDirty(false)
+
     // An automatic save must never move anyone: the log-cap reseed fires on
     // the server's schedule, not the author's, and yanking someone out of the
     // editor mid-sentence because of background housekeeping would be the
@@ -200,14 +242,24 @@ export function PageEditPage() {
       return
     }
 
-    // Pressing Save goes to the page, in a session or not. This used to be
-    // solo-only, on the reasoning that "a session save is a checkpoint, not an
-    // exit" — but `status` becomes 'collaborating' the moment the edit session
-    // is joined, whether or not anyone else is in it, so the ordinary case of
-    // one person editing alone never navigated and Save appeared to do nothing.
-    // Leaving is not destructive here: the save committed a revision, and the
-    // session's own Close button remains for stepping out without saving.
-    navigate(pageHref(page.spaceKey, page.slug, page.id))
+    // Pressing Save goes to the page. Leaving is not destructive here: the save
+    // committed a revision, and the session's own Close button remains for
+    // stepping out without saving.
+    //
+    // The toast is set for a MANUAL save too, not only the automatic one. It
+    // used to be inside the `auto` branch above, which meant a manual save
+    // navigated in silence — indistinguishable from a navigation that just
+    // happened — and made the 'Saved' half of the toast's own label
+    // unreachable, along with the contributor credit the server had gone to
+    // trouble to compute. Snackbars survive the navigation because they are
+    // rendered by this component's replacement on the page view? They are not:
+    // this component unmounts. So the notice is handed to the destination
+    // through router state, and PageViewPage shows it on arrival.
+    navigate(pageHref(page.spaceKey, page.slug, page.id), {
+      state: {
+        savedNotice: describeSave({ revisionNumber: savedRevisionNumber, contributors, auto: false }),
+      },
+    })
   }
 
   // The log_cap flow (design.md §8, hub doc): the server named THIS client
@@ -219,6 +271,12 @@ export function PageEditPage() {
   // during the auto-save opens the normal conflict dialog instead of
   // overwriting anyone silently; the demand then stays pending and the
   // next successful session save completes it (see `save` above).
+  /** What the Save button and Ctrl+S both do — one revision choice, not two. */
+  const saveNow = () =>
+    save(
+      collabActive ? (session.baseRevisionNumber ?? page?.currentRevisionNumber ?? 0) : (page?.currentRevisionNumber ?? 0),
+    )
+
   const reseedSaveInFlight = useRef(false)
   useEffect(() => {
     if (session.reseedDemand === null || !collabActive || reseedSaveInFlight.current) return
@@ -265,31 +323,34 @@ export function PageEditPage() {
 
   return (
     <Box>
-      <Stack direction="row" sx={{ mb: 2, alignItems: 'center', justifyContent: 'space-between' }}>
-        <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
-          <Typography variant="h4" component="h1">
-            Editing: {page.title}
-          </Typography>
-          {/* Beside the title, because that is what it labels — and the same
-              control the create dialog uses, so the two cannot drift. */}
-          <PageIconPicker
-            value={icon}
-            onChange={setIcon}
-            size="small"
-            disabled={saving || session.status === 'evicted'}
-          />
-          {collabActive && (
-            <Chip
-              size="small"
-              color="success"
-              variant="outlined"
-              icon={<GroupsOutlinedIcon />}
-              label="Live co-editing"
-            />
-          )}
-        </Stack>
-        <PresenceAvatars viewers={viewers} />
-      </Stack>
+      <Box sx={{ mb: 2 }}>
+        <PageHeader
+          title="Editing"
+          subject={{ label: page.title, to: pageHref(page.spaceKey, page.slug, page.id) }}
+          actions={
+            <>
+              {/* Beside the title, because that is what it labels — and the same
+                  control the create dialog uses, so the two cannot drift. */}
+              <PageIconPicker
+                value={icon}
+                onChange={setIcon}
+                size="small"
+                disabled={saving || session.status === 'evicted'}
+              />
+              {collabActive && (
+                <Chip
+                  size="small"
+                  color="success"
+                  variant="outlined"
+                  icon={<GroupsOutlinedIcon />}
+                  label="Live co-editing"
+                />
+              )}
+              <PresenceAvatars viewers={viewers} />
+            </>
+          }
+        />
+      </Box>
 
       {session.status === 'evicted' && (
         <Alert severity="warning" sx={{ mb: 2 }}>
@@ -327,6 +388,8 @@ export function PageEditPage() {
             editable={session.status !== 'evicted'}
             pageId={page.id}
             collab={collabBinding}
+            onDocChanged={() => markDirty(true)}
+            onSaveShortcut={() => void saveNow()}
           />
           <PresencePointers pointers={pointers} />
         </Box>
@@ -338,12 +401,33 @@ export function PageEditPage() {
         </Alert>
       )}
 
-      <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
+      {/*
+        Sticky, not appended below the editor. The editor grows with the
+        document, so on a long page Save sat below the entire text — the one
+        control the screen exists for, reachable only by scrolling past
+        everything. `bottom` clears the fixed classification banner, which is
+        also viewport-fixed and would otherwise sit on top of it.
+      */}
+      <Stack
+        direction="row"
+        spacing={2}
+        useFlexGap
+        sx={{
+          position: 'sticky',
+          bottom: `${CLASSIFICATION_BANNER_HEIGHT}px`,
+          zIndex: 1,
+          mt: 2,
+          py: 1.5,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          bgcolor: 'background.default',
+          borderTop: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
         <Button
           variant="contained"
-          onClick={() =>
-            void save(collabActive ? (session.baseRevisionNumber ?? page.currentRevisionNumber) : page.currentRevisionNumber)
-          }
+          onClick={() => void saveNow()}
           disabled={saving || session.status === 'connecting' || session.status === 'evicted'}
         >
           Save
@@ -351,16 +435,52 @@ export function PageEditPage() {
         <Button variant="text" onClick={() => navigate(pageHref(page.spaceKey, page.slug, page.id))}>
           {collabActive ? 'Close' : 'Cancel'}
         </Button>
+        {/* Says the shortcut exists — an unannounced accelerator is one only
+            the person who wrote it knows about. */}
+        <Typography variant="caption" color="text.secondary">
+          {dirty ? 'Unsaved changes · ' : ''}Ctrl+S saves
+        </Typography>
       </Stack>
 
       <Snackbar open={sessionSaved !== null} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setSessionSaved(null)}>
         <Alert severity="success" onClose={() => setSessionSaved(null)}>
-          {sessionSaved?.auto ? 'Autosaved' : 'Saved'} revision {sessionSaved?.revisionNumber}
-          {sessionSaved && sessionSaved.contributors.length > 0
-            ? ` — contributors: ${sessionSaved.contributors.join(', ')}`
-            : ''}
+          {sessionSaved ? describeSave(sessionSaved) : ''}
         </Alert>
       </Snackbar>
+
+      {/*
+        Leaving with unsaved work. A dialog rather than `window.confirm`,
+        matching how every other designed choice in this app is presented
+        (web/README.md) — and it can name the third option, which the browser's
+        own prompt cannot: staying is not the only alternative to discarding.
+      */}
+      <Dialog open={blocker.state === 'blocked'} onClose={() => blocker.reset?.()}>
+        <DialogTitle>Leave without saving?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This page has changes that have not been saved. Leaving now discards them.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          {/* Default focus on the non-destructive option, as everywhere else a
+              dialog stands between someone and losing work. */}
+          <Button autoFocus onClick={() => blocker.reset?.()}>
+            Keep editing
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={() => {
+              blocker.reset?.()
+              void saveNow()
+            }}
+          >
+            Save and leave
+          </Button>
+          <Button color="error" variant="contained" onClick={() => blocker.proceed?.()}>
+            Discard changes
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <ReadOnlyReplicaDialog
         open={replicaOrigin !== null}

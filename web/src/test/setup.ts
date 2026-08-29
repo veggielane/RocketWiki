@@ -17,3 +17,28 @@ import { cleanup } from '@testing-library/react'
 afterEach(() => {
   cleanup()
 })
+
+/**
+ * jsdom implements no media queries at all, and `window.matchMedia` is simply
+ * absent. Anything asking the viewport a question therefore throws rather than
+ * degrading: `ColorModeProvider` reads `prefers-color-scheme` to pick its
+ * initial mode, and the shell, header and form dialogs use MUI's
+ * `useMediaQuery` to decide their compact layouts.
+ *
+ * The stub answers "no" to everything, which pins these tests to the DESKTOP
+ * layout — the one the assertions are written against. A test that wants the
+ * compact rendering overrides this per-test rather than relying on a default.
+ */
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList
+}

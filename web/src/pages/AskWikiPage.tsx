@@ -30,6 +30,8 @@ import { citationHref, type AskCitation } from '../ask/answerSegments'
 import { AnswerBody } from '../ask/AnswerBody'
 import { isAskWikiMarkedNotConfigured, markAskWikiNotConfigured, useAskWikiPossiblyAvailable } from '../ask/askAvailability'
 import { describeAskUnavailable } from '../feedback/unavailableCopy'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { AggregateMarkingBanner } from '../markings/AggregateMarkingBanner'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 
@@ -105,6 +107,7 @@ function answerReadyAnnouncement(marking: AggregateMarkingFragment | null): stri
 }
 
 export function AskWikiPage() {
+  useDocumentTitle('Ask the wiki')
   const client = useClient()
   const [params] = useSearchParams()
   // Prefill from the search page's "Can't find it?" nudge — prefill only,
@@ -155,15 +158,10 @@ export function AskWikiPage() {
 
   return (
     <Stack spacing={3}>
-      <Box>
-        <Typography variant="h4" component="h1">
-          Ask the wiki
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Answers draw only on wiki pages you can view. Nothing here is saved — the conversation disappears when you
-          leave this page.
-        </Typography>
-      </Box>
+      <PageHeader
+        title="Ask the wiki"
+        description="Answers draw only on wiki pages you can view. Nothing here is saved — the conversation disappears when you leave this page."
+      />
 
       {/* Persistent polite live region for the multi-second wait: it must
           exist BEFORE the wait begins — a live region inserted together

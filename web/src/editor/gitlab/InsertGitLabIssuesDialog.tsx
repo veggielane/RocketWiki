@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, TextField } from '@mui/material'
 import type { GitLabIssuesSpec } from '../../gitlab/fenceBody'
+import { useDialogFullScreen } from '../../app/useDialogFullScreen'
 
 export interface InsertGitLabIssuesDialogProps {
   open: boolean
@@ -16,6 +17,7 @@ export interface InsertGitLabIssuesDialogProps {
  * server-side, the client never validates the server's words.
  */
 export function InsertGitLabIssuesDialog({ open, onClose, onInsert }: InsertGitLabIssuesDialogProps) {
+  const fullScreen = useDialogFullScreen()
   const [project, setProject] = useState('')
   const [state, setState] = useState('')
   const [labels, setLabels] = useState('')
@@ -61,7 +63,7 @@ export function InsertGitLabIssuesDialog({ open, onClose, onInsert }: InsertGitL
   }
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={fullScreen}>
       <DialogTitle>Insert GitLab issue list</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>

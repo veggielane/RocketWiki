@@ -12,11 +12,13 @@ import {
   MenuItem,
   Select,
   Skeleton,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   usePageSpaceRefQuery,
@@ -24,7 +26,8 @@ import {
   useSpaceListQuery,
   useSpacePageTreeQuery,
 } from '../graphql/generated/graphql'
-import { describeLoadFailure, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, describeNoSpaces, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { useIsInstanceAdmin } from '../auth/useIsInstanceAdmin'
 import { lookupPageIcon } from '../pages/pageIcons'
 import { SYSTEM_SEGMENT } from '../pages/pageSlug'
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
@@ -49,6 +52,13 @@ interface NavNode {
    * page was a leaf when it was only past the boundary.
    */
   hasChildren?: boolean
+  /**
+   * `PageTreeNode.hasRestrictions` — the lock badge design.md §6.6 asks for.
+   * The space browser's copy of this tree has always drawn it; the rail, which
+   * is the tree people actually navigate by, did not, so the one signal saying
+   * "this page is restricted" was on the screen nobody visits.
+   */
+  hasRestrictions?: boolean
   children?: NavNode[]
 }
 
@@ -271,6 +281,20 @@ function PageTree({
                   primary={node.title}
                   slotProps={{ primary: { variant: 'body2', noWrap: true } }}
                 />
+                {/* §6.6's restriction marker. The tooltip is for the pointer;
+                    the `aria-label` is what carries it to everyone else, since
+                    a lock glyph alone would be information in an icon. Not a
+                    gate — every node here is one the server already decided
+                    this caller may see. */}
+                {node.hasRestrictions && (
+                  <Tooltip title="This page has access restrictions">
+                    <LockOutlinedIcon
+                      sx={{ fontSize: 14, flexShrink: 0 }}
+                      color="action"
+                      aria-label="Has access restrictions"
+                    />
+                  </Tooltip>
+                )}
               </ListItemButton>
             </Box>
             {isExpanded &&
@@ -353,6 +377,8 @@ export function SpaceTreeNav() {
   const navigate = useNavigate()
   const { spaceKey: routeSpaceKey, pageId, slug } = routeContext(pathname)
   const [{ data, fetching, error }] = useSpaceListQuery()
+  // Only decides which sentence the zero-spaces empty state uses.
+  const { isInstanceAdmin } = useIsInstanceAdmin()
 
   // Only a page route needs this hop; a space route already names its space.
   const [{ data: pageRef }] = usePageSpaceRefQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
@@ -420,7 +446,11 @@ export function SpaceTreeNav() {
     return (
       <Box sx={{ px: 2, py: 1 }}>
         <Typography variant="caption" color="text.secondary">
-          No spaces yet — create one to start writing.
+          {/* Shared with the space list rather than spelled again here: the rail
+              used to tell every reader to "create one to start writing" while
+              the button that would is instance-admin-only and hidden from them
+              (design.md §6.5.1). */}
+          {describeNoSpaces(isInstanceAdmin)}
         </Typography>
       </Box>
     )

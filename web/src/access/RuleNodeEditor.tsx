@@ -7,6 +7,7 @@ import {
   FormControl,
   FormHelperText,
   IconButton,
+  InputLabel,
   Menu,
   MenuItem,
   Paper,
@@ -83,9 +84,19 @@ export function RuleNodeEditor(props: RuleNodeEditorProps) {
     onChangeKind(nodeId, e.target.value as BuilderNode['kind'])
   }
 
+  // A VISIBLE label, not just an `aria-label`. This is the most important
+  // control in the row — it decides what kind of condition this is — and it sat
+  // unlabelled directly beside a "Group" or "User ID" field that had one, so a
+  // sighted user could not tell what the box selected without opening it.
   const kindSelect = (
     <FormControl size="small" sx={{ minWidth: 220 }}>
-      <Select value={node.kind} onChange={handleKindChange} aria-label="Condition type">
+      <InputLabel id={`${nodeId}-kind-label`}>Condition</InputLabel>
+      <Select
+        labelId={`${nodeId}-kind-label`}
+        label="Condition"
+        value={node.kind}
+        onChange={handleKindChange}
+      >
         {(Object.keys(NODE_KIND_LABELS) as BuilderNode['kind'][]).map((kind) => (
           <MenuItem key={kind} value={kind}>
             {NODE_KIND_LABELS[kind]}
@@ -151,7 +162,7 @@ function RuleGroupBody({
       variant="outlined"
       sx={{ p: 1.5, borderLeft: 4, borderLeftColor: node.kind === 'allOf' ? 'primary.main' : 'secondary.main' }}
     >
-      <Stack direction="row" spacing={1} sx={{ mb: 1, alignItems: 'center' }}>
+      <Stack direction="row" spacing={1} useFlexGap sx={{ mb: 1, alignItems: 'center', flexWrap: 'wrap' }}>
         <ToggleButtonGroup
           size="small"
           exclusive
@@ -160,6 +171,7 @@ function RuleGroupBody({
             if (value && value !== node.kind) onToggleCombinator(nodeId)
           }}
           aria-label="Combinator"
+          aria-describedby={myIssues.length > 0 ? `${nodeId}-issues` : undefined}
         >
           <ToggleButton value="allOf">AND (all of)</ToggleButton>
           <ToggleButton value="anyOf">OR (any of)</ToggleButton>
@@ -170,7 +182,10 @@ function RuleGroupBody({
       </Stack>
 
       {myIssues.length > 0 && (
-        <FormHelperText error sx={{ mb: 1 }}>
+        // `id` + `role="alert"`: the group's errors used to be a bare helper
+        // line associated with nothing, so a screen reader met them only by
+        // walking into them. The group's own controls point at it below.
+        <FormHelperText error id={`${nodeId}-issues`} role="alert" sx={{ mb: 1 }}>
           {myIssues.join(' ')}
         </FormHelperText>
       )}
@@ -237,7 +252,9 @@ function RuleLeafBody({
           onChange={(_e, value) => onUpdate(nodeId, (n) => (n.kind === 'group' ? { ...n, group: value ?? '' } : n))}
           onInputChange={(_e, value) => onUpdate(nodeId, (n) => (n.kind === 'group' ? { ...n, group: value } : n))}
           renderInput={(params) => (
-            <TextField {...params} label="Group" error={myIssues.length > 0} helperText={myIssues[0]} />
+            // Every issue, not just `myIssues[0]` — a field with two problems
+            // reported one, so fixing it surfaced the next one as if it were new.
+            <TextField {...params} label="Group" error={myIssues.length > 0} helperText={myIssues.join(' ')} />
           )}
           sx={{ flexGrow: 1, maxWidth: 320, minWidth: 240 }}
         />
@@ -250,7 +267,7 @@ function RuleLeafBody({
           value={node.userId}
           onChange={(e) => onUpdate(nodeId, (n) => (n.kind === 'user' ? { ...n, userId: e.target.value } : n))}
           error={myIssues.length > 0}
-          helperText={myIssues[0] ?? 'No user directory yet — enter the subject id.'}
+          helperText={myIssues.length > 0 ? myIssues.join(' ') : 'No user directory yet — enter the subject id.'}
           sx={{ flexGrow: 1, maxWidth: 320 }}
         />
       )}
@@ -258,13 +275,15 @@ function RuleLeafBody({
       {node.kind === 'attr' && (
         <>
           <FormControl size="small" error={myIssues.some((m) => m.includes('Attribute'))} sx={{ minWidth: 200 }}>
+            <InputLabel id={`${nodeId}-attribute-label`}>Attribute</InputLabel>
             <Select
+              labelId={`${nodeId}-attribute-label`}
+              label="Attribute"
               displayEmpty
               value={node.attribute}
               onChange={(e) =>
                 onUpdate(nodeId, (n) => (n.kind === 'attr' ? { ...n, attribute: e.target.value, in: [] } : n))
               }
-              aria-label="Attribute"
             >
               <MenuItem value="" disabled>
                 Select attribute…

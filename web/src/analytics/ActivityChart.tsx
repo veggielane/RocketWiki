@@ -77,7 +77,7 @@ export function ActivityChart({ data }: { data: readonly ActivityDatum[] }) {
           { label: 'Views', colour: colours.views },
           { label: 'Edits', colour: colours.edits },
         ].map((series) => (
-          <Stack key={series.label} direction="row" spacing={0.75} alignItems="center">
+          <Stack key={series.label} direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
             <Box sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: series.colour }} />
             <Typography variant="caption" color="text.secondary">
               {series.label}
@@ -211,10 +211,10 @@ export function ActivityChart({ data }: { data: readonly ActivityDatum[] }) {
               pointerEvents: 'none',
             }}
           >
-            <Typography variant="caption" display="block" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
               {active.day}
             </Typography>
-            <Typography variant="caption" display="block">
+            <Typography variant="caption" sx={{ display: "block" }}>
               {active.views} views · {active.edits} edits
             </Typography>
           </Box>

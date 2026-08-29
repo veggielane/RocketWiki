@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { Alert, Button, MenuItem, Paper, Select, Stack, TextField, Typography } from '@mui/material'
 import { useCreateSpaceMutation, useRuleVocabularyQuery, type SpaceRole } from '../graphql/generated/graphql'
 import { describeMutationError } from '../graphql/mutationError'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { RuleBuilder } from '../access/RuleBuilder'
 import { serializeRuleNode } from '../access/ruleSerializer'
 import type { AttributeOption } from '../access/attributeOption'
@@ -25,6 +27,7 @@ const ROLE_LABELS: Record<SpaceRole, string> = { VIEWER: 'Viewer', EDITOR: 'Edit
  * "Validation"; it's surfaced on the key field rather than as a toast.
  */
 export function CreateSpacePage() {
+  useDocumentTitle('New space')
   const navigate = useNavigate()
   const [key, setKey] = useState('')
   const [name, setName] = useState('')
@@ -77,9 +80,7 @@ export function CreateSpacePage() {
 
   return (
     <Stack spacing={3} sx={{ maxWidth: 640 }}>
-      <Typography variant="h4" component="h1">
-        New space
-      </Typography>
+      <PageHeader title="New space" subject={{ label: 'Spaces', to: '/' }} />
 
       <TextField
         label="Key"

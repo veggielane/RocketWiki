@@ -7,6 +7,7 @@ import {
   MenuItem,
   Paper,
   Select,
+  Snackbar,
   Stack,
   Tooltip,
   Typography,
@@ -22,6 +23,9 @@ import {
   type SpaceRole,
 } from '../graphql/generated/graphql'
 import { describeMutationError } from '../graphql/mutationError'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { AccessGate } from '../auth/AccessGate'
 import { RuleBuilder } from '../access/RuleBuilder'
 import { parseRuleNode, serializeRuleNode } from '../access/ruleSerializer'
@@ -170,7 +174,7 @@ function SpaceGrantsEditor({ spaceId, initialGrants, groups, attributes, onSaved
     <Stack spacing={3}>
       <Alert severity="info" variant="outlined">
         Multiple grants OR together — a user's role in this space is the <strong>highest</strong> one whose rule
-        matches (design.md §6.4). An "open" space is just a Viewer grant with an Everyone condition.
+        matches. An "open" space is just a Viewer grant with an Everyone condition.
       </Alert>
 
       <Stack spacing={2}>
@@ -219,8 +223,17 @@ function SpaceGrantsEditor({ spaceId, initialGrants, groups, attributes, onSaved
         )}
       </Stack>
 
-      {saveError && <Alert severity="error">{saveError}</Alert>}
-      {saved && <Alert severity="success">Saved.</Alert>}
+      {saveError && (
+        <Alert severity="warning" onClose={() => setSaveError(null)}>
+          {saveError}
+        </Alert>
+      )}
+      {/* Snackbar, not a permanent banner — see PagePermissionsPage. */}
+      <Snackbar open={saved} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setSaved(false)}>
+        <Alert severity="success" onClose={() => setSaved(false)}>
+          Grants saved.
+        </Alert>
+      </Snackbar>
     </Stack>
   )
 }
@@ -232,6 +245,7 @@ export function SpaceGrantsPage() {
     pause: !spaceKey,
   })
   const [{ data: vocabulary }] = useRuleVocabularyQuery()
+  useDocumentTitle(data?.space ? `Grants — ${data.space.name}` : 'Grants')
 
   if (!spaceKey) return null
 
@@ -251,22 +265,24 @@ export function SpaceGrantsPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h4" component="h1">
-        Grants: {space?.name ?? spaceKey}
-      </Typography>
+      {/* Inside the gate — a heading naming the space above a 404 is a screen
+          contradicting itself. Same fix as PagePermissionsPage. */}
       <AccessGate allowed={!error && canManage} loading={fetching}>
         {space && (
-          <SpaceGrantsEditor
-            // Remount the editor after a save-triggered refetch so row
-            // baselines (initialExpressionJson etc.) reset to the fresh
-            // server state, including server-assigned ids for new rows.
-            key={space.grants.map((g) => g.id).join(',')}
-            spaceId={space.id}
-            initialGrants={space.grants}
-            groups={groups}
-            attributes={attributes}
-            onSaved={() => refetch({ requestPolicy: 'network-only' })}
-          />
+          <Stack spacing={2}>
+            <PageHeader title="Grants" subject={{ label: space.name, to: `/spaces/${space.key}` }} />
+            <SpaceGrantsEditor
+              // Remount the editor after a save-triggered refetch so row
+              // baselines (initialExpressionJson etc.) reset to the fresh
+              // server state, including server-assigned ids for new rows.
+              key={space.grants.map((g) => g.id).join(',')}
+              spaceId={space.id}
+              initialGrants={space.grants}
+              groups={groups}
+              attributes={attributes}
+              onSaved={() => refetch({ requestPolicy: 'network-only' })}
+            />
+          </Stack>
         )}
       </AccessGate>
     </Stack>

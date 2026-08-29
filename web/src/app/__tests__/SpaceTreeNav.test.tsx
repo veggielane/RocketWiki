@@ -104,8 +104,13 @@ describe('SpaceTreeNav space picker', () => {
     expect(screen.queryByRole('link', { name: 'Launch notes' })).toBeNull()
   })
 
-  it('says so when the caller can view no spaces at all', async () => {
-    const mock = createMockUrqlClient((name) => (name === 'SpaceList' ? { spaces: [] } : undefined))
+  function renderEmptySpaceList(isInstanceAdmin: boolean) {
+    const mock = createMockUrqlClient((name) => {
+      if (name === 'SpaceList') return { spaces: [] }
+      if (name === 'CurrentUser')
+        return { me: { id: 'sub-1', localUserId: 'u-1', email: 'a@b', name: 'A', hasAvatar: false, isInstanceAdmin } }
+      return undefined
+    })
     render(
       <Provider value={mock.client}>
         <MemoryRouter initialEntries={['/']}>
@@ -113,8 +118,27 @@ describe('SpaceTreeNav space picker', () => {
         </MemoryRouter>
       </Provider>,
     )
+  }
+
+  it('tells an instance admin to create the first space', async () => {
+    renderEmptySpaceList(true)
     // An empty state states the fact AND the consequence (web/README.md).
     expect(await screen.findByText(/No spaces yet — create one to start writing/)).toBeInTheDocument()
+  })
+
+  it('does not tell a non-admin to create a space they cannot create', async () => {
+    // The rail used to render the admin sentence to everyone, pointing readers
+    // at a button that is hidden from them (design.md §6.5.1 — creation is
+    // instance-admin-only). Shares its copy with the space list now, so the
+    // two surfaces cannot drift apart again.
+    renderEmptySpaceList(false)
+    expect(await screen.findByText(/an instance admin can create the first one/)).toBeInTheDocument()
+    expect(screen.queryByText(/create one to start writing/)).not.toBeInTheDocument()
+  })
+
+  it('says so when the caller can view no spaces at all', async () => {
+    renderEmptySpaceList(true)
+    expect(await screen.findByText(/No spaces yet/)).toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: 'Space' })).toBeNull()
   })
 
@@ -432,7 +456,7 @@ describe('SpaceTreeNav deeper than the query reaches', () => {
     ],
   }
 
-  function renderTruncated(subtreeResult: unknown = subtree) {
+  function renderTruncated(subtreeResult: Record<string, unknown> | undefined = subtree) {
     const mock = createMockUrqlClient((name) => {
       if (name === 'SpaceList') return SPACES
       if (name === 'SpacePageTree') return truncated

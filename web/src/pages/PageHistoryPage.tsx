@@ -1,11 +1,10 @@
 import { useState } from 'react'
-import { Link as RouterLink, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import {
   Alert,
   Box,
   Chip,
   Divider,
-  Link,
   Paper,
   Radio,
   Skeleton,
@@ -19,6 +18,8 @@ import {
 } from '@mui/material'
 import { usePageHistoryQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { MarkdownDiffView } from '../diff/MarkdownDiffView'
 import { UserAvatar } from '../avatars/UserAvatar'
 
@@ -58,8 +59,15 @@ export function PageHistoryPage() {
   const [fromId, setFromId] = useState<string | null>(null)
   const [toId, setToId] = useState<string | null>(null)
 
+  useDocumentTitle(data?.page ? `History — ${data.page.title}` : 'History')
+
   if (fetching) {
-    return <Skeleton variant="rectangular" height={320} />
+    return (
+      <Stack spacing={1}>
+        <Skeleton variant="text" width="40%" height={48} />
+        <Skeleton variant="rectangular" height={320} />
+      </Stack>
+    )
   }
   if (error || !data?.page) {
     // Absent and not-viewable stay indistinguishable (design.md §6.7).
@@ -78,17 +86,7 @@ export function PageHistoryPage() {
 
   return (
     <Stack spacing={3}>
-      <Stack spacing={0.5}>
-        <Typography variant="h4" component="h1">
-          History: {page.title}
-        </Typography>
-        {/* MUI's Link, not a bare RouterLink: a bare one renders an unstyled
-            <a> wearing the browser's default #0000ee, which fails contrast
-            against the dark surface. The browser a11y layer caught it. */}
-        <Link component={RouterLink} to={`/pages/${page.id}`} variant="body2">
-          Back to the page
-        </Link>
-      </Stack>
+      <PageHeader title="History" subject={{ label: page.title, to: `/pages/${page.id}` }} />
 
       <Paper variant="outlined">
         <Table size="small" aria-label="Revisions">
@@ -132,7 +130,7 @@ export function PageHistoryPage() {
                 </TableCell>
                 <TableCell>{revision.revisionNumber}</TableCell>
                 <TableCell>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                     <UserAvatar
                       userId={revision.author.id}
                       displayName={revision.author.displayName}
@@ -157,7 +155,7 @@ export function PageHistoryPage() {
                   </Stack>
                 </TableCell>
                 <TableCell>
-                  <Typography variant="body2" whiteSpace="nowrap">
+                  <Typography variant="body2" sx={{ whiteSpace: "nowrap" }}>
                     {new Date(revision.createdAtUtc).toLocaleString()}
                   </Typography>
                 </TableCell>
@@ -182,7 +180,7 @@ export function PageHistoryPage() {
         </Typography>
         {from && to && from.id !== to.id ? (
           <>
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }} flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: "center", flexWrap: "wrap", mb: 1.5 }}>
               <Chip size="small" label={`Revision ${from.revisionNumber}`} />
               <Typography variant="body2" color="text.secondary">
                 to

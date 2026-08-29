@@ -15,7 +15,11 @@ export function describeDenialReason(reason: string | null): string | null {
     return 'No space grant matches this user — they have no role in this space at all.'
   }
   if (reason === 'replica-read-only') {
-    return 'This space is a read-only replica (design.md §12) — editing is unconditionally disabled here.'
+    // The "(design.md §12)" this used to carry pointed at a document nobody
+    // reading a denial can open. What it was standing in for — that the
+    // read-only-ness comes from the sync direction, and so no grant can widen
+    // it — is said in words instead.
+    return 'This space is a read-only replica: its content arrives by one-way sync from another instance, so editing is disabled here whatever grants the user holds.'
   }
   if (reason === 'insufficient-space-role') {
     return "The user's space role is viewer, which is below editor."

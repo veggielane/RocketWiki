@@ -26,7 +26,7 @@ export function PermissionInspector({ detail }: { detail: EffectivePermissionDet
 
       {detail.isReplicaSpace && (
         <Alert severity="info">
-          This space is a replica of another instance — it's read-only regardless of any grant (design.md §12).
+          This space is a replica of another instance — it's read-only regardless of any grant.
         </Alert>
       )}
 

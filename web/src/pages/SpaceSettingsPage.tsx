@@ -3,11 +3,6 @@ import { useNavigate, useParams, Link as RouterLink } from 'react-router-dom'
 import {
   Alert,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
   Divider,
   List,
   ListItem,
@@ -16,6 +11,7 @@ import {
   ListItemText,
   Paper,
   Skeleton,
+  Snackbar,
   Stack,
   TextField,
   Typography,
@@ -23,7 +19,7 @@ import {
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined'
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
-import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
+import RestoreFromTrashOutlinedIcon from '@mui/icons-material/RestoreFromTrashOutlined'
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined'
 import {
   useArchiveSpaceMutation,
@@ -35,6 +31,10 @@ import {
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
 import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
+import { ConfirmDialog } from '../feedback/ConfirmDialog'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { flattenParentOptions } from './parentOptions'
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 
@@ -89,8 +89,15 @@ export function SpaceSettingsPage() {
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [homepageDraft, setHomepageDraft] = useState<string | null>(null)
 
+  useDocumentTitle(data?.space ? `Space settings — ${data.space.name}` : 'Space settings')
+
   if (fetching) {
-    return <Skeleton variant="rectangular" height={300} />
+    return (
+      <Stack spacing={1}>
+        <Skeleton variant="text" width="40%" height={48} />
+        <Skeleton variant="rectangular" height={300} />
+      </Stack>
+    )
   }
 
   if (error || !data?.space) {
@@ -193,22 +200,21 @@ export function SpaceSettingsPage() {
 
   return (
     <Stack spacing={3}>
-      <Stack spacing={0.5}>
-        <Typography variant="h4" component="h1">
-          Space settings
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          <RouterLink to={`/spaces/${space.key}`}>{space.name}</RouterLink>
-        </Typography>
-      </Stack>
+      <PageHeader title="Space settings" subject={{ label: space.name, to: `/spaces/${space.key}` }} />
 
       {space.isReplica && (
         <Alert severity="info">
           {replicaBadgeLabel(space.originInstanceId)} — {REPLICA_EXPLANATION}
         </Alert>
       )}
-      {actionError && <Alert severity="error">{actionError}</Alert>}
-      {saved && <Alert severity="success">Space settings saved.</Alert>}
+      {/* `warning` and dismissible, matching the page view, the space browser
+          and the editor — this screen was the outlier at `error` with no way to
+          clear it. `error` stays for the genuinely exceptional. */}
+      {actionError && (
+        <Alert severity="warning" onClose={() => setActionError(null)}>
+          {actionError}
+        </Alert>
+      )}
       {!canManage && (
         <Alert severity="info">
           You can read this space, but managing it needs instance admin or this space's own
@@ -330,15 +336,13 @@ export function SpaceSettingsPage() {
           <ListItem disablePadding>
             <ListItemButton component={RouterLink} to={`/spaces/${space.key}/-/grants`}>
               <ShieldOutlinedIcon fontSize="small" sx={{ mr: 2 }} />
-              <ListItemText
-                primary="Grants"
-                secondary="Who holds which role in this space (design.md §6.5)."
-              />
+              <ListItemText primary="Grants" secondary="Who holds which role in this space." />
             </ListItemButton>
           </ListItem>
           <ListItem disablePadding>
             <ListItemButton component={RouterLink} to={`/spaces/${space.key}/-/trash`}>
-              <DeleteOutlinedIcon fontSize="small" sx={{ mr: 2 }} />
+              {/* The destination, not the verb — see the browser's Trash button. */}
+              <RestoreFromTrashOutlinedIcon fontSize="small" sx={{ mr: 2 }} />
               <ListItemText primary="Trash" secondary="Deleted pages, and restoring them." />
             </ListItemButton>
           </ListItem>
@@ -369,23 +373,25 @@ export function SpaceSettingsPage() {
         </Paper>
       )}
 
-      <Dialog open={archiveOpen} onClose={() => setArchiveOpen(false)}>
-        <DialogTitle>Archive "{space.name}"?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            The space and its pages stop appearing in browsing and search. Nothing is deleted, and
-            an instance admin can restore it from the archived-spaces list.
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button autoFocus onClick={() => setArchiveOpen(false)}>
-            Cancel
-          </Button>
-          <Button color="warning" variant="contained" onClick={() => void handleArchive()}>
-            Archive
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ConfirmDialog
+        open={archiveOpen}
+        title={`Archive "${space.name}"?`}
+        confirmLabel="Archive"
+        // Reversible, so `warning` rather than `error` — but still filled, so
+        // the consequential action is not the quietest thing in the dialog.
+        tone="warning"
+        onCancel={() => setArchiveOpen(false)}
+        onConfirm={() => void handleArchive()}
+      >
+        The space and its pages stop appearing in browsing and search. Nothing is deleted, and an instance admin
+        can restore it from the archived-spaces list.
+      </ConfirmDialog>
+
+      <Snackbar open={saved} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setSaved(false)}>
+        <Alert severity="success" onClose={() => setSaved(false)}>
+          Space settings saved.
+        </Alert>
+      </Snackbar>
 
       <ReadOnlyReplicaDialog
         open={replicaOrigin !== null}

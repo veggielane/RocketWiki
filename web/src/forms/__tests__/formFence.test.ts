@@ -29,7 +29,10 @@ describe('parseFormFence', () => {
   it('treats no columns as "every field the definition declares"', () => {
     // Empty rather than a sentinel: the blocks read an empty list as "all", so a
     // fence with no columns line and one with an empty one behave identically.
-    expect(parseFormFence('collection = notes').ok && parseFormFence('collection = notes').spec.columns).toEqual([])
+    // Parsed once into a local: calling twice narrowed neither result, so the
+    // `.spec` read was on the un-narrowed union.
+    const parsed = parseFormFence('collection = notes')
+    expect(parsed.ok && parsed.spec.columns).toEqual([])
     const blank = parseFormFence('collection = notes\ncolumns =   ')
     expect(blank.ok && blank.spec.columns).toEqual([])
   })

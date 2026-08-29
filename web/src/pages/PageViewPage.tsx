@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, Link as RouterLink } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -11,11 +11,15 @@ import {
   DialogTitle,
   Divider,
   IconButton,
+  ListItemIcon,
+  Menu,
+  MenuItem,
   Skeleton,
+  Snackbar,
   Stack,
   Tooltip,
-  Typography,
 } from '@mui/material'
+import MoreVertIcon from '@mui/icons-material/MoreVert'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined'
 import NoteAddOutlinedIcon from '@mui/icons-material/NoteAddOutlined'
@@ -46,6 +50,9 @@ import {
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, blockedPageCount, describeMutationError } from '../graphql/mutationError'
 import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from '../access/move/MovePageDialog'
 import { CreatePageDialog, type CreatePageValues } from './CreatePageDialog'
@@ -115,6 +122,16 @@ export function PageViewPage({
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [actionsAnchor, setActionsAnchor] = useState<HTMLElement | null>(null)
+  // A save on the edit screen navigates here and hands its notice over in
+  // router state — the editor unmounts, so its own Snackbar cannot outlive the
+  // navigation, and a save that confirmed nothing was indistinguishable from
+  // one that silently failed. Read once into state so a re-render (or a back
+  // navigation onto the same entry) does not resurrect it.
+  const location = useLocation()
+  const [savedNotice, setSavedNotice] = useState<string | null>(
+    () => (location.state as { savedNotice?: string } | null)?.savedNotice ?? null,
+  )
   // Server truth (`viewerIsWatching`) with an optimistic local override:
   // the override is set on click, reverted if the mutation is refused, and
   // cleared when navigating to a different page.
@@ -135,6 +152,7 @@ export function PageViewPage({
   // editor mounts asynchronously), so this watches for it to appear rather
   // than relying on the browser's one-shot native hash scroll.
   useScrollToHash(data?.page?.content)
+  useDocumentTitle(data?.page?.title)
 
   const spaceId = data?.page?.spaceId
   const spaceKey = data?.page?.spaceKey
@@ -321,133 +339,160 @@ export function PageViewPage({
     // reach it through props or useParams (a slug route carries no id).
     <PageIdContext value={page.id}>
     <Box>
-      {/* design.md §21: the marking goes at the top AND the bottom. Both
-          render the server-built `label` — someone printing or screenshotting
-          a long page has to meet the marking without knowing where to look,
-          which is the whole reason for the pair. */}
-      <Box sx={{ mb: 2 }}>
-      </Box>
+      {/*
+        Nine controls used to sit here in one un-wrapping row, every one of them
+        an equally-weighted outlined button: Edit — the thing most readers came
+        to do — carried exactly the same visual weight as Watch, and Delete sat
+        beside it separated only by a red tint. They also did not fit; the row
+        alone runs past the 960px measure and squashed the title.
 
-      <Stack direction="row" sx={{ mb: 2, alignItems: 'center', justifyContent: 'space-between' }}>
-        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center', minWidth: 0 }}>
-          {/* Decorative — the h1 it sits beside is the page's name. Outside
-              the heading rather than inside it so the accessible name of the
-              heading stays exactly the title. */}
-          {TitleIcon && <TitleIcon sx={{ fontSize: 32, color: 'text.secondary' }} />}
-          <Typography variant="h4" component="h1">
-            {page.title}
-          </Typography>
-        </Stack>
-        <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
-          <PresenceAvatars viewers={viewers} />
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-            <Tooltip title="Why can I see this page?">
-              <IconButton size="small" aria-label="Why can I see this page?" onClick={() => setInspectorOpen(true)}>
-                <PolicyOutlinedIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Button
-              startIcon={watching ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
-              variant="outlined"
-              size="small"
-              onClick={() => void handleToggleWatch()}
-              aria-pressed={watching}
-            >
-              {watching ? 'Watching' : 'Watch'}
-            </Button>
-            {/* Unlike the space-level "New page" button, this one CAN be gated
-                honestly: creating a child needs canEdit on the parent, and the
-                page read already carries the server's own canEdit. */}
-            {page.canEdit && (
+        So: Edit is the one emphasised action, Watch stays out (it is a toggle
+        people use from here), and everything else moves behind an overflow
+        menu. Delete is last in that menu, under a divider — the same
+        segregation the space settings screen gives Archive, rather than a
+        destructive action one pixel from the primary one.
+      */}
+      <Box sx={{ mb: 2 }}>
+        <PageHeader
+          title={page.title}
+          titleAdornment={
+            /* Decorative — the h1 it sits beside is the page's name. Outside
+               the heading rather than inside it so the accessible name of the
+               heading stays exactly the title. */
+            TitleIcon ? <TitleIcon sx={{ fontSize: 32, color: 'text.secondary' }} /> : undefined
+          }
+          actions={
+            <>
+              <PresenceAvatars viewers={viewers} />
+              <Tooltip title="Why can I see this page?">
+                <IconButton size="small" aria-label="Why can I see this page?" onClick={() => setInspectorOpen(true)}>
+                  <PolicyOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
               <Button
-                startIcon={<NoteAddOutlinedIcon />}
+                startIcon={watching ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
                 variant="outlined"
                 size="small"
-                onClick={() => {
-                  setCreateError(null)
-                  setCreateOpen(true)
-                }}
+                onClick={() => void handleToggleWatch()}
+                aria-pressed={watching}
               >
-                Add child page
+                {watching ? 'Watching' : 'Watch'}
               </Button>
-            )}
-            {/* design.md §6.4.1: move requires canEdit at the source (and
-                the server re-checks the destination). */}
-            {page.canEdit && (
-              <Button
-                startIcon={<DriveFileMoveOutlinedIcon />}
-                variant="outlined"
-                size="small"
-                onClick={() => setMoveOpen(true)}
-              >
-                Move
-              </Button>
-            )}
-            {/* Shown to everyone who can read the page, unlike Details: history is
-                the provenance of content already in front of them, and the page
-                read is the gate that already decided they may see it. */}
-            <Button
-              component={RouterLink}
-              to={`/pages/${page.id}/history`}
-              startIcon={<HistoryOutlinedIcon />}
-              variant="outlined"
-              size="small"
-            >
-              History
-            </Button>
-            {/* Everything about the page that is not the page. Editors only,
-                matching the screen's own gate — offering a link that answers
-                "this is not for you" would be worse than not offering it. */}
-            {page.canEdit && (
-              <Button
-                component={RouterLink}
-                to={`/pages/${page.id}/details`}
-                startIcon={<TuneOutlinedIcon />}
-                variant="outlined"
-                size="small"
-              >
-                Details
-              </Button>
-            )}
-            {page.canEdit && (
-              <Button
-                component={RouterLink}
-                to={`/pages/${page.id}/edit`}
-                startIcon={<EditOutlinedIcon />}
-                variant="outlined"
-                size="small"
-              >
-                Edit
-              </Button>
-            )}
-            {page.canManageAccess && (
-              <Button
-                component={RouterLink}
-                to={`/pages/${page.id}/permissions`}
-                startIcon={<ShieldOutlinedIcon />}
-                variant="outlined"
-                size="small"
-              >
-                Permissions
-              </Button>
-            )}
-            {page.canEdit && (
-              <Button
-                startIcon={<DeleteOutlinedIcon />}
-                variant="outlined"
-                color="error"
-                size="small"
-                onClick={() => {
-                  setBlockedCount(null)
-                  setDeleteOpen(true)
-                }}
-              >
-                Delete
-              </Button>
-            )}
-          </Stack>
-        </Stack>
-      </Stack>
+              {page.canEdit && (
+                <Button
+                  component={RouterLink}
+                  to={`/pages/${page.id}/edit`}
+                  startIcon={<EditOutlinedIcon />}
+                  variant="contained"
+                  size="small"
+                >
+                  Edit
+                </Button>
+              )}
+              <Tooltip title="More actions">
+                <IconButton
+                  size="small"
+                  aria-label="More actions"
+                  aria-haspopup="menu"
+                  onClick={(e) => setActionsAnchor(e.currentTarget)}
+                >
+                  <MoreVertIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Menu anchorEl={actionsAnchor} open={Boolean(actionsAnchor)} onClose={() => setActionsAnchor(null)}>
+                {/* Shown to everyone who can read the page, unlike Details: history is
+                    the provenance of content already in front of them, and the page
+                    read is the gate that already decided they may see it. */}
+                <MenuItem
+                  component={RouterLink}
+                  to={`/pages/${page.id}/history`}
+                  onClick={() => setActionsAnchor(null)}
+                >
+                  <ListItemIcon>
+                    <HistoryOutlinedIcon fontSize="small" />
+                  </ListItemIcon>
+                  History
+                </MenuItem>
+                {/* Everything about the page that is not the page. Editors only,
+                    matching the screen's own gate — offering a link that answers
+                    "this is not for you" would be worse than not offering it. */}
+                {page.canEdit && (
+                  <MenuItem
+                    component={RouterLink}
+                    to={`/pages/${page.id}/details`}
+                    onClick={() => setActionsAnchor(null)}
+                  >
+                    <ListItemIcon>
+                      <TuneOutlinedIcon fontSize="small" />
+                    </ListItemIcon>
+                    Details
+                  </MenuItem>
+                )}
+                {/* Unlike the space-level "New page" button, this one CAN be gated
+                    honestly: creating a child needs canEdit on the parent, and the
+                    page read already carries the server's own canEdit. */}
+                {page.canEdit && (
+                  <MenuItem
+                    onClick={() => {
+                      setActionsAnchor(null)
+                      setCreateError(null)
+                      setCreateOpen(true)
+                    }}
+                  >
+                    <ListItemIcon>
+                      <NoteAddOutlinedIcon fontSize="small" />
+                    </ListItemIcon>
+                    Add child page
+                  </MenuItem>
+                )}
+                {/* design.md §6.4.1: move requires canEdit at the source (and
+                    the server re-checks the destination). */}
+                {page.canEdit && (
+                  <MenuItem
+                    onClick={() => {
+                      setActionsAnchor(null)
+                      setMoveOpen(true)
+                    }}
+                  >
+                    <ListItemIcon>
+                      <DriveFileMoveOutlinedIcon fontSize="small" />
+                    </ListItemIcon>
+                    Move
+                  </MenuItem>
+                )}
+                {page.canManageAccess && (
+                  <MenuItem
+                    component={RouterLink}
+                    to={`/pages/${page.id}/permissions`}
+                    onClick={() => setActionsAnchor(null)}
+                  >
+                    <ListItemIcon>
+                      <ShieldOutlinedIcon fontSize="small" />
+                    </ListItemIcon>
+                    Permissions
+                  </MenuItem>
+                )}
+                {page.canEdit && <Divider />}
+                {page.canEdit && (
+                  <MenuItem
+                    onClick={() => {
+                      setActionsAnchor(null)
+                      setBlockedCount(null)
+                      setDeleteOpen(true)
+                    }}
+                    sx={{ color: 'error.main' }}
+                  >
+                    <ListItemIcon>
+                      <DeleteOutlinedIcon fontSize="small" color="error" />
+                    </ListItemIcon>
+                    Delete
+                  </MenuItem>
+                )}
+              </Menu>
+            </>
+          }
+        />
+      </Box>
 
       {replicaSpace && (
         <Alert severity="info" sx={{ mb: 2 }}>
@@ -625,6 +670,16 @@ export function PageViewPage({
           <Button onClick={() => setInspectorOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={savedNotice !== null}
+        autoHideDuration={SNACKBAR_AUTO_HIDE_MS}
+        onClose={() => setSavedNotice(null)}
+      >
+        <Alert severity="success" onClose={() => setSavedNotice(null)}>
+          {savedNotice}
+        </Alert>
+      </Snackbar>
 
       {/* One replica dialog for every write on this page (move, delete,
           watch, comments) — design.md §12: explain the replica, never a raw

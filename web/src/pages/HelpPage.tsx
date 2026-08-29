@@ -13,6 +13,7 @@ import {
   Typography,
 } from '@mui/material'
 import { RichTextEditor } from '../editor/RichTextEditor'
+import { useDocumentTitle } from '../app/documentTitle'
 import { HELP_SECTIONS, HELP_TOPICS, findHelpTopic } from '../help/topics'
 
 /**
@@ -34,12 +35,16 @@ import { HELP_SECTIONS, HELP_TOPICS, findHelpTopic } from '../help/topics'
 export function HelpPage() {
   const { topic: slug } = useParams<{ topic?: string }>()
   const topic = findHelpTopic(slug ?? HELP_TOPICS[0]?.slug)
+  useDocumentTitle(topic ? `Help — ${topic.title}` : 'Help')
 
   return (
-    <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} alignItems="flex-start">
+    <Stack direction={{ xs: 'column', md: 'row' }} spacing={3} sx={{ alignItems: "flex-start" }}>
       <Paper variant="outlined" sx={{ width: { xs: '100%', md: 280 }, flexShrink: 0 }}>
         <Box sx={{ p: 2, pb: 1 }}>
-          <Typography variant="h6" component="h1">
+          {/* `variant="h4"`, like every other screen's h1. This was the only
+              page whose title rendered at h6 size, which made the app's own
+              help look like a sidebar widget rather than a screen. */}
+          <Typography variant="h4" component="h1">
             Help
           </Typography>
         </Box>

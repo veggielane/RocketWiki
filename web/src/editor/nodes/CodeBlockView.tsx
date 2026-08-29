@@ -11,7 +11,7 @@ import { GitLabIssuesBlock } from '../../gitlab/GitLabIssuesBlock'
 import { PageListBlock } from '../../pagelist/PageListBlock'
 import { FormDefinitionBlock, FormListBlock } from '../../forms/FormBlocks'
 import { parseFormFence } from '../../forms/formFence'
-import { useDebouncedValue } from '../useDebouncedValue'
+import { useDebouncedValue } from '../../useDebouncedValue'
 
 /**
  * NodeView for every `codeBlock`. Ordinary languages render exactly as the

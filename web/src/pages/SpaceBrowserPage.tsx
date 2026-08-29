@@ -17,7 +17,7 @@ import {
   Typography,
 } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
-import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
+import RestoreFromTrashOutlinedIcon from '@mui/icons-material/RestoreFromTrashOutlined'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import NoteAddOutlinedIcon from '@mui/icons-material/NoteAddOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
@@ -33,7 +33,9 @@ import {
   type ClassificationLevel,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
-import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, describeNoPages, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { PageHeader } from '../app/PageHeader'
+import { useDocumentTitle } from '../app/documentTitle'
 import { filterTreeByLabel } from '../labels/filterTreeByLabel'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { CreatePageDialog, type CreatePageValues } from './CreatePageDialog'
@@ -68,6 +70,14 @@ interface PageTreeNode {
   children?: PageTreeNode[]
 }
 
+/**
+ * Fully expanded, deliberately — this is the one screen whose job is "show me
+ * every page in this space", and it is what the label filter above it filters.
+ * The rail (app/SpaceTreeNav.tsx) is the opposite: it collapses to your current
+ * path because it is for navigating, not surveying. The two trees differing in
+ * disclosure is the point; what was NOT the point was this one having no empty
+ * state and the rail having no restriction badge, which is why both now do.
+ */
 function PageTreeList({
   nodes,
   spaceKey,
@@ -174,12 +184,21 @@ export function SpaceBrowserPage() {
     setLabelFilter(null)
   }
 
+  useDocumentTitle(data?.space?.name)
+
   const tree: PageTreeNode[] = useMemo(() => treeData?.pageTree ?? [], [treeData])
   const availableLabels = useMemo(() => distinctLabels(tree), [tree])
   const labelMatches = useMemo(() => (labelFilter ? filterTreeByLabel(tree, labelFilter) : []), [tree, labelFilter])
 
   if (fetching) {
-    return <Skeleton variant="rectangular" height={300} />
+    // Title skeleton as well as body: this screen has an h1, so a bare
+    // rectangle under-describes the layout and the heading pops in late.
+    return (
+      <Stack spacing={1}>
+        <Skeleton variant="text" width="40%" height={48} />
+        <Skeleton variant="rectangular" height={300} />
+      </Stack>
+    )
   }
 
   if (error || !data?.space) {
@@ -254,63 +273,80 @@ export function SpaceBrowserPage() {
 
   return (
     <Stack spacing={2}>
-      <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-        <Typography variant="h4" component="h1">
-          {space.name}
-        </Typography>
-        <Stack direction="row" spacing={1}>
-          <Button
-            startIcon={watching ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
-            variant="outlined"
-            size="small"
-            onClick={() => void handleToggleWatch()}
-            aria-pressed={watching}
-          >
-            {watching ? 'Watching' : 'Watch'}
-          </Button>
-          {/* No client-side gate, for the same reason as Trash below: there is
-              no space-level viewer permission on the wire to gate on (Space
-              carries only viewerIsWatching), and inventing one client-side
-              would be a guess. Creating a root page needs canEdit on the space,
-              which the server enforces; a refusal comes back into the dialog
-              inline, with the typed title and slug still there. */}
-          <Button
-            startIcon={<NoteAddOutlinedIcon />}
-            variant="outlined"
-            size="small"
-            onClick={() => {
-              setCreateError(null)
-              setCreateOpen(true)
-            }}
-          >
-            New page
-          </Button>
-          {/* No client-side gate here — the trash query itself is
-              permission-filtered server-side, same "let the server decide
-              what's visible" approach as everywhere else, rather than
-              guessing who should see a Trash link. */}
-          <Button component={RouterLink} to={`/spaces/${space.key}/-/trash`} startIcon={<DeleteOutlinedIcon />} variant="outlined" size="small">
-            Trash
-          </Button>
-          {/* Space management lives on its own page now (design.md §6.5.1):
-              rename, description, grants, trash and archiving were four
-              separate header buttons competing with the page actions. Same
-              `grants`-non-empty gate as before — the server returns grant rows
-              only to instance/space admins, so an empty list means "not yours
-              to manage". */}
-          {canManage && (
+      <PageHeader
+        title={space.name}
+        actions={
+          <>
+            <Button
+              startIcon={watching ? <NotificationsActiveIcon /> : <NotificationsNoneOutlinedIcon />}
+              variant="outlined"
+              size="small"
+              onClick={() => void handleToggleWatch()}
+              aria-pressed={watching}
+            >
+              {watching ? 'Watching' : 'Watch'}
+            </Button>
+            {/* No client-side gate here — the trash query itself is
+                permission-filtered server-side, same "let the server decide
+                what's visible" approach as everywhere else, rather than
+                guessing who should see a Trash link.
+
+                `RestoreFromTrashOutlined`, not `DeleteOutlined`: the plain
+                trash can is the DESTRUCTIVE verb everywhere else in the app
+                (the page's Delete action, every remove-row button), and using
+                it for a navigation link asked people to press "delete" to go
+                and look at something. */}
             <Button
               component={RouterLink}
-              to={`/spaces/${space.key}/-/admin`}
-              startIcon={<SettingsOutlinedIcon />}
+              to={`/spaces/${space.key}/-/trash`}
+              startIcon={<RestoreFromTrashOutlinedIcon />}
               variant="outlined"
               size="small"
             >
-              Space settings
+              Trash
             </Button>
-          )}
-        </Stack>
-      </Stack>
+            {/* Space management lives on its own page now (design.md §6.5.1):
+                rename, description, grants, trash and archiving were four
+                separate header buttons competing with the page actions. Same
+                `grants`-non-empty gate as before — the server returns grant rows
+                only to instance/space admins, so an empty list means "not yours
+                to manage". */}
+            {canManage && (
+              <Button
+                component={RouterLink}
+                to={`/spaces/${space.key}/-/admin`}
+                startIcon={<SettingsOutlinedIcon />}
+                variant="outlined"
+                size="small"
+              >
+                Space settings
+              </Button>
+            )}
+            {/* The one emphasised action on this screen, matching the space
+                list's "New space". It used to be `outlined` like its three
+                neighbours, so the screen had four equal buttons and no call to
+                action.
+
+                No client-side gate: there is no space-level viewer permission on
+                the wire to gate on (Space carries only viewerIsWatching), and
+                inventing one client-side would be a guess. Creating a root page
+                needs canEdit on the space, which the server enforces; a refusal
+                comes back into the dialog inline, with the typed title and slug
+                still there. */}
+            <Button
+              startIcon={<NoteAddOutlinedIcon />}
+              variant="contained"
+              size="small"
+              onClick={() => {
+                setCreateError(null)
+                setCreateOpen(true)
+              }}
+            >
+              New page
+            </Button>
+          </>
+        }
+      />
 
       {/* design.md §12: proactive replica banner — not just the reactive
           dialog after a refused write. */}
@@ -362,7 +398,14 @@ export function SpaceBrowserPage() {
         </Box>
       ) : (
         <Box role="region" aria-label="Page tree">
-          <PageTreeList nodes={tree} spaceKey={space.key} />
+          {tree.length > 0 ? (
+            <PageTreeList nodes={tree} spaceKey={space.key} />
+          ) : (
+            /* A space with no pages rendered an empty <List> and nothing else —
+               and this is the screen you land on right after creating one.
+               web/README.md's rule: the fact AND the consequence. */
+            <Typography color="text.secondary">{describeNoPages(true)}</Typography>
+          )}
         </Box>
       )}
 

@@ -126,7 +126,7 @@ export function InsertFormDialog({
           </Typography>
 
           {fields.map((field, index) => (
-            <Stack key={index} direction="row" spacing={1} alignItems="flex-start">
+            <Stack key={index} direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
               <TextField
                 label="Name"
                 value={field.name}

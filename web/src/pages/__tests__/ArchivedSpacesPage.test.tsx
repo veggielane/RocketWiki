@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { ArchivedSpacesPage } from '../ArchivedSpacesPage'
 import { createMockUrqlClient, type MockClient } from '../../test/mockUrqlClient'
@@ -18,9 +19,13 @@ function renderPage(spaces: typeof archived): MockClient {
     return undefined
   })
   render(
-    <UrqlProvider value={mock.client}>
-      <ArchivedSpacesPage />
-    </UrqlProvider>,
+    // The shared page header carries a back-link to the space list, so this
+    // screen now needs a router the way every other page-level test does.
+    <MemoryRouter>
+      <UrqlProvider value={mock.client}>
+        <ArchivedSpacesPage />
+      </UrqlProvider>
+    </MemoryRouter>,
   )
   return mock
 }

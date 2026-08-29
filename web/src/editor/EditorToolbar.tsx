@@ -1,5 +1,5 @@
-import { useState, type MouseEvent } from 'react'
-import type { Editor } from '@tiptap/core'
+import { useRef, useState, type MouseEvent } from 'react'
+import { getMarkRange, type Editor } from '@tiptap/core'
 import { useEditorState } from '@tiptap/react'
 import {
   Box,
@@ -23,7 +23,7 @@ import TableChartOutlinedIcon from '@mui/icons-material/TableChartOutlined'
 import LinkIcon from '@mui/icons-material/Link'
 import HorizontalRuleIcon from '@mui/icons-material/HorizontalRule'
 import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
-import CodeOffIcon from '@mui/icons-material/DataObject'
+import CodeBlockIcon from '@mui/icons-material/DataObject'
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
 import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined'
 import FormatListBulletedAddIcon from '@mui/icons-material/PlaylistAddOutlined'
@@ -46,6 +46,44 @@ import { InsertFormDialog } from './forms/InsertFormDialog'
 import DynamicFormOutlinedIcon from '@mui/icons-material/DynamicFormOutlined'
 import { buildPageListFenceBody, type PageListSpec } from '../pagelist/fenceBody'
 import { EmojiPickerButton } from './emoji/EmojiPickerButton'
+import { InsertLinkDialog, type LinkTarget } from './InsertLinkDialog'
+import { useRovingToolbar } from './useRovingToolbar'
+
+/**
+ * A stateful mark button. A `ToggleButton` rather than an `IconButton` tinted
+ * `color="primary"`, because a tint is the whole of the on/off signal to a
+ * sighted user and colour alone is a WCAG 1.4.1 failure — the same toolbar was
+ * already using `ToggleButton`'s background fill for the heading and alignment
+ * groups two centimetres away, so this is also the toolbar agreeing with
+ * itself. `ToggleButton` sets `aria-pressed` from `selected`, so there is no
+ * separate attribute to keep in step.
+ */
+function MarkToggle({
+  label,
+  active,
+  onToggle,
+  children,
+}: {
+  label: string
+  active: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <Tooltip title={label}>
+      <ToggleButton
+        size="small"
+        value={label}
+        selected={active}
+        onChange={onToggle}
+        aria-label={label}
+        sx={{ border: 0, p: 0.75 }}
+      >
+        {children}
+      </ToggleButton>
+    </Tooltip>
+  )
+}
 
 export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const [calloutMenuAnchor, setCalloutMenuAnchor] = useState<HTMLElement | null>(null)
@@ -56,10 +94,14 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   // §22) is this instance's own query language, always present.
   const [pageListDialogOpen, setPageListDialogOpen] = useState(false)
   const [formDialogOpen, setFormDialogOpen] = useState(false)
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   // §15/§18 fail-closed extends to UI affordances: no GitLab:BaseUrl means
   // the feature is absent, so the whole GitLab menu is hidden, not disabled.
   const [{ data: gitlabStatusData }] = useGitLabStatusQuery()
   const gitlabConfigured = gitlabStatusData?.gitlabStatus.configured === true
+
+  const toolbarRef = useRef<HTMLDivElement>(null)
+  const { onKeyDown } = useRovingToolbar(toolbarRef)
 
   // Contextual table controls. useEditor (v3) doesn't re-render on
   // transactions, so this subscribes explicitly to exactly the state the
@@ -91,10 +133,66 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
     setCalloutMenuAnchor(null)
   }
 
-  const insertLink = () => {
-    const href = window.prompt('Link URL (https://…)')
-    if (!href) return
-    editor.chain().focus().extendMarkRange('link').setLink({ href }).run()
+  /** The link under the cursor, if any — makes the dialog an edit rather than an insert. */
+  const currentLink = ((): LinkTarget | null => {
+    if (editor.isActive('pageLink')) {
+      const pageId = editor.getAttributes('pageLink').pageId as string | undefined
+      return pageId ? { kind: 'page', pageId } : null
+    }
+    if (editor.isActive('link')) {
+      const href = editor.getAttributes('link').href as string | undefined
+      return href ? { kind: 'external', href } : null
+    }
+    return null
+  })()
+
+  const selectionText = () => {
+    const { from, to } = editor.state.selection
+    return editor.state.doc.textBetween(from, to, ' ')
+  }
+
+  /**
+   * Link text is the selection when there is one; for a bare caret sitting
+   * inside a link it is that whole link's text, so editing one does not mean
+   * retyping its label. `getMarkRange` reads the extent without dispatching a
+   * transaction — the dialog must not move the user's selection just by opening.
+   */
+  const linkDialogText = () => {
+    const { from, to, $from } = editor.state.selection
+    if (from !== to) return selectionText()
+    if (!currentLink) return ''
+    const markType = editor.schema.marks[currentLink.kind === 'page' ? 'pageLink' : 'link']
+    const range = markType ? getMarkRange($from, markType) : null
+    return range ? editor.state.doc.textBetween(range.from, range.to, ' ') : ''
+  }
+
+  const applyLink = (target: LinkTarget, text: string) => {
+    const markName = target.kind === 'page' ? 'pageLink' : 'link'
+    const other = target.kind === 'page' ? 'link' : 'pageLink'
+    // Both marks are cleared before the chosen one is set: switching a link from
+    // external to internal must not leave the old mark stacked underneath, which
+    // would serialize as two overlapping links.
+    editor
+      .chain()
+      .focus()
+      .extendMarkRange(markName)
+      .extendMarkRange(other)
+      .insertContent({
+        type: 'text',
+        text,
+        marks: [
+          target.kind === 'page'
+            ? { type: 'pageLink', attrs: { pageId: target.pageId } }
+            : { type: 'link', attrs: { href: target.href } },
+        ],
+      })
+      .run()
+    setLinkDialogOpen(false)
+  }
+
+  const removeLink = () => {
+    editor.chain().focus().extendMarkRange('link').unsetLink().extendMarkRange('pageLink').unsetPageLink().run()
+    setLinkDialogOpen(false)
   }
 
   const insertTable = () => {
@@ -117,11 +215,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const openGitlabDialog = (dialog: 'issue-link' | 'file' | 'issues') => {
     setGitlabDialog(dialog)
     setGitlabMenuAnchor(null)
-  }
-
-  const selectionText = () => {
-    const { from, to } = editor.state.selection
-    return editor.state.doc.textBetween(from, to, ' ')
   }
 
   const insertGitlabIssueLink = (ref: GitLabIssueRef, text: string) => {
@@ -174,6 +267,8 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
 
   return (
     <Box
+      ref={toolbarRef}
+      onKeyDown={onKeyDown}
       sx={{
         display: 'flex',
         flexWrap: 'wrap',
@@ -216,113 +311,77 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
 
       <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
-      <Tooltip title="Bold">
-        <IconButton
-          size="small"
-          color={editor.isActive('bold') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleBold().run()}
-          aria-label="Bold"
-          aria-pressed={editor.isActive('bold')}
-        >
-          <FormatBoldIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Italic">
-        <IconButton
-          size="small"
-          color={editor.isActive('italic') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleItalic().run()}
-          aria-label="Italic"
-          aria-pressed={editor.isActive('italic')}
-        >
-          <FormatItalicIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Strikethrough">
-        <IconButton
-          size="small"
-          color={editor.isActive('strike') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleStrike().run()}
-          aria-label="Strikethrough"
-          aria-pressed={editor.isActive('strike')}
-        >
-          <StrikethroughSIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Inline code">
-        <IconButton
-          size="small"
-          color={editor.isActive('code') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleCode().run()}
-          aria-label="Inline code"
-          aria-pressed={editor.isActive('code')}
-        >
-          <CodeIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Link">
-        <IconButton size="small" onClick={insertLink} aria-label="Insert link">
-          <LinkIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
+      <MarkToggle label="Bold" active={editor.isActive('bold')} onToggle={() => editor.chain().focus().toggleBold().run()}>
+        <FormatBoldIcon fontSize="small" />
+      </MarkToggle>
+      <MarkToggle
+        label="Italic"
+        active={editor.isActive('italic')}
+        onToggle={() => editor.chain().focus().toggleItalic().run()}
+      >
+        <FormatItalicIcon fontSize="small" />
+      </MarkToggle>
+      <MarkToggle
+        label="Strikethrough"
+        active={editor.isActive('strike')}
+        onToggle={() => editor.chain().focus().toggleStrike().run()}
+      >
+        <StrikethroughSIcon fontSize="small" />
+      </MarkToggle>
+      <MarkToggle
+        label="Inline code"
+        active={editor.isActive('code')}
+        onToggle={() => editor.chain().focus().toggleCode().run()}
+      >
+        <CodeIcon fontSize="small" />
+      </MarkToggle>
+      {/* Stateful too: a caret inside a link opens the dialog on that link, so
+          "there is a link here" is worth showing the same way bold is. */}
+      <MarkToggle
+        label={currentLink ? 'Edit link' : 'Insert link'}
+        active={currentLink !== null}
+        onToggle={() => setLinkDialogOpen(true)}
+      >
+        <LinkIcon fontSize="small" />
+      </MarkToggle>
 
       <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
-      <Tooltip title="Bulleted list">
-        <IconButton
-          size="small"
-          color={editor.isActive('bulletList') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleBulletList().run()}
-          aria-label="Bulleted list"
-          aria-pressed={editor.isActive('bulletList')}
-        >
-          <FormatListBulletedIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Numbered list">
-        <IconButton
-          size="small"
-          color={editor.isActive('orderedList') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleOrderedList().run()}
-          aria-label="Numbered list"
-          aria-pressed={editor.isActive('orderedList')}
-        >
-          <FormatListNumberedIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Task list">
-        <IconButton
-          size="small"
-          color={editor.isActive('taskList') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleTaskList().run()}
-          aria-label="Task list"
-          aria-pressed={editor.isActive('taskList')}
-        >
-          <ChecklistIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Quote">
-        <IconButton
-          size="small"
-          color={editor.isActive('blockquote') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleBlockquote().run()}
-          aria-label="Quote"
-          aria-pressed={editor.isActive('blockquote')}
-        >
-          <FormatQuoteIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-      <Tooltip title="Code block">
-        <IconButton
-          size="small"
-          color={editor.isActive('codeBlock') ? 'primary' : 'default'}
-          onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-          aria-label="Code block"
-          aria-pressed={editor.isActive('codeBlock')}
-        >
-          <CodeOffIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
+      <MarkToggle
+        label="Bulleted list"
+        active={editor.isActive('bulletList')}
+        onToggle={() => editor.chain().focus().toggleBulletList().run()}
+      >
+        <FormatListBulletedIcon fontSize="small" />
+      </MarkToggle>
+      <MarkToggle
+        label="Numbered list"
+        active={editor.isActive('orderedList')}
+        onToggle={() => editor.chain().focus().toggleOrderedList().run()}
+      >
+        <FormatListNumberedIcon fontSize="small" />
+      </MarkToggle>
+      <MarkToggle
+        label="Task list"
+        active={editor.isActive('taskList')}
+        onToggle={() => editor.chain().focus().toggleTaskList().run()}
+      >
+        <ChecklistIcon fontSize="small" />
+      </MarkToggle>
+      <MarkToggle
+        label="Quote"
+        active={editor.isActive('blockquote')}
+        onToggle={() => editor.chain().focus().toggleBlockquote().run()}
+      >
+        <FormatQuoteIcon fontSize="small" />
+      </MarkToggle>
+      <MarkToggle
+        label="Code block"
+        active={editor.isActive('codeBlock')}
+        onToggle={() => editor.chain().focus().toggleCodeBlock().run()}
+      >
+        <CodeBlockIcon fontSize="small" />
+      </MarkToggle>
 
       <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
@@ -331,66 +390,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
           <TableChartOutlinedIcon fontSize="small" />
         </IconButton>
       </Tooltip>
-      {tableState && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }} role="group" aria-label="Table cell controls">
-          <Tooltip
-            title={
-              tableState.mergeCrossesHeader
-                ? 'Header and body cells cannot merge — the merge would not survive saving'
-                : 'Merge cells'
-            }
-          >
-            {/* span: MUI Tooltips need an enabled child to anchor events on */}
-            <span>
-              <IconButton
-                size="small"
-                onClick={() => editor.chain().focus().mergeTableCells().run()}
-                disabled={!tableState.canMerge}
-                aria-label="Merge cells"
-              >
-                <CallMergeIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title="Split cell">
-            <span>
-              <IconButton
-                size="small"
-                onClick={() => editor.chain().focus().splitCell().run()}
-                disabled={!tableState.canSplit}
-                aria-label="Split cell"
-              >
-                <CallSplitIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <ToggleButtonGroup
-            size="small"
-            exclusive
-            value={tableState.align ?? ''}
-            onChange={(_e: MouseEvent<HTMLElement>, align: TableColumnAlign | '' | null) => {
-              // Clicking the active toggle yields null — clears back to the
-              // unaligned `---` column.
-              editor
-                .chain()
-                .focus()
-                .setTableColumnAlign(align === '' || align === null ? null : align)
-                .run()
-            }}
-            aria-label="Column alignment"
-          >
-            <ToggleButton value="left" aria-label="Align column left">
-              <FormatAlignLeftIcon fontSize="small" />
-            </ToggleButton>
-            <ToggleButton value="center" aria-label="Align column center">
-              <FormatAlignCenterIcon fontSize="small" />
-            </ToggleButton>
-            <ToggleButton value="right" aria-label="Align column right">
-              <FormatAlignRightIcon fontSize="small" />
-            </ToggleButton>
-          </ToggleButtonGroup>
-        </Box>
-      )}
       <Tooltip title="Callout">
         <IconButton
           size="small"
@@ -432,11 +431,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
           <FormatListBulletedAddIcon fontSize="small" />
         </IconButton>
       </Tooltip>
-      <InsertPageListDialog
-        open={pageListDialogOpen}
-        onClose={() => setPageListDialogOpen(false)}
-        onInsert={insertPageList}
-      />
       <Tooltip title="Form">
         <IconButton
           size="small"
@@ -447,11 +441,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
           <DynamicFormOutlinedIcon fontSize="small" />
         </IconButton>
       </Tooltip>
-      <InsertFormDialog
-        open={formDialogOpen}
-        onClose={() => setFormDialogOpen(false)}
-        onInsert={insertForm}
-      />
       {/* Hidden when the registry is empty (EmojiPickerButton) — same
           absent-not-disabled posture as the GitLab menu below. */}
       <EmojiPickerButton editor={editor} />
@@ -472,6 +461,109 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
             <MenuItem onClick={() => openGitlabDialog('file')}>File embed</MenuItem>
             <MenuItem onClick={() => openGitlabDialog('issues')}>Issue list</MenuItem>
           </Menu>
+        </>
+      )}
+      <Tooltip title="Horizontal rule">
+        <IconButton
+          size="small"
+          onClick={() => editor.chain().focus().setHorizontalRule().run()}
+          aria-label="Horizontal rule"
+        >
+          <HorizontalRuleIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+
+      {/*
+        The contextual table controls sit AFTER every fixed control, never
+        among them. They used to be inserted next to "Insert table", so putting
+        the caret in a table pushed Callout, Diagram, Page list, Form, Emoji,
+        GitLab and Horizontal rule ~200px to the right — and on a wrapping
+        toolbar, sometimes onto another row. The user's pointer is over the
+        editing surface when that happens and the button they were reaching for
+        has moved. At the end, appearing costs nothing that was already there.
+      */}
+      {tableState && (
+        <>
+          <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }} role="group" aria-label="Table cell controls">
+            <Tooltip
+              title={
+                tableState.mergeCrossesHeader
+                  ? 'Header and body cells cannot merge — the merge would not survive saving'
+                  : 'Merge cells'
+              }
+            >
+              {/* span: MUI Tooltips need an enabled child to anchor events on */}
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={() => editor.chain().focus().mergeTableCells().run()}
+                  disabled={!tableState.canMerge}
+                  aria-label="Merge cells"
+                >
+                  <CallMergeIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title="Split cell">
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={() => editor.chain().focus().splitCell().run()}
+                  disabled={!tableState.canSplit}
+                  aria-label="Split cell"
+                >
+                  <CallSplitIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <ToggleButtonGroup
+              size="small"
+              exclusive
+              value={tableState.align ?? ''}
+              onChange={(_e: MouseEvent<HTMLElement>, align: TableColumnAlign | '' | null) => {
+                // Clicking the active toggle yields null — clears back to the
+                // unaligned `---` column.
+                editor
+                  .chain()
+                  .focus()
+                  .setTableColumnAlign(align === '' || align === null ? null : align)
+                  .run()
+              }}
+              aria-label="Column alignment"
+            >
+              <ToggleButton value="left" aria-label="Align column left">
+                <FormatAlignLeftIcon fontSize="small" />
+              </ToggleButton>
+              <ToggleButton value="center" aria-label="Align column center">
+                <FormatAlignCenterIcon fontSize="small" />
+              </ToggleButton>
+              <ToggleButton value="right" aria-label="Align column right">
+                <FormatAlignRightIcon fontSize="small" />
+              </ToggleButton>
+            </ToggleButtonGroup>
+          </Box>
+        </>
+      )}
+
+      {/* Dialogs live outside the toolbar's control flow — they render into a
+          portal, so they are never part of the roving tab ring above. */}
+      <InsertLinkDialog
+        open={linkDialogOpen}
+        initialText={linkDialogText()}
+        existing={currentLink}
+        onClose={() => setLinkDialogOpen(false)}
+        onSubmit={applyLink}
+        onRemove={currentLink ? removeLink : undefined}
+      />
+      <InsertPageListDialog
+        open={pageListDialogOpen}
+        onClose={() => setPageListDialogOpen(false)}
+        onInsert={insertPageList}
+      />
+      <InsertFormDialog open={formDialogOpen} onClose={() => setFormDialogOpen(false)} onInsert={insertForm} />
+      {gitlabConfigured && (
+        <>
           <InsertGitLabIssueLinkDialog
             open={gitlabDialog === 'issue-link'}
             initialText={gitlabDialog === 'issue-link' ? selectionText() : ''}
@@ -490,15 +582,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
           />
         </>
       )}
-      <Tooltip title="Horizontal rule">
-        <IconButton
-          size="small"
-          onClick={() => editor.chain().focus().setHorizontalRule().run()}
-          aria-label="Horizontal rule"
-        >
-          <HorizontalRuleIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
     </Box>
   )
 }

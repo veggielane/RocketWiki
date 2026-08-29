@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField } from '@mui/material'
 import type { GitLabFileRef } from '../../gitlab/fenceBody'
+import { useDialogFullScreen } from '../../app/useDialogFullScreen'
 
 export interface InsertGitLabFileDialogProps {
   open: boolean
@@ -15,6 +16,7 @@ export interface InsertGitLabFileDialogProps {
  * code block to the whole Markdown pipeline.
  */
 export function InsertGitLabFileDialog({ open, onClose, onInsert }: InsertGitLabFileDialogProps) {
+  const fullScreen = useDialogFullScreen()
   const [project, setProject] = useState('')
   const [path, setPath] = useState('')
   const [ref, setRef] = useState('')
@@ -42,7 +44,7 @@ export function InsertGitLabFileDialog({ open, onClose, onInsert }: InsertGitLab
   }
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={fullScreen}>
       <DialogTitle>Embed GitLab file</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
