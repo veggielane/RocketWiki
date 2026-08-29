@@ -44,7 +44,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260825062334_AddPageMarkingPrefix", applied);
         Assert.Contains("20260829090727_AddPageIcon", applied);
         Assert.Contains("20260829092438_SpaceUniquePageSlug", applied);
-        Assert.Equal(12, applied.Count);
+        Assert.Contains("20260829134601_AddPageEntries", applied);
+        Assert.Equal(13, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -286,6 +287,14 @@ public sealed class MigrationTests : SqlServerTestBase
         // move silently fail on a constraint nobody remembered.
         Assert.Equal(1, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Pages_Space_Slug' AND has_filter = 1 AND is_unique = 1"));
+        // AddPageEntries: the collection index is filtered, and - the part that only a
+        // real SQL Server can check - the lookup column really is binary-collated. SQLite
+        // cannot catch a missing collation here because its own default is already
+        // case-sensitive, which is exactly the asymmetry the collation exists to remove.
+        Assert.Equal(1, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_PageEntries_Page_Collection' AND has_filter = 1"));
+        Assert.Equal("Latin1_General_100_BIN2", await ExecuteScalarAsync<string>(
+            "SELECT collation_name FROM sys.columns WHERE object_id = OBJECT_ID('PageEntries') AND name = 'Collection'"));
         Assert.Equal(0, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Pages_Space_Parent_Slug'"));
         Assert.Equal(1, await ExecuteScalarAsync<int>(

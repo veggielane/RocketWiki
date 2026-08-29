@@ -55,6 +55,8 @@ public class RocketWikiDbContext : DbContext
     public DbSet<PagePropertyKey> PagePropertyKeys => Set<PagePropertyKey>();
     public DbSet<PageProperty> PageProperties => Set<PageProperty>();
     public DbSet<PageMarking> PageMarkings => Set<PageMarking>();
+    public DbSet<PageEntry> PageEntries => Set<PageEntry>();
+    public DbSet<PageEntryCountry> PageEntryCountries => Set<PageEntryCountry>();
     public DbSet<PageMarkingCountry> PageMarkingCountries => Set<PageMarkingCountry>();
     public DbSet<User> Users => Set<User>();
     public DbSet<AccessRule> AccessRules => Set<AccessRule>();
@@ -75,6 +77,20 @@ public class RocketWikiDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(RocketWikiDbContext).Assembly);
+
+        // PageEntry.Collection is a lookup string, and the two providers disagree about
+        // case by default: SQL Server folds it, SQLite does not. The column is normalized
+        // on write, but the storage must agree too, or a normalization bug would behave
+        // one way in production and another in the test tier — silently, which is how the
+        // blob store's key column and the property-key registry were both caught. Applied
+        // here rather than in the entity configuration because the collation NAME is
+        // SQL Server's; SQLite's own default is already case-sensitive, so it needs none.
+        if (Database.ProviderName == "Microsoft.EntityFrameworkCore.SqlServer")
+        {
+            modelBuilder.Entity<PageEntry>()
+                .Property(e => e.Collection)
+                .UseCollation("Latin1_General_100_BIN2");
+        }
 
         // Compared by provider name string (rather than the Database.IsSqlite()
         // extension) so RocketWiki.Data itself never needs a package reference to the

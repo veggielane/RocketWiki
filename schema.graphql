@@ -44,6 +44,8 @@ type Query {
   labels(spaceKey: String): [String!]! @cost(weight: "10")
   labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
+  pageEntries(pageId: UUID!, collection: String!): [PageEntryView!]
+    @cost(weight: "10")
   pagePropertyKeys: [PagePropertyKeyRef!]! @cost(weight: "10")
   pageQuery(query: String!, first: Int, after: String): PageQueryConnection!
     @cost(weight: "10")
@@ -94,6 +96,12 @@ type Mutation {
   detachLabel(input: DetachLabelRequestInput!): DetachLabelPayload!
     @cost(weight: "10")
   markNotificationRead(input: MarkNotificationReadInput!): MarkNotificationReadPayload!
+    @cost(weight: "10")
+  createPageEntry(input: CreatePageEntryInput!): CreatePageEntryPayload!
+    @cost(weight: "10")
+  updatePageEntry(input: UpdatePageEntryInput!): UpdatePageEntryPayload!
+    @cost(weight: "10")
+  deletePageEntry(input: DeletePageEntryInput!): DeletePageEntryPayload!
     @cost(weight: "10")
   setPageMarking(input: SetPageMarkingRequestInput!): SetPageMarkingPayload!
     @cost(weight: "10")
@@ -309,6 +317,11 @@ type CreateLabelPayload {
   error: PageMutationErrorView
 }
 
+type CreatePageEntryPayload {
+  entry: PageEntryView
+  error: PageMutationErrorView
+}
+
 type CreatePagePayload {
   page: Page
   error: PageMutationErrorView
@@ -354,6 +367,11 @@ type DeleteAttachmentPayload {
 
 type DeleteCommentPayload {
   comment: Comment
+  error: PageMutationErrorView
+}
+
+type DeletePageEntryPayload {
+  entry: PageEntryView
   error: PageMutationErrorView
 }
 
@@ -541,6 +559,18 @@ type PageDeleteSummary {
   deletedAtUtc: DateTime!
 }
 
+type PageEntryView {
+  id: UUID!
+  pageId: UUID!
+  collection: String!
+  data: String!
+  version: Int!
+  marking: ProtectiveMarking!
+  createdAtUtc: DateTime!
+  updatedAtUtc: DateTime!
+  updatedByUserId: UUID
+}
+
 "Information about pagination in a connection."
 type PageInfo {
   "Indicates whether more edges exist following the set defined by the clients arguments."
@@ -668,6 +698,15 @@ type PersonActivity {
   userId: UUID!
   displayName: String!
   count: Int!
+}
+
+type ProtectiveMarking {
+  format: String!
+  level: ClassificationLevel!
+  prefix: String
+  hasPrefix: Boolean!
+  eyesOnly: [String!]!
+  hasEyesOnly: Boolean!
 }
 
 type RemovePagePropertyPayload {
@@ -851,6 +890,11 @@ type UpdatePageContentPayload {
   error: PageMutationErrorView
 }
 
+type UpdatePageEntryPayload {
+  entry: PageEntryView
+  error: PageMutationErrorView
+}
+
 type UserRef {
   id: UUID!
   displayName: String!
@@ -913,6 +957,13 @@ input CreateLabelRequestInput {
   name: String!
 }
 
+input CreatePageEntryInput {
+  pageId: UUID!
+  collection: String!
+  data: String!
+  marking: PageEntryMarkingInput
+}
+
 input CreatePagePropertyKeyRequestInput {
   key: String!
   description: String
@@ -943,6 +994,11 @@ input DeleteAttachmentRequestInput {
 
 input DeleteCommentRequestInput {
   commentId: UUID!
+}
+
+input DeletePageEntryInput {
+  entryId: UUID!
+  expectedVersion: Int!
 }
 
 input DeletePageRequestInput {
@@ -992,6 +1048,12 @@ input MovePageRequestInput {
   pageId: UUID!
   newParentPageId: UUID
   newSortOrder: Int!
+}
+
+input PageEntryMarkingInput {
+  level: ClassificationLevel!
+  eyesOnly: [String!]
+  prefix: String
 }
 
 input RemovePagePropertyRequestInput {
@@ -1063,6 +1125,13 @@ input UpdatePageContentRequestInput {
   content: String!
   editSummary: String
   icon: PageIcon
+}
+
+input UpdatePageEntryInput {
+  entryId: UUID!
+  expectedVersion: Int!
+  data: String!
+  marking: PageEntryMarkingInput
 }
 
 input WatchPageRequestInput {
