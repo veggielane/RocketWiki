@@ -111,8 +111,45 @@ public class BundleExportService : IBundleExportService
                 DateTime.UtcNow))
             .ToList();
 
+        // Entries are a page's structured content, so a baseline that carried the pages
+        // and not their entries would land a replica showing forms with no records —
+        // and they would only ever appear later, for whichever entries happened to change
+        // after the baseline. Emitted as their own lines rather than nested inside the
+        // page upsert so the import side has ONE parser for an entry, shared with the
+        // incremental path.
+        var entries = await _db.PageEntries
+            .Include(e => e.Countries)
+            .Where(e => livePageIds.Contains(e.PageId))
+            .OrderBy(e => e.CreatedAtUtc).ThenBy(e => e.Id)
+            .ToListAsync(cancellationToken);
+
+        lines.AddRange(entries.Select(e => new BundleEventLine(
+            space.Key, space.Id, SequenceNumber: 0, SyncEventType.PageEntry,
+            SerializePageEntry(e), DateTime.UtcNow)));
+
         return await WriteBundleAsync(outputDirectory, localInstanceId, lines, cancellationToken);
     }
+
+    /// <summary>
+    /// The shape an entry crosses in — identical to the incremental writer's, so the
+    /// import side parses one format. Every field is written even when null: the import
+    /// assigns what it reads, so an omitted field would be read as a cleared one. That is
+    /// the bug page icons shipped with.
+    /// </summary>
+    private static string SerializePageEntry(PageEntry entry) => JsonSerializer.Serialize(
+        new
+        {
+            entryId = entry.Id,
+            pageId = entry.PageId,
+            collection = entry.Collection,
+            data = entry.Data,
+            version = entry.Version,
+            level = ProtectiveMarking.LevelWireName(entry.Level),
+            eyesOnly = entry.Countries.Select(c => c.CountryValue).OrderBy(c => c, StringComparer.Ordinal).ToArray(),
+            prefix = entry.Prefix,
+            isDeleted = entry.IsDeleted,
+        },
+        JsonOptions);
 
     public async Task<ExportedBundleInfo?> ExportIncrementalAsync(
         string outputDirectory, string localInstanceId, CancellationToken cancellationToken = default)

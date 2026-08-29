@@ -265,6 +265,9 @@ public class BundleImportService : IBundleImportService
             case SyncEventType.PageMarking:
                 await ApplyPageMarkingAsync(root.GetProperty("pageId").GetGuid(), root, cancellationToken);
                 break;
+            case SyncEventType.PageEntry:
+                await ApplyPageEntryAsync(root, cancellationToken);
+                break;
             case SyncEventType.Attachment:
                 await ApplyAttachmentAsync(root, archive, cancellationToken);
                 break;
@@ -631,6 +634,72 @@ public class BundleImportService : IBundleImportService
     /// Idempotent both directions: a repeated "set" overwrites with the same value, a
     /// repeated "remove" finds nothing to remove and does nothing.
     /// </summary>
+    /// <summary>
+    /// docs/ENTRIES-AND-FORMS-PLAN.md: an entry arriving from a lower instance.
+    /// Idempotent — re-applying the same payload overwrites with identical values.
+    ///
+    /// <para><b>A required field that is missing is a refusal, not a default.</b> The
+    /// writer always emits every field, so an absent one means a payload this build does
+    /// not understand, and guessing would be how an entry silently loses its data or its
+    /// marking. That is the shape of the bug page icons shipped with: the import assigned
+    /// unconditionally while its neighbours handled absence deliberately, so every
+    /// incremental edit stripped an icon the replica already held.</para>
+    ///
+    /// <para><b>The marking fails closed.</b> An unparseable or absent level lands the
+    /// entry at TOP SECRET rather than OFFICIAL, exactly as
+    /// <see cref="ApplyPageMarkingAsync"/> does for a page: content arriving from a lower
+    /// instance without a declared classification is precisely the case where guessing
+    /// the bottom of the ladder would be a cross-boundary disclosure.</para>
+    /// </summary>
+    private async Task ApplyPageEntryAsync(JsonElement payload, CancellationToken cancellationToken)
+    {
+        var entryId = payload.GetProperty("entryId").GetGuid();
+        var pageId = payload.GetProperty("pageId").GetGuid();
+
+        var entry = FindLocal<PageEntry>(e => e.Id == entryId)
+            ?? await _db.PageEntries.IgnoreQueryFilters()
+                .Include(e => e.Countries)
+                .FirstOrDefaultAsync(e => e.Id == entryId, cancellationToken);
+        if (entry is null)
+        {
+            entry = new PageEntry { Id = entryId, CreatedAtUtc = DateTime.UtcNow };
+            _db.PageEntries.Add(entry);
+        }
+
+        entry.PageId = pageId;
+        entry.Collection = payload.GetProperty("collection").GetString()!;
+        entry.Data = payload.GetProperty("data").GetString()!;
+        entry.Version = payload.GetProperty("version").GetInt32();
+        entry.IsDeleted = payload.GetProperty("isDeleted").GetBoolean();
+        entry.UpdatedAtUtc = DateTime.UtcNow;
+        // No local actor: the payload carries none, and a replica is read-only to users
+        // anyway. Same shape as every other sync-applied row.
+        entry.UpdatedByUserId = null;
+
+        var declared = ParseMarking(payload);
+        var applied = declared ?? ProtectiveMarking.FailClosed;
+        entry.Level = applied.Level;
+        entry.Prefix = applied.Prefix;
+
+        // The country set is replaced wholesale, so a caveat removed on the low side
+        // really goes rather than accumulating forever.
+        var existing = FindLocalAll<PageEntryCountry>(c => c.PageEntryId == entryId)
+            .Concat(entry.Countries)
+            .Distinct()
+            .ToList();
+        foreach (var stale in existing.Where(c => !applied.EyesOnly.Contains(c.CountryValue, StringComparer.Ordinal)))
+        {
+            entry.Countries.Remove(stale);
+            _db.PageEntryCountries.Remove(stale);
+        }
+
+        var held = entry.Countries.Select(c => c.CountryValue).ToHashSet(StringComparer.Ordinal);
+        foreach (var country in applied.EyesOnly.Where(c => !held.Contains(c)))
+        {
+            entry.Countries.Add(new PageEntryCountry { PageEntryId = entryId, CountryValue = country });
+        }
+    }
+
     private async Task ApplyPagePropertyAsync(JsonElement payload, CancellationToken cancellationToken)
     {
         var pageId = payload.GetProperty("pageId").GetGuid();

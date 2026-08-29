@@ -39,6 +39,16 @@ public class BundleExportImportTests : SqliteTestBase
 
     private static Principal EditorPrincipal(params string[] groups) => Principal.Create("editor-sub", groups);
 
+    /// <summary>An editor who also holds a clearance. Needed wherever a test raises a
+    /// marking: §21.6 refuses one you could not then read, and the plain EditorPrincipal
+    /// holds no clearance attribute at all — so it can only ever write OFFICIAL.</summary>
+    private static Principal ClearedEditorPrincipal(string clearance, params string[] nationalities) =>
+        Principal.Create("editor-sub", [], new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["clearance"] = [clearance],
+            ["nationality"] = nationalities,
+        });
+
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
         Kind = AccessRuleKind.SpaceGrant,
@@ -245,6 +255,182 @@ public class BundleExportImportTests : SqliteTestBase
                 var replicated = highContext.Pages.Single(p => p.Id == created.Value.Id);
                 Assert.Equal("# Edited", replicated.CurrentContent);
                 Assert.Null(replicated.Icon);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// docs/ENTRIES-AND-FORMS-PLAN.md: entries are a page's structured content, so they
+    /// cross with it — including their own markings, which is the whole reason they are
+    /// worth syncing rather than leaving local.
+    ///
+    /// <para>Both directions in one round trip, because the second is what makes the
+    /// first load-bearing: the import assigns every field it reads, so a payload that
+    /// merely FAILED to carry a change would be indistinguishable from one that cleared
+    /// it. That is the shape of the bug page icons shipped with.</para>
+    /// </summary>
+    [Fact]
+    public async Task Incremental_AnEntryAndItsMarking_BothReachTheReplica()
+    {
+        var actor = TestData.NewUser();
+        var space = NewExportedSpace();
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.Add(space);
+        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.SaveChanges();
+
+        var pageService = new PageService(lowContext, LowInstanceId);
+        var page = await pageService.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "home", "Home", "# Welcome"),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(page.IsSuccess);
+
+        var entryService = new PageEntryService(lowContext, LowInstanceId);
+        var entry = await entryService.CreateAsync(
+            new CreatePageEntryRequest(page.Value.Id, "incident-report", """{"severity":"high"}"""),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(entry.IsSuccess, $"{entry.Error}");
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var exportService = new BundleExportService(lowContext, storage);
+            var first = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
+            Assert.NotNull(first);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var importService = new BundleImportService(highContext, storage);
+                Assert.True((await importService.ImportAsync(first!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var landed = highContext.PageEntries.Include(e => e.Countries).Single(e => e.Id == entry.Value.Id);
+                Assert.Equal("incident-report", landed.Collection);
+                Assert.Equal("""{"severity":"high"}""", landed.Data);
+                Assert.Equal(ClassificationLevel.Official, landed.Level);
+
+                // Raising the marking and editing the data at once: both must land, and
+                // neither may be silently reset by the other travelling in the same payload.
+                var raised = await entryService.UpdateAsync(
+                    new UpdatePageEntryRequest(entry.Value.Id, 1, """{"severity":"critical"}""",
+                        ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], "UK")),
+                    ClearedEditorPrincipal("SECRET", "UK"), actor.Id, AuditCtx);
+                Assert.True(raised.IsSuccess, $"{raised.Error}");
+
+                var second = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
+                Assert.NotNull(second);
+                Assert.True((await importService.ImportAsync(second!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var updated = highContext.PageEntries.Include(e => e.Countries).Single(e => e.Id == entry.Value.Id);
+                Assert.Equal("""{"severity":"critical"}""", updated.Data);
+                Assert.Equal(ClassificationLevel.Secret, updated.Level);
+                Assert.Equal("UK", Assert.Single(updated.Countries).CountryValue);
+
+                // And a delete crosses as a tombstone rather than as an absence — an entry
+                // that simply stopped being mentioned would live forever on the replica.
+                // Deleting it needs the clearance too: an entry you cannot read is an
+                // entry you cannot remove.
+                Assert.True((await entryService.DeleteAsync(
+                    new DeletePageEntryRequest(entry.Value.Id, 2), ClearedEditorPrincipal("SECRET", "UK"), actor.Id, AuditCtx)).IsSuccess);
+
+                var third = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
+                Assert.NotNull(third);
+                Assert.True((await importService.ImportAsync(third!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                Assert.True(highContext.PageEntries.IgnoreQueryFilters().Single(e => e.Id == entry.Value.Id).IsDeleted);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// An entry arriving with no declared marking lands at TOP SECRET, not OFFICIAL —
+    /// the same fail-closed reading a page gets (§21). Content from a lower instance
+    /// without a classification is exactly the case where guessing the bottom of the
+    /// ladder would be a cross-boundary disclosure.
+    /// </summary>
+    [Fact]
+    public async Task Import_AnEntryWithNoMarking_LandsAtTopSecret()
+    {
+        var webOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var entryId = Guid.NewGuid();
+        var pageId = Guid.NewGuid();
+        var spaceId = Guid.NewGuid();
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            entryId,
+            pageId,
+            collection = "incident-report",
+            data = "{}",
+            version = 1,
+            isDeleted = false,
+            // No level, no eyesOnly, no prefix - a bundle written before entries were
+            // marked, or by a build that got it wrong.
+        }, webOptions);
+        // The page travels first: an entry never arrives without one, and the foreign key
+        // would refuse it anyway. Marked here, so only the ENTRY's missing marking is
+        // under test rather than the page's.
+        var pagePayload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            pageId,
+            spaceId,
+            parentPageId = (Guid?)null,
+            ancestorPath = "/",
+            slug = "home",
+            title = "Home",
+            sortOrder = 0,
+            content = "# Home",
+            revisionNumber = 1,
+            marking = new { level = "OFFICIAL", eyesOnly = Array.Empty<string>(), prefix = "UK" },
+        }, webOptions);
+        var ndjson =
+            System.Text.Json.JsonSerializer.Serialize(
+                new NdjsonEventRecord("FUT", spaceId, 1, nameof(SyncEventType.PageUpsert), pagePayload, DateTime.UtcNow), webOptions) + "\n"
+            + System.Text.Json.JsonSerializer.Serialize(
+                new NdjsonEventRecord("FUT", spaceId, 2, nameof(SyncEventType.PageEntry), payload, DateTime.UtcNow), webOptions) + "\n";
+        var payloadHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(ndjson)));
+
+        var outputDir = CreateBundleOutputDir();
+        Directory.CreateDirectory(outputDir);
+        var storage = CreateFileStorage(out var storageDir);
+        try
+        {
+            var bundlePath = Path.Combine(outputDir, "bundle-000001.zip");
+            WriteRawBundle(bundlePath, new
+            {
+                instanceId = LowInstanceId,
+                bundleNumber = 1,
+                previousManifestHash = (string?)null,
+                payloadSha256 = payloadHash,
+                spaceEventRanges = new Dictionary<string, object>
+                {
+                    ["FUT"] = new { spaceId, fromSequence = 1, toSequence = 2, eventCount = 2 },
+                },
+                formatVersion = BundleFormat.CurrentVersion,
+            }, BundleFormat.EventsEntryName(BundleFormat.CurrentVersion), ndjson);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var result = await new BundleImportService(highContext, storage)
+                    .ImportAsync(bundlePath, LowInstanceId, AuditCtx);
+                Assert.True(result.IsSuccess, $"{result.Error}");
+                Assert.Equal(ClassificationLevel.TopSecret,
+                    highContext.PageEntries.Single(e => e.Id == entryId).Level);
             }
         }
         finally

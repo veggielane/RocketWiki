@@ -32,4 +32,15 @@ public enum SyncEventType : byte
     /// and a gap would not be.</para>
     /// </summary>
     PageMarking = 10,
+
+    /// <summary>
+    /// docs/ENTRIES-AND-FORMS-PLAN.md: a page entry was created, changed or deleted.
+    /// Entries are content — they are a page's structured data, so a replica that
+    /// received the page and not its entries would show a form with no records.
+    ///
+    /// <para>One member for all three actions, with the action named in the payload,
+    /// because all three apply to the same row idempotently: an upsert, or a tombstone.
+    /// Splitting them would create three ways for a replay to arrive out of order.</para>
+    /// </summary>
+    PageEntry = 11,
 }
