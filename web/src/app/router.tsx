@@ -191,6 +191,24 @@ export const router = createBrowserRouter([
           return { Component: PagePermissionsPage }
         },
       },
+      // In-app help. Under the reserved `-` segment like every other system
+      // screen, so it can never be shadowed by a future top-level route or
+      // shadow one. Ungated: the reader most likely to need it is the one who
+      // holds a role in nothing yet.
+      {
+        path: '-/docs',
+        lazy: async () => {
+          const { HelpPage } = await import('../pages/HelpPage')
+          return { Component: HelpPage }
+        },
+      },
+      {
+        path: '-/docs/:topic',
+        lazy: async () => {
+          const { HelpPage } = await import('../pages/HelpPage')
+          return { Component: HelpPage }
+        },
+      },
       {
         path: 'search',
         lazy: async () => {

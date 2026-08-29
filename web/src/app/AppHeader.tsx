@@ -1,5 +1,6 @@
 import { Box, IconButton, InputAdornment, Stack, TextField, Tooltip } from '@mui/material'
 import AdminPanelSettingsOutlinedIcon from '@mui/icons-material/AdminPanelSettingsOutlined'
+import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined'
 import Brightness4Icon from '@mui/icons-material/Brightness4'
 import Brightness7Icon from '@mui/icons-material/Brightness7'
 import MenuIcon from '@mui/icons-material/Menu'
@@ -109,6 +110,14 @@ export function AppHeader({ navOpen, onToggleNav }: AppHeaderProps) {
         <Tooltip title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}>
           <IconButton onClick={toggle} aria-label="Toggle color mode">
             {mode === 'light' ? <Brightness4Icon /> : <Brightness7Icon />}
+          </IconButton>
+        </Tooltip>
+
+        {/* Help sits with the other always-available actions rather than in a
+            menu: the reader who needs it least knows where to look for it. */}
+        <Tooltip title="Help">
+          <IconButton component={RouterLink} to="/-/docs" aria-label="Help">
+            <HelpOutlineOutlinedIcon />
           </IconButton>
         </Tooltip>
 

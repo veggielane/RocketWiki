@@ -38,6 +38,7 @@ import { PageDetailsPage } from '../pages/PageDetailsPage'
 import { PagePermissionsPage } from '../pages/PagePermissionsPage'
 import { SpaceBrowserPage } from '../pages/SpaceBrowserPage'
 import { AnalyticsPage } from '../pages/AnalyticsPage'
+import { HelpPage } from '../pages/HelpPage'
 import { TrashPage } from '../pages/TrashPage'
 import { AuditLogPage } from '../pages/AuditLogPage'
 import { RichTextEditor } from '../editor/RichTextEditor'
@@ -594,6 +595,9 @@ const SCREENS: Screen[] = [
   },
   { name: 'space-browser', render: (mode) => shell(mode, '/spaces/PROP/-/browse', 'spaces/:spaceKey/-/browse', <SpaceBrowserPage />) },
   { name: 'analytics', render: (mode) => shell(mode, '/spaces/PROP/-/analytics', 'spaces/:spaceKey/-/analytics', <AnalyticsPage />) },
+  // Help renders long prose through the read-only editor, so this is also the
+  // capture that would catch a body-copy contrast regression in either theme.
+  { name: 'help', render: (mode) => shell(mode, '/-/docs/classification', '-/docs/:topic', <HelpPage />) },
   { name: 'trash', render: (mode) => shell(mode, '/spaces/PROP/-/trash', 'spaces/:spaceKey/-/trash', <TrashPage />) },
   { name: 'audit-log', render: (mode) => shell(mode, '/admin/audit', 'admin/audit', <AuditLogPage />) },
   {
