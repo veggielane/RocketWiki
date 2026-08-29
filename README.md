@@ -23,10 +23,13 @@ export-control requirements: WYSIWYG editing over a Markdown storage format, a
 
 **This is under active, parallel construction.** Every design.md §16
 milestone except the Confluence migration trial is implemented and
-test-verified (the SQL Server slice on every CI run), but nothing has been
-deployed or run end to end on a real machine — see
-[Current status](#current-status) before assuming anything works. To work
-on it, start with [DEVELOPING.md](DEVELOPING.md).
+test-verified (the SQL Server slice on every CI run). The stack has been run
+end to end on real containers — see
+[Getting started with Docker](#getting-started-with-docker) to do it yourself
+— but it has never been *deployed*: the Helm chart and images are authored and
+unexercised, and nothing has been applied to a cluster. Read
+[Current status](#current-status) before assuming any particular thing works.
+To work on it, start with [DEVELOPING.md](DEVELOPING.md).
 
 A browsable version of these documents can be generated from `docs-site/`
 (`docs-site/README.md` explains the scheme — edit the canonical files here,
@@ -53,15 +56,110 @@ default, what *unset* means, and which keys fail closed — is catalogued in
 - **.NET 10 SDK** (developed against 10.0.400).
 - **Node.js 24** and npm, for the `web/` frontend (developed against Node
   24.14.1 / npm 11.12.1).
-- **A container runtime** (Docker or Podman) is required to run `aspire run` —
-  it starts SQL Server, MinIO, and Keycloak as containers. **Not installed in
-  the environment this was developed in**, so the full stack has never
-  actually been started; see [Current status](#current-status).
+- **Docker** — for the full stack (SQL Server, Keycloak, MinIO, draw.io) and
+  for the SQL Server test tier. Both are optional: everything else builds,
+  tests and runs without it. Developed against Docker Desktop 4.87.0 (engine
+  29.7.2, Linux containers).
 - The Aspire CLI and project templates
   (`dotnet tool install -g Aspire.Cli`, `dotnet new install
-  Aspire.ProjectTemplates`) if you want to scaffold further, though `aspire
-  run`/`aspire publish` also work via the CLI tool once container tooling is
-  present.
+  Aspire.ProjectTemplates`) only if you want the `aspire` command itself —
+  `dotnet run --project src/RocketWiki.AppHost` needs neither.
+
+## Getting started with Docker
+
+The full stack, from a clean clone to signed in as a real user. This path has
+been walked end to end from empty volumes (2026-08-28 — see
+[Current status](#current-status)), and the warnings below are the specific
+things that cost time when it was.
+
+**1. Trust the ASP.NET dev certificate**, once per machine:
+
+```
+dotnet dev-certs https --trust
+```
+
+Do this *before* the first `dotnet run`. The Aspire CLI otherwise tries it for
+you and sits on a modal OS dialog until someone clicks it — which, from a
+script or a terminal you have looked away from, is indistinguishable from a
+hung build.
+
+**2. Start the stack:**
+
+```
+dotnet run --project src/RocketWiki.AppHost
+```
+
+That brings up SQL Server (with a data volume), Keycloak with the `rocketwiki`
+dev realm auto-imported, MinIO, a draw.io container for the diagram editor, and
+the API — with connection strings injected and startup ordering handled. The
+Aspire dashboard URL is printed at startup, and receives all traces, metrics
+and logs (design.md §15).
+
+**The first run builds the SQL Server image** from `docker/mssql-fts` (a few
+minutes; cached afterwards). This is not optional and not a preference: Aspire's
+default `AddSqlServer` image has neither Full-Text Search nor the `vector` type,
+so the application cannot run on it at all.
+
+**3. Generate the GraphQL client and start the SPA.** The Vite app is not in the
+AppHost yet, so it runs separately:
+
+```
+cd web
+npm ci
+npm run codegen   # REQUIRED — the typed client is generated from
+                  # ../schema.graphql and deliberately not committed
+npm run dev       # http://localhost:5173
+```
+
+The dev server proxies `/graphql`, `/hubs` (WebSocket), `/attachments`,
+`/avatars`, `/avatar`, `/emojis` and `/users` to the API, which is why the API
+carries no CORS policy — always go through the proxy. The API's port is
+assigned dynamically under Aspire: read it off the dashboard and set
+`VITE_API_TARGET=http://localhost:<port>` before `npm run dev`. Copy
+`web/.env.example` to `web/.env.local` for the rest; every `VITE_*` key is
+documented there and in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+Take `VITE_OIDC_AUTHORITY` from `.env.example` as-is
+(`http://localhost:8080/realms/rocketwiki`) rather than reading a port off
+`docker ps`. Keycloak's *published* container port is randomised per run; 8080
+is Aspire's stable proxy in front of it. Using the container's own port looks
+right, and breaks sign-in only after the redirect back from Keycloak.
+
+**4. Sign in.** The realm seeds six users, all with password
+`RocketWiki!Dev1`, chosen to cover the rule engine's edge cases rather than to
+be a plausible org chart — `alice.engineer` is the ordinary one to start with,
+`frank.admin` is the instance admin, and `carol.noattr` deliberately carries no
+attribute claims at all (§6.3's fail-closed case). The full table, and what
+each proves, is in
+[`src/RocketWiki.AppHost/keycloak/README.md`](src/RocketWiki.AppHost/keycloak/README.md).
+
+**5. Optional: the GraphQL IDE.** Nitro is served at the API's `/graphql` in
+Development — a schema browser and query console. It is switched off in every
+other environment explicitly, rather than by relying on the package default,
+because this application holds classified content. Queries there travel the
+same authenticated path the SPA's do, so an unauthenticated session sees
+exactly what an unauthenticated SPA would: absent-shaped empty answers.
+
+### When it doesn't come up
+
+Both of these are "only on a fresh volume" rules, and both look like something
+else:
+
+- **`docker volume rm` the Keycloak volume after editing
+  `rocketwiki-realm.json`.** The realm imports only into a fresh volume, so
+  otherwise the old one persists and your change appears to do nothing.
+- **SQL Server's `sa` password lives in the volume, not in config.**
+  `MSSQL_SA_PASSWORD` is read only when the engine initializes a new master
+  database; after that the volume's copy wins. `AppHost.cs` pins the password
+  (`RocketWiki-dev-sa-1`) rather than letting Aspire generate one, because a
+  generated password works until the cached value changes and then the stack
+  half-starts *forever*: SQL Server reports healthy, the API sits in
+  `WaitFor(sql)`, and the only evidence is `Login failed for user 'sa'` inside
+  the container log. To fix without losing data, see the `mssql-conf` recipe in
+  [DEVELOPING.md](DEVELOPING.md#full-stack-docker--aspire-run).
+
+[DEVELOPING.md](DEVELOPING.md) is the fuller reference — test tiers, the
+no-Docker paths, CI, and package upgrades.
 
 ## Building and testing
 
@@ -124,18 +222,20 @@ npm test         # vitest
 See [`web/README.md`](web/README.md) and `web/package.json` for the rest of
 the frontend's own tooling (codegen, lint).
 
-### Running the whole stack
+### Running without Docker
 
 ```
-cd src/RocketWiki.AppHost
-aspire run
+dotnet run --project src/RocketWiki.Api    # http://localhost:5079
 ```
 
-This is what *should* bring up SQL Server, MinIO, a Keycloak seeded with the
-`rocketwiki` dev realm, and the API, with the Aspire dashboard for logs and
-traces (design.md §15). **This has never been run** in the environment this
-was built in — no container runtime was available. See below for exactly
-what that means.
+Health endpoints and `/graphql` respond, but data queries need a real database
+and migrate-on-startup fails loudly without one (by design — set
+`Database:MigrateOnStartup=false` to skip it), so this is mostly for
+pipeline/middleware work. The integration tier is the honest way to exercise
+the API container-free: it runs the real HTTP pipeline against EF Core on
+SQLite. For the SPA alone, `VITE_FAKE_REALTIME=true npm run dev` swaps the
+SignalR transports for in-memory fakes. See
+[DEVELOPING.md](DEVELOPING.md#backend-standalone-no-docker).
 
 ## Project layout
 
