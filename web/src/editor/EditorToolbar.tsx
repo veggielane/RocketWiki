@@ -42,6 +42,8 @@ import { InsertGitLabIssuesDialog } from './gitlab/InsertGitLabIssuesDialog'
 import { buildFileFenceBody, buildIssuesFenceBody, type GitLabFileRef, type GitLabIssuesSpec } from '../gitlab/fenceBody'
 import type { GitLabIssueRef } from '../gitlab/issueScheme'
 import { InsertPageListDialog } from './pagelist/InsertPageListDialog'
+import { InsertFormDialog } from './forms/InsertFormDialog'
+import DynamicFormOutlinedIcon from '@mui/icons-material/DynamicFormOutlined'
 import { buildPageListFenceBody, type PageListSpec } from '../pagelist/fenceBody'
 import { EmojiPickerButton } from './emoji/EmojiPickerButton'
 
@@ -53,6 +55,7 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   // Not behind any integration flag, unlike the GitLab menu: RQL (design.md
   // §22) is this instance's own query language, always present.
   const [pageListDialogOpen, setPageListDialogOpen] = useState(false)
+  const [formDialogOpen, setFormDialogOpen] = useState(false)
   // §15/§18 fail-closed extends to UI affordances: no GitLab:BaseUrl means
   // the feature is absent, so the whole GitLab menu is hidden, not disabled.
   const [{ data: gitlabStatusData }] = useGitLabStatusQuery()
@@ -141,7 +144,10 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
    * (design.md §22, §18): no bespoke node, so the Markdown pipeline needs no
    * branch and the round trip is byte-exact for free.
    */
-  const insertFence = (language: 'gitlab-file' | 'gitlab-issues' | 'page-list', body: string) => {
+  const insertFence = (
+    language: 'gitlab-file' | 'gitlab-issues' | 'page-list' | 'form-definition' | 'form-list',
+    body: string,
+  ) => {
     editor
       .chain()
       .focus()
@@ -156,6 +162,15 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const insertGitlabFile = (ref: GitLabFileRef) => insertFence('gitlab-file', buildFileFenceBody(ref))
   const insertGitlabIssues = (spec: GitLabIssuesSpec) => insertFence('gitlab-issues', buildIssuesFenceBody(spec))
   const insertPageList = (spec: PageListSpec) => insertFence('page-list', buildPageListFenceBody(spec))
+
+  // Two fences in one action when the author asked for the table as well. Inserted
+  // in order, so the definition sits above the records it describes — which is the
+  // reading order, and the order the author was thinking in.
+  const insertForm = (fences: { language: 'form-definition' | 'form-list'; body: string }[]) => {
+    for (const fence of fences) {
+      insertFence(fence.language, fence.body)
+    }
+  }
 
   return (
     <Box
@@ -421,6 +436,21 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
         open={pageListDialogOpen}
         onClose={() => setPageListDialogOpen(false)}
         onInsert={insertPageList}
+      />
+      <Tooltip title="Form">
+        <IconButton
+          size="small"
+          onClick={() => setFormDialogOpen(true)}
+          aria-label="Insert form"
+          aria-haspopup="dialog"
+        >
+          <DynamicFormOutlinedIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+      <InsertFormDialog
+        open={formDialogOpen}
+        onClose={() => setFormDialogOpen(false)}
+        onInsert={insertForm}
       />
       {/* Hidden when the registry is empty (EmojiPickerButton) — same
           absent-not-disabled posture as the GitLab menu below. */}
