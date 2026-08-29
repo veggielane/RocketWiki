@@ -155,6 +155,10 @@ builder.Services.AddScoped<IInstanceRoleAccessor, InstanceRoleAccessor>();
 // with it.
 builder.Services.AddSingleton(new InstanceIdentity(localInstanceId));
 builder.Services.AddScoped<IPageReadService, PageReadService>();
+// Analytics reads through IPageReadService rather than the DbContext for its
+// visible-page set, so the §21 clearance gate and §6.4 restrictions are the ones
+// already enforced everywhere else rather than a second copy in an aggregation.
+builder.Services.AddScoped<IAnalyticsService, AnalyticsService>();
 // Viewer-relative permission facts, the §6.6 inspector, and the manage-gated
 // restriction listing. Needs the local InstanceId (unlike IPageReadService) because
 // canEdit/canComment honor the replica invariant (design.md §12).

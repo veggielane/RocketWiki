@@ -4,6 +4,8 @@ schema {
 }
 
 type Query {
+  analytics(spaceKey: String, fromUtc: DateTime!, toUtc: DateTime!): AnalyticsReport
+    @cost(weight: "10")
   archivedSpaces: [ArchivedSpace!]! @cost(weight: "10")
   askWiki(question: String!): AskWikiPayload! @cost(weight: "10")
   auditEvents(
@@ -139,6 +141,12 @@ type AccessRule {
   updatedByUserId: UUID!
 }
 
+type ActivityPoint {
+  day: LocalDate!
+  views: Int!
+  edits: Int!
+}
+
 type AddCommentPayload {
   comment: Comment
   error: PageMutationErrorView
@@ -150,6 +158,25 @@ type AggregateMarkingLabel {
   prefix: String
   label: String!
   levelName: String!
+}
+
+type AnalyticsReport {
+  scope: AnalyticsScope!
+  activity: [ActivityPoint!]!
+  mostViewed: [PageActivity!]!
+  mostEdited: [PageActivity!]!
+  topReaders: [PersonActivity!]!
+  topContributors: [PersonActivity!]!
+  health: ContentHealth!
+  topSearches: [SearchActivity!]!
+  zeroResultSearches: [SearchActivity!]!
+}
+
+type AnalyticsScope {
+  spaceKey: String
+  fromUtc: DateTime!
+  toUtc: DateTime!
+  visiblePageCount: Int!
 }
 
 type ArchivedSpace {
@@ -262,6 +289,14 @@ type Comment {
   createdAtUtc: DateTime!
   editedAtUtc: DateTime
   isDeleted: Boolean!
+}
+
+type ContentHealth {
+  stalePageCount: Int!
+  stalestPages: [PageActivity!]!
+  orphanPageCount: Int!
+  unlabelledPageCount: Int!
+  neverViewedPageCount: Int!
 }
 
 type CreateAccessRulePayload {
@@ -492,6 +527,14 @@ type Page {
   updatedAtUtc: DateTime!
 }
 
+type PageActivity {
+  pageId: UUID!
+  title: String!
+  slug: String!
+  spaceKey: String!
+  count: Int!
+}
+
 type PageDeleteSummary {
   rootPageId: UUID!
   deletedPageCount: Int!
@@ -621,6 +664,12 @@ type PageTreeRestriction {
   expressionJson: String!
 }
 
+type PersonActivity {
+  userId: UUID!
+  displayName: String!
+  count: Int!
+}
+
 type RemovePagePropertyPayload {
   removedPropertyKeyId: UUID
   error: PageMutationErrorView
@@ -689,6 +738,12 @@ type RqlValue {
   kind: RqlValueKind!
   text: String
   nowOffset: String
+}
+
+type SearchActivity {
+  query: String!
+  runCount: Int!
+  zeroResultCount: Int!
 }
 
 type SearchConnection {
@@ -1165,6 +1220,10 @@ enum SpaceRole {
 "The `DateTime` scalar type represents a date and time with time zone offset information."
 scalar DateTime
   @specifiedBy(url: "https://scalars.graphql.org/chillicream/date-time.html")
+
+"The `LocalDate` scalar type represents a date without time or time zone information."
+scalar LocalDate
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/local-date.html")
 
 "The `Long` scalar type represents a signed 64-bit integer."
 scalar Long
