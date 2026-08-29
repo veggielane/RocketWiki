@@ -34,7 +34,7 @@ import { SettingsPage } from '../pages/SettingsPage'
 import { AskWikiPage } from '../pages/AskWikiPage'
 import { AdminEmojisPage } from '../pages/AdminEmojisPage'
 import { AdminPropertyKeysPage } from '../pages/AdminPropertyKeysPage'
-import { PagePropertiesPage } from '../pages/PagePropertiesPage'
+import { PageDetailsPage } from '../pages/PageDetailsPage'
 import { PagePermissionsPage } from '../pages/PagePermissionsPage'
 import { SpaceBrowserPage } from '../pages/SpaceBrowserPage'
 import { AnalyticsPage } from '../pages/AnalyticsPage'
@@ -581,8 +581,8 @@ const SCREENS: Screen[] = [
     // of this file uses — a table of value fields plus a picker on one, a
     // DataGrid plus a create form on the other — so they cost one mock entry
     // each and earn the browser layer's contrast/target-size coverage.
-    name: 'page-properties',
-    render: (mode) => shell(mode, '/pages/page-1/properties', 'pages/:pageId/properties', <PagePropertiesPage />),
+    name: 'page-details',
+    render: (mode) => shell(mode, '/pages/page-1/details', 'pages/:pageId/details', <PageDetailsPage />),
   },
   {
     name: 'admin-property-keys',

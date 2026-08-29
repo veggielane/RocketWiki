@@ -161,15 +161,25 @@ export const router = createBrowserRouter([
           return { Component: PageEditPage }
         },
       },
-      // Not gated at all: reading a page's properties needs only canView
-      // (design.md §20.2 — properties carry no restriction of their own), so
-      // the screen itself hides the editing affordances when the page's
-      // `canEdit` is false, exactly as the page view does.
+      // Everything about a page that is not the page. Self-gated on the
+      // server-computed `canEdit` that arrives with the page rather than by a
+      // router guard, so there is no second round trip and no second copy of the
+      // rule — the screen itself says who it is for.
+      {
+        path: 'pages/:pageId/details',
+        lazy: async () => {
+          const { PageDetailsPage } = await import('../pages/PageDetailsPage')
+          return { Component: PageDetailsPage }
+        },
+      },
+      // The address properties used to live at. Kept as a redirect rather than
+      // deleted: it is the sort of URL someone pastes into a ticket, and a link
+      // that used to work should not start 404ing because a screen grew.
       {
         path: 'pages/:pageId/properties',
         lazy: async () => {
-          const { PagePropertiesPage } = await import('../pages/PagePropertiesPage')
-          return { Component: PagePropertiesPage }
+          const { PropertiesRedirect } = await import('../pages/PageDetailsPage')
+          return { Component: PropertiesRedirect }
         },
       },
       // Also self-gated (page.canManageAccess) rather than router-level —

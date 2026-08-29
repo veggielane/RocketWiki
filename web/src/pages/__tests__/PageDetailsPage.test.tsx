@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
-import { PagePropertiesPage } from '../PagePropertiesPage'
+import { PageDetailsPage } from '../PageDetailsPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../../test/axe'
 
@@ -98,10 +98,10 @@ function renderPage(options: Options = {}) {
     return undefined
   })
   render(
-    <MemoryRouter initialEntries={['/pages/page-1/properties']}>
+    <MemoryRouter initialEntries={['/pages/page-1/details']}>
       <UrqlProvider value={mock.client}>
         <Routes>
-          <Route path="/pages/:pageId/properties" element={<PagePropertiesPage />} />
+          <Route path="/pages/:pageId/details" element={<PageDetailsPage />} />
         </Routes>
       </UrqlProvider>
     </MemoryRouter>,
@@ -112,7 +112,7 @@ function renderPage(options: Options = {}) {
 const mutations = (mock: ReturnType<typeof renderPage>, name: string) =>
   mock.operations.filter((op) => op.name === name).map((op) => op.variables)
 
-describe('PagePropertiesPage accessibility', () => {
+describe('PageDetailsPage accessibility', () => {
   it('has no axe violations with the table, the add form, and a labelled field per row', async () => {
     renderPage()
     expect(await screen.findByRole('table', { name: 'Page properties' })).toBeInTheDocument()
@@ -121,23 +121,23 @@ describe('PagePropertiesPage accessibility', () => {
     await expectNoAxeViolations()
   })
 
-  it('has no axe violations in the read-only view', async () => {
+  it('has no axe violations on the refusal a non-editor gets', async () => {
     renderPage({ canEdit: false })
-    await screen.findByRole('table', { name: 'Page properties' })
+    await screen.findByText(/managed by its editors/)
     await expectNoAxeViolations()
   })
 })
 
-describe('PagePropertiesPage permission-driven rendering (design.md §20.2)', () => {
-  it('shows a viewer the values with no editing affordances at all', async () => {
+describe('PageDetailsPage permission-driven rendering (design.md §20.2)', () => {
+  it('is for editors: a viewer is told so, and shown nothing', async () => {
+    // The tightening this screen exists for. A non-editor sees no properties table
+    // here at all - the values are still on the page view, which is where a reader
+    // reads them. An editing surface that renders read-only for most of its
+    // visitors is a worse answer than one that says who it is for.
     renderPage({ canEdit: false })
-    await screen.findByRole('table', { name: 'Page properties' })
-    expect(screen.getByRole('rowheader', { name: 'Owner' })).toBeInTheDocument()
-    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+    expect(await screen.findByText(/managed by its editors/)).toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: 'Page properties' })).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Remove Owner' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Add a property' })).not.toBeInTheDocument()
   })
 
   it('gives an editor a value field, a remove button and the add form', async () => {
@@ -153,7 +153,7 @@ describe('PagePropertiesPage permission-driven rendering (design.md §20.2)', ()
   })
 })
 
-describe('PagePropertiesPage clearing a value', () => {
+describe('PageDetailsPage clearing a value', () => {
   it('removes the property instead of setting an empty value', async () => {
     const mock = renderPage()
     const field = await screen.findByRole('textbox', { name: 'Value for Status' })
@@ -188,7 +188,7 @@ describe('PagePropertiesPage clearing a value', () => {
   })
 })
 
-describe('PagePropertiesPage saving and adding', () => {
+describe('PageDetailsPage saving and adding', () => {
   it('sends only the rows that changed', async () => {
     const mock = renderPage()
     const field = await screen.findByRole('textbox', { name: 'Value for Owner' })
@@ -239,7 +239,7 @@ describe('PagePropertiesPage saving and adding', () => {
   })
 })
 
-describe('PagePropertiesPage typed refusals', () => {
+describe('PageDetailsPage typed refusals', () => {
   it('explains a read-only replica instead of showing a raw error (design.md §12)', async () => {
     const mock = renderPage({
       setError: { kind: 'ReadOnlyReplica', spaceId: 'space-1', originInstanceId: 'LOW', message: null },
@@ -267,7 +267,7 @@ describe('PagePropertiesPage typed refusals', () => {
   })
 })
 
-describe('PagePropertiesPage protective marking section (design.md §21)', () => {
+describe('PageDetailsPage protective marking section (design.md §21)', () => {
   it('puts the marking in its own section ABOVE the properties table, never as a row', async () => {
     renderPage()
     const marking = await screen.findByRole('heading', { name: 'Protective marking' })
@@ -279,14 +279,16 @@ describe('PagePropertiesPage protective marking section (design.md §21)', () =>
     expect(table.textContent).not.toContain('OFFICIAL')
   })
 
-  it('shows a viewer the marking read-only, alongside the read-only properties', async () => {
+  it('shows a non-editor no marking control here — the banner on the page is where they read it', async () => {
+    // The marking itself is not hidden from anyone who can view the page; §21's
+    // banners carry it. What a non-editor does not get is the screen for CHANGING it.
     renderPage({ canEdit: false })
-    expect(await screen.findByText('UK OFFICIAL')).toBeInTheDocument()
+    await screen.findByText(/managed by its editors/)
     expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
   })
 })
 
-describe('PagePropertiesPage empty states', () => {
+describe('PageDetailsPage empty states', () => {
   it('names the registry as the missing piece when no keys are defined', async () => {
     renderPage({ properties: [], registry: [] })
     expect(
@@ -299,10 +301,20 @@ describe('PagePropertiesPage empty states', () => {
     expect(await screen.findByText('No properties yet — pick a key below to add the first one.')).toBeInTheDocument()
   })
 
-  it('tells a viewer the fact and the consequence', async () => {
+  it('does not reach the empty state for a non-editor — the screen refuses first', async () => {
     renderPage({ properties: [], canEdit: false })
+    expect(await screen.findByText(/managed by its editors/)).toBeInTheDocument()
     expect(
-      await screen.findByText('No properties on this page — only someone who can edit it can add them.'),
-    ).toBeInTheDocument()
+      screen.queryByText('No properties on this page — only someone who can edit it can add them.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('says the space is a replica rather than calling its editors non-editors', async () => {
+    // On a replica canEdit is false for EVERYONE (§12 refuses beneath every grant),
+    // so a bare canEdit gate would tell a space's own editors they are not editors -
+    // and swallow the one screen that explains why the space is read-only.
+    renderPage({ canEdit: false, isReplica: true })
+    expect(await screen.findByText(/Replica of LOW/)).toBeInTheDocument()
+    expect(screen.queryByText(/managed by its editors/)).not.toBeInTheDocument()
   })
 })

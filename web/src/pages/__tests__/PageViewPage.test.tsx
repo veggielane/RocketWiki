@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { PageViewPage } from '../PageViewPage'
@@ -229,19 +229,30 @@ describe('PageViewPage properties panel (design.md §20)', () => {
     expect(screen.queryByRole('link', { name: /properties/i })).not.toBeInTheDocument()
   })
 
-  it('links an editor through to the properties screen', async () => {
+  it('sends an editor to the details screen, not to a properties one', async () => {
+    // Managing properties moved off the page. The link an editor gets is to
+    // everything-about-the-page, which is where the rest of the chrome is headed.
     renderPage({ pageOverrides: { canEdit: true } })
-    expect(await screen.findByRole('link', { name: 'Edit properties' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Details' })).toHaveAttribute(
       'href',
-      '/pages/page-1/properties',
+      '/pages/page-1/details',
     )
   })
 
-  it('offers an editor the screen even with no properties yet, and shows a viewer nothing', async () => {
+  it('offers no Details link to someone who cannot edit', async () => {
+    // The screen refuses non-editors, so offering it would be an invitation to a
+    // refusal - the same "hidden rather than offered-and-refused" rule the edit and
+    // move affordances already follow.
+    renderPage({ pageOverrides: { canEdit: false } })
+    await screen.findByRole('heading', { name: 'Runbook' })
+    expect(screen.queryByRole('link', { name: 'Details' })).not.toBeInTheDocument()
+  })
+
+  it('shows the panel only when there is something in it', async () => {
+    // Previously an editor saw an empty panel carrying an "Add properties" link, so
+    // every page wore a box whether or not it had any properties. The panel is now
+    // purely a display of values that exist.
     renderPage({ pageOverrides: { canEdit: true, properties: [] } })
-    expect(await screen.findByRole('link', { name: 'Add properties' })).toBeInTheDocument()
-    cleanup()
-    renderPage({ pageOverrides: { properties: [] } })
     await screen.findByRole('heading', { name: 'Runbook' })
     expect(screen.queryByRole('heading', { name: 'Properties' })).not.toBeInTheDocument()
   })

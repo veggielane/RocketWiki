@@ -25,6 +25,7 @@ import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNone
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined'
 import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
+import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined'
 import {
   usePageByIdQuery,
   useCurrentUserQuery,
@@ -377,6 +378,20 @@ export function PageViewPage({
                 Move
               </Button>
             )}
+            {/* Everything about the page that is not the page. Editors only,
+                matching the screen's own gate — offering a link that answers
+                "this is not for you" would be worse than not offering it. */}
+            {page.canEdit && (
+              <Button
+                component={RouterLink}
+                to={`/pages/${page.id}/details`}
+                startIcon={<TuneOutlinedIcon />}
+                variant="outlined"
+                size="small"
+              >
+                Details
+              </Button>
+            )}
             {page.canEdit && (
               <Button
                 component={RouterLink}
@@ -454,16 +469,15 @@ export function PageViewPage({
         </Box>
       )}
 
-      {/* design.md §20: properties are page metadata, so they read beside the
-          page like the label strip above — never inside the content, which is
-          what keeps them out of the Markdown round trip entirely. The link to
-          the editing screen appears only with canEdit (§20.2). */}
-      {(page.properties.length > 0 || page.canEdit) && (
+      {/* Properties still read beside the page rather than inside it (design.md
+          §20 — that is what keeps them out of the Markdown round trip), but the
+          panel is now read-only here and managing them happens on the details
+          screen. Shown only when there is something to show: an empty panel with
+          an edit link was chrome that every page carried whether or not it had
+          any properties at all. */}
+      {page.properties.length > 0 && (
         <Box sx={{ mb: 2 }}>
-          <PagePropertiesPanel
-            properties={page.properties}
-            editHref={page.canEdit ? `/pages/${page.id}/properties` : undefined}
-          />
+          <PagePropertiesPanel properties={page.properties} />
         </Box>
       )}
 

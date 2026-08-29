@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link as RouterLink, useParams } from 'react-router-dom'
+import { Link as RouterLink, Navigate, useParams } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -372,19 +372,26 @@ function PropertiesEditor({
 }
 
 /**
- * A page's properties (design.md §20): admin-defined key/value metadata kept
- * beside the page instead of inside it, which is why it gets its own screen
- * rather than an editor node — properties never enter the Markdown, so §4's
- * round trip has nothing new to preserve.
+ * A page's details: everything about the page that is not the page.
  *
- * Reading needs only canView, so this screen is not access-gated the way
- * /permissions is; editing needs `canEdit` on the page (§20.2), and the
- * server-computed flag decides whether the value fields, remove buttons and
- * add form exist at all. Replica spaces refuse every value write beneath
- * every grant (§12) — that refusal renders as the shared replica explainer,
- * never a raw toast.
+ * Properties (design.md §20) are its first section and, for now, its only one —
+ * the screen exists so that more can move here rather than accreting on the page
+ * view, which is what it was already starting to do. Anything moved here should
+ * be metadata ABOUT the page, never content of it.
+ *
+ * **Editors only**, which is a deliberate tightening. The properties screen this
+ * replaces was open to anyone with canView, on the reasoning that properties
+ * carry no restriction of their own (§20.2) — still true, and the values remain
+ * visible to every reader on the page view. What changes is that the screen for
+ * MANAGING them is now an editing surface, and an editing surface that renders
+ * read-only for most of its visitors is a worse answer than one that says who it
+ * is for. The server is unmoved either way: every write is still gated on
+ * canEdit, and this only decides what to offer.
+ *
+ * Replica spaces refuse every value write beneath every grant (§12) — that
+ * refusal renders as the shared replica explainer, never a raw toast.
  */
-export function PagePropertiesPage() {
+export function PageDetailsPage() {
   const { pageId } = useParams<{ pageId: string }>()
   const [{ data, fetching, error }, refetch] = usePagePropertiesForPageQuery({
     variables: { id: pageId ?? '' },
@@ -418,14 +425,34 @@ export function PagePropertiesPage() {
   }
 
   const page = data.page
+
   const registry = keyData?.pagePropertyKeys ?? []
   const replicaSpace = spaceMeta?.space?.isReplica === true ? spaceMeta.space : null
+
+  // Editors only. Not a router guard: `canEdit` is server-computed and arrives with
+  // the page, so gating here needs no second round trip and no duplicated rule — and
+  // someone following a stale link gets a sentence rather than a blank. The server
+  // refuses every write regardless; this only decides what to offer.
+  //
+  // The replica arm is not a nicety. On a replica `canEdit` is false for EVERYONE
+  // (§12 refuses beneath every grant), so a bare canEdit gate would tell a space's
+  // own editors they are not editors — true of the flag, false of them, and it would
+  // also swallow the one screen that explains why the space is read-only.
+  if (!page.canEdit) {
+    return (
+      <Alert severity="info">
+        {replicaSpace
+          ? `${replicaBadgeLabel(replicaSpace.originInstanceId)} — ${REPLICA_EXPLANATION} Its details cannot be changed here.`
+          : "A page's details are managed by its editors. You can still read this page, and its properties, from the page itself."}
+      </Alert>
+    )
+  }
 
   return (
     <Stack spacing={2}>
       <Box>
         <Typography variant="h4" component="h1">
-          Properties: {page.title}
+          Details: {page.title}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
           Everything kept beside{' '}
@@ -508,4 +535,15 @@ export function PagePropertiesPage() {
       />
     </Stack>
   )
+}
+
+/**
+ * `/pages/{id}/properties` → `/pages/{id}/details`. Properties moved into the
+ * details screen; this keeps the old address working for anything that already
+ * links to it. `replace` so the dead URL does not sit in history waiting for a
+ * back button to land on it again.
+ */
+export function PropertiesRedirect() {
+  const { pageId } = useParams<{ pageId: string }>()
+  return <Navigate to={`/pages/${pageId}/details`} replace />
 }
