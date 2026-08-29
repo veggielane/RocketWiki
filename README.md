@@ -721,20 +721,40 @@ executed on Docker Desktop 4.87.0 (engine 29.7.2, Linux containers) from
   roughly five GraphQL spans plus the ASP.NET span per request, with no
   per-field resolver spans.
 
-That run found eight defects that every prior form of review had missed, three
-of them in shipped product code rather than dev scaffolding: the dev realm
-issued tokens with **no `sub` claim** (so nobody could authenticate at all),
-**no caller was ever an instance admin** (ASP.NET renames the `roles` claim to
-`ClaimTypes.Role` and only one lookup didn't know), and **every S3 upload
-failed over plain HTTP** (payload signing was unconditionally disabled, which
-the AWS SDK forbids without TLS — i.e. against exactly the in-network MinIO/Ceph
-deployments §9.4 describes). The remaining five were AppHost wiring: a stock
-SQL Server image with neither full-text search nor the `vector` type,
-unresolved AI connection strings that silently held the API in a pending state
-forever, no `WaitFor` on the database (so migrate-on-startup lost a race and
-crashed), a Keycloak reference that injected service-discovery variables while
-the API read a connection string, and a MinIO container nothing was configured
-to use. All eight are fixed.
+That run, and the first real use of the SPA against it, found **twelve defects**
+every prior form of review had missed. Five were in shipped application code:
+
+- the dev realm issued tokens with **no `sub` claim**, so nobody could
+  authenticate at all;
+- **no caller was ever an instance admin** — ASP.NET renames the `roles` claim
+  to `ClaimTypes.Role`, and only one lookup didn't know;
+- **every S3 upload failed over plain HTTP**, because payload signing was
+  unconditionally disabled, which the AWS SDK forbids without TLS — i.e.
+  against exactly the in-network MinIO/Ceph deployments §9.4 describes;
+- **sign-in never completed**: the OIDC state store was in-memory, and sign-in
+  state has to survive the navigation to Keycloak and back, so the code
+  exchange failed every time and the SPA sat on "Completing sign-in…";
+- **the notifications hub never connected**, because StrictMode's double mount
+  raced `start()` against `stop()` and `withAutomaticReconnect` only resumes a
+  connection that succeeded once — realtime was dead for the whole session;
+- and **every page view failed** with "Couldn't load this page": Hot Chocolate
+  resolves sibling fields in parallel, and the DataLoaders behind them shared
+  the request-scoped `DbContext`, so EF Core threw "a second operation was
+  started on this context instance" on six fields at once.
+
+Five more were AppHost wiring — a stock SQL Server image with neither full-text
+search nor the `vector` type, unresolved AI connection strings that silently
+held the API in a pending state forever, no `WaitFor` on the database (so
+migrate-on-startup lost a race and crashed), a Keycloak reference that injected
+service-discovery variables while the API read a connection string, and a MinIO
+container nothing was configured to use. The last was a test that only passed
+while the app was *mis*configured. All twelve are fixed, with regression tests
+where the defect was in code.
+
+Note what the last one required: it reproduces only against a real database,
+because in-process SQLite answers a batch fast enough that the parallel
+dispatches never overlap. Its regression test therefore lives in the §14
+container tier, not the SQLite one.
 
 **Still explicitly unverified:**
 - **That any browser span has ever been exported to a real OTLP endpoint.**

@@ -17,13 +17,12 @@ namespace RocketWiki.Api.GraphQL;
 /// subscription-bookkeeping row, not content.
 /// </summary>
 public sealed class ViewerWatchesPageDataLoader(
-    RocketWikiDbContext db,
+    DbContextOptions<RocketWikiDbContext> dbOptions,
     IActingUserAccessor actingUserAccessor,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
     : BatchDataLoader<Guid, bool>(batchScheduler, options ?? new DataLoaderOptions())
 {
-    private readonly RocketWikiDbContext _db = db;
     private readonly IActingUserAccessor _actingUserAccessor = actingUserAccessor;
 
     protected override async Task<IReadOnlyDictionary<Guid, bool>> LoadBatchAsync(
@@ -35,7 +34,10 @@ public sealed class ViewerWatchesPageDataLoader(
             return keys.ToDictionary(k => k, _ => false);
         }
 
-        var watched = await _db.Watches
+        // Own context per batch — see DataLoaderDbContext.
+        await using var db = DataLoaderDbContext.Create(dbOptions);
+
+        var watched = await db.Watches
             .Where(w => w.UserId == actingUserId.Value && w.PageId != null && keys.Contains(w.PageId.Value))
             .Select(w => w.PageId!.Value)
             .ToListAsync(cancellationToken);
@@ -50,13 +52,12 @@ public sealed class ViewerWatchesPageDataLoader(
 /// <summary>Space twin of <see cref="ViewerWatchesPageDataLoader"/> for
 /// <c>Space.viewerIsWatching</c> — same shape, same reasoning.</summary>
 public sealed class ViewerWatchesSpaceDataLoader(
-    RocketWikiDbContext db,
+    DbContextOptions<RocketWikiDbContext> dbOptions,
     IActingUserAccessor actingUserAccessor,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
     : BatchDataLoader<Guid, bool>(batchScheduler, options ?? new DataLoaderOptions())
 {
-    private readonly RocketWikiDbContext _db = db;
     private readonly IActingUserAccessor _actingUserAccessor = actingUserAccessor;
 
     protected override async Task<IReadOnlyDictionary<Guid, bool>> LoadBatchAsync(
@@ -68,7 +69,10 @@ public sealed class ViewerWatchesSpaceDataLoader(
             return keys.ToDictionary(k => k, _ => false);
         }
 
-        var watched = await _db.Watches
+        // Own context per batch — see DataLoaderDbContext.
+        await using var db = DataLoaderDbContext.Create(dbOptions);
+
+        var watched = await db.Watches
             .Where(w => w.UserId == actingUserId.Value && w.SpaceId != null && keys.Contains(w.SpaceId.Value))
             .Select(w => w.SpaceId!.Value)
             .ToListAsync(cancellationToken);

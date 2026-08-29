@@ -17,17 +17,20 @@ namespace RocketWiki.Api.GraphQL;
 /// not browsing the space.
 /// </summary>
 public sealed class SpaceKeyBySpaceIdDataLoader(
-    RocketWikiDbContext db,
+    DbContextOptions<RocketWikiDbContext> dbOptions,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
     : BatchDataLoader<Guid, string>(batchScheduler, options ?? new DataLoaderOptions())
 {
-    private readonly RocketWikiDbContext _db = db;
-
     protected override async Task<IReadOnlyDictionary<Guid, string>> LoadBatchAsync(
-        IReadOnlyList<Guid> keys, CancellationToken cancellationToken) =>
-        await _db.Spaces
+        IReadOnlyList<Guid> keys, CancellationToken cancellationToken)
+    {
+        // Own context per batch — see DataLoaderDbContext.
+        await using var db = DataLoaderDbContext.Create(dbOptions);
+
+        return await db.Spaces
             .IgnoreQueryFilters()
             .Where(s => keys.Contains(s.Id))
             .ToDictionaryAsync(s => s.Id, s => s.Key, cancellationToken);
+    }
 }

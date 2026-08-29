@@ -1,6 +1,9 @@
 using GreenDonut;
+using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Services;
+using RocketWiki.Data;
+using RocketWiki.Data.Services;
 
 namespace RocketWiki.Api.GraphQL;
 
@@ -21,17 +24,20 @@ namespace RocketWiki.Api.GraphQL;
 /// </summary>
 public sealed class PagePermissionFactsDataLoader : BatchDataLoader<Guid, PagePermissionFacts>
 {
-    private readonly IPagePermissionReadService _permissionReadService;
+    private readonly DbContextOptions<RocketWikiDbContext> _dbOptions;
+    private readonly InstanceIdentity _instanceIdentity;
     private readonly ICurrentPrincipalAccessor _principalAccessor;
 
     public PagePermissionFactsDataLoader(
-        IPagePermissionReadService permissionReadService,
+        DbContextOptions<RocketWikiDbContext> dbOptions,
+        InstanceIdentity instanceIdentity,
         ICurrentPrincipalAccessor principalAccessor,
         IBatchScheduler batchScheduler,
         DataLoaderOptions? options = null)
         : base(batchScheduler, options ?? new DataLoaderOptions())
     {
-        _permissionReadService = permissionReadService;
+        _dbOptions = dbOptions;
+        _instanceIdentity = instanceIdentity;
         _principalAccessor = principalAccessor;
     }
 
@@ -46,6 +52,13 @@ public sealed class PagePermissionFactsDataLoader : BatchDataLoader<Guid, PagePe
             return new Dictionary<Guid, PagePermissionFacts>();
         }
 
-        return await _permissionReadService.GetPermissionFactsAsync(keys.ToArray(), principal, cancellationToken);
+        // Own context per batch — see DataLoaderDbContext. Constructed here rather
+        // than injected for the same reason as PageMarkingByPageIdDataLoader:
+        // injecting the service would carry the request-scoped context in with it,
+        // which is the thing that raced. Mirrors Program's registration exactly.
+        await using var db = DataLoaderDbContext.Create(_dbOptions);
+        var permissionReadService = new PagePermissionReadService(db, _instanceIdentity.LocalInstanceId);
+
+        return await permissionReadService.GetPermissionFactsAsync(keys.ToArray(), principal, cancellationToken);
     }
 }

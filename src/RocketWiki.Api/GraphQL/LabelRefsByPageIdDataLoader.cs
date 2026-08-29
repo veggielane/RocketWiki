@@ -29,17 +29,18 @@ public sealed record LabelRef(Guid Id, Guid SpaceId, string Name);
 /// through the canView-filtered read paths, never through this loader.
 /// </summary>
 public sealed class LabelRefsByPageIdDataLoader(
-    RocketWikiDbContext db,
+    DbContextOptions<RocketWikiDbContext> dbOptions,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
     : GroupedDataLoader<Guid, LabelRef>(batchScheduler, options ?? new DataLoaderOptions())
 {
-    private readonly RocketWikiDbContext _db = db;
-
     protected override async Task<ILookup<Guid, LabelRef>> LoadGroupedBatchAsync(
         IReadOnlyList<Guid> keys, CancellationToken cancellationToken)
     {
-        var pairs = await _db.PageLabels
+        // Own context per batch — see DataLoaderDbContext.
+        await using var db = DataLoaderDbContext.Create(dbOptions);
+
+        var pairs = await db.PageLabels
             .Where(pl => keys.Contains(pl.PageId))
             .Select(pl => new { pl.PageId, pl.LabelId, pl.Label!.SpaceId, pl.Label.Name })
             .ToListAsync(cancellationToken);

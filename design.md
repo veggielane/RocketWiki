@@ -1890,9 +1890,10 @@ the dev realm imported, every dev user logged in through PKCE, attachments
 round-tripped through MinIO, and OTLP traces/metrics/logs captured off the
 wire. The README's status section records exactly what was observed.
 
-**The result is the argument for this caveat having existed.** Eight defects
-surfaced in the first hour, three of them in shipped product code that both
-the test suite and repeated human review had passed over:
+**The result is the argument for this caveat having existed.** Twelve defects
+surfaced once the system was actually run — five of them in shipped
+application code that both the test suite and repeated human review had passed
+over. Three came from the container run itself:
 
 1. The dev realm's tokens carried **no `sub` claim** — a realm-level
    `clientScopes` array suppresses Keycloak's built-in scopes, and `sub` has
@@ -1907,13 +1908,31 @@ the test suite and repeated human review had passed over:
    hard-coded true, which the AWS SDK refuses without TLS — i.e. against
    exactly the in-network object stores §9.4 describes.
 
-The other five were AppHost wiring (stock SQL Server image with no full-text
+Three more surfaced the moment a browser was pointed at the running stack —
+each one blocking the step before it could even be reached:
+
+4. **Sign-in never completed.** The OIDC user store and state store shared one
+   in-memory backing. Tokens belong in memory (§11), but *sign-in state* is
+   written before the browser leaves for Keycloak and read after it returns, so
+   the navigation wiped it and the code exchange failed every time.
+5. **The notifications hub never connected.** StrictMode's mount/unmount/mount
+   raced `start()` against `stop()`, and `withAutomaticReconnect` only resumes a
+   connection that succeeded once, so realtime stayed dead for the session.
+6. **Every page view failed.** Sibling fields resolve in parallel, and the
+   DataLoaders behind them shared the request-scoped `DbContext` — six fields at
+   once returning "a second operation was started on this context instance".
+   This one reproduces *only* against a real database: in-process SQLite answers
+   each batch fast enough that the dispatches never overlap, which is why its
+   regression test lives in the §14 container tier.
+
+The remaining five were AppHost wiring (stock SQL Server image with no full-text
 search and no `vector` type; unresolved optional connection strings holding
 the API in a pending state forever; no `WaitFor` on the database, so
 migrate-on-startup lost a boot race; a Keycloak reference injecting service
 discovery variables while the API read a connection string; MinIO running with
-nothing configured to use it). All eight are fixed, with regression tests where
-the defect was in `src/`.
+nothing configured to use it), and one was a test that passed only while the
+application was *mis*configured. All twelve are fixed, with regression tests
+where the defect was in code.
 
 The general lesson is worth keeping: **every one of these was a seam between
 two correct components** — Keycloak and its import format, ASP.NET and its

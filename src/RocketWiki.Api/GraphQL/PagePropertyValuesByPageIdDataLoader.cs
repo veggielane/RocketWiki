@@ -24,17 +24,18 @@ namespace RocketWiki.Api.GraphQL;
 /// through (the same reason <c>LabelRef</c> exists).
 /// </summary>
 public sealed class PagePropertyValuesByPageIdDataLoader(
-    RocketWikiDbContext db,
+    DbContextOptions<RocketWikiDbContext> dbOptions,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
     : GroupedDataLoader<Guid, PagePropertyValue>(batchScheduler, options ?? new DataLoaderOptions())
 {
-    private readonly RocketWikiDbContext _db = db;
-
     protected override async Task<ILookup<Guid, PagePropertyValue>> LoadGroupedBatchAsync(
         IReadOnlyList<Guid> keys, CancellationToken cancellationToken)
     {
-        var rows = await _db.PageProperties
+        // Own context per batch — see DataLoaderDbContext.
+        await using var db = DataLoaderDbContext.Create(dbOptions);
+
+        var rows = await db.PageProperties
             .Where(p => keys.Contains(p.PageId))
             .Select(p => new
             {

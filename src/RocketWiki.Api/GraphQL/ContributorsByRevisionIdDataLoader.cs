@@ -15,24 +15,25 @@ namespace RocketWiki.Api.GraphQL;
 /// the canView-gated revisions path, the same byline reasoning as Comment.author.
 /// </summary>
 public sealed class ContributorsByRevisionIdDataLoader(
-    RocketWikiDbContext db,
+    DbContextOptions<RocketWikiDbContext> dbOptions,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
     : GroupedDataLoader<Guid, UserRef>(batchScheduler, options ?? new DataLoaderOptions())
 {
-    private readonly RocketWikiDbContext _db = db;
-
     protected override async Task<ILookup<Guid, UserRef>> LoadGroupedBatchAsync(
         IReadOnlyList<Guid> keys, CancellationToken cancellationToken)
     {
-        var rows = await _db.PageRevisionContributors.AsNoTracking()
+        // Own context per batch — see DataLoaderDbContext.
+        await using var db = DataLoaderDbContext.Create(dbOptions);
+
+        var rows = await db.PageRevisionContributors.AsNoTracking()
             .Where(c => keys.Contains(c.PageRevisionId))
             .Select(c => new
             {
                 c.PageRevisionId,
                 c.UserId,
                 c.User!.DisplayName,
-                HasAvatar = _db.UserAvatars.Any(a => a.UserId == c.UserId),
+                HasAvatar = db.UserAvatars.Any(a => a.UserId == c.UserId),
             })
             .ToListAsync(cancellationToken);
 

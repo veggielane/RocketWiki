@@ -31,20 +31,23 @@ public sealed record UserRef(Guid Id, string DisplayName, bool HasAvatar);
 /// <c>AuditEvent.userDisplayName</c> (previously an unbatched per-row query).
 /// </summary>
 public sealed class UserRefByIdDataLoader(
-    RocketWikiDbContext db,
+    DbContextOptions<RocketWikiDbContext> dbOptions,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
     : BatchDataLoader<Guid, UserRef>(batchScheduler, options ?? new DataLoaderOptions())
 {
-    private readonly RocketWikiDbContext _db = db;
-
     protected override async Task<IReadOnlyDictionary<Guid, UserRef>> LoadBatchAsync(
-        IReadOnlyList<Guid> keys, CancellationToken cancellationToken) =>
+        IReadOnlyList<Guid> keys, CancellationToken cancellationToken)
+    {
+        // Own context per batch — see DataLoaderDbContext.
+        await using var db = DataLoaderDbContext.Create(dbOptions);
+
         // HasAvatar is a correlated EXISTS inside the same single batched query —
         // still one Users round trip per request batch, not one per row and not a
         // second query. Provider-agnostic LINQ (translates on SQLite and SQL Server).
-        await _db.Users.AsNoTracking()
+        return await db.Users.AsNoTracking()
             .Where(u => keys.Contains(u.Id))
-            .Select(u => new UserRef(u.Id, u.DisplayName, _db.UserAvatars.Any(a => a.UserId == u.Id)))
+            .Select(u => new UserRef(u.Id, u.DisplayName, db.UserAvatars.Any(a => a.UserId == u.Id)))
             .ToDictionaryAsync(u => u.Id, u => u, cancellationToken);
+    }
 }

@@ -1,6 +1,9 @@
 using GreenDonut;
+using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Services;
+using RocketWiki.Data;
+using RocketWiki.Data.Services;
 
 namespace RocketWiki.Api.GraphQL;
 
@@ -34,12 +37,22 @@ namespace RocketWiki.Api.GraphQL;
 /// enforcement the caller is actually subject to.</para>
 /// </summary>
 public sealed class PageMarkingByPageIdDataLoader(
-    IPageMarkingReader reader,
+    DbContextOptions<RocketWikiDbContext> dbOptions,
     IBatchScheduler batchScheduler,
     DataLoaderOptions? options = null)
     : BatchDataLoader<Guid, ProtectiveMarking>(batchScheduler, options ?? new DataLoaderOptions())
 {
     protected override async Task<IReadOnlyDictionary<Guid, ProtectiveMarking>> LoadBatchAsync(
-        IReadOnlyList<Guid> keys, CancellationToken cancellationToken) =>
-        await reader.LoadAsync(keys, cancellationToken);
+        IReadOnlyList<Guid> keys, CancellationToken cancellationToken)
+    {
+        // Own context per batch — see DataLoaderDbContext. The reader is constructed
+        // here rather than injected precisely because injecting it would bring the
+        // request-scoped context back in with it; Program registers exactly this
+        // shape (`new PageMarkingReadService(db)`) with no decorator, so this stays
+        // faithful to the DI registration.
+        await using var db = DataLoaderDbContext.Create(dbOptions);
+        var reader = new PageMarkingReadService(db);
+
+        return await reader.LoadAsync(keys, cancellationToken);
+    }
 }
