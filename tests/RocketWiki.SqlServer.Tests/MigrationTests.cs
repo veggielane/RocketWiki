@@ -42,7 +42,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260824185208_AddPageProperties", applied);
         Assert.Contains("20260825054144_AddPageMarkings", applied);
         Assert.Contains("20260825062334_AddPageMarkingPrefix", applied);
-        Assert.Equal(10, applied.Count);
+        Assert.Contains("20260829090727_AddPageIcon", applied);
+        Assert.Equal(11, applied.Count);
         Assert.Empty(pending);
     }
 

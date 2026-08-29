@@ -1,3 +1,5 @@
+using RocketWiki.Core.Enums;
+
 namespace RocketWiki.Core.Services;
 
 /// <summary>
@@ -35,6 +37,8 @@ namespace RocketWiki.Core.Services;
 public sealed record PageTreeNode(
     Guid Id,
     string Title,
+    /// <summary>Decoration only (design.md §4) — the tree shows it beside the title; nothing gates on it.</summary>
+    PageIcon? Icon,
     string Slug,
     int SortOrder,
     bool HasRestrictions,

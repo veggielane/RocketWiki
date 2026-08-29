@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
 
 namespace RocketWiki.Data.Configurations;
 
@@ -14,6 +15,19 @@ public class PageConfiguration : IEntityTypeConfiguration<Page>
         builder.Property(p => p.AncestorPath).HasMaxLength(2600).IsRequired();
         builder.Property(p => p.Slug).HasMaxLength(200).IsRequired();
         builder.Property(p => p.Title).HasMaxLength(500).IsRequired();
+
+        // Stored as the wire NAME, not EF's default integer. An icon is decoration
+        // whose members will be added to over time, and an integer column would make
+        // inserting one in the middle of the enum silently repaint every existing page.
+        // The name also keeps the column legible to anyone reading the table directly,
+        // and matches the form the sync bundle carries — one spelling everywhere.
+        // Unrecognised names read back as null (PageIcons.FromWireName), so a row
+        // written by a newer build degrades to "no icon" rather than throwing.
+        builder.Property(p => p.Icon)
+            .HasMaxLength(PageIcons.MaxWireNameLength)
+            .HasConversion(
+                icon => icon == null ? null : PageIcons.ToWireName(icon.Value),
+                name => PageIcons.FromWireName(name));
         // See RocketWiki.Data.Configurations.CommentConfiguration for why there's no
         // explicit "nvarchar(max)" here.
         builder.Property(p => p.CurrentContent).IsRequired();

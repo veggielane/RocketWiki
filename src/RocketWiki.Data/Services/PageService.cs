@@ -83,6 +83,7 @@ public class PageService : IPageService
             AncestorPath = parent is null ? "/" : $"{parent.AncestorPath}{parent.Id}/",
             Slug = request.Slug,
             Title = request.Title,
+            Icon = request.Icon,
             CurrentContent = request.Content,
             CurrentRevisionNumber = 1,
             SortOrder = 0,
@@ -208,6 +209,11 @@ public class PageService : IPageService
         }
 
         page.Title = request.Title;
+        // Set unconditionally, including to null: the request carries the icon the page
+        // should HAVE after this save, so "cleared it" and "left it alone" have to be
+        // the same code path. Treating null as "no change" would make removing an icon
+        // impossible through the only mutation that can set one.
+        page.Icon = request.Icon;
         page.CurrentContent = request.Content;
         page.CurrentRevisionNumber = newRevisionNumber;
         page.UpdatedAtUtc = now;

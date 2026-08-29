@@ -288,6 +288,12 @@ public class BundleImportService : IBundleImportService
         page.AncestorPath = payload.GetProperty("ancestorPath").GetString()!;
         page.Slug = payload.GetProperty("slug").GetString()!;
         page.Title = payload.GetProperty("title").GetString()!;
+        // Optional on the wire (bundles written before icons existed have no such
+        // property) and unrecognised names read back as null, so an icon this build has
+        // never heard of costs the page its decoration and nothing else.
+        page.Icon = payload.TryGetProperty("icon", out var iconElement) && iconElement.ValueKind == JsonValueKind.String
+            ? PageIcons.FromWireName(iconElement.GetString())
+            : null;
         page.SortOrder = payload.GetProperty("sortOrder").GetInt32();
         page.CurrentContent = payload.GetProperty("content").GetString()!;
         page.CurrentRevisionNumber = payload.GetProperty("revisionNumber").GetInt32();

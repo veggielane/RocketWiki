@@ -1,3 +1,5 @@
+using RocketWiki.Core.Enums;
+
 namespace RocketWiki.Core.Entities;
 
 /// <summary>data-model.md: Page — belongs to a space, forms a tree via ParentPageId.</summary>
@@ -14,6 +16,15 @@ public class Page
 
     public string Slug { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional decoration shown beside the title in the navigation tree and on the
+    /// page (<see cref="PageIcon"/>). Null means no icon, which is a real state and not
+    /// a missing value — a default would assert something about the page that nobody
+    /// chose. Stored by name; nothing reads it to make a decision.
+    /// </summary>
+    public PageIcon? Icon { get; set; }
+
     public int SortOrder { get; set; }
     public int CurrentRevisionNumber { get; set; }
     public string CurrentContent { get; set; } = string.Empty;

@@ -221,7 +221,7 @@ public class PageReadService : IPageReadService
         // PageTreeNode's doc for why a tree that displayed a different marking from the
         // one it enforced would be the wrong kind of wrong.
         return new PageTreeNode(
-            page.Id, page.Title, page.Slug, page.SortOrder, hasRestrictions, ownViewRestrictions,
+            page.Id, page.Title, page.Icon, page.Slug, page.SortOrder, hasRestrictions, ownViewRestrictions,
             PageMarkingView.From(marking), children);
     }
 

@@ -1,8 +1,20 @@
+using RocketWiki.Core.Enums;
+
 namespace RocketWiki.Core.Services;
 
-public sealed record CreatePageRequest(Guid SpaceId, Guid? ParentPageId, string Slug, string Title, string Content);
+public sealed record CreatePageRequest(
+    Guid SpaceId, Guid? ParentPageId, string Slug, string Title, string Content, PageIcon? Icon = null);
 
-public sealed record UpdatePageContentRequest(Guid PageId, int ExpectedRevisionNumber, string Title, string Content, string? EditSummary);
+/// <summary>
+/// <paramref name="Icon"/> is the page's icon AFTER the save, null meaning "no icon".
+/// It rides on the content save rather than getting its own mutation because it is
+/// page metadata the author sets while editing, exactly like the title beside it —
+/// and because a separate mutation would let the icon and the content disagree about
+/// which revision they belong to.
+/// </summary>
+public sealed record UpdatePageContentRequest(
+    Guid PageId, int ExpectedRevisionNumber, string Title, string Content, string? EditSummary,
+    PageIcon? Icon = null);
 
 public sealed record MovePageRequest(Guid PageId, Guid? NewParentPageId, int NewSortOrder);
 

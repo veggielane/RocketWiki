@@ -478,6 +478,7 @@ type Page {
   ancestorPath: String!
   slug: String!
   title: String!
+  icon: PageIcon
   sortOrder: Int!
   currentRevisionNumber: Int!
   isDeleted: Boolean!
@@ -602,6 +603,7 @@ type PageRevision {
 type PageTreeNode {
   id: UUID!
   title: String!
+  icon: PageIcon
   slug: String!
   sortOrder: Int!
   hasRestrictions: Boolean!
@@ -858,6 +860,7 @@ input CreatePageRequestInput {
   slug: String!
   title: String!
   content: String!
+  icon: PageIcon
 }
 
 input CreateSpaceRequestInput {
@@ -990,6 +993,7 @@ input UpdatePageContentRequestInput {
   title: String!
   content: String!
   editSummary: String
+  icon: PageIcon
 }
 
 input WatchPageRequestInput {
@@ -1056,6 +1060,31 @@ enum GitLabUnavailableReason {
 enum PageAction {
   VIEW
   EDIT
+}
+
+enum PageIcon {
+  DOCUMENT
+  BOOK
+  NOTE
+  CHECKLIST
+  CALENDAR
+  CHART
+  DATABASE
+  CODE
+  TERMINAL
+  BUG
+  FLASK
+  ROCKET
+  WRENCH
+  CLOUD
+  LOCK
+  SHIELD
+  WARNING
+  LIGHTBULB
+  PEOPLE
+  MAP
+  STAR
+  FLAG
 }
 
 enum RqlErrorCode {

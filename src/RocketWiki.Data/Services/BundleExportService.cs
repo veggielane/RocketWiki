@@ -495,6 +495,11 @@ public class BundleExportService : IBundleExportService
                 ancestorPath = page.AncestorPath,
                 slug = page.Slug,
                 title = page.Title,
+                // By NAME, like the marking's level below: an icon added to the enum
+                // must not renumber what an existing bundle means. A replica that does
+                // not know this name imports the page without an icon (§12's
+                // decoration-degrades rule) rather than refusing the bundle.
+                icon = page.Icon is null ? null : PageIcons.ToWireName(page.Icon.Value),
                 sortOrder = page.SortOrder,
                 content = page.CurrentContent,
                 revisionNumber = page.CurrentRevisionNumber,
