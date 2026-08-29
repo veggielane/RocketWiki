@@ -136,8 +136,17 @@ public sealed partial class NotificationsHub : Hub
             return;
         }
 
+        // HasAvatar as a correlated EXISTS in this same query — the join already had to
+        // read the user row, so presence gains the flag without a second round trip.
         var user = await db.Users.AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Subject == principal.UserId, Context.ConnectionAborted);
+            .Where(u => u.Subject == principal.UserId)
+            .Select(u => new
+            {
+                u.Id,
+                u.DisplayName,
+                HasAvatar = db.UserAvatars.Any(a => a.UserId == u.Id),
+            })
+            .FirstOrDefaultAsync(Context.ConnectionAborted);
         if (user is null)
         {
             ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceNoLocalUser);
@@ -145,7 +154,8 @@ public sealed partial class NotificationsHub : Hub
         }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(pageId));
-        registry.JoinPage(pageId, new PresenceViewer(Context.ConnectionId, user.Id, user.DisplayName, ColourFor(user.Id)));
+        registry.JoinPage(pageId, new PresenceViewer(
+            Context.ConnectionId, user.Id, user.DisplayName, ColourFor(user.Id), user.HasAvatar));
         ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceJoined);
 
         await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
@@ -189,7 +199,13 @@ public sealed partial class NotificationsHub : Hub
     }
 
     private object[] ToPublicViews(Guid pageId) => registry.GetViewers(pageId)
-        .Select(v => (object)new { userId = v.UserId, displayName = v.DisplayName, colour = v.Colour })
+        .Select(v => (object)new
+        {
+            userId = v.UserId,
+            displayName = v.DisplayName,
+            colour = v.Colour,
+            hasAvatar = v.HasAvatar,
+        })
         .ToArray();
 
     private static readonly string[] Palette =

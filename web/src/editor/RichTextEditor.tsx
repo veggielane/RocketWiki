@@ -232,9 +232,20 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     }
   }, [editor])
 
+  // Read-only rendering is CONTENT, not a control. The outlined frame and the
+  // generous padding below are affordances for composing — they say "you may type
+  // here" — and applying them to a rendered comment or page body drew a bordered
+  // card with 16px of inset around it, which on a one-line comment is mostly empty
+  // box. (Its companion, the 200px min-height in editor-content.css, is scoped to
+  // the contenteditable surface for the same reason.) Same renderer either way,
+  // per this component's own "one renderer" rule — only its chrome differs.
+  if (!editable) {
+    return <EditorContent editor={editor} />
+  }
+
   return (
     <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
-      {editable && showToolbar && <EditorToolbar editor={editor} />}
+      {showToolbar && <EditorToolbar editor={editor} />}
       {/* Inline, not a snackbar (web/README.md's feedback rule): a failed
           upload is a state the author has to act on — the image they
           dropped is NOT in the document — and an auto-hiding toast can
@@ -250,7 +261,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
       <Box sx={{ p: 2 }}>
         <EditorContent editor={editor} />
       </Box>
-      {editable && editor && <EmojiSuggestionPopup editor={editor} />}
+      {editor && <EmojiSuggestionPopup editor={editor} />}
     </Paper>
   )
 })

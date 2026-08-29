@@ -79,6 +79,24 @@ query PageById($id: UUID!) {
   }
 }
 
+# Creating a page. `parentPageId` null makes it a root page in the space;
+# supplying one nests it, which is the "add child page" entry point. The
+# selection is deliberately small — just enough to navigate to the new page —
+# because the view route refetches it in full on arrival anyway.
+mutation CreatePage($input: CreatePageRequestInput!) {
+  createPage(input: $input) {
+    page {
+      id
+      spaceId
+      title
+      slug
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
+
 mutation UpdatePageContent($input: UpdatePageContentRequestInput!) {
   updatePageContent(input: $input) {
     page {

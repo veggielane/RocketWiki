@@ -3,7 +3,17 @@ using RocketWiki.Core.Access;
 namespace RocketWiki.Api.RealTime;
 
 /// <summary>One viewer's public presence facts (design.md §8: "payloads carry display name and colour only — never attributes").</summary>
-public sealed record PresenceViewer(string ConnectionId, Guid UserId, string DisplayName, string Colour);
+/// <summary>
+/// One viewer on a page, as presence broadcasts them. <paramref name="HasAvatar"/>
+/// rides along for the same reason <c>UserRef</c> carries it (design.md §19): without
+/// it the SPA cannot tell "no avatar" from "not fetched yet", so it probes
+/// <c>GET /users/{id}/avatar</c> and takes a 404 for every viewer who has never
+/// uploaded one. It costs nothing to supply — the hub already loads the user row on
+/// join, so this is a correlated EXISTS inside that same query, not a second round
+/// trip.
+/// </summary>
+public sealed record PresenceViewer(
+    string ConnectionId, Guid UserId, string DisplayName, string Colour, bool HasAvatar);
 
 /// <summary>
 /// Ephemeral, in-memory only (design.md §8: presence "no table, no audit rows") —

@@ -25,6 +25,7 @@ import ShieldOutlinedIcon from '@mui/icons-material/ShieldOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import DriveFileRenameOutlineIcon from '@mui/icons-material/DriveFileRenameOutline'
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined'
+import NoteAddOutlinedIcon from '@mui/icons-material/NoteAddOutlined'
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined'
 import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
@@ -33,6 +34,7 @@ import {
   useRenameSpaceMutation,
   useSpaceTreeQuery,
   useSpacePageTreeQuery,
+  useCreatePageMutation,
   useWatchSpaceMutation,
   useUnwatchSpaceMutation,
   type ClassificationLevel,
@@ -42,6 +44,7 @@ import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../
 import { filterTreeByLabel } from '../labels/filterTreeByLabel'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { RenameSpaceDialog } from '../spaces/RenameSpaceDialog'
+import { CreatePageDialog } from './CreatePageDialog'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 
 /**
@@ -125,12 +128,15 @@ export function SpaceBrowserPage() {
   const [, archiveSpace] = useArchiveSpaceMutation()
   const [, watchSpace] = useWatchSpaceMutation()
   const [, unwatchSpace] = useUnwatchSpaceMutation()
+  const [{ fetching: creating }, createPage] = useCreatePageMutation()
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameValue, setRenameValue] = useState('')
   const [archiveOpen, setArchiveOpen] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [replicaOrigin, setReplicaOrigin] = useState<string | null>(null)
   const [labelFilter, setLabelFilter] = useState<string | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   // Server truth (`viewerIsWatching`) with an optimistic override on click,
   // reverted if the mutation is refused; reset when switching spaces.
   const [watchOverride, setWatchOverride] = useState<boolean | null>(null)
@@ -173,6 +179,31 @@ export function SpaceBrowserPage() {
     return false
   }
 
+  const handleCreatePage = async (values: { title: string; slug: string }) => {
+    setCreateError(null)
+    const result = await createPage({
+      input: { spaceId: space.id, parentPageId: null, slug: values.slug, title: values.title, content: '' },
+    })
+    // A refusal keeps the dialog open with the typed values — the fix for a
+    // duplicate slug or a missing permission is a correction, not a retype.
+    if (result.error) {
+      setCreateError(describeLoadFailure('PAGE').summary)
+      return
+    }
+    const refused = describeMutationError(result.data?.createPage.error)
+    if (refused) {
+      setCreateError(refused)
+      return
+    }
+    const created = result.data?.createPage.page
+    if (created) {
+      setCreateOpen(false)
+      // Straight into the editor: a page created with empty content exists to be
+      // written, and landing on an empty read view would just mean one more click.
+      navigate(`/pages/${created.id}/edit`)
+    }
+  }
+
   const handleToggleWatch = async () => {
     setActionError(null)
     const next = !watching
@@ -204,6 +235,23 @@ export function SpaceBrowserPage() {
             aria-pressed={watching}
           >
             {watching ? 'Watching' : 'Watch'}
+          </Button>
+          {/* No client-side gate, for the same reason as Trash below: there is
+              no space-level viewer permission on the wire to gate on (Space
+              carries only viewerIsWatching), and inventing one client-side
+              would be a guess. Creating a root page needs canEdit on the space,
+              which the server enforces; a refusal comes back into the dialog
+              inline, with the typed title and slug still there. */}
+          <Button
+            startIcon={<NoteAddOutlinedIcon />}
+            variant="outlined"
+            size="small"
+            onClick={() => {
+              setCreateError(null)
+              setCreateOpen(true)
+            }}
+          >
+            New page
           </Button>
           {/* No client-side gate here — the trash query itself is
               permission-filtered server-side, same "let the server decide
@@ -306,6 +354,15 @@ export function SpaceBrowserPage() {
           <PageTreeList nodes={tree} />
         </Box>
       )}
+
+      <CreatePageDialog
+        open={createOpen}
+        parentLabel={space.name}
+        error={createError}
+        busy={creating}
+        onCancel={() => setCreateOpen(false)}
+        onConfirm={(values) => void handleCreatePage(values)}
+      />
 
       <RenameSpaceDialog
         open={renameOpen}

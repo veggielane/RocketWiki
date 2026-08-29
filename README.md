@@ -766,10 +766,14 @@ container tier, not the SQLite one.
   `web/.env.example` documents the variables for standalone `vite dev`,
   including the easily-missed detail that the dashboard's OTLP/HTTP port is
   18890, not the gRPC 18889.
-- **The SPA against this stack.** Everything above was driven over HTTP with
-  `curl`; `npm run dev` has not been pointed at a live API, so the browser
-  half of the login flow (redirect handling, token renewal, the SignalR hub
-  over a real connection) remains unobserved.
+- **Token renewal in the browser.** `npm run dev` has now been pointed at the
+  live stack, and a real browser has completed the login redirect, loaded and
+  created pages, and held an open SignalR hub connection — the three defects
+  that turned up doing it are listed above. What remains unobserved is the
+  *silent renew* path: no session has been left running long enough for an
+  access token to expire and be refreshed through the `silent_redirect_uri`
+  iframe, which is the one part of design.md §11's auth story a short manual
+  session never reaches.
 - **Milestone 5, the migration trial**, still needs a real Confluence export.
 - **The k3s deployment.** `deploy/helm` is lint- and render-verified only; no
   chart has been installed into a cluster. See `deploy/README.md`.

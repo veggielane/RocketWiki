@@ -502,9 +502,9 @@ const SCREENS: Screen[] = [
       const presence = realtime.presence as FakePresenceTransport
       act(() => {
         presence.emitViewers([
-          { userId: 'user-ada', displayName: 'Ada Lovelace', colour: 'hsl(60, 70%, 45%)' },
-          { userId: 'user-grace', displayName: 'Grace Hopper', colour: 'hsl(174, 70%, 45%)' },
-          { userId: 'user-chris', displayName: 'Chris', colour: 'hsl(240, 70%, 45%)' },
+          { userId: 'user-ada', displayName: 'Ada Lovelace', colour: 'hsl(60, 70%, 45%)', hasAvatar: false },
+          { userId: 'user-grace', displayName: 'Grace Hopper', colour: 'hsl(174, 70%, 45%)', hasAvatar: false },
+          { userId: 'user-chris', displayName: 'Chris', colour: 'hsl(240, 70%, 45%)', hasAvatar: false },
         ])
       })
       await settle()

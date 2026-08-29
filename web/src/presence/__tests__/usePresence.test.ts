@@ -40,10 +40,10 @@ describe('usePresence', () => {
     const { result } = renderHook(() => usePresence('page-1', transport))
 
     act(() => {
-      transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00' }])
+      transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00', hasAvatar: false }])
     })
 
-    expect(result.current.viewers).toEqual([{ userId: 'u1', displayName: 'Ada', colour: '#f00' }])
+    expect(result.current.viewers).toEqual([{ userId: 'u1', displayName: 'Ada', colour: '#f00', hasAvatar: false }])
   })
 
   it('resets viewers and pointers to empty when leaving a page — stale presence from the old page must not bleed into the new one', () => {
@@ -53,7 +53,7 @@ describe('usePresence', () => {
     })
 
     act(() => {
-      transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00' }])
+      transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00', hasAvatar: false }])
       transport.emitPointer({ userId: 'u1', displayName: 'Ada', colour: '#f00', x: 0.5, y: 0.5 })
     })
     expect(result.current.viewers).toHaveLength(1)

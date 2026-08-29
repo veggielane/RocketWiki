@@ -9,9 +9,18 @@
 
 .rw-editor-content {
   outline: none;
-  min-height: 200px;
   font-size: 0.95rem;
   line-height: 1.6;
+}
+
+/*
+ * A comfortable click target for composing — and ONLY for composing.
+ * ProseMirror sets contenteditable="false" in read-only mode, so scoping on it
+ * keeps the editing surface roomy while a rendered comment or page body sizes to
+ * its content. Unscoped, this gave every two-word comment 200px of empty space.
+ */
+.rw-editor-content[contenteditable='true'] {
+  min-height: 200px;
 }
 
 .rw-editor-content p {

@@ -18,6 +18,7 @@ import {
 } from '@mui/material'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined'
+import NoteAddOutlinedIcon from '@mui/icons-material/NoteAddOutlined'
 import LocalOfferOutlinedIcon from '@mui/icons-material/LocalOfferOutlined'
 import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import NotificationsNoneOutlinedIcon from '@mui/icons-material/NotificationsNoneOutlined'
@@ -30,6 +31,7 @@ import {
   useSpaceReplicaBannerQuery,
   useSpaceLabelDetailsQuery,
   useSpaceTreeForMoveQuery,
+  useCreatePageMutation,
   useMovePageMutation,
   useAddCommentMutation,
   useDeleteCommentMutation,
@@ -44,6 +46,7 @@ import { asReadOnlyReplica, blockedPageCount, describeMutationError } from '../g
 import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from '../access/move/MovePageDialog'
+import { CreatePageDialog } from './CreatePageDialog'
 import { DeletePageDialog } from '../trash/DeletePageDialog'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { ancestorRestrictionsOf, flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
@@ -87,6 +90,8 @@ export function PageViewPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [editingLabels, setEditingLabels] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   // Server truth (`viewerIsWatching`) with an optimistic local override:
   // the override is set on click, reverted if the mutation is refused, and
   // cleared when navigating to a different page.
@@ -100,6 +105,7 @@ export function PageViewPage() {
     setWatchOverride(null)
     setEditingLabels(false)
     setInspectorOpen(false)
+    setCreateOpen(false)
   }
   // Search results (design.md §9) link to `#anchorId` — the heading isn't
   // in the DOM yet at the moment of navigation (content loads and the
@@ -123,6 +129,7 @@ export function PageViewPage() {
     variables: { spaceKey: spaceKey ?? '' },
     pause: !spaceKey || !editingLabels,
   })
+  const [{ fetching: creating }, createPage] = useCreatePageMutation()
   const [, movePage] = useMovePageMutation()
   const [, addComment] = useAddCommentMutation()
   const [, deleteComment] = useDeleteCommentMutation()
@@ -167,6 +174,34 @@ export function PageViewPage() {
   }
 
   const watching = watchOverride ?? data?.page?.viewerIsWatching ?? false
+
+  const handleCreateChild = async (values: { title: string; slug: string }) => {
+    if (!page) return
+    setCreateError(null)
+    const result = await createPage({
+      input: {
+        spaceId: page.spaceId,
+        parentPageId: page.id,
+        slug: values.slug,
+        title: values.title,
+        content: '',
+      },
+    })
+    if (result.error) {
+      setCreateError(describeLoadFailure('PAGE').summary)
+      return
+    }
+    const refused = describeMutationError(result.data?.createPage.error)
+    if (refused) {
+      setCreateError(refused)
+      return
+    }
+    const created = result.data?.createPage.page
+    if (created) {
+      setCreateOpen(false)
+      navigate(`/pages/${created.id}/edit`)
+    }
+  }
 
   const handleToggleWatch = async () => {
     if (!pageId) return
@@ -282,6 +317,22 @@ export function PageViewPage() {
             >
               {watching ? 'Watching' : 'Watch'}
             </Button>
+            {/* Unlike the space-level "New page" button, this one CAN be gated
+                honestly: creating a child needs canEdit on the parent, and the
+                page read already carries the server's own canEdit. */}
+            {page.canEdit && (
+              <Button
+                startIcon={<NoteAddOutlinedIcon />}
+                variant="outlined"
+                size="small"
+                onClick={() => {
+                  setCreateError(null)
+                  setCreateOpen(true)
+                }}
+              >
+                Add child page
+              </Button>
+            )}
             {/* design.md §6.4.1: move requires canEdit at the source (and
                 the server re-checks the destination). */}
             {page.canEdit && (
@@ -433,6 +484,15 @@ export function PageViewPage() {
       <Box sx={{ mt: 4 }}>
         <MarkingBanner label={page.marking.label} level={page.marking.level} placement="foot" />
       </Box>
+
+      <CreatePageDialog
+        open={createOpen}
+        parentLabel={page.title}
+        error={createError}
+        busy={creating}
+        onCancel={() => setCreateOpen(false)}
+        onConfirm={(values) => void handleCreateChild(values)}
+      />
 
       <MovePageDialog
         open={moveOpen}

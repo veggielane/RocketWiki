@@ -56,6 +56,13 @@ export interface PresenceViewer {
   userId: string
   displayName: string
   colour: string
+  /**
+   * Whether this viewer has an uploaded avatar. Supplied by the hub so
+   * `UserAvatar` can render initials without probing `GET /users/{id}/avatar`
+   * — omitting it meant a 404 on every page view for every viewer who had
+   * never uploaded one.
+   */
+  hasAvatar: boolean
 }
 
 /**
