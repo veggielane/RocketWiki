@@ -1937,6 +1937,18 @@ nothing configured to use it), and one was a test that passed only while the
 application was *mis*configured. All twelve are fixed, with regression tests
 where the defect was in code.
 
+Continued probing of the same running stack turned up a thirteenth the next
+day, of exactly the same shape: **an unauthenticated GraphQL query for any
+audited list crashed instead of answering.** Every read root gives an anonymous
+caller the empty, absent-shaped answer, and `DbAuditSink` refuses to write a row
+with no acting user (§7) — both correct, and nothing between them established
+that an anonymous request has no row to write, so `AuditFieldMiddleware`
+dispatched a success row for the non-null empty list and the sink threw. Eleven
+root fields answered "Unexpected Execution Error". The §14 SQLite tier could
+always have caught this — its fake handler authenticates a request with no
+claims header as genuinely anonymous — but no test had ever aimed an anonymous
+client at an audited *list*, only at `me` and the unaudited roots.
+
 The general lesson is worth keeping: **every one of these was a seam between
 two correct components** — Keycloak and its import format, ASP.NET and its
 claim mapping, the AWS SDK and its transport, Aspire and the API's

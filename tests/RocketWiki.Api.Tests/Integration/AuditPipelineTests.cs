@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RocketWiki.Api.Audit;
@@ -146,6 +148,107 @@ public sealed class AuditPipelineTests(RocketWikiApiFactory factory) : IClassFix
 
         Assert.Equal(AuditOutcome.Denied, auditEvent.Outcome);
         Assert.Contains("failingRestriction", auditEvent.DetailsJson);
+    }
+
+    /// <summary>
+    /// The anonymous convention (an empty list, the same absent shape every other read
+    /// root gives) meeting design.md §7's refusal to write a UserId-less audit row. Both
+    /// halves were right on their own and the seam between them was not: the empty list
+    /// is non-null, so AuditFieldMiddleware dispatched a Success row for a request with
+    /// no acting user, and DbAuditSink turned every one of these queries into an
+    /// execution error. Every audited root that answers an anonymous caller with a
+    /// non-null shape is listed here — the earlier tier missed this because no test ever
+    /// aimed an anonymous client at an audited *list*.
+    /// </summary>
+    [Theory]
+    [InlineData("{ spaces { key } }", "spaces")]
+    [InlineData("{ pageTree(spaceId: \"00000000-0000-0000-0000-000000000000\") { id } }", "pageTree")]
+    [InlineData("{ archivedSpaces { key } }", "archivedSpaces")]
+    [InlineData("{ labels }", "labels")]
+    [InlineData("{ labelDetails { id name } }", "labelDetails")]
+    [InlineData("{ notifications { id } }", "notifications")]
+    [InlineData("{ groups }", "groups")]
+    [InlineData("{ attributeRegistry { key } }", "attributeRegistry")]
+    [InlineData("{ search(query: \"anything\") { totalCount edges { cursor } } }", "search.edges")]
+    public async Task AnonymousAuditedRead_AnswersEmpty_WithoutErrorOrAuditRow(string query, string emptyArrayPath)
+    {
+        var client = factory.CreateClient(); // no SetTestUser
+        var before = await CountAuditEventsAsync();
+
+        using var result = await client.PostGraphQLAsync(query);
+
+        Assert.False(result.RootElement.TryGetProperty("errors", out var errors), errors.ToString());
+        Assert.Equal(0, Walk(result.RootElement.GetProperty("data"), emptyArrayPath).GetArrayLength());
+        Assert.Equal(before, await CountAuditEventsAsync());
+    }
+
+    /// <summary>
+    /// The same seam on the other emission path: these two roots record their denial
+    /// themselves rather than through AuditFieldMiddleware, so they reached DbAuditSink
+    /// before anything had established there was a caller to attribute the row to. An
+    /// anonymous caller is not an instance admin, so the honest answer is each field's
+    /// own refusal - not the sink's "no resolvable acting user" leaking out as an
+    /// execution error.
+    /// </summary>
+    [Theory]
+    [InlineData("{ auditEvents(filter: {}) { totalCount } }", "Instance admin required to view the audit log.")]
+    [InlineData("{ syncStatus { localInstanceId } }", "Instance admin required to view sync status.")]
+    public async Task AnonymousAdminGatedRead_IsRefusedByItsOwnGate_WithoutAuditRow(string query, string expectedMessage)
+    {
+        var client = factory.CreateClient(); // no SetTestUser
+        var before = await CountAuditEventsAsync();
+
+        using var result = await client.PostGraphQLAsync(query);
+
+        var errors = result.RootElement.GetProperty("errors");
+        Assert.Equal(expectedMessage, errors[0].GetProperty("message").GetString());
+        Assert.Equal(before, await CountAuditEventsAsync());
+    }
+
+    /// <summary>
+    /// The half that must NOT be softened: a request that authenticated but carries no
+    /// subject claim resolves no acting user, and design.md §7's "no anonymous wikis"
+    /// makes that a bug to surface, not an anonymous read to wave through. The claims
+    /// header is built by hand because SetTestUser always emits a `sub` - the whole
+    /// point here is a token that authenticates without one.
+    /// </summary>
+    [Fact]
+    public async Task AuthenticatedReadWithNoResolvableActingUser_StillFailsLoudly()
+    {
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(TestAuthHandler.ClaimsHeaderName, EncodeClaimsWithoutSubject());
+        var before = await CountAuditEventsAsync();
+
+        using var result = await client.PostGraphQLAsync("{ spaces { key } }");
+
+        var errors = result.RootElement.GetProperty("errors");
+        Assert.Contains("no resolvable acting user", errors[0].ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, await CountAuditEventsAsync());
+    }
+
+    private static string EncodeClaimsWithoutSubject()
+    {
+        var json = JsonSerializer.Serialize(new[] { new TestAuthHandler.TestClaim("name", "No Subject") });
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
+    }
+
+    /// <summary>Follows a dot-separated path through the GraphQL `data` object, so one
+    /// theory can point at both a root list and a connection's `edges`.</summary>
+    private static JsonElement Walk(JsonElement element, string path)
+    {
+        foreach (var segment in path.Split('.'))
+        {
+            element = element.GetProperty(segment);
+        }
+
+        return element;
+    }
+
+    private async Task<int> CountAuditEventsAsync()
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        return await db.AuditEvents.CountAsync();
     }
 
     private static async Task<Guid> CreateUserAsync(RocketWikiDbContext db)

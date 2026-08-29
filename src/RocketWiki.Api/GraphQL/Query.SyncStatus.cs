@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text.Json;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
@@ -58,6 +59,7 @@ public partial class Query
     [AuditAction("sync.status")]
     [UseAuditDispatch]
     public async Task<SyncStatusView> SyncStatus(
+        ClaimsPrincipal claimsPrincipal,
         [Service] RocketWikiDbContext db,
         [Service] IInstanceRoleAccessor instanceRoleAccessor,
         [Service] InstanceIdentity instanceIdentity,
@@ -66,13 +68,20 @@ public partial class Query
     {
         if (!instanceRoleAccessor.IsInstanceAdmin)
         {
-            // Same {"reason": ...} details shape as every other denial row (§7), so
-            // the audit log viewer reads one format for all denials (ReadDenialAudit).
-            await auditSink.RecordAsync(
-                new AuditRecord(
-                    "sync.status", AuditOutcome.Denied,
-                    DetailsJson: JsonSerializer.Serialize(new { reason = "instance admin required" })),
-                cancellationToken);
+            // Anonymous is refused the same way but records nothing, for the reason
+            // AuditEvents states at the identical gate: no acting user exists to
+            // attribute the row to, and DbAuditSink refuses UserId-less rows (§7).
+            if (claimsPrincipal.Identity?.IsAuthenticated == true)
+            {
+                // Same {"reason": ...} details shape as every other denial row (§7), so
+                // the audit log viewer reads one format for all denials (ReadDenialAudit).
+                await auditSink.RecordAsync(
+                    new AuditRecord(
+                        "sync.status", AuditOutcome.Denied,
+                        DetailsJson: JsonSerializer.Serialize(new { reason = "instance admin required" })),
+                    cancellationToken);
+            }
+
             throw new GraphQLException("Instance admin required to view sync status.");
         }
 

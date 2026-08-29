@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text.Json;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
@@ -46,6 +47,7 @@ public partial class Query
     [UsePaging(IncludeTotalCount = true)]
     public async Task<IQueryable<AuditEvent>> AuditEvents(
         AuditFilterInput filter,
+        ClaimsPrincipal claimsPrincipal,
         [Service] RocketWikiDbContext db,
         [Service] IInstanceRoleAccessor instanceRoleAccessor,
         [Service] IAuditSink auditSink,
@@ -53,13 +55,24 @@ public partial class Query
     {
         if (!instanceRoleAccessor.IsInstanceAdmin)
         {
-            // Same {"reason": ...} details shape as every other denial row (§7), so
-            // the audit log viewer reads one format for all denials (ReadDenialAudit).
-            await auditSink.RecordAsync(
-                new AuditRecord(
-                    "audit.view", AuditOutcome.Denied,
-                    DetailsJson: JsonSerializer.Serialize(new { reason = "instance admin required" })),
-                cancellationToken);
+            // An anonymous caller is refused identically but records nothing: there is
+            // no acting user to attribute a row to, and DbAuditSink refuses UserId-less
+            // rows by design (§7) — recording unconditionally made an anonymous probe
+            // fail with that refusal instead of this field's own honest one. Same stance
+            // Query.Page takes for an anonymous read, and the claims are read the way
+            // Query.Me reads them, since "no acting user" alone would also silence the
+            // authenticated-but-unresolvable case that must stay loud.
+            if (claimsPrincipal.Identity?.IsAuthenticated == true)
+            {
+                // Same {"reason": ...} details shape as every other denial row (§7), so
+                // the audit log viewer reads one format for all denials (ReadDenialAudit).
+                await auditSink.RecordAsync(
+                    new AuditRecord(
+                        "audit.view", AuditOutcome.Denied,
+                        DetailsJson: JsonSerializer.Serialize(new { reason = "instance admin required" })),
+                    cancellationToken);
+            }
+
             throw new GraphQLException("Instance admin required to view the audit log.");
         }
 

@@ -756,6 +756,15 @@ because in-process SQLite answers a batch fast enough that the parallel
 dispatches never overlap. Its regression test therefore lives in the §14
 container tier, not the SQLite one.
 
+A thirteenth came out of more probing of the same stack the next day:
+**every audited list query crashed for an unauthenticated caller.** Anonymous
+callers get an empty list by convention, and the audit sink refuses to write a
+row with no acting user by design; nothing in between said that an anonymous
+request has no row to write, so eleven root fields answered "Unexpected
+Execution Error" instead of `[]`. The SQLite tier could have caught this one — a
+test client with no claims header really is anonymous — but no test had ever
+aimed one at an audited list.
+
 **Still explicitly unverified:**
 - **That any browser span has ever been exported to a real OTLP endpoint.**
   The exporter's transport is mocked in the web tests; the only evidence the

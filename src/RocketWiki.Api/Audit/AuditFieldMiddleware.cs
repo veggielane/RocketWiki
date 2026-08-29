@@ -17,6 +17,10 @@ namespace RocketWiki.Api.Audit;
 /// resolvers themselves, where the typed error (with its reason) is available —
 /// this middleware only ever sees Outcome.Success.
 ///
+/// An unauthenticated request is never audited here either — see the guard in
+/// <see cref="InvokeAsync"/> for why that distinction has to be drawn at this layer
+/// rather than inside <see cref="DbAuditSink"/>.
+///
 /// A null result is never audited here: by the time this middleware runs, the resolver
 /// has already collapsed the internal ReadResult (design.md §6.7) to null, and the two
 /// things null can mean diverge in what they deserve — a denial was *already audited by
@@ -42,6 +46,25 @@ public sealed class AuditFieldMiddleware(FieldDelegate next)
         var member = context.Selection.Field.ResolverMember ?? context.Selection.Field.Member;
         var action = member?.GetCustomAttribute<AuditActionAttribute>()?.Action;
         if (action is null)
+        {
+            return;
+        }
+
+        // An anonymous caller made no access decision worth recording: every read root
+        // answers an unauthenticated request with the same absent shape it gives anyone
+        // (Query.Spaces' empty list, Query.Search's empty connection), which is as much
+        // a non-decision as the null result skipped above — Query.Page's doc already
+        // states that an anonymous read writes no row. Those shapes are non-null though,
+        // so without this the dispatch below reached DbAuditSink, which throws on a
+        // request with no acting user and turned every such query into an execution
+        // error. The guard belongs here rather than in the sink because the sink's throw
+        // must keep firing for an *authenticated* request that resolved no acting user:
+        // that one is a genuine bug, and only the authentication state separates the two.
+        // Skipped solely on positive proof of anonymity — with no HttpContext to ask, the
+        // sink still decides, so a missing audit row is never the quiet consequence of
+        // this middleware not knowing who the caller was.
+        var httpContext = context.Service<IHttpContextAccessor>().HttpContext;
+        if (httpContext is not null && httpContext.User.Identity?.IsAuthenticated != true)
         {
             return;
         }
