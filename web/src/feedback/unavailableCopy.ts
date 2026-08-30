@@ -159,6 +159,12 @@ export type LoadFailureReason =
    * unreachable" while editing a marking would go looking in the wrong place.
    */
   | 'NATIONALITY_VOCABULARY'
+  /**
+   * The accumulated group vocabulary (design.md §6.6). Names the instance has
+   * observed in tokens, never a membership list — so, like the other
+   * registries, it has nothing to conceal and can say what failed.
+   */
+  | 'GROUP_LIST'
   | 'SYNC_STATUS'
   /**
    * The usage report (design.md §7). Distinct from the null the server returns
@@ -204,6 +210,8 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       }
     case 'NOTIFICATIONS':
       return { summary: "Couldn't load notifications.", pointsToSettings: false }
+    case 'GROUP_LIST':
+      return { summary: "Couldn't load the group list.", pointsToSettings: false }
     case 'SYNC_STATUS':
       return { summary: "Couldn't load sync status.", pointsToSettings: false }
     case 'ANALYTICS':

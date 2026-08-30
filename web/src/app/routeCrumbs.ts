@@ -47,6 +47,7 @@ export const ADMIN_PAGES: Record<string, string> = {
   analytics: 'Analytics',
   audit: 'Audit log',
   sync: 'Sync status',
+  groups: 'Groups',
   emojis: 'Emoji',
   'property-keys': 'Property keys',
 }

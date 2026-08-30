@@ -27,6 +27,12 @@ const LIVE_SECTIONS = [
     to: '/admin/sync',
   },
   {
+    title: 'Groups',
+    description:
+      'The group names this instance has seen in a sign-in token — the vocabulary access rules can name.',
+    to: '/admin/groups',
+  },
+  {
     title: 'Custom emojis',
     description: 'Curate the :name: registry every signed-in user can render.',
     to: '/admin/emojis',

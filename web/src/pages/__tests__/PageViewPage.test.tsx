@@ -1,17 +1,26 @@
-import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { PageViewPage } from '../PageViewPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
+import { FakePresenceTransport } from '../../realtime/FakePresenceTransport'
 import { expectNoAxeViolations } from '../../test/axe'
 
 // The page view joins presence on mount; tests must never construct a real
-// SignalR connection (design.md §8 — and jsdom has no hub to reach).
-vi.mock('../../realtime/transports', async () => {
-  const { FakePresenceTransport } = await import('../../realtime/FakePresenceTransport')
-  const transport = new FakePresenceTransport()
-  return { getDefaultPresenceTransport: () => transport }
+// SignalR connection (design.md §8 — and jsdom has no hub to reach). A fresh
+// instance per test keeps recorded pointer traffic from leaking across them —
+// same shape as the edit page's harness.
+const holder = vi.hoisted(() => ({ transport: undefined as unknown }))
+vi.mock('../../realtime/transports', () => ({
+  getDefaultPresenceTransport: () => holder.transport,
+}))
+
+let transport: FakePresenceTransport
+
+beforeEach(() => {
+  transport = new FakePresenceTransport()
+  holder.transport = transport
 })
 
 const basePage = {
@@ -349,5 +358,89 @@ describe('PageViewPage replica banner (design.md §12)', () => {
     renderPage()
     await screen.findByRole('heading', { name: 'Runbook' })
     expect(screen.queryByText(/Replica of/)).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * Live cursors while READING, over the whole page.
+ *
+ * Presence was wired correctly here all along — the view route joins the page
+ * group and the hub relays `PointerMoved` to everyone in it, editing or not.
+ * What was wrong was the SCOPE: capture and overlay wrapped only the read-only
+ * editor, so a reader's cursor stopped broadcasting the moment it left the
+ * prose — over the title, the action row, the attachments, the comments — and
+ * remote cursors could only ever be drawn inside that one column. It read as
+ * "presence only works when editing"; it was presence working in a box.
+ */
+describe('PageViewPage — live cursors cover the page, not just the content column', () => {
+  /** The presence surface: the outermost element the page renders. */
+  function surface() {
+    // Climb from the title to the render container's only child — which is the
+    // surface, and is the point: it wraps everything, not just the prose.
+    let el: HTMLElement = screen.getByText('Runbook')
+    while (el.parentElement && el.parentElement.parentElement !== document.body) {
+      el = el.parentElement
+    }
+    // jsdom lays nothing out, so a rect has to be staged for the fractions to
+    // be computable at all.
+    el.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 1000, height: 500, right: 1000, bottom: 500, x: 0, y: 0 }) as DOMRect
+    return el
+  }
+
+  it('broadcasts a pointer moved anywhere on the page, not only over the prose', async () => {
+    renderPage()
+    await screen.findByText('Runbook')
+    transport.sentPositions.length = 0
+    surface()
+
+    // Over the heading — outside the content column entirely.
+    fireEvent.mouseMove(screen.getByText('Runbook'), { clientX: 250, clientY: 100 })
+    // The sampler sends on its own interval; `record` is what the surface calls.
+    await waitFor(() => expect(transport.sentPositions.length).toBeGreaterThan(0), { timeout: 2000 })
+
+    const sent = transport.sentPositions.at(-1)!
+    expect(sent.pageId).toBe('page-1')
+    expect(sent.x).toBeCloseTo(0.25)
+    expect(sent.y).toBeCloseTo(0.2)
+  })
+
+  it('renders a remote reader’s cursor', async () => {
+    renderPage()
+    await screen.findByText('Runbook')
+
+    act(() => {
+      transport.emitPointer({ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', x: 0.5, y: 0.5 })
+    })
+
+    expect(await screen.findByText('Zoe')).toBeInTheDocument()
+  })
+
+  it('prunes a cursor when its owner leaves the page', async () => {
+    // Ghost cursors: `pointers` was only ever added to, so someone who
+    // navigated away left their arrow and name painted over content another
+    // reader was still reading.
+    renderPage()
+    await screen.findByText('Runbook')
+    act(() => {
+      transport.emitViewers([{ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', hasAvatar: false }])
+      transport.emitPointer({ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', x: 0.5, y: 0.5 })
+    })
+    expect(await screen.findByText('Zoe')).toBeInTheDocument()
+
+    act(() => transport.emitViewers([]))
+
+    await waitFor(() => expect(screen.queryByText('Zoe')).not.toBeInTheDocument())
+  })
+
+  it('keeps the cursor overlay out of the accessibility tree', async () => {
+    renderPage()
+    await screen.findByText('Runbook')
+    act(() => {
+      transport.emitPointer({ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', x: 0.5, y: 0.5 })
+    })
+
+    const label = await screen.findByText('Zoe')
+    expect(label.closest('[aria-hidden="true"]')).not.toBeNull()
   })
 })

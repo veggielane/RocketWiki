@@ -32,7 +32,7 @@ import { RichTextEditor, type RichTextEditorHandle, type CollabBinding } from '.
 import { useCoEditSession } from '../editor/coedit/useCoEditSession'
 import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
-import { PresencePointers } from '../presence/PresencePointers'
+import { PresenceSurface } from '../presence/PresenceSurface'
 import { colourForUser } from '../presence/colourForUser'
 import { getDefaultCoEditTransport, getDefaultPresenceTransport } from '../realtime/transports'
 import { useRealtimeConnection } from '../realtime/useRealtimeConnection'
@@ -335,7 +335,10 @@ export function PageEditPage() {
     // was, in fact, saved: the forms feature had no working authoring preview
     // at all, while CodeBlockView promised a side-by-side one.
     <PageIdContext value={page.id}>
-    <Box>
+    {/* The whole edit screen is the presence surface, sharing one component
+        with the view route — capture box and overlay must be the SAME box, and
+        two hand-paired copies were two chances to drift. */}
+    <PresenceSurface pointers={pointers} recordPointer={recordPointer}>
       <Box sx={{ mb: 2 }}>
         <PageHeader
           title="Editing"
@@ -409,26 +412,16 @@ export function PageEditPage() {
         // timeout — a dead hub degrades to solo, never to a dead editor.
         <Skeleton variant="rectangular" height={300} />
       ) : (
-        <Box
-          sx={{ position: 'relative' }}
-          onMouseMove={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect()
-            if (rect.width === 0 || rect.height === 0) return
-            recordPointer((e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height)
-          }}
-        >
-          <RichTextEditor
-            key={`${page.id}:${collabBinding ? 'collab' : 'solo'}`}
-            ref={editorRef}
-            initialMarkdown={page.content}
-            editable={session.status !== 'evicted'}
-            pageId={page.id}
-            collab={collabBinding}
-            onDocChanged={() => markDirty(true)}
-            onSaveShortcut={() => void saveNow()}
-          />
-          <PresencePointers pointers={pointers} />
-        </Box>
+        <RichTextEditor
+          key={`${page.id}:${collabBinding ? 'collab' : 'solo'}`}
+          ref={editorRef}
+          initialMarkdown={page.content}
+          editable={session.status !== 'evicted'}
+          pageId={page.id}
+          collab={collabBinding}
+          onDocChanged={() => markDirty(true)}
+          onSaveShortcut={() => void saveNow()}
+        />
       )}
 
       {saveError && (
@@ -560,7 +553,7 @@ export function PageEditPage() {
         }}
         onKeepEditing={() => setConflict(null)}
       />
-    </Box>
+    </PresenceSurface>
     </PageIdContext>
   )
 }

@@ -287,6 +287,15 @@ export const router = createBrowserRouter([
               return { Component: SyncStatusPage }
             },
           },
+          // Group names the instance has observed at sign-in — vocabulary for
+          // access rules, never a membership directory.
+          {
+            path: 'groups',
+            lazy: async () => {
+              const { AdminGroupsPage } = await import('../pages/AdminGroupsPage')
+              return { Component: AdminGroupsPage }
+            },
+          },
           {
             path: 'emojis',
             lazy: async () => {

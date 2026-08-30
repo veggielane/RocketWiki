@@ -75,3 +75,12 @@ query RuleVocabulary {
     allowedValues
   }
 }
+
+# The same accumulated group vocabulary as `RuleVocabulary` above, on its own
+# for the admin Groups screen — which wants only the names and should not pull
+# the attribute registry with them. Groups are NOT stored per user: this is the
+# set of names the instance has observed in tokens at sign-in, which is why the
+# screen can list them and can never show who is in one.
+query KnownGroups {
+  groups
+}

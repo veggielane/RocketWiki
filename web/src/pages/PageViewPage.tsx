@@ -67,7 +67,7 @@ import { useScrollToHash } from './useScrollToHash'
 import { PageIdContext } from './pageContext'
 import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
-import { PresencePointers } from '../presence/PresencePointers'
+import { PresenceSurface } from '../presence/PresenceSurface'
 import { getDefaultPresenceTransport } from '../realtime/transports'
 
 /**
@@ -339,7 +339,12 @@ export function PageViewPage({
     // Fences rendered inside the content need the page they sit on, and cannot
     // reach it through props or useParams (a slug route carries no id).
     <PageIdContext value={page.id}>
-    <Box>
+    {/* The WHOLE page is the presence surface, not just the content column.
+        Capture and overlay used to wrap the read-only editor alone, so a
+        reader's cursor vanished the moment it left the prose — over the title,
+        the action row, the attachments, the comments — which read as presence
+        being broken rather than as presence being scoped. */}
+    <PresenceSurface pointers={pointers} recordPointer={recordPointer}>
       {/*
         Nine controls used to sit here in one un-wrapping row, every one of them
         an equally-weighted outlined button: Edit — the thing most readers came
@@ -517,17 +522,7 @@ export function PageViewPage({
           screen, which any viewer can open read-only. Two renderings of the
           same rows, one of them a panel wedged above the content, was the
           clutter this move exists to remove. */}
-      <Box
-        sx={{ position: 'relative' }}
-        onMouseMove={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect()
-          if (rect.width === 0 || rect.height === 0) return
-          recordPointer((e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height)
-        }}
-      >
-        <RichTextEditor initialMarkdown={page.content} editable={false} showToolbar={false} />
-        <PresencePointers pointers={pointers} />
-      </Box>
+      <RichTextEditor initialMarkdown={page.content} editable={false} showToolbar={false} />
 
       {page.canEdit && (
         <Box sx={{ mt: 2 }}>
@@ -645,7 +640,7 @@ export function PageViewPage({
         originInstanceId={replicaOrigin}
         onClose={() => setReplicaOrigin(null)}
       />
-    </Box>
+    </PresenceSurface>
     </PageIdContext>
   )
 }
