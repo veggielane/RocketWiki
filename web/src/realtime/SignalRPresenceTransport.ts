@@ -15,7 +15,7 @@ import type {
  * Real implementation of `PresenceTransport` — and of `CoEditTransport`,
  * because both live on the same hub connection. Presence lives on the same
  * hub as notifications (`/hubs/notifications` — NotificationsHub.cs owns
- * `JoinPage`/`LeavePage`/`PointerMove` and broadcasts `ViewersChanged`/
+ * `JoinRoom`/`LeaveRoom`/`PointerMove` and broadcasts `ViewersChanged`/
  * `PointerMoved`), which adopted this frontend's proposed method/event
  * names verbatim. Uses MessagePack (registered server-side via
  * `AddMessagePackProtocol`) rather than the default JSON protocol, since
@@ -76,7 +76,7 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
    * overtake each other. Ported from SignalRNotificationsTransport, which
    * solved this class of problem first.
    *
-   * The bug this closes: `leavePage` used to return early whenever the
+   * The bug this closes: `leaveRoom` used to return early whenever the
    * connection was not yet `Connected`. On a fast navigation the join suspends
    * inside `ensureStarted()`, the cleanup's leave sees `Connecting` and sends
    * NOTHING, and then negotiation completes and the pending join runs — leaving
@@ -100,21 +100,21 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
     return next
   }
 
-  async joinPage(pageId: string): Promise<void> {
+  async joinRoom(roomKey: string): Promise<void> {
     return this.enqueue(async () => {
       await this.ensureStarted()
-      await this.connection.invoke('JoinPage', pageId)
+      await this.connection.invoke('JoinRoom', roomKey)
     })
   }
 
-  async leavePage(pageId: string): Promise<void> {
+  async leaveRoom(roomKey: string): Promise<void> {
     return this.enqueue(async () => {
       // Still no `ensureStarted`: if nothing ever started there is no group to
       // leave, and a teardown path is the last place to raise. But this now
       // runs AFTER any queued join, so the state check reflects the join's
       // outcome rather than racing it.
       if (this.connection.state !== signalR.HubConnectionState.Connected) return
-      await this.connection.invoke('LeavePage', pageId)
+      await this.connection.invoke('LeaveRoom', roomKey)
     })
   }
 
@@ -128,13 +128,13 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
     return () => this.connection.off('PointerMoved', handler)
   }
 
-  sendPointerPosition(pageId: string, x: number, y: number): void {
+  sendPointerPosition(roomKey: string, x: number, y: number): void {
     // Fire-and-forget: a dropped pointer sample is invisible (the next one
     // arrives in under 50ms), so this deliberately doesn't await or queue
     // — awaiting per-call would let a slow connection back up a queue of
     // increasingly-stale positions. `catch` swallows the rejection a
     // not-yet-connected invoke produces for the same reason.
-    this.connection.invoke('PointerMove', pageId, x, y).catch(() => {})
+    this.connection.invoke('PointerMove', roomKey, x, y).catch(() => {})
   }
 
   // ---- CoEditTransport (same connection, design.md §8 co-editing) ----

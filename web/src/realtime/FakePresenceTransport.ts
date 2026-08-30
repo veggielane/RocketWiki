@@ -31,9 +31,9 @@ export class FakePresenceTransport implements PresenceTransport, CoEditTransport
   private evictedHandlers = new Set<(pageId: string) => void>()
   private reconnectedHandlers = new Set<() => void>()
 
-  joinedPages: string[] = []
-  leftPages: string[] = []
-  sentPositions: { pageId: string; x: number; y: number }[] = []
+  joinedRooms: string[] = []
+  leftRooms: string[] = []
+  sentPositions: { roomKey: string; x: number; y: number }[] = []
 
   /** Script for `joinEditSession` — null (default) means refused → solo path. May also be a function for per-call scripting. */
   editSessionJoinResult: EditSessionJoin | null | (() => EditSessionJoin | null) = null
@@ -43,19 +43,19 @@ export class FakePresenceTransport implements PresenceTransport, CoEditTransport
   pushedAwareness: { pageId: string; update: Uint8Array }[] = []
   reseeds: { pageId: string; fullState: Uint8Array }[] = []
 
-  async joinPage(pageId: string): Promise<void> {
-    this.joinedPages.push(pageId)
+  async joinRoom(roomKey: string): Promise<void> {
+    this.joinedRooms.push(roomKey)
   }
 
-  async leavePage(pageId: string): Promise<void> {
-    this.leftPages.push(pageId)
+  async leaveRoom(roomKey: string): Promise<void> {
+    this.leftRooms.push(roomKey)
   }
 
-  /** Currently-joined pages, accounting for leaves — for tests asserting "no page left joined after teardown." */
-  get currentlyJoinedPages(): string[] {
-    const left = [...this.leftPages]
-    return this.joinedPages.filter((pageId) => {
-      const i = left.indexOf(pageId)
+  /** Currently-joined rooms, accounting for leaves — for tests asserting "no room left joined after teardown." */
+  get currentlyJoinedRooms(): string[] {
+    const left = [...this.leftRooms]
+    return this.joinedRooms.filter((roomKey) => {
+      const i = left.indexOf(roomKey)
       if (i === -1) return true
       left.splice(i, 1)
       return false
@@ -72,8 +72,8 @@ export class FakePresenceTransport implements PresenceTransport, CoEditTransport
     return () => this.pointerHandlers.delete(handler)
   }
 
-  sendPointerPosition(pageId: string, x: number, y: number): void {
-    this.sentPositions.push({ pageId, x, y })
+  sendPointerPosition(roomKey: string, x: number, y: number): void {
+    this.sentPositions.push({ roomKey, x, y })
   }
 
   /** Test/dev only: simulates the hub broadcasting an updated viewer list. */

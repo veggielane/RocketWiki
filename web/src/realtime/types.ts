@@ -137,25 +137,31 @@ export interface CoEditTransport {
 
 export interface PresenceTransport {
   /**
-   * Presence uses page-scoped hub groups, not per-user fan-out (design.md
+   * Presence uses ROOM-scoped hub groups, not per-user fan-out (design.md
    * §8 — high-frequency + identical-for-everyone, unlike notifications).
-   * Joining/leaving must be explicit and paired: a page left behind in a
-   * group after the viewer navigates away is a live data leak (their
-   * cursor keeps broadcasting to a page they're no longer looking at),
-   * not just a resource leak.
+   *
+   * A room is an opaque authorized string (`page:{id}`, `space:{KEY}:{screen}`,
+   * `site:{path}` — see presence/presenceRoom.ts), because presence follows the
+   * SCREEN and not every screen is a page. The server decides whether the caller
+   * may join a given room; the client never assumes it may.
+   *
+   * Joining/leaving must be explicit and paired, and that now matters on every
+   * navigation rather than only between pages: a room left behind after the
+   * viewer has moved on is a live data leak — their cursor keeps broadcasting
+   * into a screen they are no longer looking at — not just a resource leak.
    */
-  joinPage(pageId: string): Promise<void>
-  leavePage(pageId: string): Promise<void>
+  joinRoom(roomKey: string): Promise<void>
+  leaveRoom(roomKey: string): Promise<void>
   onViewersChanged(handler: (viewers: PresenceViewer[]) => void): () => void
   onPointerMoved(handler: (position: PointerPosition) => void): () => void
   /**
    * Callers must throttle before calling this — the transport sends
    * whatever it's given, one message per call (see realtime/pointerSampler.ts).
-   * Takes the pageId because the hub's `PointerMove(pageId, x, y)` needs to
-   * know which page group to relay into (one connection can have joined
-   * several pages over its lifetime).
+   * Takes the roomKey because the hub's `PointerMove(roomKey, x, y)` needs to
+   * know which group to relay into (one connection can have joined several
+   * rooms over its lifetime).
    */
-  sendPointerPosition(pageId: string, x: number, y: number): void
+  sendPointerPosition(roomKey: string, x: number, y: number): void
   /**
    * Fires after the underlying connection auto-reconnects.
    *

@@ -18,8 +18,8 @@ import type { PresenceTransport, RealtimeConnectionState } from '../types'
 function makeTransport() {
   let emit: ((state: RealtimeConnectionState) => void) | null = null
   const transport: PresenceTransport = {
-    joinPage: vi.fn(async () => {}),
-    leavePage: vi.fn(async () => {}),
+    joinRoom: vi.fn(async () => {}),
+    leaveRoom: vi.fn(async () => {}),
     onViewersChanged: () => () => {},
     onPointerMoved: () => () => {},
     sendPointerPosition: () => {},
@@ -58,8 +58,8 @@ describe('useRealtimeConnection', () => {
     // The fakes and any future transport need not implement it, and the absence
     // of a signal must not make every test render a warning banner.
     const silent: PresenceTransport = {
-      joinPage: vi.fn(async () => {}),
-      leavePage: vi.fn(async () => {}),
+      joinRoom: vi.fn(async () => {}),
+      leaveRoom: vi.fn(async () => {}),
       onViewersChanged: () => () => {},
       onPointerMoved: () => () => {},
       sendPointerPosition: () => {},
@@ -72,8 +72,8 @@ describe('useRealtimeConnection', () => {
   it('unsubscribes on unmount', () => {
     const unsubscribe = vi.fn()
     const transport: PresenceTransport = {
-      joinPage: vi.fn(async () => {}),
-      leavePage: vi.fn(async () => {}),
+      joinRoom: vi.fn(async () => {}),
+      leaveRoom: vi.fn(async () => {}),
       onViewersChanged: () => () => {},
       onPointerMoved: () => () => {},
       sendPointerPosition: () => {},

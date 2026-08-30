@@ -10,6 +10,7 @@ import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { jsonToMarkdown } from '../../editor/markdown/toMarkdown'
 import { expectNoAxeViolations } from '../../test/axe'
 import { FakePresenceTransport } from '../../realtime/FakePresenceTransport'
+import { PresenceRoomContext } from '../../presence/PresenceRoomContext'
 import type { MutationErrorFragment } from '../../graphql/generated/graphql'
 
 // The edit page joins presence AND (since co-editing) the page's edit
@@ -86,6 +87,8 @@ interface RenderOptions {
   /** Response page for UpdatePageContentInSession (collab saves). */
   sessionSavedPage?: Record<string, unknown> | null
   sessionSaveError?: MutationErrorFragment | null
+  /** Stands in for the shell, which owns presence and receives the room this screen declares. */
+  presence?: { viewers: never[]; setRoom: (room: string) => void }
 }
 
 function renderEditPage(updateError: MutationErrorFragment | null, options: RenderOptions = {}) {
@@ -103,7 +106,13 @@ function renderEditPage(updateError: MutationErrorFragment | null, options: Rend
     return undefined
   })
 
-  render(<UrqlProvider value={mock.client}>{editorRouter()}</UrqlProvider>)
+  render(
+    <UrqlProvider value={mock.client}>
+      <PresenceRoomContext value={options.presence ?? { viewers: [], setRoom: () => {} }}>
+        {editorRouter()}
+      </PresenceRoomContext>
+    </UrqlProvider>,
+  )
   return mock
 }
 
@@ -468,15 +477,16 @@ describe('PageEditPage solo fallback (co-editing is a progressive enhancement, n
     expect(mock.operations.filter((op) => op.name === 'UpdatePageContentInSession')).toHaveLength(0)
   })
 
-  it('joins page presence on mount (pointer overlay rides the same canView-gated JoinPage channel as the view page)', async () => {
-    renderEditPage(null)
+  it('declares the page room, so a reader and an editor of one page share it', async () => {
+    // Presence itself moved to the app shell — the only component that sees
+    // every route. What stays here is the one thing the shell cannot know:
+    // WHICH page. The readable address carries a slug, so the id has to come
+    // from the screen that resolved it, and both page screens name it alike.
+    const setRoom = vi.fn()
+    renderEditPage(null, { presence: { viewers: [], setRoom } })
     await screen.findByRole('button', { name: 'Save' })
 
-    expect(transport.currentlyJoinedPages).toEqual(['page-1'])
-    act(() => {
-      transport.emitPointer({ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', x: 0.5, y: 0.5 })
-    })
-    expect(await screen.findByText('Zoe')).toBeInTheDocument()
+    expect(setRoom).toHaveBeenCalledWith('page:page-1')
   })
 })
 

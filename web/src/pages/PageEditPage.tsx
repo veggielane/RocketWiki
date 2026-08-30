@@ -30,9 +30,9 @@ import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
 import { RichTextEditor, type RichTextEditorHandle, type CollabBinding } from '../editor/RichTextEditor'
 import { useCoEditSession } from '../editor/coedit/useCoEditSession'
-import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
-import { PresenceSurface } from '../presence/PresenceSurface'
+import { usePresenceViewers, useSetPresenceRoom } from '../presence/PresenceRoomContext'
+import { pageRoom } from '../presence/presenceRoom'
 import { colourForUser } from '../presence/colourForUser'
 import { getDefaultCoEditTransport, getDefaultPresenceTransport } from '../realtime/transports'
 import { useRealtimeConnection } from '../realtime/useRealtimeConnection'
@@ -130,7 +130,11 @@ export function PageEditPage() {
 
   // Same presence join + pointer overlay as the view page; keyed on pageId
   // (route reuse — see usePresence.ts).
-  const { viewers, pointers, recordPointer } = usePresence(pageId ?? '', getDefaultPresenceTransport())
+  // Same room as the view screen, so a reader and an editor of one page see
+  // each other. The shell owns the surface and the overlay; this only names
+  // the room, because the id is the part the route may not carry.
+  useSetPresenceRoom(pageId ? pageRoom(pageId) : null)
+  const viewers = usePresenceViewers()
   // Whether the hub is actually up — the chip and banner below report it
   // rather than asserting liveness the app cannot verify.
   const connection = useRealtimeConnection(getDefaultPresenceTransport())
@@ -335,10 +339,7 @@ export function PageEditPage() {
     // was, in fact, saved: the forms feature had no working authoring preview
     // at all, while CodeBlockView promised a side-by-side one.
     <PageIdContext value={page.id}>
-    {/* The whole edit screen is the presence surface, sharing one component
-        with the view route — capture box and overlay must be the SAME box, and
-        two hand-paired copies were two chances to drift. */}
-    <PresenceSurface pointers={pointers} recordPointer={recordPointer}>
+    <Box>
       <Box sx={{ mb: 2 }}>
         <PageHeader
           title="Editing"
@@ -553,7 +554,7 @@ export function PageEditPage() {
         }}
         onKeepEditing={() => setConflict(null)}
       />
-    </PresenceSurface>
+    </Box>
     </PageIdContext>
   )
 }

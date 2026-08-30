@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigation } from 'react-router-dom'
 import { Box, LinearProgress, Stack, useMediaQuery, useTheme } from '@mui/material'
 import { visuallyHidden } from '@mui/utils'
@@ -9,6 +9,11 @@ import { SideMenu } from './SideMenu'
 import { PageTitleContext, composeDocumentTitle } from './documentTitle'
 import { routeTitleFor } from './routeCrumbs'
 import { useCanonicalSpace } from './useCanonicalSpaceKey'
+import { usePresence } from '../presence/usePresence'
+import { PresenceSurface } from '../presence/PresenceSurface'
+import { PresenceRoomContext } from '../presence/PresenceRoomContext'
+import { presenceRoomFor } from '../presence/presenceRoom'
+import { getDefaultPresenceTransport } from '../realtime/transports'
 import { measureFor } from './contentMeasure'
 
 
@@ -86,6 +91,36 @@ export function AppShell() {
     mainRef.current?.focus()
   }, [pathname])
 
+  /**
+   * Presence follows the SCREEN, and the shell is the only thing that sees
+   * every screen — which is why it lives here rather than in the two page
+   * components it used to be nailed into. Those were the only two routes that
+   * ever had cursors, and even there the overlay covered the content column
+   * alone.
+   *
+   * The route names the room, except for page screens: their room is
+   * `page:{id}` and the id is not always in the URL (the readable
+   * `/spaces/ENG/runbook` carries a slug), so those screens push it up
+   * through PresenceRoomContext once they have resolved it. `presenceRoomFor`
+   * returns null for them, so nothing is joined in the meantime.
+   *
+   * The override is cleared on every navigation, during render rather than in
+   * an effect: an effect would leave one committed frame in which the new
+   * screen is showing while presence still names the old page's room, and that
+   * frame is a pointer sample broadcast into a room the user has left.
+   */
+  const [roomOverride, setRoomOverride] = useState<string | null>(null)
+  const [roomForPath, setRoomForPath] = useState(pathname)
+  if (roomForPath !== pathname) {
+    setRoomForPath(pathname)
+    setRoomOverride(null)
+  }
+  const room = roomOverride ?? presenceRoomFor(pathname)
+  const { viewers, pointers, recordPointer } = usePresence(room, getDefaultPresenceTransport())
+  // Identity-stable, so a screen can depend on it in an effect.
+  const setRoom = useCallback((next: string) => setRoomOverride(next), [])
+  const presenceValue = useMemo(() => ({ viewers, setRoom }), [viewers, setRoom])
+
   const toggleNav = () => {
     setNavOpen((open) => {
       const next = !open
@@ -146,6 +181,18 @@ export function AppShell() {
         <Box role="status" aria-live="polite" sx={visuallyHidden}>
           {title}
         </Box>
+        {/* The presence surface wraps the CONTENT, not `<main>` itself.
+            `<main>` is the scroll container, so an overlay pinned to its inset
+            would sit at scroll offset 0 and slide away as the reader scrolls,
+            while pointer fractions were taken from the visible box — two
+            different coordinate spaces. This element is as tall as the content,
+            which makes the fractions and the overlay agree at any scroll
+            position, exactly as they did when the surface wrapped a page's
+            outer box.
+
+            It also leaves `mainRef`, the route-change focus target and the
+            title live-region alone: they are siblings of this, not inside it. */}
+        <PresenceSurface pointers={pointers} recordPointer={recordPointer}>
         <Stack
           spacing={2}
           sx={{
@@ -163,10 +210,13 @@ export function AppShell() {
           </Box>
           <Box sx={{ width: '100%', maxWidth: measureFor(pathname) }}>
             <PageTitleContext value={registerPageTitle}>
-              <Outlet />
+              <PresenceRoomContext value={presenceValue}>
+                <Outlet />
+              </PresenceRoomContext>
             </PageTitleContext>
           </Box>
         </Stack>
+        </PresenceSurface>
       </Box>
     </Box>
   )

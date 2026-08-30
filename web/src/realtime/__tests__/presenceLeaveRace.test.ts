@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 
 /**
- * §1.7 — `LeavePage` was dropped when you navigated before the hub finished
+ * §1.7 — `LeaveRoom` was dropped when you navigated before the hub finished
  * connecting.
  *
- * `joinPage` awaits `ensureStarted()`; `usePresence` fires it un-awaited. On a
+ * `joinRoom` awaits `ensureStarted()`; `usePresence` fires it un-awaited. On a
  * fast navigation the old code ran:
  *
- *   1. mount → `joinPage('A')` suspends inside `ensureStarted()`
- *   2. navigate → cleanup → `leavePage('A')` sees state `Connecting` and
+ *   1. mount → `joinRoom('A')` suspends inside `ensureStarted()`
+ *   2. navigate → cleanup → `leaveRoom('A')` sees state `Connecting` and
  *      returns WITHOUT SENDING ANYTHING
- *   3. negotiation completes → the pending `joinPage('A')` resumes and invokes
- *      `JoinPage('A')`
+ *   3. negotiation completes → the pending `joinRoom('A')` resumes and invokes
+ *      `JoinRoom('A')`
  *
  * The client is then in page A's hub group with no matching leave, having left
  * the screen. Local handlers are unsubscribed so it is invisible on this side,
@@ -106,14 +106,14 @@ describe('connection loss is observable', () => {
 })
 
 describe('presence group membership survives a navigation mid-connect', () => {
-  it('sends LeavePage after the pending JoinPage, rather than dropping it', async () => {
+  it('sends LeaveRoom after the pending JoinRoom, rather than dropping it', async () => {
     const transport = new SignalRPresenceTransport('/hubs/presence')
 
     // Mount: join starts and suspends inside `start()`.
-    const joining = transport.joinPage('page-a')
+    const joining = transport.joinRoom('page-a')
     // Navigate away before the connection is up — exactly what usePresence's
     // cleanup does, and the moment the old guard bailed out on.
-    const leaving = transport.leavePage('page-a')
+    const leaving = transport.leaveRoom('page-a')
 
     // The queue hands work to a microtask, so let the join actually reach
     // `start()` before asserting on the state it is suspended in.
@@ -127,6 +127,6 @@ describe('presence group membership survives a navigation mid-connect', () => {
     await leaving
 
     // Both sent, and in the only order that leaves the server's view correct.
-    expect(hub.invokes).toEqual(['JoinPage(page-a)', 'LeavePage(page-a)'])
+    expect(hub.invokes).toEqual(['JoinRoom(page-a)', 'LeaveRoom(page-a)'])
   })
 })

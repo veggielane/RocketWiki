@@ -65,10 +65,9 @@ import { computeLabelOps } from '../labels/labelOps'
 import { ClassificationBanner } from '../markings/ClassificationBanner'
 import { useScrollToHash } from './useScrollToHash'
 import { PageIdContext } from './pageContext'
-import { usePresence } from '../presence/usePresence'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
-import { PresenceSurface } from '../presence/PresenceSurface'
-import { getDefaultPresenceTransport } from '../realtime/transports'
+import { usePresenceViewers, useSetPresenceRoom } from '../presence/PresenceRoomContext'
+import { pageRoom } from '../presence/presenceRoom'
 
 /**
  * Page view. Renders through the exact same `RichTextEditor` component as
@@ -173,10 +172,13 @@ export function PageViewPage({
   const [, createLabel] = useCreateLabelMutation()
   const [, attachLabel] = useAttachLabelMutation()
   const [, detachLabel] = useDetachLabelMutation()
-  // Depends on pageId, not just mount — see usePresence.ts's comment on
-  // why route reuse (same component, different pageId) needs this. The
-  // transport is the app-lifetime singleton from realtime/transports.ts.
-  const { viewers, pointers, recordPointer } = usePresence(pageId ?? '', getDefaultPresenceTransport())
+  // The room only this screen can name. The shell owns presence now — it is
+  // the only component that sees every route — but the readable address
+  // carries a slug, not an id, so the id has to come from here. Reader and
+  // editor of the same page therefore share one room whichever URL they
+  // arrived by, and the cursor overlay is the shell-wide one.
+  useSetPresenceRoom(pageId ? pageRoom(pageId) : null)
+  const viewers = usePresenceViewers()
 
   /** Routes a mutation error to the right UX; returns true when there was one. */
   const surfaceError = (mutationError: Parameters<typeof asReadOnlyReplica>[0]): boolean => {
@@ -339,12 +341,7 @@ export function PageViewPage({
     // Fences rendered inside the content need the page they sit on, and cannot
     // reach it through props or useParams (a slug route carries no id).
     <PageIdContext value={page.id}>
-    {/* The WHOLE page is the presence surface, not just the content column.
-        Capture and overlay used to wrap the read-only editor alone, so a
-        reader's cursor vanished the moment it left the prose — over the title,
-        the action row, the attachments, the comments — which read as presence
-        being broken rather than as presence being scoped. */}
-    <PresenceSurface pointers={pointers} recordPointer={recordPointer}>
+    <Box>
       {/*
         Nine controls used to sit here in one un-wrapping row, every one of them
         an equally-weighted outlined button: Edit — the thing most readers came
@@ -640,7 +637,7 @@ export function PageViewPage({
         originInstanceId={replicaOrigin}
         onClose={() => setReplicaOrigin(null)}
       />
-    </PresenceSurface>
+    </Box>
     </PageIdContext>
   )
 }

@@ -7,14 +7,14 @@ describe('usePresence', () => {
   it('joins the given page on mount', () => {
     const transport = new FakePresenceTransport()
     renderHook(() => usePresence('page-1', transport))
-    expect(transport.currentlyJoinedPages).toEqual(['page-1'])
+    expect(transport.currentlyJoinedRooms).toEqual(['page-1'])
   })
 
   it('leaves the page on unmount', () => {
     const transport = new FakePresenceTransport()
     const { unmount } = renderHook(() => usePresence('page-1', transport))
     unmount()
-    expect(transport.currentlyJoinedPages).toEqual([])
+    expect(transport.currentlyJoinedRooms).toEqual([])
   })
 
   it('leaves the old page and joins the new one when pageId changes — the route-reuse case (design.md §8)', () => {
@@ -27,12 +27,12 @@ describe('usePresence', () => {
     const { rerender } = renderHook(({ pageId }) => usePresence(pageId, transport), {
       initialProps: { pageId: 'page-1' },
     })
-    expect(transport.currentlyJoinedPages).toEqual(['page-1'])
+    expect(transport.currentlyJoinedRooms).toEqual(['page-1'])
 
     rerender({ pageId: 'page-2' })
 
-    expect(transport.currentlyJoinedPages).toEqual(['page-2'])
-    expect(transport.leftPages).toContain('page-1')
+    expect(transport.currentlyJoinedRooms).toEqual(['page-2'])
+    expect(transport.leftRooms).toContain('page-1')
   })
 
   it('updates viewers when the transport broadcasts a change', () => {
@@ -91,7 +91,7 @@ describe('usePresence', () => {
     expect(transport.sentPositions).toEqual([])
   })
 
-  it('stamps sent pointer positions with the page they belong to — the hub needs the page group per sample', async () => {
+  it('stamps sent pointer positions with the room they belong to — the hub needs the group per sample', async () => {
     const transport = new FakePresenceTransport()
     const { result } = renderHook(() => usePresence('page-1', transport))
 
@@ -101,14 +101,14 @@ describe('usePresence', () => {
       await new Promise((resolve) => setTimeout(resolve, 80))
     })
 
-    expect(transport.sentPositions).toEqual([{ pageId: 'page-1', x: 0.5, y: 0.5 }])
+    expect(transport.sentPositions).toEqual([{ roomKey: 'page-1', x: 0.5, y: 0.5 }])
   })
 
   it('does not leave a page it never joined when unmounted before any effect ran twice (no duplicate leave calls)', () => {
     const transport = new FakePresenceTransport()
     const { unmount } = renderHook(() => usePresence('page-1', transport))
     unmount()
-    expect(transport.leftPages).toEqual(['page-1'])
+    expect(transport.leftRooms).toEqual(['page-1'])
   })
 })
 
@@ -126,13 +126,13 @@ describe('usePresence — rejoin after reconnect', () => {
   it('rejoins the page when the connection comes back', () => {
     const transport = new FakePresenceTransport()
     renderHook(() => usePresence('page-1', transport))
-    expect(transport.joinedPages).toEqual(['page-1'])
+    expect(transport.joinedRooms).toEqual(['page-1'])
 
     act(() => transport.emitReconnected())
 
-    expect(transport.joinedPages).toEqual(['page-1', 'page-1'])
+    expect(transport.joinedRooms).toEqual(['page-1', 'page-1'])
     // A rejoin is not a leave — the old connection is already gone server-side.
-    expect(transport.leftPages).toEqual([])
+    expect(transport.leftRooms).toEqual([])
   })
 
   it('rejoins the page currently being viewed, not the one joined at mount', () => {
@@ -141,12 +141,12 @@ describe('usePresence — rejoin after reconnect', () => {
       initialProps: { pageId: 'page-1' },
     })
     rerender({ pageId: 'page-2' })
-    const before = transport.joinedPages.length
+    const before = transport.joinedRooms.length
 
     act(() => transport.emitReconnected())
 
-    expect(transport.joinedPages).toHaveLength(before + 1)
-    expect(transport.joinedPages.at(-1)).toBe('page-2')
+    expect(transport.joinedRooms).toHaveLength(before + 1)
+    expect(transport.joinedRooms.at(-1)).toBe('page-2')
   })
 
   it('drops the pointers held from before the drop', () => {
@@ -169,10 +169,10 @@ describe('usePresence — rejoin after reconnect', () => {
     const transport = new FakePresenceTransport()
     const { unmount } = renderHook(() => usePresence('page-1', transport))
     unmount()
-    const joinsAfterUnmount = transport.joinedPages.length
+    const joinsAfterUnmount = transport.joinedRooms.length
 
     act(() => transport.emitReconnected())
 
-    expect(transport.joinedPages).toHaveLength(joinsAfterUnmount)
+    expect(transport.joinedRooms).toHaveLength(joinsAfterUnmount)
   })
 })
