@@ -52,7 +52,15 @@ spec:
           # specific paths win over the catch-all below regardless of order.
           {{- $apiSvc := printf "%s-api" (include "rocketwiki.fullname" .) }}
           {{- $apiPort := .Values.api.service.port }}
-          {{- range $path := list "/graphql" "/hubs" "/attachments" "/mcp" }}
+          {{- /*
+            The API's plain-HTTP surface. /avatars, /avatar, /emojis and /users were
+            missing, and the failure was silent: they fell through to the web Service's
+            SPA catch-all below, so an avatar or emoji GET answered 200 text/html into an
+            <img> and the writes 405'd. Pinned against web/vite.config.ts's dev proxy list
+            by ApiRouteSurfaceTests, so this list and nginx's cannot drift from what the
+            SPA actually calls.
+          */}}
+          {{- range $path := list "/graphql" "/hubs" "/attachments" "/mcp" "/avatars" "/avatar" "/emojis" "/users" }}
           # {{ $path }} → API{{ if eq $path "/mcp" }} (milestone 8 — a 404 today, routed now so launching /mcp needs no ingress change){{ end }}
           - path: {{ $path }}
             pathType: Prefix

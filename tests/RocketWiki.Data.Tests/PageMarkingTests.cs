@@ -125,6 +125,51 @@ public class PageMarkingTests : SqliteTestBase
         Assert.Equal(["GB", "US"], marking.Countries.Select(c => c.CountryValue).OrderBy(c => c, StringComparer.Ordinal));
     }
 
+    /// <summary>
+    /// design.md §21.11 nominates <c>SetByUserId IS NULL</c> as "the query that finds
+    /// every page nobody has yet looked at", so a marking nobody chose must not name an
+    /// actor. Creation inherits — the author picked a parent, not a classification, which
+    /// is also why §21.7 raises no marking event for a page creation.
+    ///
+    /// <para>Naming the creator made every page ever created look reviewed. It matters
+    /// most where unreviewed content arrives in bulk: a Confluence import creates every
+    /// page through this method with a real acting user, so an entire migrated estate was
+    /// stamped non-null and invisible to that query — strictly worse than the
+    /// AddPageMarkings backfill it parallels, which leaves NULL. Both other writers of
+    /// this column (the persistence-seam backstop and the sync importer) already wrote
+    /// null; this one disagreed.</para>
+    /// </summary>
+    [Fact]
+    public async Task CreatePage_LeavesTheMarkingUnattributed_SoUnreviewedPagesStayFindable()
+    {
+        var author = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(author);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.SaveChanges();
+
+        var service = new PageService(context, "local-instance");
+        var created = await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "fresh", "Fresh", "# Fresh"),
+            PrincipalWith("SECRET", ["GB"]), author.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+
+        var inheritedMarking = context.PageMarkings.Single(m => m.PageId == created.Value.Id);
+        Assert.Null(inheritedMarking.SetByUserId);
+
+        // Non-vacuous, and the whole point of the distinction: an EXPLICIT re-mark is a
+        // judgement, so it does name its actor and drops out of the unreviewed query.
+        var marked = await new PageMarkingService(context, "local-instance").SetAsync(
+            new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, []),
+            PrincipalWith("SECRET", ["GB"]), author.Id, AuditCtx);
+        Assert.True(marked.IsSuccess, $"re-mark failed: {marked.Error}");
+
+        Assert.Equal(author.Id, context.PageMarkings.Single(m => m.PageId == created.Value.Id).SetByUserId);
+    }
+
     [Fact]
     public async Task CreatePage_AtTheRoot_IsOfficial()
     {

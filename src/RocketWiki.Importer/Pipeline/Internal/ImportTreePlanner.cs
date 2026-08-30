@@ -31,21 +31,28 @@ internal static class ImportTreePlanner
             getId: p => p.ConfluencePageId,
             getParentId: p => p.ParentConfluencePageId is { } pid && pagesById.ContainsKey(pid) ? pid : null);
 
-        // Slugs must be unique per parent (data-model.md scopes the constraint to
-        // siblings, not the whole space), computed in tree order so a title seen twice
-        // under the same parent disambiguates deterministically regardless of which
-        // sibling Confluence happened to list first.
-        var slugScopesByParent = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // Slugs are unique per SPACE, not per parent. The slug is the page's address
+        // (/spaces/{key}/{slug}) with the hierarchy deliberately absent from it, so that
+        // moving a page never breaks a link — PageService says so and the unique index
+        // IX_Pages_Space_Slug enforces it (widened from per-parent by migration
+        // SpaceUniquePageSlug).
+        //
+        // This used to scope the set per parent, which the app stopped agreeing with and
+        // nobody updated. The consequence was not subtle: any Confluence space with two
+        // same-titled pages under different parents — "Overview", "Meeting Notes", "FAQ",
+        // a year — planned the same slug twice, the second CreatePageAsync came back
+        // ValidationError, and ConfluenceSpaceImporter then skipped that page's ENTIRE
+        // subtree. That is the most common shape a real Confluence space has.
+        //
+        // Still computed in tree order, which is what makes the disambiguation suffix
+        // deterministic rather than dependent on the order Confluence happened to list
+        // pages in.
+        var slugsInSpace = new HashSet<string>(StringComparer.Ordinal);
         var planned = new List<PlannedPage>(orderedPages.Count);
         foreach (var page in orderedPages)
         {
             var parentId = page.ParentConfluencePageId is { } pid && pagesById.ContainsKey(pid) ? pid : null;
-            var siblingScopeKey = parentId ?? "$root";
-            var siblingSlugs = slugScopesByParent.TryGetValue(siblingScopeKey, out var scope)
-                ? scope
-                : slugScopesByParent[siblingScopeKey] = new HashSet<string>(StringComparer.Ordinal);
-
-            planned.Add(new PlannedPage(page, Slugifier.Slugify(page.Title, siblingSlugs), parentId));
+            planned.Add(new PlannedPage(page, Slugifier.Slugify(page.Title, slugsInSpace), parentId));
         }
 
         return new ImportTreePlan { OrderedPages = planned, OrphanedPages = orphaned };

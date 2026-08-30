@@ -8,14 +8,14 @@ namespace RocketWiki.Importer.Pipeline;
 /// <summary>
 /// Turns a Confluence page title into a slug matching data-model.md's Page.Slug
 /// constraint: unique among live siblings. Uniqueness is the caller's responsibility to
-/// enforce via <paramref name="alreadyUsedAmongSiblings"/> — this mutates that set.
+/// enforce via <paramref name="alreadyUsed"/> — this mutates that set.
 /// </summary>
 internal static partial class Slugifier
 {
-    public static string Slugify(string title, HashSet<string> alreadyUsedAmongSiblings)
+    public static string Slugify(string title, HashSet<string> alreadyUsed)
     {
         var baseSlug = BuildBaseSlug(title);
-        if (alreadyUsedAmongSiblings.Add(baseSlug))
+        if (alreadyUsed.Add(baseSlug))
         {
             return baseSlug;
         }
@@ -27,7 +27,7 @@ internal static partial class Slugifier
             candidate = $"{baseSlug}-{suffix}";
             suffix++;
         }
-        while (!alreadyUsedAmongSiblings.Add(candidate));
+        while (!alreadyUsed.Add(candidate));
 
         return candidate;
     }

@@ -60,6 +60,27 @@ public interface IPageReadService
     Task<ReadResult<IReadOnlyList<PageRevision>>> GetRevisionHistoryAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Many pages at once, each gated by the same <c>canView</c> as
+    /// <see cref="GetPageAsync"/> — a constant number of queries for the whole batch, not
+    /// one call per id.
+    ///
+    /// <para>A page that does not exist, or that the principal cannot view, is simply
+    /// <b>absent from the result</b> — the two are indistinguishable to the caller, per
+    /// §6.7. That is why this returns a dictionary rather than a <see cref="ReadResult{T}"/>
+    /// per key: its only caller is the batching layer behind list-resolved fields, where a
+    /// missing key already reads as "no value", and the denial for a directly-requested
+    /// page is audited on the single-page path that requested it.</para>
+    ///
+    /// <para>This exists because the alternative — looping <see cref="GetPageAsync"/> over
+    /// the batch — is either N×3 round trips serially, or, if parallelized, N concurrent
+    /// operations on one <c>DbContext</c>, which EF refuses outright ("a second operation
+    /// was started on this context instance"). That failure took out every page view in
+    /// the SPA once already; see DataLoaderDbContext.</para>
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, Page>> GetPagesAsync(
+        IReadOnlyCollection<Guid> pageIds, Principal principal, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The ids of each given page's directly-visible children, in tree order (SortOrder,
     /// then Id), for MANY parents at once — a constant number of queries for the whole
     /// batch, so a list of pages resolving <c>children</c> costs one round of work rather

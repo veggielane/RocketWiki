@@ -104,7 +104,7 @@ internal static class SyncCliArgumentParser
         var complete = verb switch
         {
             SyncVerb.Export => outputDirectory is not null && instanceId is not null,
-            SyncVerb.Import => bundlePath is not null && originInstanceId is not null,
+            SyncVerb.Import => bundlePath is not null && originInstanceId is not null && instanceId is not null,
             _ => false,
         };
 

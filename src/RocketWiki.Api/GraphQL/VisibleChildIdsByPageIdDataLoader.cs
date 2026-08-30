@@ -1,6 +1,8 @@
 using GreenDonut;
+using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Identity;
-using RocketWiki.Core.Services;
+using RocketWiki.Data;
+using RocketWiki.Data.Services;
 
 namespace RocketWiki.Api.GraphQL;
 
@@ -20,26 +22,33 @@ namespace RocketWiki.Api.GraphQL;
 /// individually, so a page whose ancestor is above the caller's clearance no longer
 /// answers <c>children</c> with a misleading empty list).</para>
 ///
-/// <para>Unlike <see cref="PageByIdDataLoader"/>, this one genuinely batches: the Core
-/// method it calls is batch-shaped, so the keys collapse into one round of queries rather
-/// than one call per key. Permission evaluation stays entirely inside RocketWiki.Data —
-/// <c>PermissionContextLoader</c> is internal there, and a loader that assembled
-/// authorization inputs itself would be exactly the second enforcement path §6.7 warns
-/// about.</para>
+/// <para>The Core method it calls is batch-shaped, so the keys collapse into one round of
+/// queries rather than one call per key. Permission evaluation stays entirely inside
+/// RocketWiki.Data — <c>PermissionContextLoader</c> is internal there, and a loader that
+/// assembled authorization inputs itself would be exactly the second enforcement path
+/// §6.7 warns about.</para>
+///
+/// <para><b>Own context</b>, like every other loader (see <see cref="DataLoaderDbContext"/>).
+/// It originally injected the request-scoped <c>IPageReadService</c>, which is safe in
+/// isolation — one call, no internal fan-out — but not in company: loaders dispatch in the
+/// same tick, so sharing the request context with <see cref="PageByIdDataLoader"/> put two
+/// batches on one <c>DbContext</c> for a query as ordinary as
+/// <c>search { edges { node { page { children { id } } } } }</c>. "Safe unless something
+/// else runs at the same time" is not a property a DataLoader can have.</para>
 /// </summary>
 public sealed class VisibleChildIdsByPageIdDataLoader : BatchDataLoader<Guid, IReadOnlyList<Guid>>
 {
-    private readonly IPageReadService _readService;
+    private readonly DbContextOptions<RocketWikiDbContext> _dbOptions;
     private readonly ICurrentPrincipalAccessor _principalAccessor;
 
     public VisibleChildIdsByPageIdDataLoader(
-        IPageReadService readService,
+        DbContextOptions<RocketWikiDbContext> dbOptions,
         ICurrentPrincipalAccessor principalAccessor,
         IBatchScheduler batchScheduler,
         DataLoaderOptions? options = null)
         : base(batchScheduler, options ?? new DataLoaderOptions())
     {
-        _readService = readService;
+        _dbOptions = dbOptions;
         _principalAccessor = principalAccessor;
     }
 
@@ -54,6 +63,7 @@ public sealed class VisibleChildIdsByPageIdDataLoader : BatchDataLoader<Guid, IR
             return new Dictionary<Guid, IReadOnlyList<Guid>>();
         }
 
-        return await _readService.GetVisibleChildIdsAsync(keys, principal, cancellationToken);
+        await using var db = DataLoaderDbContext.Create(_dbOptions);
+        return await new PageReadService(db).GetVisibleChildIdsAsync(keys, principal, cancellationToken);
     }
 }

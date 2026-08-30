@@ -201,40 +201,79 @@ jobs:
         run: |
           set -euo pipefail
           chart=deploy/helm/rocketwiki
+          # api.instanceId is required (design.md §12) — every render below has to
+          # supply it, which is itself the point: see the failure case further down.
+          req="--set api.instanceId=ci-instance"
 
-          s3=$(helm template rw "$chart" --set api.fileStorage.provider=S3)
+          s3=$(helm template rw "$chart" $req --set api.fileStorage.provider=S3)
           grep -q 'FileStorage__S3__Bucket' <<<"$s3"
           ! grep -q 'FileStorage__FileSystem__Root' <<<"$s3"
 
-          fs=$(helm template rw "$chart" --set api.fileStorage.provider=FileSystem \
+          fs=$(helm template rw "$chart" $req --set api.fileStorage.provider=FileSystem \
                  --set api.fileStorage.fileSystem.existingClaim=ci-pvc)
           grep -q 'FileStorage__FileSystem__Root' <<<"$fs"
           grep -q 'claimName: "ci-pvc"' <<<"$fs"
 
           # Blobs in the database: no S3 env, no FileSystem env, and no volume
           # at all — needing neither an object store nor a PVC is the point.
-          sql=$(helm template rw "$chart" --set api.fileStorage.provider=SqlServer)
+          sql=$(helm template rw "$chart" $req --set api.fileStorage.provider=SqlServer)
           grep -q 'value: "SqlServer"' <<<"$sql"
           ! grep -q 'FileStorage__S3__' <<<"$sql"
           ! grep -q 'FileStorage__FileSystem__Root' <<<"$sql"
           ! grep -q 'persistentVolumeClaim' <<<"$sql"
+
+      # The lint+render job existed and still missed two things a render can see
+      # perfectly well: which paths reach the API, and whether the instance
+      # identity actually made it into the container. Both were real defects —
+      # four route prefixes answered the SPA's index.html in production, and an
+      # empty instanceId silently made every replicated space writable.
+      - name: The API's route surface and instance identity must survive a render
+        run: |
+          set -euo pipefail
+          chart=deploy/helm/rocketwiki
+          rendered=$(helm template rw "$chart" --set api.instanceId=ci-instance)
+
+          # Every prefix the SPA calls same-origin must route to the API Service.
+          # ApiRouteSurfaceTests pins this list against web/vite.config.ts; this
+          # step is the same assertion against actually-rendered YAML.
+          for path in /graphql /hubs /attachments /mcp /avatars /avatar /emojis /users; do
+            grep -q "path: $path\$" <<<"$rendered" \
+              || { echo "::error::ingress renders no route for $path"; exit 1; }
+          done
+
+          # design.md §12: the identity has to reach the container, not just the
+          # values file. An omitted env var is what let both sides default to
+          # "standalone" and made imported spaces writable.
+          grep -q 'name: Instance__Id' <<<"$rendered"
+          grep -q 'value: "ci-instance"' <<<"$rendered"
 
       - name: The chart's promised failures must actually fail
         run: |
           set -euo pipefail
           chart=deploy/helm/rocketwiki
 
+          req="--set api.instanceId=ci-instance"
+
           # FileSystem without a PVC: the chart refuses rather than creating
           # storage for state (design.md §15).
-          if helm template rw "$chart" --set api.fileStorage.provider=FileSystem >/dev/null 2>&1; then
+          if helm template rw "$chart" $req --set api.fileStorage.provider=FileSystem >/dev/null 2>&1; then
             echo "::error::provider=FileSystem with no existingClaim should have failed to render."
             exit 1
           fi
 
           # values.schema.json must reject an unknown provider, matching
           # AddFileStorage's fail-closed switch.
-          if helm template rw "$chart" --set api.fileStorage.provider=Nonsense >/dev/null 2>&1; then
+          if helm template rw "$chart" $req --set api.fileStorage.provider=Nonsense >/dev/null 2>&1; then
             echo "::error::An unrecognized FileStorage provider should have failed schema validation."
+            exit 1
+          fi
+
+          # design.md §12: the instance identity cannot be blanked back out. An empty
+          # value used to omit the env var entirely and let the app's "standalone"
+          # fallback apply invisibly — which is how a low/high pair ends up sharing an
+          # identity and every mirrored space becomes writable on the high side.
+          if helm template rw "$chart" --set api.instanceId= >/dev/null 2>&1; then
+            echo "::error::An empty api.instanceId should have failed schema validation."
             exit 1
           fi
 

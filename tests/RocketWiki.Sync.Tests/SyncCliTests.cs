@@ -29,6 +29,11 @@ public sealed class SyncCliTests : IDisposable
 {
     private const string LowInstanceId = "low-instance";
 
+    /// <summary>The importing (high) instance's own id. Required on `import` so the CLI can
+    /// refuse a bundle that originates from here — see BundleSelfOriginError. Distinct from
+    /// LowInstanceId, which is what the bundles under test declare as their origin.</summary>
+    private const string HighInstanceId = "high-instance";
+
     private readonly SqliteConnection _lowConnection;
     private readonly SqliteConnection _highConnection;
     private readonly string _tempRoot;
@@ -178,7 +183,8 @@ public sealed class SyncCliTests : IDisposable
     {
         var (exitCode, output) = await RunCliAsync(
             "import", "--connection-string", "high", "--attachments-root", HighStorageRoot,
-            "--bundle", Path.Combine(_tempRoot, "no-such-thing"), "--origin-instance-id", LowInstanceId);
+            "--bundle", Path.Combine(_tempRoot, "no-such-thing"),
+            "--instance-id", HighInstanceId, "--origin-instance-id", LowInstanceId);
 
         Assert.Equal(1, exitCode);
         Assert.Contains("neither a bundle file nor a directory", output);
@@ -467,6 +473,7 @@ public sealed class SyncCliTests : IDisposable
             "import",
             "--connection-string", "high",
             "--bundle", bundlePath,
+            "--instance-id", HighInstanceId,
             "--origin-instance-id", LowInstanceId,
             "--attachments-root", HighStorageRoot);
 }

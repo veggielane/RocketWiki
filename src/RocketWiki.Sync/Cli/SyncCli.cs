@@ -144,7 +144,9 @@ public static class SyncCli
             return 1;
         }
 
-        var importService = new BundleImportService(db, fileStorage);
+        // The local instance id is what makes the self-origin refusal possible; without
+        // it an instance cannot tell its own content coming back from a real replica.
+        var importService = new BundleImportService(db, fileStorage, options.InstanceId);
 
         foreach (var bundleFile in bundleFiles)
         {

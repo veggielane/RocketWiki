@@ -26,6 +26,16 @@ WORKDIR /source
 # layer caches across source-only changes. Restoring the Api project pulls its
 # four ProjectReferences transitively — deliberately NOT the .sln, which would
 # drag in the Aspire AppHost and test projects this image has no use for.
+#
+# The two repo-root build inputs come FIRST, and they are not optional. This repo
+# uses Central Package Management: every csproj carries
+# <PackageReference Include="…" /> with no Version attribute at all, and
+# Directory.Packages.props is the only place versions exist. Without it MSBuild
+# walks up from /source/src/RocketWiki.Api/ and finds nothing, so
+# ManagePackageVersionsCentrally is never set and every reference is versionless —
+# restore either errors or silently resolves versions nobody chose. global.json
+# pins the SDK band for the same "build what the repo says" reason.
+COPY Directory.Packages.props global.json ./
 COPY src/RocketWiki.Api/RocketWiki.Api.csproj                     src/RocketWiki.Api/
 COPY src/RocketWiki.ServiceDefaults/RocketWiki.ServiceDefaults.csproj src/RocketWiki.ServiceDefaults/
 COPY src/RocketWiki.Core/RocketWiki.Core.csproj                   src/RocketWiki.Core/

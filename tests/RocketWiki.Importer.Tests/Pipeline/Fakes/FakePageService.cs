@@ -8,9 +8,17 @@ namespace RocketWiki.Importer.Tests.Pipeline.Fakes;
 /// <summary>
 /// A minimal in-memory stand-in for IPageService that enforces the two invariants the
 /// importer's tree-building logic depends on — a page can't be created under a parent
-/// that doesn't exist yet, and a slug must be unique among siblings — so a test that gets
-/// the creation order or slug disambiguation wrong fails here, the same way it would
-/// against the real EF-backed service.
+/// that doesn't exist yet, and a slug must be unique per SPACE — so a test that gets the
+/// creation order or slug disambiguation wrong fails here, the same way it would against
+/// the real EF-backed service.
+///
+/// <para>"Per space" is load-bearing and was wrong here. This fake enforced the OLD
+/// per-parent rule while its doc claimed parity with the real service, so the importer's
+/// own per-parent planning looked correct in every test — which is exactly why nothing
+/// caught that a Confluence space with two same-titled pages under different parents
+/// ("Overview", "FAQ", a year) failed its second create and had that page's whole subtree
+/// skipped. A fake that disagrees with the thing it stands in for does not reduce
+/// coverage, it inverts it.</para>
 /// </summary>
 public sealed class FakePageService : IPageService
 {
@@ -38,9 +46,9 @@ public sealed class FakePageService : IPageService
             return Task.FromResult(PageMutationResult<Page>.Failure(new NotFoundError(parentId)));
         }
 
-        if (_pages.Values.Any(p => p.SpaceId == request.SpaceId && p.ParentPageId == request.ParentPageId && p.Slug == request.Slug))
+        if (_pages.Values.Any(p => p.SpaceId == request.SpaceId && p.Slug == request.Slug))
         {
-            return Task.FromResult(PageMutationResult<Page>.Failure(new ValidationError($"Slug '{request.Slug}' is already used by a sibling page.")));
+            return Task.FromResult(PageMutationResult<Page>.Failure(new ValidationError($"Slug '{request.Slug}' is already used by another page in this space.")));
         }
 
         var failure = FailCreateWhen?.Invoke(request);

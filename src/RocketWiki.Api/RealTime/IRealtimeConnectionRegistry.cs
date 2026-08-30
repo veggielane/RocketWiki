@@ -51,6 +51,18 @@ public interface IRealtimeConnectionRegistry
 
     IReadOnlyList<PresenceViewer> GetViewers(Guid pageId);
 
-    /// <summary>Every (page, connection, principal) triple currently present on any page — the working set <see cref="IPresenceRuleChangeNotifier"/> re-checks on a rule change.</summary>
-    IReadOnlyList<(Guid PageId, string ConnectionId, Principal Principal)> GetAllPageConnections();
+    /// <summary>
+    /// Every (page, connection, principal) triple currently present on any page — the
+    /// working set <see cref="IPresenceRuleChangeNotifier"/> re-checks on an access change.
+    ///
+    /// <para><b>Principal is nullable, and a null one means "evict".</b> A viewer can be
+    /// present on a page with no matching connection entry — <c>JoinPage</c> registers
+    /// presence without repairing a missing connection record, and the hub only calls
+    /// <c>RegisterConnection</c> when the local User row already exists. This used to
+    /// inner-join the two maps and silently drop such a viewer from the working set, which
+    /// meant the one case where the registry cannot say who someone is was also the one
+    /// case where they were never re-checked. §6.7's shape is the opposite: a viewer whose
+    /// principal cannot be resolved is exactly who should lose the group.</para>
+    /// </summary>
+    IReadOnlyList<(Guid PageId, string ConnectionId, Principal? Principal)> GetAllPageConnections();
 }

@@ -45,11 +45,17 @@ public static class ImporterCli
             return 1;
         }
 
+        // Path overload, not the stream one: the export owns the file handle and closes it
+        // when `using (export)` below disposes it. This used to open the FileStream here
+        // under a `using var` INSIDE the try, which closed it at the end of that block —
+        // while the export's lazy OpenContent closures still needed it. Pass 2 then threw
+        // ObjectDisposedException on the first attachment, unhandled, after every page had
+        // already been committed and before the report was written. Every real
+        // (non-dry-run) import carrying an attachment died there.
         ConfluenceSpaceExport export;
         try
         {
-            using var exportStream = File.OpenRead(options.ExportPath);
-            export = new ConfluenceXmlExportReader().Read(exportStream);
+            export = new ConfluenceXmlExportReader().Read(options.ExportPath);
         }
         catch (ConfluenceExportFormatException ex)
         {

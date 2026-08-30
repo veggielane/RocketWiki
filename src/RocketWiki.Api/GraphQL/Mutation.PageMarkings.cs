@@ -1,5 +1,6 @@
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
+using RocketWiki.Api.RealTime;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
 
@@ -29,6 +30,7 @@ public partial class Mutation
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         [Service] IAuditSink auditSink,
+        [Service] IPresenceRuleChangeNotifier ruleChangeNotifier,
         CancellationToken cancellationToken)
     {
         var (principal, actingUserId, auditContext, unauthenticated) =
@@ -45,6 +47,12 @@ public partial class Mutation
                 auditSink, "page.marking.set", result.Error, AuditSubjectType.Page, input.PageId, cancellationToken);
             return new SetPageMarkingPayload(null, PageMutationErrorView.From(result.Error));
         }
+
+        // design.md §8: an access change has to reach live sessions, not just the
+        // database. A marking is the third input to canView (§21), so a page
+        // re-marked above a joined co-editor's clearance must evict them - otherwise
+        // they keep receiving UpdateReceived, which is page content in CRDT form.
+        await ruleChangeNotifier.NotifyRulesChangedAsync(cancellationToken);
 
         return new SetPageMarkingPayload(result.Value, null);
     }

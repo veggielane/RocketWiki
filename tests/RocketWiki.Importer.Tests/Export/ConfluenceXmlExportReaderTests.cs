@@ -205,6 +205,89 @@ public class ConfluenceXmlExportReaderTests
         Assert.Equal(AttachmentBytes, buffer.ToArray());
     }
 
+    /// <summary>
+    /// The lifetime the CLI got wrong, at the level that can catch it without a database.
+    ///
+    /// <para>Attachment content is streamed lazily during pass 2, long after the read
+    /// returns, so the file handle has to live as long as the export. The CLI used to open
+    /// the file itself under a <c>using var</c> inside its read <c>try</c>, which closed it
+    /// at the end of that block — so the first <c>OpenContent</c> threw
+    /// <c>ObjectDisposedException</c>, unhandled, after every page had already been
+    /// committed and before the report was written. Every real (non-dry-run) import with an
+    /// attachment died there, and no test could see it: every ImporterCliTests case is
+    /// <c>--dry-run</c> (which never opens an attachment), and the reader tests all kept
+    /// their own stream alive for the whole method — the opposite of the CLI's shape.</para>
+    ///
+    /// <para>The path overload removes the question by owning the handle, so this asserts
+    /// the property that matters: read, then read attachment bytes with no stream of the
+    /// caller's own in scope, then dispose once.</para>
+    /// </summary>
+    [Fact]
+    public void Read_from_a_path_keeps_attachment_content_readable_until_the_export_is_disposed()
+    {
+        var exportPath = Path.Combine(
+            Directory.CreateTempSubdirectory("rocketwiki-export-lifetime").FullName, "export.zip");
+        try
+        {
+            using (var built = BuildExportZip(EntitiesXmlTemplate, ("attachments/300/1", AttachmentBytes)))
+            using (var file = File.Create(exportPath))
+            {
+                built.Position = 0;
+                built.CopyTo(file);
+            }
+
+            // Exactly the CLI's shape: nothing but the export is held.
+            using var export = new ConfluenceXmlExportReader().Read(exportPath);
+
+            var attachment = Assert.Single(
+                Assert.Single(export.Space.Pages, p => p.ConfluencePageId == "100").Attachments);
+
+            using var content = attachment.OpenContent();
+            using var buffer = new MemoryStream();
+            content.CopyTo(buffer);
+            Assert.Equal(AttachmentBytes, buffer.ToArray());
+        }
+        finally
+        {
+            var dir = Path.GetDirectoryName(exportPath)!;
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>Disposing the export really does release the file — otherwise the "own the
+    /// handle" fix would trade a crash for a leak. Asserted by deleting the file, which
+    /// Windows refuses while a handle is open.</summary>
+    [Fact]
+    public void Disposing_an_export_read_from_a_path_releases_the_file()
+    {
+        var dir = Directory.CreateTempSubdirectory("rocketwiki-export-release").FullName;
+        var exportPath = Path.Combine(dir, "export.zip");
+        try
+        {
+            using (var built = BuildExportZip(EntitiesXmlTemplate))
+            using (var file = File.Create(exportPath))
+            {
+                built.Position = 0;
+                built.CopyTo(file);
+            }
+
+            new ConfluenceXmlExportReader().Read(exportPath).Dispose();
+
+            File.Delete(exportPath);
+            Assert.False(File.Exists(exportPath));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public void Page_with_no_attachments_property_has_an_empty_attachment_list()
     {

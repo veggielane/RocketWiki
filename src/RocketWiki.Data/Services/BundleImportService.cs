@@ -25,11 +25,25 @@ public class BundleImportService : IBundleImportService
 
     private readonly RocketWikiDbContext _db;
     private readonly IFileStorage _fileStorage;
+    private readonly string? _localInstanceId;
 
-    public BundleImportService(RocketWikiDbContext db, IFileStorage fileStorage)
+    /// <param name="localInstanceId">
+    /// design.md §12: this instance's own identity, used for exactly one check — refusing a
+    /// bundle that claims to originate from here (<see cref="BundleSelfOriginError"/>).
+    /// Nothing else in the import consults it; a replica's read-only-ness is decided later,
+    /// by comparing the stored <c>OriginInstanceId</c> against the id the API was
+    /// configured with.
+    ///
+    /// <para>Nullable because a caller that genuinely does not know its own identity should
+    /// not be forced to invent one — but the consequence is stated rather than hidden: the
+    /// self-origin check cannot run, and the only guard left is the operator's own care.
+    /// Every production path supplies it.</para>
+    /// </param>
+    public BundleImportService(RocketWikiDbContext db, IFileStorage fileStorage, string? localInstanceId = null)
     {
         _db = db;
         _fileStorage = fileStorage;
+        _localInstanceId = localInstanceId;
     }
 
     // design.md §15: the bundle path is not tagged (an operator filesystem path), and
@@ -56,6 +70,20 @@ public class BundleImportService : IBundleImportService
     private async Task<PageMutationResult<ImportedBundleSummary>> ImportCoreAsync(
         string bundleFilePath, string originInstanceId, AuditContext auditContext, CancellationToken cancellationToken)
     {
+        // design.md §12, before anything is read: a bundle from THIS instance is refused.
+        // Importing it would write its spaces with OriginInstanceId equal to the local id,
+        // which is precisely the test Space.IsReplicaOf uses - so the "replicas are
+        // read-only, always" invariant would answer false and every mirrored space would be
+        // writable. The realistic way that happens is not tampering, it is two instances
+        // left on the same identity (the Helm chart shipped exactly that default), so this
+        // guard is about a configuration mistake, not an attack.
+        if (_localInstanceId is not null
+            && string.Equals(originInstanceId, _localInstanceId, StringComparison.Ordinal))
+        {
+            return PageMutationResult<ImportedBundleSummary>.Failure(
+                new BundleSelfOriginError(_localInstanceId));
+        }
+
         using var archive = ZipFile.OpenRead(bundleFilePath);
 
         var manifestBytes = await ReadEntryAsync(archive, "manifest.json", cancellationToken);

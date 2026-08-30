@@ -111,6 +111,7 @@ public partial class Mutation
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         [Service] IAuditSink auditSink,
+        [Service] IPresenceRuleChangeNotifier ruleChangeNotifier,
         CancellationToken cancellationToken)
     {
         var (principal, actingUserId, auditContext, unauthenticated) =
@@ -127,6 +128,11 @@ public partial class Mutation
             return new MovePagePayload(null, PageMutationErrorView.From(result.Error));
         }
 
+        // design.md §8: a move rewrites AncestorPath, so the page inherits a DIFFERENT
+        // restriction chain - anyone joined to it may no longer qualify, and the change
+        // has to reach live sessions rather than only the database.
+        await ruleChangeNotifier.NotifyRulesChangedAsync(cancellationToken);
+
         return new MovePagePayload(result.Value, null);
     }
 
@@ -138,6 +144,7 @@ public partial class Mutation
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         [Service] IAuditSink auditSink,
+        [Service] IPresenceRuleChangeNotifier ruleChangeNotifier,
         CancellationToken cancellationToken)
     {
         var (principal, actingUserId, auditContext, unauthenticated) =
@@ -153,6 +160,9 @@ public partial class Mutation
             await MutationAuthHelper.AuditDenialIfApplicableAsync(auditSink, "page.delete", result.Error, AuditSubjectType.Page, input.PageId, cancellationToken);
             return new DeletePagePayload(null, PageMutationErrorView.From(result.Error));
         }
+
+        // A trashed page is unreadable, so nobody should still be joined to one.
+        await ruleChangeNotifier.NotifyRulesChangedAsync(cancellationToken);
 
         return new DeletePagePayload(result.Value, null);
     }

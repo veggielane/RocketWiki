@@ -61,3 +61,17 @@ public sealed record SpaceSequenceGapError(Guid SpaceId, long ExpectedSequence, 
 /// the hash chain. The fix is operational: upgrade this instance, then re-import.
 /// </summary>
 public sealed record BundleFormatUnsupportedError(int BundleFormatVersion, int MaxSupportedVersion) : PageMutationError;
+
+/// <summary>
+/// design.md §12: the bundle claims to originate from THIS instance, so importing it
+/// would land its spaces as native rather than replica — <see cref="Entities.Space.IsReplicaOf"/>
+/// compares <c>OriginInstanceId</c> against the local id, so an equal pair makes
+/// <c>canEdit</c> answer normally and every mirrored space becomes writable. That is a
+/// silent fail-OPEN on the invariant one-way sync rests on, and the shape it arrives in is
+/// mundane: two instances both left on the default identity.
+///
+/// <para>Refused before any event is applied, like every other integrity refusal, because
+/// "these are my own spaces coming back at me" is not a state to absorb halfway. The fix
+/// is operational — give the two instances distinct <c>Instance:Id</c> values.</para>
+/// </summary>
+public sealed record BundleSelfOriginError(string InstanceId) : PageMutationError;

@@ -42,6 +42,46 @@ public class ConfluenceSpaceImporterTests
     private static ConfluenceExportAttachment Attachment(string id, string fileName, byte[] bytes, string contentType = "application/octet-stream") =>
         new(id, fileName, contentType, () => new MemoryStream(bytes));
 
+    /// <summary>
+    /// The shape almost every real Confluence space has: the same page title under
+    /// different parents. "Overview", "Meeting Notes", "FAQ", a year — Confluence allows
+    /// it because its slugs are per-parent, and RocketWiki's are per SPACE (the slug is
+    /// the page's address, hierarchy deliberately absent, enforced by
+    /// IX_Pages_Space_Slug).
+    ///
+    /// <para>The planner kept scoping its slug set per parent, so it planned "overview"
+    /// twice; the second CreatePageAsync came back ValidationError, and the importer
+    /// SKIPS that page's entire subtree on a create failure. Nothing caught it because
+    /// FakePageService enforced the same stale per-parent rule while its doc claimed
+    /// parity with the real service — so the whole test suite agreed with the bug.</para>
+    /// </summary>
+    [Fact]
+    public async Task Same_title_under_different_parents_gets_distinct_slugs_and_all_pages_import()
+    {
+        var export = new ConfluenceExportSpace("ENG", "Engineering", "Engineering docs",
+        [
+            Page("1", null, "Rockets", "<p>Rockets.</p>"),
+            Page("2", null, "Satellites", "<p>Satellites.</p>"),
+            Page("3", "1", "Overview", "<p>Rocket overview.</p>"),
+            Page("4", "2", "Overview", "<p>Satellite overview.</p>"),
+            // A third, to prove the disambiguation keeps counting rather than colliding
+            // again at the second duplicate.
+            Page("5", "2", "Overview", "<p>Another overview.</p>"),
+        ]);
+
+        var result = await CreateImporter().ImportAsync(export, DefaultOptions());
+
+        Assert.True(result.Success);
+        Assert.All(result.Report.Pages, p => Assert.Null(p.SkippedReason));
+        Assert.Equal(5, _pageService.CreatedPages.Count);
+
+        var slugs = _pageService.CreatedPages.Select(p => p.Slug).ToList();
+        Assert.Equal(slugs.Count, slugs.Distinct(StringComparer.Ordinal).Count());
+        Assert.Contains("overview", slugs);
+        Assert.Contains("overview-2", slugs);
+        Assert.Contains("overview-3", slugs);
+    }
+
     [Fact]
     public async Task Happy_path_creates_the_page_tree_and_resolves_a_forward_reference_link()
     {

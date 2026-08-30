@@ -28,6 +28,43 @@ namespace RocketWiki.Importer.Export;
 /// </remarks>
 public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
 {
+    /// <summary>
+    /// Opens the export file and reads it, handing ownership of the file handle to the
+    /// returned <see cref="ConfluenceSpaceExport"/> — dispose that, and only that.
+    ///
+    /// <para><b>Prefer this over the stream overload.</b> The returned export hands out
+    /// lazy <c>OpenContent</c> closures that reopen zip entries during pass 2, so the
+    /// underlying stream has to stay open until the export is disposed. Passing a stream
+    /// in makes that lifetime the caller's to get right, and the CLI got it wrong in the
+    /// one way that costs the most: a <c>using var</c> around the read closed the file at
+    /// the end of that block, so the first attachment threw ObjectDisposedException —
+    /// after every page had already been committed and before the report was written.
+    /// Every real (non-dry-run) import with an attachment died there. With the file opened
+    /// here there is no second lifetime for a caller to hold.</para>
+    /// </summary>
+    /// <exception cref="ConfluenceExportFormatException">The file is not a readable zip,
+    /// or is not a Confluence space export. The stream is closed before this propagates,
+    /// so a rejected path leaks no handle.</exception>
+    public ConfluenceSpaceExport Read(string exportPath)
+    {
+        var stream = File.OpenRead(exportPath);
+        try
+        {
+            return Read(stream);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Reads an already-open stream. <b>The returned export takes ownership</b> — the
+    /// archive is built with <c>leaveOpen: false</c>, so disposing the export disposes
+    /// this stream too, and the caller must not dispose it separately. See the path
+    /// overload above, which removes the question.
+    /// </summary>
     public ConfluenceSpaceExport Read(Stream exportZip)
     {
         var archive = new ZipArchive(exportZip, ZipArchiveMode.Read, leaveOpen: false);

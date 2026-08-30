@@ -92,8 +92,30 @@ api:
   aspnetcoreEnvironment: Production
 
   # design.md §12: instance identity for low/high sync (native vs replica
-  # spaces). "" omits the env var and the app default ("standalone") applies.
-  instanceId: ""
+  # spaces). **Change this on any instance that takes part in sync.**
+  #
+  # It used to default to "", which omitted the env var entirely and let the
+  # app's own "standalone" fallback apply. Two things were wrong with that, and
+  # only one of them was the value: a low/high pair installed with defaults both
+  # called themselves "standalone", so every imported space satisfied
+  # OriginInstanceId == localInstanceId, Space.IsReplicaOf answered false, and
+  # every mirrored space was WRITABLE on the high side — a silent fail-OPEN on
+  # the invariant one-way sync rests on. Nothing failed at deploy time, and
+  # nothing in the rendered manifest even showed the identity.
+  #
+  # The default is now explicit rather than implied, so `Instance__Id` always
+  # appears in the rendered Deployment and is visible in a diff, and
+  # values.schema.json refuses an empty string so it cannot be blanked back out.
+  # It is deliberately still a working default — the single-instance deployment
+  # is the common case and should not need a value to install.
+  #
+  # What actually protects the sync case is not this file: BundleImportService
+  # REFUSES a bundle whose origin equals the importing instance's own id
+  # (BundleSelfOriginError). So a low/high pair left on the default fails loudly
+  # at the first import, naming the problem, instead of quietly making replicas
+  # writable. That guard covers Docker Compose and `aspire publish` too, which a
+  # chart-only requirement never could.
+  instanceId: standalone
 
   probes:
     # "http" (default) or "tcp".

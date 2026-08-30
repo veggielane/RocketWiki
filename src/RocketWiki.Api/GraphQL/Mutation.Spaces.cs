@@ -1,5 +1,6 @@
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
+using RocketWiki.Api.RealTime;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -167,6 +168,7 @@ public partial class Mutation
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         [Service] IInstanceRoleAccessor instanceRoleAccessor,
         [Service] IAuditSink auditSink,
+        [Service] IPresenceRuleChangeNotifier ruleChangeNotifier,
         CancellationToken cancellationToken)
     {
         var (principal, actingUserId, auditContext, unauthenticated) =
@@ -183,6 +185,12 @@ public partial class Mutation
             await MutationAuthHelper.AuditDenialIfApplicableAsync(auditSink, "space.archive", result.Error, AuditSubjectType.Space, input.SpaceId, cancellationToken);
             return new ArchiveSpacePayload(null, PageMutationErrorView.From(result.Error));
         }
+
+        // design.md §8: an access change has to reach live sessions, not just the
+        // database. An archived space is hidden and read-only, so anyone
+        // still joined to one of its pages is holding a session the space no longer
+        // offers.
+        await ruleChangeNotifier.NotifyRulesChangedAsync(cancellationToken);
 
         return new ArchiveSpacePayload(result.Value, null);
     }

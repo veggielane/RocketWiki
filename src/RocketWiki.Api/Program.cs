@@ -450,7 +450,24 @@ app.MapRocketWikiMcp();
 
 // design.md §8: one hub for both durable per-user notifications and ephemeral
 // page-scoped presence (see NotificationsHub's own doc for why one hub, not two).
-app.MapHub<NotificationsHub>("/hubs/notifications");
+app.MapHub<NotificationsHub>("/hubs/notifications", options =>
+{
+    // design.md §6.1/§8: the hub builds its ABAC Principal from the token at CONNECT and
+    // keeps it for the connection's life — send-time canView, the presence sweep and the
+    // co-edit sweep all evaluate against that one snapshot. Without this, a connection
+    // outlived its token indefinitely: a principal whose `clearance` or `nationality` had
+    // been revoked in Keycloak kept authorizing presence membership, notification titles
+    // and CRDT relay for as long as the socket stayed open, and the rule-change sweep
+    // could not compensate because it re-evaluates rules against that same stale
+    // principal — attribute-side revocations were outside its reach entirely.
+    //
+    // CloseOnAuthenticationExpiration closes the connection when the token expires, so the
+    // client reconnects and rebuilds the principal from a fresh one. That bounds staleness
+    // to the token lifetime, which is the same bound §6.1 already accepts for every other
+    // surface ("a change in Keycloak takes effect on the user's next token refresh").
+    // It does not make revocation instant, and nothing here claims it does.
+    options.CloseOnAuthenticationExpiration = true;
+});
 
 // Also enables `dotnet run schema export --output schema.graphql` (design.md §8:
 // SDL is checked in and code/file drift is a later CI gate).

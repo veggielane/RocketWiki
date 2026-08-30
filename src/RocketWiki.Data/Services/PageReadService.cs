@@ -179,6 +179,43 @@ public class PageReadService : IPageReadService
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<Guid, Page>> GetPagesAsync(
+        IReadOnlyCollection<Guid> pageIds, Principal principal, CancellationToken cancellationToken = default)
+    {
+        var ids = pageIds.Distinct().ToArray();
+        var result = new Dictionary<Guid, Page>();
+        if (ids.Length == 0)
+        {
+            return result;
+        }
+
+        // Four queries for the whole batch regardless of its size: the pages, then the
+        // loader's three (grants, restriction chains, markings). Same shape as
+        // GetVisibleChildIdsAsync, and the reason is the same — the per-page alternative
+        // is N*3 round trips that cannot be parallelized on one DbContext.
+        var pages = await _db.Pages.Where(p => ids.Contains(p.Id)).ToListAsync(cancellationToken);
+        if (pages.Count == 0)
+        {
+            return result;
+        }
+
+        var batch = await _permissions.LoadBatchAsync(
+            pages.Select(PermissionSubject.For).ToList(), cancellationToken);
+
+        foreach (var page in pages)
+        {
+            // Replica status is irrelevant to canView (design.md §6.4), so false here
+            // exactly as on the single-page path.
+            if (batch.For(PermissionSubject.For(page), isReplicaSpace: false).Compute(principal).CanView)
+            {
+                result[page.Id] = page;
+            }
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyDictionary<Guid, IReadOnlyList<Guid>>> GetVisibleChildIdsAsync(
         IReadOnlyCollection<Guid> parentPageIds, Principal principal, CancellationToken cancellationToken = default)
     {

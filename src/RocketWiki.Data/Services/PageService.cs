@@ -149,7 +149,27 @@ public class PageService : IPageService
             // A root page takes ProtectiveMarking.Baseline's UK (design.md §21.12).
             Prefix = inherited.Prefix,
             SetAtUtc = now,
-            SetByUserId = actingUserId,
+            // NO ACTOR, deliberately. design.md §21.11 nominates `SetByUserId IS NULL` on
+            // PageMarkings as "the query that finds every page nobody has yet looked at",
+            // and an inherited marking is exactly that: the creator did not choose it, the
+            // parent (or the OFFICIAL floor) did — which is also why §21.7 raises no
+            // marking event for a page creation. Naming the creator here made every page
+            // ever created look reviewed.
+            //
+            // It matters most where unreviewed content arrives in bulk. A Confluence
+            // import creates every page through this method with a real acting user, so
+            // an entire migrated estate was stamped non-null and invisible to the one
+            // query the design nominates for finding it — strictly worse than the
+            // AddPageMarkings backfill it parallels, which leaves NULL, and in precisely
+            // the situation §21.11's "it is wearing a marking that says it is fine"
+            // warning is about.
+            //
+            // This also settles a disagreement inside the codebase: the persistence-seam
+            // backstop (RocketWikiDbContext.EnsurePageMarkings) already writes null here
+            // with the comment "nobody chose this marking, the invariant did", and
+            // BundleImportService writes null for a synced marking. Non-null now means one
+            // thing everywhere — somebody called setPageMarking and made a judgement.
+            SetByUserId = null,
         };
         foreach (var country in inherited.EyesOnly)
         {

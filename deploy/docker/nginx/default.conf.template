@@ -78,9 +78,16 @@ server {
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
         proxy_set_header   X-Forwarded-Host  $host;
-        # Upload size cap. nginx's default (1m) would reject any real
-        # attachment; 100m is a guess pending a product decision — the API
-        # does not enforce its own limit yet, so today this line IS the limit.
+        # Upload size cap, matching Attachments:MaxSizeBytes (100 MiB default) —
+        # nginx's own default of 1m would reject any real attachment. This is no
+        # longer "the" limit: the API enforces its own cap before any blob or row
+        # is written (AttachmentOptions/AttachmentEndpoints), so keep the two in
+        # step and expect the API's to be the one that answers.
+        #
+        # Note the layering is Compose-only. The Helm ingress routes /attachments
+        # straight to the api Service, so a k3s deployment never passes through
+        # this line at all and the API's cap is the only one — which is exactly why
+        # the API had to grow one.
         client_max_body_size 100m;
         # Stream uploads through instead of buffering them to nginx's disk
         # first — the API is the thing that should own backpressure here.
@@ -91,6 +98,66 @@ server {
     # today; routing it now means the /mcp launch needs no coordinated change
     # to an already-reviewed deployment artifact.
     location /mcp {
+        proxy_pass         http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+    }
+
+    # --- The rest of the binary-HTTP surface (design.md §7's `attachment`
+    # channel, §19's profile pictures and custom emojis).
+    #
+    # These four were missing, and the failure was silent in the worst way: they
+    # fell into the SPA catch-all below, so `GET /users/{id}/avatar` and
+    # `GET /emojis/{name}` returned HTTP 200 with index.html into an <img>, and
+    # the writes got a 405 from the static handler. Avatars and custom emojis
+    # were simply broken in production, admin emoji management was dead, and
+    # nothing failed at deploy time to say so.
+    #
+    # The list is not free-form: ApiRouteSurfaceTests pins it against
+    # web/vite.config.ts's dev proxy list, which is the ground truth for what the
+    # SPA calls same-origin. Add a prefix there and this file fails the build
+    # until it is added here too.
+    location /avatars {
+        proxy_pass         http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+        # Profile pictures are capped far below attachments (Avatars:MaxSizeBytes,
+        # 5 MiB); leave headroom rather than duplicating the app's number here.
+        client_max_body_size 16m;
+        proxy_request_buffering off;
+    }
+
+    # The anonymous Gravatar-protocol endpoint (§19), distinct from /avatars —
+    # singular, hash-addressed, and flag-gated in the app.
+    location /avatar {
+        proxy_pass         http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+    }
+
+    location /emojis {
+        proxy_pass         http://${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   X-Forwarded-Host  $host;
+        # Emojis:MaxSizeBytes is 256 KiB; same headroom reasoning as /avatars.
+        client_max_body_size 4m;
+        proxy_request_buffering off;
+    }
+
+    # GET /users/{id}/avatar — the authenticated in-wiki avatar read.
+    location /users {
         proxy_pass         http://${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header   Host              $host;

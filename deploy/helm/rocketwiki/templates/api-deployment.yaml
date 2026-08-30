@@ -87,10 +87,19 @@ spec:
             - name: HealthEndpoints__Enabled
               value: "true"
             {{- end }}
-            {{- with .Values.api.instanceId }}
+            {{- /*
+              design.md §12. Emitted UNCONDITIONALLY — no `with` guard. It used to
+              be wrapped in one, so an empty value omitted the variable entirely
+              and the app's "standalone" fallback applied invisibly: nothing in the
+              rendered manifest showed the instance identity at all, and a low/high
+              pair on defaults both answered "standalone", which makes every
+              imported space native rather than replica and therefore WRITABLE.
+              values.schema.json refuses an empty string, so there is nothing left
+              for a conditional to protect against, and always rendering the
+              variable means the identity is visible in a `helm template` diff.
+            */}}
             - name: Instance__Id
-              value: {{ . | quote }}
-            {{- end }}
+              value: {{ .Values.api.instanceId | quote }}
             - name: FileStorage__Provider
               value: {{ .Values.api.fileStorage.provider | quote }}
             {{- if eq .Values.api.fileStorage.provider "S3" }}

@@ -18,6 +18,11 @@
           "minLength": 1,
           "description": "Name of the operator-created Secret carrying connection strings and S3 credentials. Required: this chart never templates secret material."
         },
+        "instanceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "design.md §12: this deployment's instance identity, and REQUIRED. It used to default to \"\", which omitted the env var and let the app's \"standalone\" fallback apply — so a low/high pair installed from this chart with defaults both called themselves \"standalone\", every imported space satisfied OriginInstanceId == localInstanceId, IsReplicaOf was false, and every mirrored space was writable on the high side. A silent fail-OPEN on the one invariant one-way sync rests on. Must be distinct per instance; a standalone deployment can say \"standalone\" explicitly, which is a decision rather than a default."
+        },
         "probes": {
           "type": "object",
           "properties": {
@@ -44,7 +49,7 @@
           }
         }
       },
-      "required": ["replicaCount", "existingSecret"]
+      "required": ["replicaCount", "existingSecret", "instanceId"]
     },
     "web": {
       "type": "object",

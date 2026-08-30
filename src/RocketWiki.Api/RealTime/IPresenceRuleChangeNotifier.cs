@@ -11,8 +11,25 @@ namespace RocketWiki.Api.RealTime;
 
 /// <summary>
 /// design.md §8: "connections evicted and re-authorized when rules change — the same
-/// cache-invalidation signal that refreshes the rule engine (§6.7)." Called from
-/// Mutation.AccessRules.cs after any successful rule change.
+/// cache-invalidation signal that refreshes the rule engine (§6.7)."
+///
+/// <para><b>"Rules" means every input to canView/canEdit, not just AccessRule rows.</b>
+/// This used to be called only from Mutation.AccessRules.cs, which covered one of the
+/// three things the decision is computed from (§6.4/§21: space grants, the restriction
+/// chain, AND the protective marking). So a page re-marked above a joined co-editor's
+/// clearance left them in the SignalR group — still receiving <c>UpdateReceived</c>,
+/// which is page content in CRDT form, and still able to <c>PushUpdate</c>. It is now
+/// called after every mutation that can change the answer: rule create/update/delete,
+/// <c>setPageMarking</c> (§21 gates views "on every read path, exactly as a page
+/// restriction does"), <c>movePage</c> (a new AncestorPath means a different inherited
+/// restriction chain), <c>deletePage</c>, and <c>archiveSpace</c>.</para>
+///
+/// <para><b>The caller's cancellation token is deliberately ignored.</b> The sweep runs
+/// after the change has committed, so abandoning it half-done leaves an authorization
+/// change durably applied in the database and only partially applied to live sessions —
+/// fail-open, with no retry and no queue. An admin's browser going away is not a decision
+/// about whether the eviction should finish. Individual failures inside the sweep are
+/// contained per connection and fail closed (evict) rather than unwinding the loop.</para>
 ///
 /// Deliberately re-checks EVERY open presence connection rather than computing which
 /// pages one rule change could possibly affect: restrictions accumulate down the page
@@ -47,7 +64,20 @@ public sealed class PresenceRuleChangeNotifier(
 {
     public async Task NotifyRulesChangedAsync(CancellationToken cancellationToken)
     {
-        await ReauthorizeEditSessionsAsync(cancellationToken);
+        // design.md §6.7/§8: the sweep runs to completion regardless of the CALLER's
+        // token. It used to thread the admin's request token through every step, so an
+        // admin whose HTTP connection dropped mid-sweep left every not-yet-visited
+        // connection joined with the restriction already committed — an authorization
+        // change that had durably taken effect in the database but only partially in the
+        // live session state, with no retry, no queue and no signal. That is fail-OPEN on
+        // the one path whose entire job is closing access, and the cancellation it obeyed
+        // was not even a decision about this work.
+        //
+        // The parameter stays for interface compatibility and is deliberately unused; see
+        // the interface doc.
+        _ = cancellationToken;
+
+        await ReauthorizeEditSessionsAsync();
 
         var connections = registry.GetAllPageConnections();
         if (connections.Count == 0)
@@ -76,11 +106,36 @@ public sealed class PresenceRuleChangeNotifier(
         var evicted = 0;
         foreach (var (pageId, connectionId, principal) in connections)
         {
-            // ValueOrNull: this sweep only needs "still viewable or not" - the eviction
-            // itself is a consequence of a rule change (whose mutation was audited),
-            // not a user's read request, so there is no denied *read* to audit here.
-            var page = (await pageReadService.GetPageAsync(pageId, principal, cancellationToken)).ValueOrNull();
-            if (page is not null)
+            bool stillViewable;
+            if (principal is null)
+            {
+                // The registry knows this connection is present but cannot say who it is
+                // (see GetAllPageConnections). Unresolvable identity is not a reason to
+                // leave someone in a page group — it is the clearest reason to remove
+                // them.
+                stillViewable = false;
+            }
+            else
+            {
+                try
+                {
+                    // ValueOrNull: this sweep only needs "still viewable or not" - the
+                    // eviction itself is a consequence of an access change (whose mutation
+                    // was audited), not a user's read request, so there is no denied
+                    // *read* to audit here.
+                    stillViewable = (await pageReadService.GetPageAsync(pageId, principal, CancellationToken.None))
+                        .ValueOrNull() is not null;
+                }
+                catch (Exception)
+                {
+                    // One connection's check failing must not abandon the rest of the
+                    // sweep — that is how a durably-applied restriction ends up only
+                    // partially enforced. Fail closed for this connection and carry on.
+                    stillViewable = false;
+                }
+            }
+
+            if (stillViewable)
             {
                 continue;
             }
@@ -90,8 +145,22 @@ public sealed class PresenceRuleChangeNotifier(
             // already implies - the evicted connection simply stops being a member of
             // this page's group and stops receiving anything scoped to it, the same
             // "absent, not forbidden" shape everywhere else in this schema.
+            //
+            // Registry first, then the SignalR group: the group removal is the half that
+            // actually stops data reaching the client, so it must not be skipped because
+            // the registry call threw.
             registry.LeavePage(pageId, connectionId);
-            await hubContext.Groups.RemoveFromGroupAsync(connectionId, NotificationsHub.GroupName(pageId), cancellationToken);
+            try
+            {
+                await hubContext.Groups.RemoveFromGroupAsync(
+                    connectionId, NotificationsHub.GroupName(pageId), CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // A dead connection is the ordinary reason this throws, and it is already
+                // the outcome we wanted. Anything else must still not stop the sweep.
+            }
+
             affectedPages.Add(pageId);
             evicted++;
         }
@@ -102,9 +171,10 @@ public sealed class PresenceRuleChangeNotifier(
         foreach (var pageId in affectedPages)
         {
             var views = registry.GetViewers(pageId)
-                .Select(v => new { userId = v.UserId, displayName = v.DisplayName, colour = v.Colour })
+                .Select(v => new { userId = v.UserId, displayName = v.DisplayName, colour = v.Colour, hasAvatar = v.HasAvatar })
                 .ToArray();
-            await hubContext.Clients.Group(NotificationsHub.GroupName(pageId)).SendAsync("ViewersChanged", views, cancellationToken);
+            await hubContext.Clients.Group(NotificationsHub.GroupName(pageId))
+                .SendAsync("ViewersChanged", views, CancellationToken.None);
         }
     }
 
@@ -118,7 +188,7 @@ public sealed class PresenceRuleChangeNotifier(
     /// Same telemetry stance as presence: an aggregate eviction count, no per-subject
     /// trace facts.
     /// </summary>
-    private async Task ReauthorizeEditSessionsAsync(CancellationToken cancellationToken)
+    private async Task ReauthorizeEditSessionsAsync()
     {
         var members = editSessions.GetAllMembers();
         if (members.Count == 0)
@@ -133,8 +203,22 @@ public sealed class PresenceRuleChangeNotifier(
         var evicted = 0;
         foreach (var (pageId, member) in members)
         {
-            var facts = await permissionReadService.GetPermissionFactsAsync([pageId], member.Principal, cancellationToken);
-            if (facts.TryGetValue(pageId, out var fact) && fact.Permission.CanEdit)
+            bool mayStillEdit;
+            try
+            {
+                var facts = await permissionReadService.GetPermissionFactsAsync(
+                    [pageId], member.Principal, CancellationToken.None);
+                mayStillEdit = facts.TryGetValue(pageId, out var fact) && fact.Permission.CanEdit;
+            }
+            catch (Exception)
+            {
+                // Fail closed for this member, and do not abandon the others: a member
+                // still relaying CRDT updates for a page they may no longer edit is the
+                // outcome this sweep exists to prevent.
+                mayStillEdit = false;
+            }
+
+            if (mayStillEdit)
             {
                 continue;
             }
@@ -145,28 +229,54 @@ public sealed class PresenceRuleChangeNotifier(
                 continue; // already gone (raced a disconnect)
             }
 
-            await hubContext.Groups.RemoveFromGroupAsync(
-                member.ConnectionId, NotificationsHub.EditGroupName(pageId), cancellationToken);
-            await hubContext.Clients.Client(member.ConnectionId)
-                .SendAsync("EvictedFromEditSession", pageId, cancellationToken);
-
-            if (departure.Demand is not null)
+            // The group removal is what actually closes the relay, so it comes first and
+            // its failure never skips the rest.
+            try
             {
-                await hubContext.Clients.Client(departure.Demand.ConnectionId).SendAsync(
-                    "ReseedRequired", pageId, departure.Demand.BaseRevisionNumber, departure.Demand.Reason, cancellationToken);
+                await hubContext.Groups.RemoveFromGroupAsync(
+                    member.ConnectionId, NotificationsHub.EditGroupName(pageId), CancellationToken.None);
+                await hubContext.Clients.Client(member.ConnectionId)
+                    .SendAsync("EvictedFromEditSession", pageId, CancellationToken.None);
+
+                if (departure.Demand is not null)
+                {
+                    await hubContext.Clients.Client(departure.Demand.ConnectionId).SendAsync(
+                        "ReseedRequired", pageId, departure.Demand.BaseRevisionNumber, departure.Demand.Reason,
+                        CancellationToken.None);
+                }
+            }
+            catch (Exception)
+            {
+                // A dead connection throws here and is already evicted as far as it
+                // matters. Never let it stop the sweep.
             }
 
-            var spaceKey = await db.Pages.AsNoTracking()
-                .Where(p => p.Id == pageId)
-                .Select(p => p.Space!.Key)
-                .FirstOrDefaultAsync(cancellationToken);
-
-            await EditSessionAudit.RecordAsync(
-                db, member.UserId, EditSessionAudit.LeftAction, AuditOutcome.Success,
-                pageId, spaceKey, EditSessionAudit.ReasonDetails(EditSessionAudit.LeftReasonEvicted),
-                member.ConnectionId, member.ClientIp, cancellationToken);
-
             evicted++;
+
+            // §7's row for the departure. Written LAST and never allowed to unwind the
+            // loop: the member has already lost the session and the group by this point,
+            // so an audit-write failure that propagated would turn a bookkeeping fault
+            // into an authorization one, leaving every later member un-evicted. This is
+            // the same exception EditSessionAudit already states for disconnect-time
+            // rows — nothing can un-evict someone, so the insert's failure cannot be made
+            // to fail the action, only to be reported.
+            try
+            {
+                var spaceKey = await db.Pages.AsNoTracking()
+                    .Where(p => p.Id == pageId)
+                    .Select(p => p.Space!.Key)
+                    .FirstOrDefaultAsync(CancellationToken.None);
+
+                await EditSessionAudit.RecordAsync(
+                    db, member.UserId, EditSessionAudit.LeftAction, AuditOutcome.Success,
+                    pageId, spaceKey, EditSessionAudit.ReasonDetails(EditSessionAudit.LeftReasonEvicted),
+                    member.ConnectionId, member.ClientIp, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // Counted below regardless: the eviction happened whether or not its row did.
+                db.ChangeTracker.Clear();
+            }
         }
 
         ApiTelemetry.CoEditEvictions.Add(evicted);

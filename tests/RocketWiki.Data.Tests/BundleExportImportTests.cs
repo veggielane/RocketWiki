@@ -284,6 +284,74 @@ public class BundleExportImportTests : SqliteTestBase
         }
     }
 
+    /// <summary>
+    /// design.md §12: a bundle claiming to originate from THIS instance is refused before
+    /// anything is applied. Landing it would write the spaces with
+    /// <c>OriginInstanceId</c> equal to the local id — the exact test
+    /// <c>Space.IsReplicaOf</c> uses — so "replicas are read-only, always" would answer
+    /// false and every mirrored space would be writable.
+    ///
+    /// <para>The realistic route in is a configuration mistake, not tampering: the Helm
+    /// chart shipped <c>instanceId: ""</c>, which omitted the env var and let both sides
+    /// fall back to "standalone". The chart now requires the value; this refuses the
+    /// consequence for every deployment path, including the two the chart does not cover.</para>
+    /// </summary>
+    [Fact]
+    public async Task Import_OfABundleFromThisVeryInstance_IsRefused_AndNothingLands()
+    {
+        var space = NewExportedSpace();
+        var page = TestData.NewPage(space, "home");
+
+        using var lowContext = CreateContext();
+        lowContext.Spaces.Add(space);
+        lowContext.Pages.Add(page);
+        lowContext.SaveChanges();
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundleInfo = await new BundleExportService(lowContext, storage)
+                .ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                // The importing instance's id is the SAME as the bundle's origin - two
+                // instances left on one identity.
+                var result = await new BundleImportService(highContext, storage, LowInstanceId)
+                    .ImportAsync(bundleInfo.BundleFilePath, LowInstanceId, AuditCtx);
+
+                Assert.False(result.IsSuccess);
+                Assert.Equal(LowInstanceId, Assert.IsType<BundleSelfOriginError>(result.Error).InstanceId);
+
+                // Refused before anything is read, so nothing landed - not the space, not
+                // the page, and no import state to make the next attempt look like a gap.
+                Assert.Empty(highContext.Pages.IgnoreQueryFilters().ToList());
+                Assert.Empty(highContext.Spaces.IgnoreQueryFilters().ToList());
+                Assert.Empty(highContext.SyncImportStates.ToList());
+            }
+
+            // Non-vacuous: the same bundle into a genuinely different instance applies.
+            var (okConnection, okContext) = CreateSecondaryDatabase();
+            using (okConnection)
+            using (okContext)
+            {
+                var ok = await new BundleImportService(okContext, storage, "high-instance")
+                    .ImportAsync(bundleInfo.BundleFilePath, LowInstanceId, AuditCtx);
+
+                Assert.True(ok.IsSuccess, $"import into a distinct instance failed: {ok.Error}");
+                Assert.Single(okContext.Pages.ToList());
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Baseline_CarriesThePageIcon_ByWireName()
     {
