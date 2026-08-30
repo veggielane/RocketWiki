@@ -12,8 +12,11 @@ using SixLabors.ImageSharp.Processing;
 namespace RocketWiki.Api.Avatars;
 
 /// <summary>
-/// <see cref="IAvatarImageProcessor"/> over SixLabors.ImageSharp (pinned 4.1.1 —
-/// license note in the csproj). Upload bytes are untrusted input, so decoding runs
+/// <see cref="IAvatarImageProcessor"/> over SixLabors.ImageSharp — pinned to 3.x in
+/// Directory.Packages.props, where the version and the Six Labors Split License
+/// reasoning for staying off 4.x live together. (This comment used to name 4.1.1, a
+/// version this repo has never referenced; the number is left out of the prose now so
+/// there is exactly one place to read it.) Upload bytes are untrusted input, so decoding runs
 /// against a private <see cref="Configuration"/> that is limited three ways before
 /// any pixel work happens:
 ///

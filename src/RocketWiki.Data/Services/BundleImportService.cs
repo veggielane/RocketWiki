@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
+using RocketWiki.Core.Content;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
@@ -26,6 +27,7 @@ public class BundleImportService : IBundleImportService
     private readonly RocketWikiDbContext _db;
     private readonly IFileStorage _fileStorage;
     private readonly string? _localInstanceId;
+    private readonly BundleLimits _limits;
 
     /// <param name="localInstanceId">
     /// design.md §12: this instance's own identity, used for exactly one check — refusing a
@@ -39,11 +41,19 @@ public class BundleImportService : IBundleImportService
     /// self-origin check cannot run, and the only guard left is the operator's own care.
     /// Every production path supplies it.</para>
     /// </param>
-    public BundleImportService(RocketWikiDbContext db, IFileStorage fileStorage, string? localInstanceId = null)
+    /// <param name="limits">
+    /// Decompression ceilings (<see cref="BundleLimits"/>). Defaulted rather than required
+    /// because there is exactly one right answer in production and no caller should be
+    /// choosing; the parameter exists so a test can prove the refusal with a few kilobytes
+    /// instead of a few gigabytes.
+    /// </param>
+    public BundleImportService(
+        RocketWikiDbContext db, IFileStorage fileStorage, string? localInstanceId = null, BundleLimits? limits = null)
     {
         _db = db;
         _fileStorage = fileStorage;
         _localInstanceId = localInstanceId;
+        _limits = limits ?? BundleLimits.Default;
     }
 
     // design.md §15: the bundle path is not tagged (an operator filesystem path), and
@@ -67,7 +77,31 @@ public class BundleImportService : IBundleImportService
         return result;
     }
 
+    /// <summary>
+    /// Wraps the import so the decompression ceilings (<see cref="BundleLimits"/>) can be
+    /// enforced deep inside a stream copy and still surface as the typed refusal every
+    /// other integrity failure returns. The alternative — threading a result type through
+    /// every helper that touches a zip entry — would put the check's plumbing in more
+    /// places than the check itself, which is how a guard ends up skipped on the one path
+    /// nobody edited.
+    /// </summary>
     private async Task<PageMutationResult<ImportedBundleSummary>> ImportCoreAsync(
+        string bundleFilePath, string originInstanceId, AuditContext auditContext, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ImportBoundedAsync(bundleFilePath, originInstanceId, auditContext, cancellationToken);
+        }
+        catch (Exception ex) when (ex is BundleLimitExceededException or DecompressionLimitExceededException)
+        {
+            // Two shapes of the same refusal: the ceilings this class checks itself (entry
+            // count, declared sizes, line count) and the one BoundedReadStream enforces
+            // mid-read on the bytes that actually arrive.
+            return PageMutationResult<ImportedBundleSummary>.Failure(new BundleTooLargeError(ex.Message));
+        }
+    }
+
+    private async Task<PageMutationResult<ImportedBundleSummary>> ImportBoundedAsync(
         string bundleFilePath, string originInstanceId, AuditContext auditContext, CancellationToken cancellationToken)
     {
         // design.md §12, before anything is read: a bundle from THIS instance is refused.
@@ -86,7 +120,14 @@ public class BundleImportService : IBundleImportService
 
         using var archive = ZipFile.OpenRead(bundleFilePath);
 
-        var manifestBytes = await ReadEntryAsync(archive, "manifest.json", cancellationToken);
+        // The cheapest possible refusal, and the first one: entry count and the total
+        // uncompressed size the archive's own central directory declares. Both numbers
+        // come from the bundle, so a bomb can lie about the second - which is why every
+        // read below ALSO counts what it actually decompresses. This pass exists so the
+        // obvious case is rejected without decompressing a single byte.
+        CheckArchiveShape(archive);
+
+        var manifestBytes = await ReadEntryAsync(archive, "manifest.json", _limits.MaxManifestBytes, cancellationToken);
         var manifest = JsonSerializer.Deserialize<BundleManifest>(manifestBytes, JsonOptions)
             ?? throw new InvalidOperationException($"'{bundleFilePath}' has an unparseable manifest.json.");
 
@@ -101,8 +142,22 @@ public class BundleImportService : IBundleImportService
                 new BundleFormatUnsupportedError(manifest.FormatVersion, BundleFormat.CurrentVersion));
         }
 
+        // design.md §12: the bundle's OWN declared origin must be the stream the operator
+        // said they were importing. Every replica space, every SyncImportState position and
+        // every per-space sequence on this side is keyed by `originInstanceId` - the
+        // argument - and manifest.InstanceId was, until this check, read by nothing at all.
+        // A bundle from instance A imported as if it came from B splices two streams into
+        // one position, and the strict ordering that position exists to enforce becomes an
+        // ordering over nothing. The realistic route in is a wrong --origin-instance-id on
+        // a scheduled job, not forgery, which is exactly why it is worth catching.
+        if (!string.Equals(manifest.InstanceId, originInstanceId, StringComparison.Ordinal))
+        {
+            return PageMutationResult<ImportedBundleSummary>.Failure(
+                new BundleOriginMismatchError(manifest.InstanceId ?? "(absent)", originInstanceId));
+        }
+
         var eventsEntryName = BundleFormat.EventsEntryName(manifest.FormatVersion);
-        var eventsBytes = await ReadEntryAsync(archive, eventsEntryName, cancellationToken);
+        var eventsBytes = await ReadEntryAsync(archive, eventsEntryName, _limits.MaxEventsBytes, cancellationToken);
         var actualPayloadHash = Convert.ToHexString(SHA256.HashData(eventsBytes));
         if (!string.Equals(actualPayloadHash, manifest.PayloadSha256, StringComparison.OrdinalIgnoreCase))
         {
@@ -138,7 +193,18 @@ public class BundleImportService : IBundleImportService
                 "a bundle may be missing, reordered, or tampered."));
         }
 
-        var records = ParseEvents(eventsBytes);
+        // Attachment BYTES, verified before any of them is written (see the method).
+        // Deliberately after the cheap manifest-level checks and after the duplicate
+        // no-op above: this is the only check in the file that costs a full read of
+        // every blob, so a bundle that is going to be refused for being out of order,
+        // or skipped for having already been applied, is never hashed.
+        var blobError = await VerifyBlobIntegrityAsync(archive, cancellationToken);
+        if (blobError is not null)
+        {
+            return PageMutationResult<ImportedBundleSummary>.Failure(blobError);
+        }
+
+        var records = ParseEvents(eventsBytes, _limits.MaxEventLines);
 
         // EVERY per-space sequence is checked before ANY event is applied. This used to
         // happen inside the apply loop, which made this class's own opening claim — "every
@@ -314,7 +380,7 @@ public class BundleImportService : IBundleImportService
 
     private async Task ApplyEventAsync(NdjsonEventRecord record, ZipArchive archive, CancellationToken cancellationToken)
     {
-        var eventType = Enum.Parse<SyncEventType>(record.EventType);
+        var eventType = ParseEventType(record.EventType);
         using var payload = JsonDocument.Parse(record.PayloadJson);
         var root = payload.RootElement;
 
@@ -843,6 +909,17 @@ public class BundleImportService : IBundleImportService
         var contentHashHex = payload.GetProperty("contentHash").GetString()!;
         var isDeleted = payload.TryGetProperty("isDeleted", out var deletedEl) && deletedEl.GetBoolean();
 
+        // Validated before it is used to name a blobs/ entry OR written to a binary(32)
+        // column. Convert.FromHexString below threw a bare FormatException on a non-hex
+        // string - a refusal in substance that escaped the CLI's filter as a crash - and a
+        // well-formed-but-short hex string would have got past it only to fail at
+        // SaveChanges as a truncation error, after the blob was already in storage.
+        if (!IsSha256Hex(contentHashHex))
+        {
+            throw new InvalidDataException(
+                $"Attachment {attachmentId} declares a contentHash that is not a SHA-256 hex digest.");
+        }
+
         // Attachments.UploadedByUserId is a required FK into Users - Guid.Empty would
         // violate it on the high side, since there's obviously no local user with that
         // id. The uploader arrives as a shadow user, exactly like a comment author.
@@ -860,15 +937,26 @@ public class BundleImportService : IBundleImportService
             // from the sync payload in the first place - see SyncOutboxWriter).
             var storageKey = StorageKeys.ForAttachment(now);
 
+            // These bytes have already been re-hashed and matched against this very entry
+            // name by VerifyBlobIntegrityAsync, before anything in this bundle was
+            // applied - so what lands in storage is provably the content the (hash-chained)
+            // event line declares. The bound is repeated anyway because a stream copy that
+            // trusts an earlier pass is a stream copy with no bound of its own.
             var blobEntry = archive.GetEntry($"blobs/{contentHashHex}");
             if (blobEntry is not null)
             {
                 await using var entryStream = blobEntry.Open();
-                await _fileStorage.SaveAsync(storageKey, entryStream, payload.GetProperty("contentType").GetString()!, cancellationToken);
+                await using var bounded = new BoundedReadStream(entryStream, _limits.MaxBlobBytes, blobEntry.FullName);
+                await _fileStorage.SaveAsync(storageKey, bounded, payload.GetProperty("contentType").GetString()!, cancellationToken);
             }
-            // A missing blob entry (e.g. a duplicate-content attachment whose blob was
-            // already packed under a different attachment's line) is not an error here -
-            // ExistsAsync at download time is what surfaces a genuinely missing object.
+            // A missing blob entry is not an error here - export skips an attachment whose
+            // object is absent from its own storage (design.md §10: an operational fault,
+            // not something export should crash on), so refusing the whole bundle would
+            // turn one origin-side fault into a boundary the operator cannot cross without
+            // a re-export. ExistsAsync at download time is what surfaces it. Note the
+            // residual this leaves: stripping a blobs/ entry from a bundle omits that
+            // attachment's content rather than substituting it, and the omission is
+            // visible at the first download attempt.
 
             attachment = new Attachment
             {
@@ -898,7 +986,7 @@ public class BundleImportService : IBundleImportService
         using var payload = JsonDocument.Parse(record.PayloadJson);
         var root = payload.RootElement;
 
-        switch (Enum.Parse<SyncEventType>(record.EventType))
+        switch (ParseEventType(record.EventType))
         {
             case SyncEventType.PageUpsert:
             case SyncEventType.PageMove:
@@ -1075,19 +1163,208 @@ public class BundleImportService : IBundleImportService
     private static Guid? GetNullableGuid(JsonElement payload, string propertyName) =>
         payload.TryGetProperty(propertyName, out var element) && element.ValueKind != JsonValueKind.Null ? element.GetGuid() : null;
 
-    private static List<NdjsonEventRecord> ParseEvents(byte[] eventsBytes)
+    private static List<NdjsonEventRecord> ParseEvents(byte[] eventsBytes, int maxLines)
     {
         var text = Encoding.UTF8.GetString(eventsBytes);
         var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return lines.Select(line => JsonSerializer.Deserialize<NdjsonEventRecord>(line, JsonOptions)!).ToList();
+        if (lines.Length > maxLines)
+        {
+            // Each line becomes an object held for the whole import, so the count needs a
+            // ceiling of its own rather than one inferred from the byte cap and the
+            // shortest legal line.
+            throw new BundleLimitExceededException(
+                $"the events file has {lines.Length} lines, above the {maxLines}-line ceiling.");
+        }
+
+        // Not `Deserialize(...)!`: a line that is literally `null` deserializes to null, and
+        // the null-forgiving operator turned that into a NullReferenceException three
+        // frames away from the malformed line. A named refusal says which line, and it is
+        // the kind of exception the CLI's refusal filter is meant to turn into an audit
+        // row rather than a stack trace.
+        var records = new List<NdjsonEventRecord>(lines.Length);
+        for (var i = 0; i < lines.Length; i++)
+        {
+            records.Add(JsonSerializer.Deserialize<NdjsonEventRecord>(lines[i], JsonOptions)
+                ?? throw new InvalidDataException($"Line {i + 1} of the bundle's events file is not an event record."));
+        }
+
+        return records;
     }
 
-    private static async Task<byte[]> ReadEntryAsync(ZipArchive archive, string entryName, CancellationToken cancellationToken)
+    /// <summary>
+    /// The event type named on an NDJSON line. <c>Enum.Parse</c> threw a bare
+    /// <see cref="ArgumentException"/> for an unrecognised name — a refusal in substance
+    /// but not in shape, so it escaped the CLI's filter and crashed instead of leaving the
+    /// <c>sync.import.refused</c> row. <c>Enum.IsDefined</c> is the second half:
+    /// <c>TryParse</c> happily accepts <c>"57"</c> as a SyncEventType.
+    ///
+    /// <para>Refusing rather than skipping is deliberate. A name this build does not know
+    /// means either corruption or a format this instance predates, and the second case is
+    /// already handled loudly upstream by the format-version check — so silently dropping
+    /// the event would be absorbing an unknown, which is the one thing §12 never does.</para>
+    /// </summary>
+    private static SyncEventType ParseEventType(string eventTypeName) =>
+        Enum.TryParse<SyncEventType>(eventTypeName, out var parsed) && Enum.IsDefined(parsed)
+            ? parsed
+            : throw new InvalidDataException(
+                $"The bundle carries an event of type '{eventTypeName}', which this instance does not recognise.");
+
+    // --- Integrity and bounds on the archive itself (design.md §12) ---------------------
+
+    /// <summary>
+    /// Thrown from inside a bounded read; converted to a <see cref="BundleTooLargeError"/>
+    /// at the single catch in <see cref="ImportCoreAsync"/>. Private because it is a
+    /// control-flow detail of this class and must never be part of anyone's contract - a
+    /// caller sees the typed refusal, like every other integrity failure.
+    /// </summary>
+    private sealed class BundleLimitExceededException(string reason)
+        : Exception($"Bundle exceeds the import ceiling: {reason}");
+
+    /// <summary>
+    /// Entry count and declared total expansion, from the central directory alone - no
+    /// decompression. <see cref="ZipArchiveEntry.Length"/> is what the archive CLAIMS an
+    /// entry expands to, so this cannot be the only bound (the bounded copies below are
+    /// what make a lie useless); it is here because refusing an obvious bomb should not
+    /// require reading it first.
+    /// </summary>
+    private void CheckArchiveShape(ZipArchive archive)
+    {
+        if (archive.Entries.Count > _limits.MaxEntryCount)
+        {
+            throw new BundleLimitExceededException(
+                $"it declares {archive.Entries.Count} entries, above the {_limits.MaxEntryCount}-entry ceiling.");
+        }
+
+        long declaredTotal = 0;
+        foreach (var entry in archive.Entries)
+        {
+            declaredTotal += entry.Length;
+            if (declaredTotal > _limits.MaxTotalUncompressedBytes)
+            {
+                throw new BundleLimitExceededException(
+                    $"it declares more than {_limits.MaxTotalUncompressedBytes} bytes of uncompressed content.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// design.md §12: <b>every attachment's bytes are re-hashed before any of them is
+    /// written.</b> An entry under <c>blobs/</c> is named for the SHA-256 of its own
+    /// content (BundleExportService.WriteBlobsAsync), and the event line that references
+    /// it carries the same hex string — and THAT line is inside the bytes
+    /// <c>manifest.PayloadSha256</c> covers, which the manifest chain covers in turn. So
+    /// recomputing the hash and requiring it to equal the entry's name is what extends the
+    /// existing chain over attachment content: it needs no change to the bundle format,
+    /// because the binding was already there and simply never checked.
+    ///
+    /// <para>Without it, an attachment's file content could be substituted anywhere on the
+    /// transfer medium with nothing detecting it — on the one boundary whose entire
+    /// purpose is that only vetted content crosses. The declared hash was written straight
+    /// into <c>Attachment.ContentHash</c> and the bytes streamed straight to storage, so
+    /// the high side then held a row asserting a hash its own blob did not have.</para>
+    ///
+    /// <para><b>Position matters as much as the check.</b> This is a PRE-PASS, for the
+    /// same reason the per-space sequence check is one: attachments are written to storage
+    /// as their events are applied, and a refusal partway through leaves those blobs
+    /// behind forever (SaveChangesAsync is never reached, so the ROWS evaporate and the
+    /// bytes do not, and a corrected re-import mints a fresh storage key). Verified here,
+    /// nothing has been written yet.</para>
+    ///
+    /// <para>Every <c>blobs/</c> entry is verified, not only the ones some event line
+    /// happens to reference — an unreferenced entry is not a thing this exporter produces,
+    /// so its presence is already a reason to look, and checking all of them means no
+    /// entry can be smuggled in behind a reference that only appears in a later bundle.
+    /// The entry name itself must be a well-formed SHA-256 (64 hex characters): that is
+    /// the invariant the whole scheme rests on, so it is checked rather than assumed.</para>
+    /// </summary>
+    private async Task<BundleBlobTamperedError?> VerifyBlobIntegrityAsync(
+        ZipArchive archive, CancellationToken cancellationToken)
+    {
+        foreach (var entry in archive.Entries)
+        {
+            if (!entry.FullName.StartsWith("blobs/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // A bare directory entry ("blobs/") carries no content and is not a blob.
+            // Our exporter never writes one; a re-zip by an operator tool might.
+            if (entry.FullName.EndsWith('/'))
+            {
+                continue;
+            }
+
+            var declaredHashHex = entry.FullName["blobs/".Length..];
+            if (!IsSha256Hex(declaredHashHex))
+            {
+                return new BundleBlobTamperedError(
+                    $"'{entry.FullName}' is not named for a SHA-256 content hash. Every blobs/ entry must be named " +
+                    "for the hash of its own bytes - that naming IS the integrity binding between an attachment's " +
+                    "content and the hash-covered event line that references it.");
+            }
+
+            var actualHashHex = await HashEntryAsync(entry, _limits.MaxBlobBytes, cancellationToken);
+            if (!string.Equals(actualHashHex, declaredHashHex, StringComparison.OrdinalIgnoreCase))
+            {
+                // The hash itself is not repeated back in full: it is in the entry name,
+                // which the operator can read. What matters is which entry and that the
+                // bytes are not the bytes the bundle claims.
+                return new BundleBlobTamperedError(
+                    $"'{entry.FullName}' contains bytes that hash to {actualHashHex}, not to the content hash its " +
+                    "own entry name declares - the attachment's content was substituted or corrupted in transit.");
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>64 hex characters, and nothing else. Case-insensitive because
+    /// <c>Convert.ToHexString</c> emits upper and a hand-built bundle may not.</summary>
+    private static bool IsSha256Hex(string value)
+    {
+        if (value.Length != 64)
+        {
+            return false;
+        }
+
+        foreach (var c in value)
+        {
+            if (!char.IsAsciiHexDigit(c))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>SHA-256 of an entry's decompressed bytes, computed streaming so a blob is
+    /// never held in memory, and bounded so hashing one cannot itself be the attack.</summary>
+    private static async Task<string> HashEntryAsync(ZipArchiveEntry entry, long maxBytes, CancellationToken cancellationToken)
+    {
+        await using var stream = entry.Open();
+        await using var bounded = new BoundedReadStream(stream, maxBytes, entry.FullName);
+        return Convert.ToHexString(await SHA256.HashDataAsync(bounded, cancellationToken));
+    }
+
+    private static async Task<byte[]> ReadEntryAsync(
+        ZipArchive archive, string entryName, long maxBytes, CancellationToken cancellationToken)
     {
         var entry = archive.GetEntry(entryName) ?? throw new InvalidOperationException($"Bundle is missing '{entryName}'.");
+
+        // The declared size first (free), then the copy counts for itself - see
+        // CheckArchiveShape for why the declared number cannot be trusted alone.
+        if (entry.Length > maxBytes)
+        {
+            throw new BundleLimitExceededException(
+                $"'{entryName}' declares {entry.Length} uncompressed bytes, above its {maxBytes}-byte ceiling.");
+        }
+
         await using var stream = entry.Open();
+        await using var bounded = new BoundedReadStream(stream, maxBytes, entryName);
         using var memory = new MemoryStream();
-        await stream.CopyToAsync(memory, cancellationToken);
+        await bounded.CopyToAsync(memory, cancellationToken);
         return memory.ToArray();
     }
+
 }

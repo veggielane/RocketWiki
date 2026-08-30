@@ -4,7 +4,9 @@ Every configuration key the system reads, with its default, what **unset**
 means, and the owning `design.md` section. Enumerated from source (the "Read
 at" column names the file that actually reads each key), not from memory —
 if this table and the code ever disagree, the code wins and this file has a
-bug. Last verified against source: 2026-08-24.
+bug. Last verified against source: 2026-08-30 (the API/frontend tables against
+2026-08-24; the two new tables at the bottom — the web container's nginx
+runtime env and the operator CLIs' connection string — against 2026-08-30).
 
 Two conventions to know before reading:
 
@@ -150,6 +152,8 @@ per value (`Embeddings/EmbeddingPipelineConfiguration.cs`,
 | `Ai:ChatTimeoutSeconds` | `30` | n/a. One attempt, no retries; an ask degrades to `UNREACHABLE`, never hangs | §9.5 |
 | `Ai:MaxContextChars` | `24000` | n/a. Cap on context text sent to the model per ask | §9.5 |
 | `Ai:MaxRetrievedPages` | `8` | n/a. Permission-filtered hits retrieval asks `ISearchService` for | §9.5 |
+| `Ai:MaxOutputTokens` | `800` | n/a. Cap on the answer the model may generate; without one the only bound was the 30 s network timeout | §9.5 |
+| `Ai:MaxQuestionChars` | `2000` | n/a. Longest question accepted; over it, `askWiki` answers `QUESTION_TOO_LONG` before retrieval and before anything is sent. **The only key in this table the SPA can read** — `assistantStatus.maxQuestionChars` reports it (null when the assistant is unconfigured), so the ask page can warn while a question is being typed rather than only after it is refused | §9.5 |
 
 ## Health endpoints and telemetry
 
@@ -186,3 +190,42 @@ named.
 | `VITE_OTEL_SERVICE_NAME` | `rocketwiki-web` | n/a (has a default). Worth overriding per instance so replica traces are distinguishable | `src/telemetry/config.ts` |
 | `VITE_APP_VERSION` | *(none)* | `service.version` omitted entirely | `src/telemetry/config.ts` |
 | `VITE_API_TARGET` (dev server only) | `http://localhost:5079` | Dev proxy target. `launchSettings.json` is gitignored, so a fresh clone gets no launch profile and `dotnet run` binds Kestrel's default instead — start the API with `ASPNETCORE_URLS=http://localhost:5079` to match. Under Aspire, read the dynamic port off the dashboard and set this | `vite.config.ts` |
+
+## The web container (nginx runtime env, not `VITE_*`)
+
+Read by `deploy/docker/nginx/default.conf.template` through the nginx image's
+envsubst step — **runtime** values, unlike everything in the table above.
+Two of them exist only because the SPA's external origins are baked in at
+build time and nginx has no way to read them back.
+
+| Key | Default | Unset means | Read at |
+|---|---|---|---|
+| `API_UPSTREAM` | `api:8080` | n/a (has a default; the Helm chart sets the api Service's DNS name) | `Dockerfile.web`, nginx template |
+| `CSP_CONNECT_SRC` | `'self'` | Same-origin XHR/WebSocket only. **Must name the `VITE_OIDC_AUTHORITY` origin**, or sign-in fails at the first discovery fetch; add the OTLP collector origin too if browser telemetry is on | nginx template `Content-Security-Policy` |
+| `CSP_FRAME_SRC` | `'none'` | No frames at all. **Must name the `VITE_DRAWIO_URL` origin** if the diagram editor is enabled | nginx template `Content-Security-Policy` |
+
+Both CSP values are correct as they stand for an image built with neither
+`VITE_OIDC_AUTHORITY` nor `VITE_DRAWIO_URL` — which is what an unconfigured
+build is, since both fail closed. A forgotten value therefore breaks sign-in
+loudly at the first attempt rather than silently permitting every origin. The
+Helm chart carries them as `web.csp.connectSrc` / `web.csp.frameSrc`, and its
+schema rejects empty strings (an empty `connect-src` blocks even same-origin
+`/graphql`). Everything else in the policy — and the HSTS, `X-Frame-Options`,
+`X-Content-Type-Options` and `Referrer-Policy` headers — needs no
+configuration; see `deploy/README.md`.
+
+## Operator CLIs (`RocketWiki.Importer`, `RocketWiki.Sync`) and the migration Job
+
+| Key | Default | Unset means | Read at |
+|---|---|---|---|
+| `ROCKETWIKI_CONNECTIONSTRING` | *(none)* | The CLI falls back to `--connection-string-file`, then `--connection-string`; with none of the three it prints usage and exits 1. For the Helm migration Job the same variable is what `efbundle` runs against | `CliArgumentParser`, `SyncCliArgumentParser`, `RocketWikiDbContextFactory` |
+
+`ConnectionStrings__rocketwiki` is also accepted by
+`RocketWikiDbContextFactory` (the standard .NET spelling), so a Secret whose
+key is already that name works with no mapping.
+
+**Prefer the variable, or `--connection-string-file <path>`, over
+`--connection-string <value>`.** A credential on the command line is readable
+by every other local user (`ps`, `/proc/<pid>/cmdline`, Process Explorer) and
+lands in shell history and crash dumps. The flag still works because scripted
+invocations exist, not because it is a good idea.

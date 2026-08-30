@@ -38,6 +38,26 @@ spec:
             # kubectl port-forward, not just the ingress.
             - name: API_UPSTREAM
               value: {{ printf "%s-api:%v" (include "rocketwiki.fullname" .) .Values.api.service.port | quote }}
+            # The two Content-Security-Policy directives that have to name
+            # EXTERNAL origins. They are runtime values because the origins are
+            # baked into the SPA bundle at BUILD time (Vite inlines VITE_*), so
+            # nginx cannot read what the image was built against — see
+            # deploy/docker/nginx/default.conf.template's header and values.yaml.
+            #
+            # connect-src is DERIVED from web.oidcAuthority (the same value the
+            # image's --build-arg VITE_OIDC_AUTHORITY carried), so the origin
+            # sign-in needs cannot drift from the origin the policy allows —
+            # they are one value, stated once. web.csp.connectSrc overrides it
+            # for deployments that need more origins in the list.
+            #
+            # frame-src has no such source to derive from — draw.io is a
+            # separate build arg — so it stays an explicit value defaulting to
+            # 'none': forgetting it breaks the diagram editor loudly rather
+            # than silently permitting every origin to frame content.
+            - name: CSP_CONNECT_SRC
+              value: {{ include "rocketwiki.web.cspConnectSrc" . | quote }}
+            - name: CSP_FRAME_SRC
+              value: {{ .Values.web.csp.frameSrc | quote }}
           # Plain HTTP GET of the SPA shell — for a static file server that
           # IS the health check. nginx fails to start entirely (and the probe
           # never passes) if the API_UPSTREAM hostname doesn't resolve, which

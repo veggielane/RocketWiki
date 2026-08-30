@@ -236,6 +236,72 @@ web:
   service:
     port: 8080 # nginx-unprivileged listens on 8080 (non-root can't bind 80)
 
+  # REQUIRED. The Keycloak realm URL the web image was BUILT with
+  # (`--build-arg VITE_OIDC_AUTHORITY=…` — see deploy/README.md "Building the
+  # images"). Restate it here, exactly.
+  #
+  # This is the ONE build arg the chart carries, and it earns its place by being
+  # load-bearing rather than documentary: its ORIGIN is what the CSP's
+  # connect-src is derived from below, so sign-in and the policy that permits
+  # sign-in are one value instead of two that must be kept in step. The other
+  # VITE_* args are deliberately NOT restated here — the chart cannot check
+  # them against the image, and a value nothing enforces is a value that drifts
+  # and then lies.
+  #
+  # It still cannot be *verified* against the image (Vite inlines it; nothing in
+  # a running container can report what it was built with). What it buys is that
+  # a deployment has to state its authority explicitly, and that the CSP follows
+  # from the statement — so the remaining failure mode is one wrong value that
+  # breaks sign-in loudly, not two values that disagree.
+  #
+  # The default is a PLACEHOLDER, not a fallback. `.invalid` is the RFC 2606
+  # reserved TLD that is guaranteed never to resolve, so an untouched value
+  # cannot accidentally work: the derived CSP would permit an origin the image
+  # was not built against, and sign-in fails at the first discovery fetch. It is
+  # a real string rather than "" only because values.schema.json pins the SHAPE
+  # (a scheme-less value has no origin to derive from) and `helm lint --strict`
+  # validates this file itself — the same reason api.instanceId ships
+  # "standalone" rather than empty. The install NOTES call it out by name.
+  #
+  #   oidcAuthority: https://keycloak.internal/realms/rocketwiki
+  oidcAuthority: "https://keycloak.invalid/realms/rocketwiki"
+
+  # Content-Security-Policy: the two directives that name EXTERNAL origins.
+  #
+  # Everything else in the policy is fixed in the image's nginx config
+  # (deploy/docker/nginx/default.conf.template — read its header for the full
+  # directive-by-directive reasoning). These two are values because the origins
+  # they name are baked into the SPA bundle at BUILD time: Vite inlines every
+  # VITE_* variable, so the running nginx has no way to discover what the image
+  # was built against.
+  #
+  # *** Keep these in step with the image's build args, or sign-in breaks. ***
+  #
+  #   connectSrc is DERIVED from web.oidcAuthority above and normally left
+  #   empty: the chart takes that URL's origin and renders
+  #   `'self' <origin>`, which is what oidc-client-ts needs for its discovery,
+  #   token and userinfo XHRs. 'self' already covers same-origin ws/wss, so
+  #   /hubs needs nothing. Set it only to add MORE origins — an OTLP collector
+  #   the bundle exports browser traces to, a second identity provider — and
+  #   then you own the whole list, including the Keycloak origin.
+  #
+  #   frameSrc has nothing to derive from (draw.io is its own build arg), so it
+  #   is stated. It must name the VITE_DRAWIO_URL origin if the diagram editor
+  #   is enabled, and the Keycloak origin if silent renew falls back to its
+  #   iframe. 'none' — the default — is correct for a build with no draw.io.
+  #
+  # Forgetting frameSrc breaks the diagram editor loudly at first use. The
+  # alternative default (permit every origin) would fail silently and forever,
+  # which is not the trade anything else here takes.
+  #
+  # Example for a deployment that also exports browser traces:
+  #   csp:
+  #     connectSrc: "'self' https://keycloak.internal https://otel.internal:4318"
+  #     frameSrc: "https://drawio.internal https://keycloak.internal"
+  csp:
+    connectSrc: ""
+    frameSrc: "'none'"
+
   resources:
     requests:
       cpu: 50m

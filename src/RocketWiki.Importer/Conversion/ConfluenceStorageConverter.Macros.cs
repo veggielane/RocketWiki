@@ -131,7 +131,25 @@ public sealed partial class ConfluenceStorageConverter
 
     private static string RenderCodeMacro(XElement macro, RenderState state)
     {
-        var language = GetMacroParameter(macro, "language");
+        var declaredLanguage = GetMacroParameter(macro, "language");
+
+        // Reduced to characters a language tag can legitimately contain BEFORE anything
+        // else looks at it (MarkdownText.SanitizeFenceLanguage explains why an info string
+        // cannot be escaped, only reduced). Interpolated raw, a `language` containing a
+        // newline closed the fence's info string and turned everything after it into live
+        // Markdown blocks in stored content - a structure-spoofing primitive controlled by
+        // whoever authored the Confluence page.
+        var language = MarkdownText.SanitizeFenceLanguage(declaredLanguage);
+        if (declaredLanguage is not null && language != declaredLanguage.Trim())
+        {
+            state.Report.Add(new ConversionIssue(
+                IssueSeverity.Info,
+                IssueCategory.LossyTransform,
+                "Code block declared a language containing characters a fence info string cannot carry; "
+                + "the disallowed characters were removed. The code itself is untouched.",
+                state.CurrentLocation,
+                declaredLanguage));
+        }
 
         // A Confluence code macro carries whatever language string its author typed,
         // and it was passed into the fence unvalidated. A block tagged "mermaid" or
@@ -443,6 +461,21 @@ public sealed partial class ConfluenceStorageConverter
         if (riUrl is not null)
         {
             var url = (string?)riUrl.Attribute(ConfluenceNamespaces.Ri + "value") ?? string.Empty;
+
+            // Same scheme allowlist as a raw <img> src and an anchor href - one rule for
+            // every destination that arrives from the imported source.
+            if (!MarkdownText.IsAllowedLinkUrl(url))
+            {
+                state.Report.Add(new ConversionIssue(
+                    IssueSeverity.Lossy,
+                    IssueCategory.DroppedElement,
+                    "Image (ri:url) used a URL scheme this importer does not carry across; the image was dropped "
+                    + "and replaced by its alt text.",
+                    state.CurrentLocation,
+                    url));
+                return MarkdownText.Escape(alt ?? string.Empty);
+            }
+
             state.Report.Add(new ConversionIssue(
                 IssueSeverity.Info,
                 IssueCategory.LossyTransform,

@@ -201,9 +201,11 @@ jobs:
         run: |
           set -euo pipefail
           chart=deploy/helm/rocketwiki
-          # api.instanceId is required (design.md §12) — every render below has to
-          # supply it, which is itself the point: see the failure case further down.
-          req="--set api.instanceId=ci-instance"
+          # api.instanceId is required (design.md §12) and web.oidcAuthority is
+          # required too (it is the realm the web image was BUILT against, and the
+          # CSP's connect-src is derived from it) — every render below has to supply
+          # both, which is itself the point: see the failure cases further down.
+          req="--set api.instanceId=ci-instance --set web.oidcAuthority=https://keycloak.ci/realms/rw"
 
           s3=$(helm template rw "$chart" $req --set api.fileStorage.provider=S3)
           grep -q 'FileStorage__S3__Bucket' <<<"$s3"
@@ -231,7 +233,8 @@ jobs:
         run: |
           set -euo pipefail
           chart=deploy/helm/rocketwiki
-          rendered=$(helm template rw "$chart" --set api.instanceId=ci-instance)
+          rendered=$(helm template rw "$chart" --set api.instanceId=ci-instance \
+                       --set web.oidcAuthority=https://keycloak.ci/realms/rw)
 
           # Every prefix the SPA calls same-origin must route to the API Service.
           # ApiRouteSurfaceTests pins this list against web/vite.config.ts; this
@@ -247,12 +250,22 @@ jobs:
           grep -q 'name: Instance__Id' <<<"$rendered"
           grep -q 'value: "ci-instance"' <<<"$rendered"
 
+          # The web container's Content-Security-Policy connect-src is DERIVED from
+          # web.oidcAuthority's ORIGIN — scheme + host, never the realm path, which
+          # CSP would treat as a path prefix nobody requests and so match nothing.
+          # If these two ever drift apart, sign-in breaks at the first discovery
+          # fetch with a console error and no server-side trace, which is the worst
+          # kind of deployment bug to debug. One value, derived, checked here.
+          grep -q "value: \"'self' https://keycloak.ci\"" <<<"$rendered" \
+            || { echo "::error::CSP_CONNECT_SRC was not derived from web.oidcAuthority's origin"; exit 1; }
+          grep -q 'name: CSP_FRAME_SRC' <<<"$rendered"
+
       - name: The chart's promised failures must actually fail
         run: |
           set -euo pipefail
           chart=deploy/helm/rocketwiki
 
-          req="--set api.instanceId=ci-instance"
+          req="--set api.instanceId=ci-instance --set web.oidcAuthority=https://keycloak.ci/realms/rw"
 
           # FileSystem without a PVC: the chart refuses rather than creating
           # storage for state (design.md §15).
@@ -276,6 +289,68 @@ jobs:
             echo "::error::An empty api.instanceId should have failed schema validation."
             exit 1
           fi
+
+          # B30's deployment half. VITE_OIDC_AUTHORITY is inlined into the SPA at
+          # build time and the SPA now fails closed without it — which on its own
+          # only moves the failure from "users redirected to localhost" to "the
+          # image is a brick nobody notices until first login". So BOTH ends refuse:
+          # Dockerfile.web's oidc-authority-check stage will not build an image
+          # without it, and the chart will not render a deployment that does not
+          # state it. Omitted, empty, and scheme-less are the three shapes that
+          # produce the same unusable result, so all three are refused.
+          for bad in "" "keycloak.internal" "ftp://keycloak.internal"; do
+            if helm template rw "$chart" --set api.instanceId=ci-instance \
+                 --set "web.oidcAuthority=$bad" >/dev/null 2>&1; then
+              echo "::error::web.oidcAuthority='$bad' should have failed schema validation."
+              exit 1
+            fi
+          done
+
+          # And an empty frame-src, which would render `frame-src ;` — the same as
+          # 'none', but by accident rather than by decision.
+          if helm template rw "$chart" $req --set web.csp.frameSrc= >/dev/null 2>&1; then
+            echo "::error::An empty web.csp.frameSrc should have failed schema validation."
+            exit 1
+          fi
+
+          # web.oidcAuthority's default is a PLACEHOLDER on the reserved `.invalid`
+          # TLD, not a fallback — it cannot resolve, so an untouched value cannot
+          # accidentally work. It is a real string rather than "" only so this
+          # file's own schema check and `helm lint --strict` pass (the same reason
+          # api.instanceId ships "standalone"). The install NOTES must therefore say
+          # so loudly, and must stop saying so once a real value is set.
+          notes=$(helm install --dry-run --generate-name "$chart" --set api.instanceId=ci-instance)
+          grep -q 'IS STILL THE PLACEHOLDER' <<<"$notes" \
+            || { echo "::error::NOTES must flag the untouched web.oidcAuthority placeholder"; exit 1; }
+
+          notes=$(helm install --dry-run --generate-name "$chart" $req)
+          ! grep -q 'IS STILL THE PLACEHOLDER' <<<"$notes" \
+            || { echo "::error::NOTES still flags a placeholder after web.oidcAuthority was set"; exit 1; }
+
+      # The web image's build-arg guard, proven for the cost of one alpine layer:
+      # `--target oidc-authority-check` stops before npm ci and the Vite build, so
+      # this is seconds rather than minutes. The guard is load-bearing in the real
+      # build too — the build stage COPYs its marker file, so BuildKit cannot skip
+      # it — and a full `docker build -f Dockerfile.web` with no authority fails at
+      # this same step.
+      - name: The web image refuses to build without an OIDC authority
+        run: |
+          set -euo pipefail
+
+          for bad in "" "keycloak.internal" "ftp://keycloak.internal"; do
+            if docker build -f Dockerfile.web --target oidc-authority-check \
+                 ${bad:+--build-arg "VITE_OIDC_AUTHORITY=$bad"} . >/dev/null 2>&1; then
+              echo "::error::Dockerfile.web built with VITE_OIDC_AUTHORITY='$bad'; it must refuse."
+              exit 1
+            fi
+          done
+
+          # The two accepted shapes: a real authority, and the explicit,
+          # named opt-out for building a deliberately-unusable smoke-test image.
+          docker build -f Dockerfile.web --target oidc-authority-check \
+            --build-arg VITE_OIDC_AUTHORITY=https://keycloak.ci/realms/rw . >/dev/null
+          docker build -f Dockerfile.web --target oidc-authority-check \
+            --build-arg ALLOW_UNCONFIGURED_OIDC=1 . >/dev/null
 
   # The browser accessibility tier (docs/ACCESSIBILITY.md). The `frontend`
   # job's vitest run already includes the jsdom axe layer (fast, structural,

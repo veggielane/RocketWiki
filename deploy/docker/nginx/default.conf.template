@@ -4,13 +4,39 @@
 #
 # This is an *envsubst template*, not a finished config: the official nginx
 # images (including nginx-unprivileged) run /etc/nginx/templates/*.template
-# through envsubst at container start and write the result to conf.d. The one
-# substituted variable is ${API_UPSTREAM} (host:port of the API service) —
-# Dockerfile.web sets NGINX_ENVSUBST_FILTER=^API_UPSTREAM$ so nginx's own
-# runtime variables ($uri, $http_upgrade, ...) are never touched even if a
-# same-named env var existed. The Helm chart sets API_UPSTREAM to the api
-# Service's DNS name; the Dockerfile default (api:8080) suits Docker Compose,
-# where "api" is the conventional service name.
+# through envsubst at container start and write the result to conf.d. The
+# substituted variables are ${API_UPSTREAM} (host:port of the API service) and
+# the two CSP origin lists below — Dockerfile.web's NGINX_ENVSUBST_FILTER names
+# exactly those three, so nginx's own runtime variables ($uri, $http_upgrade,
+# ...) are never touched even if a same-named env var existed. The Helm chart
+# sets API_UPSTREAM to the api Service's DNS name; the Dockerfile default
+# (api:8080) suits Docker Compose, where "api" is the conventional service name.
+#
+# ---------------------------------------------------------------------------
+# THE TWO CSP VARIABLES, AND WHY THEY ARE VARIABLES
+# ---------------------------------------------------------------------------
+# The SPA's *cross-origin* dependencies are decided when the IMAGE IS BUILT
+# (Vite inlines every VITE_* value — see Dockerfile.web), but a Content-Security-
+# Policy has to be served at RUNTIME. There is no way for nginx to read what the
+# bundle was built with, so the two directives that name external origins are
+# left to the deployment to state:
+#
+#   CSP_CONNECT_SRC  default "'self'"  — connect-src. Must additionally name the
+#                    Keycloak origin from VITE_OIDC_AUTHORITY (oidc-client-ts
+#                    fetches discovery, token and userinfo over XHR) and the OTLP
+#                    collector origin if VITE_OTEL_EXPORTER_OTLP_ENDPOINT is set.
+#                    'self' already covers same-origin ws/wss, so /hubs needs
+#                    nothing extra.
+#   CSP_FRAME_SRC    default "'none'"  — frame-src. Must name the draw.io origin
+#                    from VITE_DRAWIO_URL if the diagram editor is enabled, and
+#                    the Keycloak origin if silent renew falls back to its iframe.
+#
+# The defaults are correct for an image built with NEITHER set — which is the
+# default build, since VITE_OIDC_AUTHORITY and VITE_DRAWIO_URL both fail closed
+# with no default of their own. That makes the failure mode a loud one at first
+# sign-in rather than a policy that quietly permits everything, which is the
+# trade this codebase takes everywhere else. Keep them in step with the build
+# args; deploy/README.md says so too, and values.yaml carries them for the chart.
 #
 # Why the SPA's own server proxies the API at all, when the Traefik Ingress
 # also routes these paths (see the chart): the frontend's defaults are
@@ -27,6 +53,29 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 
+# HSTS, only when the request actually arrived over TLS.
+#
+# nginx here listens on plain 8080 behind a TLS-terminating Traefik (or behind
+# nothing at all — the chart's ingress defaults to `tls: []`), so $scheme inside
+# the pod is ALWAYS http and cannot answer this question. X-Forwarded-Proto is
+# what the terminator sets, so that is what is read.
+#
+# An empty value makes nginx omit the header entirely, which is the whole point:
+# a deployment served over plain HTTP must not advertise HSTS, and one behind
+# TLS gets it without anyone remembering to switch it on.
+#
+# A client can of course forge X-Forwarded-Proto over plain HTTP and receive an
+# HSTS header it then honours. That is self-inflicted and harmless — it pins
+# their own browser to https for this host and nothing else.
+#
+# No includeSubDomains and no preload, deliberately: this is an internal wiki
+# whose siblings on the same parent domain are other people's services, and
+# includeSubDomains would make a decision about them from here.
+map $http_x_forwarded_proto $rocketwiki_hsts {
+    https   "max-age=31536000";
+    default "";
+}
+
 server {
     # nginx-unprivileged listens on 8080 — an unprivileged user cannot bind 80.
     listen       8080;
@@ -39,6 +88,63 @@ server {
     gzip on;
     gzip_types text/css application/javascript application/json image/svg+xml;
     gzip_min_length 1024;
+
+    # --- Security headers ----------------------------------------------------
+    #
+    # !! READ THIS BEFORE ADDING AN add_header TO ANY location BLOCK !!
+    #
+    # nginx's add_header does NOT merge across levels. A `location` that declares
+    # even ONE add_header of its own REPLACES the whole inherited set — silently,
+    # with no warning at config test or at runtime. So a location that adds a
+    # Cache-Control and nothing else serves its responses with no CSP, no
+    # X-Frame-Options and no nosniff, and the only way to notice is to look at a
+    # response.
+    #
+    # The rule this file follows, and the one ApiRouteSurfaceTests enforces:
+    #
+    #   a `location` either declares NO add_header at all (and inherits every
+    #   header below), or it repeats ALL of them alongside its own.
+    #
+    # Two locations take the second branch today (/assets/ and the SPA catch-all,
+    # which both set Cache-Control). Every proxy location takes the first.
+    #
+    # `always` on each: without it nginx omits the header on error responses
+    # (4xx/5xx), and a clickjacking frame around a 403 is still a frame.
+    #
+    # ---- What each directive is for -----------------------------------------
+    #   default-src 'self'      the floor; everything unlisted falls back to it
+    #   base-uri 'self'         an injected <base> cannot re-point relative URLs
+    #   object-src 'none'       no <object>/<embed> plugin surface at all
+    #   frame-ancestors 'none'  the wiki is never framed (clickjacking); the
+    #                           X-Frame-Options below says the same to browsers
+    #                           that predate CSP3
+    #   script-src 'self'       hashed bundles only. No 'unsafe-inline' and no
+    #                           'unsafe-eval' — nothing in the dependency set
+    #                           needs either, and this is the directive that
+    #                           actually stands behind the one HTML-injection
+    #                           sink in the app (mermaid's SVG output, whose only
+    #                           other sanitizer is mermaid's bundled DOMPurify)
+    #   style-src 'unsafe-inline'  required, not laziness: MUI/emotion injects
+    #                           <style> elements at runtime, and mermaid's SVG
+    #                           carries its own <style>. Inline STYLE is not a
+    #                           script-execution vector on its own
+    #   img-src data: blob:     data: for draw.io diagrams (rendered as an inert
+    #                           <img> data-URI) and blob: for avatars/attachments
+    #                           fetched through the authenticated pipeline and
+    #                           handed to URL.createObjectURL
+    #   font-src 'self' data:   no external font CDN; data: covers inlined fonts
+    #   connect-src / frame-src see the file header — deployment-supplied
+    #   form-action 'self'      no form posts to a foreign origin
+    #
+    # Referrer-Policy is no-referrer rather than the usual
+    # strict-origin-when-cross-origin: page URLs on this wiki carry space keys and
+    # page slugs, and a slug can be as disclosing as a title. Nothing here needs a
+    # referrer (the OIDC flow uses redirect + PKCE), so none is sent.
+    add_header Content-Security-Policy   "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ${CSP_CONNECT_SRC}; frame-src ${CSP_FRAME_SRC}; form-action 'self'" always;
+    add_header X-Frame-Options           "DENY" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header Referrer-Policy           "no-referrer" always;
+    add_header Strict-Transport-Security $rocketwiki_hsts always;
 
     # --- API proxy locations -------------------------------------------------
     # One shared set of proxy headers. X-Forwarded-* matter to the API for
@@ -170,6 +276,15 @@ server {
     # Vite emits content-hashed filenames under /assets — safe to cache
     # forever; a new deploy means new names.
     location /assets/ {
+        # This block declares an add_header, so it inherits NONE of the
+        # server-level ones and has to repeat them — see the rule at the top of
+        # the server block. Adding a header here without the five below silently
+        # strips the security headers from every static asset.
+        add_header Content-Security-Policy   "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ${CSP_CONNECT_SRC}; frame-src ${CSP_FRAME_SRC}; form-action 'self'" always;
+        add_header X-Frame-Options           "DENY" always;
+        add_header X-Content-Type-Options    "nosniff" always;
+        add_header Referrer-Policy           "no-referrer" always;
+        add_header Strict-Transport-Security $rocketwiki_hsts always;
         add_header Cache-Control "public, max-age=31536000, immutable";
         try_files $uri =404;
     }
@@ -178,6 +293,15 @@ server {
     # index.html and lets the client router take over. index.html itself must
     # never be cached, or users keep running a stale bundle after an upgrade.
     location / {
+        # Same repetition, same reason — and this is the block that matters most:
+        # it serves index.html, the document the CSP and X-Frame-Options actually
+        # govern. An add_header added here without these five would take the whole
+        # SPA out from behind its own policy.
+        add_header Content-Security-Policy   "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ${CSP_CONNECT_SRC}; frame-src ${CSP_FRAME_SRC}; form-action 'self'" always;
+        add_header X-Frame-Options           "DENY" always;
+        add_header X-Content-Type-Options    "nosniff" always;
+        add_header Referrer-Policy           "no-referrer" always;
+        add_header Strict-Transport-Security $rocketwiki_hsts always;
         add_header Cache-Control "no-cache";
         try_files $uri $uri/ /index.html;
     }

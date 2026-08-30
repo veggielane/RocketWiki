@@ -91,15 +91,35 @@ already written, and it used to be the one thing you didn't get.
 ## 4. Then, and only then, a real run
 
 ```
+# The connection string comes from the environment, so it never enters argv —
+# where `ps`, /proc/<pid>/cmdline, shell history and crash dumps would all have
+# it. --connection-string-file <path> works too (for a mounted secret), and
+# --connection-string <value> still works but puts the credential in argv.
+export ROCKETWIKI_CONNECTIONSTRING='<sql-server-connection-string>'
+
 RocketWiki.Importer --export <path> --space-key <KEY> \
-  --connection-string "<sql-server-connection-string>" \
   --attachments-root <directory> \
   --acting-user-id <existing-rocketwiki-user-guid> \
   --importer-principal-id <sub-claim-value-for-the-importer> \
   --grant-role <editor|space-admin> \
   --grant-expression '<access-rule-expression-json>' \
+  --local-instance-id <this-instance's-Instance:Id> \
   --report import-report.txt
 ```
+
+`--local-instance-id` is **required** for a real run and must match what the API is
+configured with (`Instance:Id`). It used to default to `"standalone"`, which is the one
+value that cannot be right anywhere but a test: a space's `OriginInstanceId` is what marks
+it native or a replica (design.md §12), so importing without the flag against an API
+configured with any other identity produces spaces that are permanently **read-only
+replicas of an instance that does not exist**, and unpicking that needs a data fix rather
+than a re-run. A dry run needs none — it writes nothing.
+
+A `--grant-expression` of `{"everyone": true}` now prints a loud **WIDE GRANT** warning
+before the space is created. It is a warning and not a refusal — opening a space to
+everyone is a legitimate choice for genuinely general content, and a hard block would only
+teach people to work around it — but the consequence used to be invisible until somebody
+looked at the space afterwards.
 
 `--grant-role`/`--grant-expression` decide who can see and edit the space once it exists
 — **and, for the duration of the run, what the importer itself may write.** Every

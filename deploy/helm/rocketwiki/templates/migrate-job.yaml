@@ -54,9 +54,7 @@ spec:
           imagePullPolicy: {{ .Values.api.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-          # An explicit env entry (not envFrom) because $(VAR) expansion in
-          # args is only guaranteed for variables declared in `env`. The
-          # value comes from the same operator-created Secret the API uses —
+          # The value comes from the same operator-created Secret the API uses —
           # referenced, never templated (values.yaml api.existingSecret).
           # If the Secret is missing the pod fails config validation and the
           # release install/upgrade fails before anything rolls: fail closed.
@@ -67,9 +65,27 @@ spec:
                   name: {{ .Values.api.existingSecret | quote }}
                   key: ConnectionStrings__rocketwiki
           command: ["/app/efbundle"]
-          # --connection overrides the placeholder baked in by the
-          # design-time factory (RocketWikiDbContextFactory.cs).
-          args: ["--connection", "$(ROCKETWIKI_CONNECTIONSTRING)"]
+          # NO --connection argument, deliberately. This used to read
+          # args: ["--connection", "$(ROCKETWIKI_CONNECTIONSTRING)"], which put
+          # the database credentials into the container's ARGV: visible in
+          # `kubectl describe pod`, in /proc/<pid>/cmdline to anything else in
+          # the pod, and in whatever the container runtime records about the
+          # process. The connection string is read from the environment instead,
+          # by RocketWikiDbContextFactory — so the pod spec carries only the
+          # secretKeyRef and the value never leaves the container's own env.
+          #
+          # That factory is the ONLY resolution path here, which is what makes
+          # this safe: Dockerfile.api builds the bundle with
+          # `--project src/RocketWiki.Data` and no --startup-project, and
+          # RocketWiki.Data is a class library with no Program — so EF has
+          # nothing to fall back to but IDesignTimeDbContextFactory. (The
+          # factory also accepts ConnectionStrings__rocketwiki, the standard
+          # .NET spelling, if a future bundle is ever built against the API.)
+          #
+          # If the variable is somehow empty, the factory falls back to its
+          # localhost design-time placeholder, which cannot resolve inside this
+          # container: the Job fails rather than migrating something unintended.
+          args: []
           resources:
             {{- toYaml .Values.migrate.resources | nindent 12 }}
 {{- end }}

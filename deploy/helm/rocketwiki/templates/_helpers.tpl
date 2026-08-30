@@ -61,3 +61,45 @@ imagePullSecrets:
 {{- toYaml . | nindent 2 }}
 {{- end }}
 {{- end -}}
+
+{{/*
+The web image's Content-Security-Policy `connect-src`, DERIVED from
+web.oidcAuthority unless the operator states one explicitly.
+
+Why derived rather than restated: connect-src has to name the Keycloak origin
+or sign-in fails at the first discovery fetch (oidc-client-ts uses XHR), and
+that origin is already stated one line above as web.oidcAuthority. Two values
+that must agree, maintained by hand, is a drift bug with a schedule. So the
+common case needs one value, and the override exists for the deployments that
+genuinely need more origins in the list (an OTLP collector, a second IdP).
+
+An explicit web.csp.connectSrc is used verbatim — including whatever the
+operator did or did not put in it. That is the point of an override.
+*/}}
+{{- define "rocketwiki.web.cspConnectSrc" -}}
+{{- if .Values.web.csp.connectSrc -}}
+{{- .Values.web.csp.connectSrc -}}
+{{- else -}}
+{{- $origin := include "rocketwiki.web.oidcOrigin" . -}}
+{{- printf "'self' %s" $origin -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The ORIGIN of web.oidcAuthority — scheme + host + port, no path. A CSP source
+is an origin: "https://keycloak.internal/realms/rocketwiki" as written would
+make the whole directive silently useless, since CSP would match it as a path
+prefix nobody ever requests.
+
+Fails the render rather than producing an empty origin. values.schema.json
+already pins the shape, so reaching this is a schema that was edited without
+this template — which is exactly when a silent empty string would be worst: it
+renders `connect-src 'self' `, sign-in breaks, and nothing says why.
+*/}}
+{{- define "rocketwiki.web.oidcOrigin" -}}
+{{- $url := urlParse (.Values.web.oidcAuthority | default "") -}}
+{{- if or (not $url.scheme) (not $url.host) -}}
+{{- fail (printf "web.oidcAuthority must be an http:// or https:// URL (got %q). It is the Keycloak realm URL the web image was BUILT with (--build-arg VITE_OIDC_AUTHORITY), and its origin is what the CSP's connect-src must name." .Values.web.oidcAuthority) -}}
+{{- end -}}
+{{- printf "%s://%s" $url.scheme $url.host -}}
+{{- end -}}

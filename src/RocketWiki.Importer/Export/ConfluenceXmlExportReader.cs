@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
+using RocketWiki.Core.Content;
 using RocketWiki.Importer.Export.Internal;
 
 namespace RocketWiki.Importer.Export;
@@ -28,6 +29,15 @@ namespace RocketWiki.Importer.Export;
 /// </remarks>
 public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
 {
+    private readonly ConfluenceExportLimits _limits;
+
+    /// <param name="limits">
+    /// Decompression ceilings (<see cref="ConfluenceExportLimits"/>). Defaulted because
+    /// there is one right answer in production and no caller should be choosing; the
+    /// parameter exists so a test can prove the refusal with kilobytes.
+    /// </param>
+    public ConfluenceXmlExportReader(ConfluenceExportLimits? limits = null) => _limits = limits ?? ConfluenceExportLimits.Default;
+
     /// <summary>
     /// Opens the export file and reads it, handing ownership of the file handle to the
     /// returned <see cref="ConfluenceSpaceExport"/> — dispose that, and only that.
@@ -69,14 +79,38 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
     {
         var archive = new ZipArchive(exportZip, ZipArchiveMode.Read, leaveOpen: false);
 
+        // Before anything is decompressed: the shape the archive DECLARES. Free to read,
+        // and it refuses the obvious bomb without touching a byte of it. Not a proof - the
+        // declared sizes are the archive author's numbers - which is why the reads below
+        // count for themselves as well.
+        CheckArchiveShape(archive);
+
         var entitiesEntry = archive.GetEntry("entities.xml")
             ?? throw new ConfluenceExportFormatException(
                 "The archive has no entities.xml at its root - this doesn't look like a Confluence XML space export.");
 
+        if (entitiesEntry.Length > _limits.MaxEntitiesXmlBytes)
+        {
+            throw new ConfluenceExportFormatException(
+                $"entities.xml declares {entitiesEntry.Length} uncompressed bytes, above this importer's " +
+                $"{_limits.MaxEntitiesXmlBytes}-byte ceiling. It is parsed into an in-memory document, so reading it " +
+                "would cost several times that again - refusing rather than exhausting the host.");
+        }
+
         EntityGraph graph;
         using (var entitiesStream = entitiesEntry.Open())
+        using (var bounded = new BoundedReadStream(entitiesStream, _limits.MaxEntitiesXmlBytes, "entities.xml"))
         {
-            graph = EntityGraph.Parse(entitiesStream);
+            try
+            {
+                graph = EntityGraph.Parse(bounded, _limits.MaxEntitiesXmlBytes);
+            }
+            catch (DecompressionLimitExceededException ex)
+            {
+                // Translated so the CLI's one export-refusal handler covers this too,
+                // rather than the tool dying with an unhandled exception on a bomb.
+                throw new ConfluenceExportFormatException(ex.Message);
+            }
         }
 
         var spaceObjects = graph.ObjectsOfClass("Space").ToList();
@@ -133,7 +167,7 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
             var attachments = graph.GetCollectionIds(pageObject, "attachments")
                 .Select(graph.ById)
                 .Where(a => a is not null)
-                .Select(a => BuildAttachment(graph, a!, archive, readerNotes))
+                .Select(a => BuildAttachment(graph, a!, archive, readerNotes, _limits))
                 .Where(a => a is not null)
                 .Select(a => a!)
                 .ToList();
@@ -516,7 +550,8 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
     }
 
     private static ConfluenceExportAttachment? BuildAttachment(
-        EntityGraph graph, EntityObject attachmentObject, ZipArchive archive, List<string> readerNotes)
+        EntityGraph graph, EntityObject attachmentObject, ZipArchive archive, List<string> readerNotes,
+        ConfluenceExportLimits limits)
     {
         var fileName = graph.GetScalar(attachmentObject, "fileName");
         if (fileName is null)
@@ -544,11 +579,48 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
         }
 
         var entryFullName = entry.FullName;
+        var maxAttachmentBytes = limits.MaxAttachmentBytes;
         return new ConfluenceExportAttachment(attachmentObject.Id, fileName, contentType, () =>
-            archive.GetEntry(entryFullName)?.Open()
-            ?? throw new ConfluenceExportFormatException(
-                $"Attachment '{fileName}' (Confluence id {attachmentObject.Id}) was found in entities.xml, and its " +
-                $"binary was located at '{entryFullName}' while reading the archive, but that entry is gone now " +
-                "that content is actually being read. The archive may have been modified between reading and use."));
+        {
+            var stream = archive.GetEntry(entryFullName)?.Open()
+                ?? throw new ConfluenceExportFormatException(
+                    $"Attachment '{fileName}' (Confluence id {attachmentObject.Id}) was found in entities.xml, and its " +
+                    $"binary was located at '{entryFullName}' while reading the archive, but that entry is gone now " +
+                    "that content is actually being read. The archive may have been modified between reading and use.");
+
+            // Bounded at the point of use, not at read time: this closure is what pass 2
+            // hands to AttachmentService, which buffers the whole attachment to hash it.
+            // An unbounded entry here is a memory exhaustion with an upload's name on it.
+            // The importer catches the resulting refusal per attachment, so one oversized
+            // file is a reported failure rather than an abandoned run.
+            return new BoundedReadStream(stream, maxAttachmentBytes, entryFullName);
+        });
+    }
+
+    /// <summary>
+    /// Entry count and declared total expansion, from the central directory alone. See
+    /// <see cref="ConfluenceExportLimits"/> for why this is a fast path rather than the
+    /// proof.
+    /// </summary>
+    private void CheckArchiveShape(ZipArchive archive)
+    {
+        if (archive.Entries.Count > _limits.MaxEntryCount)
+        {
+            throw new ConfluenceExportFormatException(
+                $"The export declares {archive.Entries.Count} entries, above this importer's " +
+                $"{_limits.MaxEntryCount}-entry ceiling. Refusing rather than reading it.");
+        }
+
+        long declaredTotal = 0;
+        foreach (var entry in archive.Entries)
+        {
+            declaredTotal += entry.Length;
+            if (declaredTotal > _limits.MaxTotalUncompressedBytes)
+            {
+                throw new ConfluenceExportFormatException(
+                    $"The export declares more than {_limits.MaxTotalUncompressedBytes} bytes of uncompressed " +
+                    "content, above this importer's ceiling. Refusing rather than reading it.");
+            }
+        }
     }
 }

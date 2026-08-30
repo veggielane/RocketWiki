@@ -86,6 +86,8 @@ public static class ImporterCli
             }
             else
             {
+                WarnOnWideGrant(options.InitialGrantExpressionJson!, export.Space.Key, output);
+
                 var optionsBuilder = new DbContextOptionsBuilder<RocketWikiDbContext>().UseSqlServer(options.ConnectionString);
                 await using var dbContext = new RocketWikiDbContext(optionsBuilder.Options);
 
@@ -136,5 +138,68 @@ public static class ImporterCli
 
             return report.NeedsReview ? 3 : 0;
         }
+    }
+
+    /// <summary>
+    /// Says out loud what <c>--grant-expression '{"everyone": true}'</c> means before the
+    /// space is created with it.
+    ///
+    /// <para>The grant given here becomes the imported space's <b>initial space grant</b>
+    /// (design.md §6): the rule deciding who may read everything the import is about to
+    /// write. An <c>everyone</c> rule opens a whole migrated Confluence space — which on
+    /// this product is export-controlled content by default — to every authenticated
+    /// principal on the instance, in one flag, silently.</para>
+    ///
+    /// <para>It is a warning and not a refusal on purpose. Opening a space to everyone is a
+    /// legitimate choice for genuinely general content, and this is an operator tool run
+    /// deliberately; a hard block would only teach people to work around it. What was
+    /// missing was not permission, it was that the choice was invisible — the flag went in
+    /// and the space came out with no line anywhere saying what had just been granted.
+    /// Clearance still applies underneath regardless (§6.3): a grant widens who may reach a
+    /// space, never what they may read inside it.</para>
+    ///
+    /// <para>Matched on the parsed expression rather than the raw string so whitespace and
+    /// key casing cannot slip past it. An expression that will not parse is left alone —
+    /// the import's own grant preflight refuses that case with a better message.</para>
+    ///
+    /// <para><b>internal</b> rather than private so it is testable on its own: the path
+    /// that calls it needs a live SQL Server two statements later, so a black-box test
+    /// through <see cref="RunAsync"/> could never reach it.</para>
+    /// </summary>
+    internal static void WarnOnWideGrant(string grantExpressionJson, string spaceKey, TextWriter output)
+    {
+        bool isEveryone;
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(grantExpressionJson);
+            isEveryone = document.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                && document.RootElement.TryGetProperty("everyone", out var everyone)
+                && everyone.ValueKind == System.Text.Json.JsonValueKind.True;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return;
+        }
+
+        if (!isEveryone)
+        {
+            return;
+        }
+
+        output.WriteLine();
+        output.WriteLine("  !! WIDE GRANT !!");
+        output.WriteLine(
+            $"  --grant-expression is {{\"everyone\": true}}, so space '{spaceKey}' will be readable by EVERY");
+        output.WriteLine(
+            "  authenticated principal on this instance the moment it is created - including everything");
+        output.WriteLine(
+            "  this import is about to write into it. For a migrated Confluence space that is very often");
+        output.WriteLine(
+            "  wrong: prefer a group or attribute rule (e.g. {\"group\": \"engineering\"}) and widen later.");
+        output.WriteLine(
+            "  (Protective markings still apply underneath - a grant widens who may reach the space, never");
+        output.WriteLine(
+            "  what they may read inside it - but the space's existence, titles and structure are exposed.)");
+        output.WriteLine();
     }
 }

@@ -1205,6 +1205,19 @@ degradation pattern, including `UNREACHABLE` on endpoint failure: one
 attempt, bounded timeout, no retries). v1 is non-streaming and stateless:
 no conversation memory, each ask retrieves fresh under the current token.
 
+**The question is bounded, and the bound is readable.** `Ai:MaxQuestionChars`
+(default 2000) refuses an over-long question *before* retrieval and before
+anything is sent — refused rather than truncated, so what gets cut is the
+asker's choice rather than a silent prefix. The `assistantStatus` query
+reports that number (and null when the assistant is unconfigured: no feature,
+no bound), so a client can warn while a question is being typed instead of
+only after it is refused. It is instance configuration, not content — the
+`gitlabStatus` shape — but unlike `gitlabStatus` it answers an anonymous
+caller with the same shape as an unconfigured instance: `askWiki` refuses
+anonymous callers outright, so there is no feature there to describe, and an
+unauthenticated inventory of what a classified deployment runs is the same
+thing production introspection was closed to avoid.
+
 ---
 
 ## 10. File storage
@@ -1453,6 +1466,41 @@ bundle-000041.zip
 - The manifest hash chain makes a missing, reordered, or tampered bundle a
   detected error, never a silent absorb. Every import is audited
   (`sync.import` with bundle id and event range).
+- **Attachment bytes are re-hashed on import, and the chain reaches them
+  without covering them.** `PayloadSha256` covers the events file only; the
+  binaries live in their own `blobs/` entries outside it. What binds them is
+  that each entry is *named* for the SHA-256 of its own content and the event
+  line referencing it carries the same hex string — and that line is inside the
+  hashed payload. So the importer recomputes the hash of every `blobs/` entry
+  and requires it to equal the entry's own name (which must itself be a
+  well-formed SHA-256). Substituting a file would need a preimage; renaming the
+  entry breaks the reference from a hash-covered line. Refused as a
+  `sync.import.refused` of the same family as a chain break, and — like the
+  per-space sequence check — as a **pre-pass**, because attachments are written
+  to storage as their events apply and a half-applied bundle leaves blobs
+  behind that nothing collects.
+
+  What this does **not** cover is omission: stripping a `blobs/` entry makes
+  that attachment land with no content rather than with the wrong content, and
+  that is deliberate — export legitimately skips an attachment whose object is
+  missing from its own storage (§10), so refusing on absence would turn an
+  origin-side fault into a boundary the operator cannot cross. The omission
+  surfaces at the first download.
+- **The bundle's declared origin must match the one the importer was told.**
+  `manifest.instanceId` is compared against the operator's
+  `--origin-instance-id`. Every replica space, the import position and every
+  per-space sequence on the high side are keyed by the latter; importing
+  instance A's bundle as if it came from B splices two streams into one
+  position, and the strict ordering that position exists to enforce becomes an
+  ordering over nothing.
+- **A bundle is decompressed under ceilings** (entry count, per-entry and total
+  uncompressed size, event-line count). Every integrity check above happens
+  *after* something has been decompressed, so none of them stops a zip bomb —
+  and the declared size of a zip entry is a number its author chose, so the
+  reads count the bytes that actually arrive rather than trusting it. Refused
+  as `sync.import.refused` like any other integrity failure. The Confluence
+  importer applies the same discipline to a space export, which is likewise an
+  archive from outside this system (§13).
 
 **Bundle format versioning.** The manifest declares `formatVersion`; its
 absence marks format 1 (the original, current-state-only baselines). Format
@@ -1522,18 +1570,31 @@ or as a scheduled job. An admin **sync status** page shows the last bundle
 applied, per-space sequence positions, and loud warnings on gaps or chain
 breaks.
 
-The CLI is `RocketWiki.Sync export --connection-string … --output <dir>
---instance-id <id> --attachments-root <dir> [--baseline <space-key>]` and
-`RocketWiki.Sync import --connection-string … --bundle <file-or-dir>
---origin-instance-id <id> --attachments-root <dir>`. `--baseline` runs
+The CLI is `RocketWiki.Sync export --output <dir> --instance-id <id>
+--attachments-root <dir> [--baseline <space-key>]` and `RocketWiki.Sync
+import --bundle <file-or-dir> --origin-instance-id <id> --attachments-root
+<dir>`. The database connection string comes from
+`$ROCKETWIKI_CONNECTIONSTRING` or `--connection-string-file <path>` rather
+than from argv — a credential on the command line is readable by every other
+local user (`ps`, `/proc/<pid>/cmdline`) and lands in shell history and crash
+dumps; `--connection-string <value>` still works and is documented as the
+discouraged option. `--baseline` runs
 exactly once per newly exported space and is refused for a space that isn't
-flagged exported or that this instance doesn't own. Import in directory mode
+flagged exported or that this instance doesn't own — a check the **export
+service** makes, not only the CLI, so a second caller cannot bypass it the way
+the incremental path's `SyncOutboxWriter` gate never could be. Import in directory mode
 applies every `bundle-*.zip` in bundle-number order; exit code 2 (vs. 1 for
 usage errors) marks integrity refusals so a scheduled job can page on them.
 An integrity refusal also leaves a durable audit row: `sync.import.refused`
 on the sync channel, recording the bundle file name, origin instance, and
-refusal reason (gap, chain break, payload-hash mismatch, per-space sequence
-gap, or unreadable file). It is written on a fresh unit of work — never the
+refusal reason (gap, chain break, payload-hash mismatch, attachment-blob hash
+mismatch, origin mismatch, size-limit exceeded, per-space sequence gap,
+unsupported format, or unreadable file). The last of those covers a bundle
+whose bytes are simply malformed — truncated JSON, a missing required payload
+key, an unparseable date, an event type this build does not know — and it is
+listed here because it is easy to build the refusal machinery and then not
+reach it: a throw that escapes the CLI's catch is an exit code and a stack
+trace where §7 requires a durable row. It is written on a fresh unit of work — never the
 one holding the partially-applied bundle — and is deliberately not
 `sync.import` with a `denied` outcome: §7's denied names a principal
 refused by a failing restriction, and an integrity refusal has neither; the

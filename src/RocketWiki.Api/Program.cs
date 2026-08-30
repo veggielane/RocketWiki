@@ -336,14 +336,36 @@ builder.Services
     //
     // It does not add authorization of its own and does not need to - the IDE is static
     // UI, and every query it sends travels the same authenticated path as the SPA's.
-    // What it discloses beyond that is the SCHEMA, which introspection already serves
-    // unauthenticated. Whether introspection itself should be closed in production is a
-    // separate decision and is deliberately not made here.
+    // What it discloses beyond that is the SCHEMA - and that is now closed too, below.
     .ModifyServerOptions(o =>
     {
         o.Tool.Enable = builder.Environment.IsDevelopment();
         o.Tool.Title = "RocketWiki API";
     })
+    // Introspection: on in Development, OFF everywhere else. This was the open decision
+    // the Nitro comment above deferred; it is made here, in the same shape and for the
+    // same reason.
+    //
+    // /graphql is reachable unauthenticated (the pipeline authenticates the PRINCIPAL,
+    // not the endpoint), and introspection answers without one. What it hands over is
+    // structure, never content - an unauthenticated introspection response cannot name a
+    // page, a space or a marking value, and every actual read still returns empty/absent
+    // (design.md §6.7). So this is defence in depth, not a disclosure fix, and it is
+    // ranked that way: what it removes is a map. On an instance whose schema carries
+    // field names like `clearance` and `protectiveMarking`, a free, unauthenticated,
+    // machine-readable inventory of every query, mutation, argument and enum value is a
+    // reconnaissance convenience with no operational purpose in production.
+    //
+    // Nothing legitimate needs it there:
+    //   * the SPA's codegen reads the checked-in schema.graphql, never a live endpoint
+    //     (web/codegen.ts), and that file is pinned to the code by SchemaExportTests;
+    //   * `dotnet run schema export` builds the schema in-process;
+    //   * __typename is NOT introspection and keeps working, which matters because
+    //     urql's cache invalidation is keyed on it.
+    //
+    // Development keeps it because Nitro is unusable without it, and Development is
+    // exactly where a schema browser is the point.
+    .DisableIntrospection(disable: !builder.Environment.IsDevelopment())
     // --- GraphQL tracing (design.md §15) ---
     // HotChocolate.Diagnostics emits on the "HotChocolate.Diagnostics" ActivitySource,
     // which ServiceDefaults subscribes to. Every option below is set explicitly, even

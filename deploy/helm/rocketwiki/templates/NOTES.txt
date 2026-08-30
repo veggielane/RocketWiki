@@ -24,8 +24,30 @@ What just happened / will happen:
 
 Reminders that bite:
   - api.replicaCount is locked to 1 (design.md §15 — SignalR state).
-  - Probes are TCP-only until the /health-in-Production follow-up lands in
-    src/ (values.yaml api.probes.mode).
+  - Probes are {{ .Values.api.probes.mode }} (values.yaml api.probes.mode). The
+    http mode wires /alive and /health and sets HealthEndpoints__Enabled on the
+    api container; tcp is the dependency-free fallback. Neither path is routed
+    at the ingress.
   - `helm rollback` does NOT roll back the database schema — see
-    deploy/README.md "Upgrade and rollback" before relying on it.
+    deploy/README.md "Install / upgrade / rollback" before relying on it.
+  {{- if contains ".invalid" (include "rocketwiki.web.oidcOrigin" .) }}
+  - !! web.oidcAuthority IS STILL THE PLACEHOLDER !!
+    It is {{ .Values.web.oidcAuthority }} — the `.invalid` TLD never resolves, so
+    NOBODY WILL BE ABLE TO SIGN IN. Set it to the Keycloak realm URL the web
+    image was BUILT with (--build-arg VITE_OIDC_AUTHORITY); the CSP below is
+    derived from it, so the wrong value permits the wrong origin and sign-in
+    fails at the first discovery fetch with only a browser console error.
+  {{- else }}
+  - This release expects a web image BUILT with
+        --build-arg VITE_OIDC_AUTHORITY={{ .Values.web.oidcAuthority }}
+    Vite inlines that at build time, so nothing running can verify it — if the
+    image was built against a different realm, sign-in fails and this is the
+    line to check first.
+  {{- end }}
+    The CSP's connect-src is derived from web.oidcAuthority:
+        connect-src={{ include "rocketwiki.web.cspConnectSrc" . }}{{ if .Values.web.csp.connectSrc }}  (overridden by web.csp.connectSrc){{ end }}
+        frame-src={{ .Values.web.csp.frameSrc }}{{ if eq .Values.web.csp.frameSrc "'none'" }}  (no draw.io: set web.csp.frameSrc to the VITE_DRAWIO_URL origin if diagrams are on){{ end }}
+  - Ingress TLS is {{ if .Values.ingress.tls }}configured.{{ else }}NOT configured (ingress.tls is empty), so this
+    deployment serves plain HTTP: bearer tokens cross the network in the clear
+    and no HSTS header is sent. See deploy/README.md "Network posture".{{ end }}
   - Telemetry export is {{ if .Values.api.otel.enabled }}ENABLED → {{ .Values.api.otel.endpoint }} — that endpoint must be inside the network boundary (design.md §15 "Telemetry is not audit").{{ else }}disabled (design.md §15 fail-closed default).{{ end }}

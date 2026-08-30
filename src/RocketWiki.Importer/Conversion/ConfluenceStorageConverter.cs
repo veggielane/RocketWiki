@@ -70,7 +70,23 @@ public sealed partial class ConfluenceStorageConverter
 
         try
         {
-            return XElement.Parse(wrapped, LoadOptions.PreserveWhitespace);
+            // XXE, stated rather than inherited — the same reasoning as EntityGraph.Parse.
+            // The page body being parsed here is content from another organisation's
+            // Confluence, and `XElement.Parse(string)` is safe today only because of a
+            // framework default. Prohibit + a null resolver say so, and survive both a
+            // runtime change and an edit that reaches back for the convenience overload.
+            var settings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersFromEntities = 0,
+                // The fragment is already in memory as a string, so its length IS the
+                // bound; the reader is told so rather than left unbounded.
+                ConformanceLevel = ConformanceLevel.Document,
+            };
+
+            using var reader = XmlReader.Create(new StringReader(wrapped), settings);
+            return XElement.Load(reader, LoadOptions.PreserveWhitespace);
         }
         catch (XmlException ex)
         {

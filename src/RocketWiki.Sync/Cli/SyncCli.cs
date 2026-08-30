@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RocketWiki.Core.Enums;
@@ -160,7 +161,7 @@ public static class SyncCli
             {
                 result = await importService.ImportAsync(bundleFile, options.OriginInstanceId!, auditContext, cancellationToken);
             }
-            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException)
+            catch (Exception ex) when (IsMalformedBundle(ex))
             {
                 // An unopenable zip or a structurally broken manifest is the same class
                 // of loud, refuse-don't-absorb failure as a chain break (design.md §12).
@@ -213,11 +214,54 @@ public static class SyncCli
         await auditDb.SaveChangesAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// "The bundle's own bytes are malformed", as an exception filter.
+    ///
+    /// <para>This used to read <c>InvalidDataException or InvalidOperationException</c>,
+    /// which covered an unopenable zip and a missing entry and nothing else — so a bundle
+    /// with a truncated JSON line, a required property missing, or an unparseable date
+    /// <b>crashed the CLI</b> instead of being refused. That is an audit gap on the
+    /// boundary, and precisely the one §7 exists to close: the operator got a stack trace
+    /// and an exit code of 134 where the contract promises exit 2 and a durable
+    /// <c>sync.import.refused</c> row naming the file. The refusal machinery was fine; it
+    /// simply was not reached.</para>
+    ///
+    /// <para><b>Widened to a named list, not to <c>Exception</c>.</b> Each entry below
+    /// corresponds to a throw site reachable from bundle content:</para>
+    /// <list type="bullet">
+    /// <item><see cref="InvalidDataException"/> — a corrupt zip, and the import's own
+    /// "this bundle says something impossible" refusals.</item>
+    /// <item><see cref="InvalidOperationException"/> — a missing archive entry, an
+    /// unparseable manifest, a <c>JsonElement</c> read as the wrong kind.</item>
+    /// <item><see cref="JsonException"/> — a malformed manifest or NDJSON line.</item>
+    /// <item><see cref="KeyNotFoundException"/> — <c>GetProperty</c> for a required
+    /// payload key the bundle does not carry.</item>
+    /// <item><see cref="FormatException"/> / <see cref="OverflowException"/> — a value
+    /// that is the right kind but not a legal guid, date, or number.</item>
+    /// </list>
+    ///
+    /// <para><b>What is deliberately NOT caught matters as much.</b> A database failure, a
+    /// disk fault, or a cancellation is not the bundle being malformed, and recording one
+    /// as <c>reason: unreadable</c> against this file would put a false statement in the
+    /// regulated record — worse than the crash, because it looks like evidence. Those
+    /// still propagate.</para>
+    /// </summary>
+    private static bool IsMalformedBundle(Exception ex) =>
+        ex is InvalidDataException
+            or InvalidOperationException
+            or JsonException
+            or KeyNotFoundException
+            or FormatException
+            or OverflowException;
+
     private static string ClassifyRefusal(PageMutationError error) => error switch
     {
         BundleGapError => "bundle_gap",
         BundleChainMismatchError => "chain_mismatch",
         BundlePayloadTamperedError => "payload_hash_mismatch",
+        BundleBlobTamperedError => "blob_hash_mismatch",
+        BundleTooLargeError => "size_limit_exceeded",
+        BundleOriginMismatchError => "origin_mismatch",
         SpaceSequenceGapError => "space_sequence_gap",
         BundleFormatUnsupportedError => "unsupported_format",
         _ => error.GetType().Name,
@@ -230,6 +274,15 @@ public static class SyncCli
             "import the missing bundle(s) first (design.md §12: bundles apply strictly in order).",
         BundleChainMismatchError e => $"manifest hash chain break - {e.Reason}",
         BundlePayloadTamperedError e => $"payload hash mismatch - {e.Reason}",
+        // Same refusal family as the two above, and phrased the same way on purpose: an
+        // attachment's bytes not matching the hash the (chain-covered) event line declares
+        // for them is a tampered payload, just one that lives in its own archive entry.
+        BundleBlobTamperedError e => $"attachment content hash mismatch - {e.Reason}",
+        BundleTooLargeError e => $"bundle size limit exceeded - {e.Reason}",
+        BundleOriginMismatchError e =>
+            $"the bundle's manifest declares origin instance '{e.DeclaredInstanceId}', but --origin-instance-id " +
+            $"says '{e.ExpectedInstanceId}'. Importing it under the wrong origin would splice two instances' " +
+            "bundle streams into one position (design.md §12) - check the flag, or the bundle directory.",
         SpaceSequenceGapError e =>
             $"per-space sequence gap in space {e.SpaceId}: expected sequence {e.ExpectedSequence}, got {e.ActualSequence}.",
         BundleFormatUnsupportedError e =>

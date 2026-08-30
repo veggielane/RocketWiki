@@ -104,6 +104,117 @@ public sealed class ApiRouteSurfaceTests
             .Select(m => m.Groups["p"].Value)
             .ToList();
 
+    /// <summary>
+    /// The document-level security headers, and the nginx trap that makes "we set them at
+    /// server level" an unsafe thing to believe.
+    ///
+    /// <para><b>add_header does not merge across levels.</b> A <c>location</c> that declares
+    /// even one add_header of its own REPLACES the entire inherited set — silently, with no
+    /// warning at <c>nginx -t</c> and no error at runtime. So adding a Cache-Control to a
+    /// block is enough to serve every response from it with no CSP, no X-Frame-Options and
+    /// no nosniff, and the only way to find out is to look at a response header. Two
+    /// locations already declare a Cache-Control, so this is not hypothetical.</para>
+    ///
+    /// <para>The invariant, encoded: <b>a location either declares no add_header at all
+    /// (and inherits everything), or it declares all five.</b> That is exactly nginx's rule
+    /// rather than an approximation of it, which is why it can be checked mechanically —
+    /// and why "the headers are present on every location that serves responses" follows
+    /// from it rather than needing a second, weaker assertion.</para>
+    /// </summary>
+    [Fact]
+    public void NginxTemplate_SetsTheSecurityHeaders_AndNoLocationSilentlyDropsThem()
+    {
+        var template = ReadRepoFile(Path.Combine("deploy", "docker", "nginx", "default.conf.template"));
+
+        string[] required =
+        [
+            "Content-Security-Policy",
+            "X-Frame-Options",
+            "X-Content-Type-Options",
+            "Referrer-Policy",
+            "Strict-Transport-Security",
+        ];
+
+        // The server-level set, which everything with no add_header of its own inherits.
+        // Read from the region before the first `location` block so a header declared only
+        // inside some location cannot satisfy this.
+        var firstLocation = template.IndexOf("\n    location ", StringComparison.Ordinal);
+        Assert.True(firstLocation > 0, "Could not find the first `location` block; the template was restructured.");
+        var serverPreamble = template[..firstLocation];
+
+        foreach (var header in required)
+        {
+            Assert.True(
+                Regex.IsMatch(serverPreamble, $@"^\s*add_header\s+{Regex.Escape(header)}\s", RegexOptions.Multiline),
+                $"deploy/docker/nginx/default.conf.template sets no server-level `{header}`.");
+        }
+
+        // `always` on every one: without it nginx omits the header on 4xx/5xx responses,
+        // and a clickjacking frame around a 403 is still a frame.
+        foreach (Match match in Regex.Matches(template, @"^\s*add_header\s+(?<h>\S+)\s+(?<rest>.*)$", RegexOptions.Multiline))
+        {
+            if (required.Contains(match.Groups["h"].Value, StringComparer.Ordinal))
+            {
+                Assert.EndsWith("always;", match.Groups["rest"].Value.Trim(), StringComparison.Ordinal);
+            }
+        }
+
+        // And the trap itself: any location that declares an add_header must declare all
+        // five, because declaring one drops the inherited set entirely.
+        foreach (var (path, body) in ReadNginxLocationBodies(template))
+        {
+            if (!body.Contains("add_header", StringComparison.Ordinal))
+            {
+                continue; // declares none, so it inherits all of them
+            }
+
+            foreach (var header in required)
+            {
+                Assert.True(
+                    body.Contains($"add_header {header}", StringComparison.Ordinal)
+                    || Regex.IsMatch(body, $@"add_header\s+{Regex.Escape(header)}\s"),
+                    $"`location {path}` in deploy/docker/nginx/default.conf.template declares an add_header of its " +
+                    $"own, which REPLACES every inherited one — but does not repeat `{header}`. Every response from " +
+                    "that block is therefore served without it. Repeat all five, or set none here.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Each `location … { … }` block's path and body, matched by counting braces. A regex
+    /// cannot do this (the bodies contain braces of their own, e.g. `${API_UPSTREAM}`), and
+    /// getting it wrong would make the assertion above vacuous.
+    /// </summary>
+    private static List<(string Path, string Body)> ReadNginxLocationBodies(string template)
+    {
+        var blocks = new List<(string, string)>();
+        foreach (Match match in Regex.Matches(template, @"^\s*location\s+(?<p>\S+)\s*\{", RegexOptions.Multiline))
+        {
+            var depth = 1;
+            var start = match.Index + match.Length;
+            var i = start;
+            while (i < template.Length && depth > 0)
+            {
+                if (template[i] == '{')
+                {
+                    depth++;
+                }
+                else if (template[i] == '}')
+                {
+                    depth--;
+                }
+
+                i++;
+            }
+
+            Assert.Equal(0, depth); // unbalanced braces mean the parse is wrong, not the config
+            blocks.Add((match.Groups["p"].Value, template[start..(i - 1)]));
+        }
+
+        Assert.True(blocks.Count >= 8, $"Parsed only {blocks.Count} location blocks; the parse is broken.");
+        return blocks;
+    }
+
     /// <summary>The `range $path := list "…" "…"` line that generates the API paths.</summary>
     private static List<string> ReadIngressPaths()
     {

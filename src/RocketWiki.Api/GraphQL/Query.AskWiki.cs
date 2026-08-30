@@ -33,8 +33,61 @@ public sealed record AskWikiPayload(
     AskWikiUnavailableReason? Unavailable,
     AggregateMarkingLabel? AggregateMarking);
 
+/// <summary>
+/// What the ask surface needs to know BEFORE anybody asks: whether this instance has an
+/// assistant at all, and how long a question it will accept.
+///
+/// <para><b>Why a status field rather than a field on <see cref="AskWikiPayload"/>.</b>
+/// The limit's whole use is a character counter that warns while the question is being
+/// typed. A field on the payload only arrives with an answer — i.e. after the ask that
+/// the counter existed to prevent — so it would be a number that only ever shows up too
+/// late. This is the <c>gitlabStatus</c> shape, for the same reason gitlabStatus has it:
+/// instance configuration the client needs in order to render correctly, read once.</para>
+///
+/// <para><see cref="MaxQuestionChars"/> is <b>null exactly when the assistant is not
+/// configured</b>, rather than reporting the code default. There is no limit when there
+/// is no feature, and a number quoted for an absent assistant is a number about nothing —
+/// the UI's honest state there is the one it already has: no figure at all. (The refusal
+/// copy in <c>unavailableCopy.ts</c> deliberately quotes no number today for precisely
+/// this reason; with this field it can.)</para>
+/// </summary>
+public sealed record AssistantStatus(bool Configured, int? MaxQuestionChars);
+
 public partial class Query
 {
+    /// <summary>
+    /// Instance configuration for the ask surface. No content, no wiki state, nobody
+    /// else's anything — a bound and a boolean.
+    ///
+    /// <para><b>Anonymous callers get the absent shape</b> (<c>configured: false</c>, no
+    /// limit), which is deliberately stricter than its sibling <c>gitlabStatus</c>. Two
+    /// reasons, and the inconsistency is worth stating rather than leaving to be
+    /// discovered: <c>askWiki</c> itself refuses anonymous callers outright, so a status
+    /// field that answered them would describe a feature they cannot reach; and this
+    /// instance has just closed introspection outside Development on the argument that an
+    /// unauthenticated, machine-readable inventory of what a classified system runs has no
+    /// operational purpose. "This deployment has an AI assistant wired to an endpoint" is
+    /// a small entry in that same inventory. It costs the SPA nothing — it reads this
+    /// signed in.</para>
+    ///
+    /// <para><c>gitlabStatus</c>'s looser posture is pre-existing and not changed here;
+    /// this field simply does not copy it.</para>
+    /// </summary>
+    [NoAudit("Reads instance configuration only - whether an assistant endpoint is configured and the question-length bound. No wiki content, no principal attributes, no other user's state (design.md §7). Anonymous callers get the same answer as an unconfigured instance.")]
+    public AssistantStatus AssistantStatus(
+        [Service] IServiceProvider services,
+        [Service] ICurrentPrincipalAccessor principalAccessor)
+    {
+        // GetService, not GetRequiredService: AssistantConfiguration registers
+        // AssistantOptions ONLY when a chat endpoint and model are configured (§15's
+        // fail-closed family), so its absence IS "not configured" and must not throw.
+        var options = principalAccessor.Current is null ? null : services.GetService<AssistantOptions>();
+
+        return options is null
+            ? new AssistantStatus(Configured: false, MaxQuestionChars: null)
+            : new AssistantStatus(Configured: true, MaxQuestionChars: options.MaxQuestionChars);
+    }
+
     /// <summary>
     /// "Ask the wiki" (design.md §9, resolving §17's assistant bullet): RAG over the
     /// permission-filtered hybrid index, generation at the configured in-network

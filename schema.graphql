@@ -7,6 +7,7 @@ type Query {
   analytics(spaceKey: String, fromUtc: DateTime!, toUtc: DateTime!): AnalyticsReport
     @cost(weight: "10")
   archivedSpaces: [ArchivedSpace!]! @cost(weight: "10")
+  assistantStatus: AssistantStatus!
   askWiki(question: String!): AskWikiPayload! @cost(weight: "10")
   auditEvents(
     filter: AuditFilterInput!
@@ -222,6 +223,11 @@ type AskWikiPayload {
   citations: [AskWikiCitation!]!
   unavailable: AskWikiUnavailableReason
   aggregateMarking: AggregateMarkingLabel
+}
+
+type AssistantStatus {
+  configured: Boolean!
+  maxQuestionChars: Int
 }
 
 type AttachLabelPayload {

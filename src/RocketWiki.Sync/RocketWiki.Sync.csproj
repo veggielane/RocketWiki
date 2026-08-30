@@ -26,4 +26,12 @@
     <ProjectReference Include="..\RocketWiki.Storage\RocketWiki.Storage.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Same convention as RocketWiki.Api/.Data/.Storage/.Importer: the test project can
+         name internal implementation details (SyncCliArgumentParser's environment-variable
+         constant) rather than re-spelling them as string literals that could drift from
+         the thing they are meant to pin. -->
+    <InternalsVisibleTo Include="RocketWiki.Sync.Tests" />
+  </ItemGroup>
+
 </Project>

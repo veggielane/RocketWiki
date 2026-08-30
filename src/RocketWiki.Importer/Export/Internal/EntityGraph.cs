@@ -1,3 +1,4 @@
+using System.Xml;
 using System.Xml.Linq;
 
 namespace RocketWiki.Importer.Export.Internal;
@@ -48,13 +49,47 @@ internal sealed class EntityGraph
     /// streaming reader would have to build most of the same index anyway. If an
     /// import dies on memory, this is the line to look at first, and the fix is a
     /// two-pass XmlReader that indexes offsets rather than elements.
+    ///
+    /// <para>That memory shape is exactly why the caller bounds the stream and why
+    /// <paramref name="maxBytes"/> is echoed into the parser's own limit below: "hundreds
+    /// of MB, accepted" is a statement about a LEGITIMATE export, and it stops being a
+    /// reasonable posture the moment the file is one somebody else chose.</para>
     /// </summary>
-    public static EntityGraph Parse(Stream entitiesXml)
+    /// <param name="entitiesXml">The (already byte-bounded) entities.xml stream.</param>
+    /// <param name="maxBytes">
+    /// The same ceiling the caller bounded the stream with, reused here as
+    /// <see cref="XmlReaderSettings.MaxCharactersInDocument"/> — a second bound expressed in
+    /// the parser's own currency, so a document that is small on the wire but expands
+    /// through the parser is stopped by the parser.
+    /// </param>
+    public static EntityGraph Parse(Stream entitiesXml, long maxBytes)
     {
         XDocument doc;
         try
         {
-            doc = XDocument.Load(entitiesXml);
+            // XXE, stated rather than inherited. net10's XmlReader defaults are already
+            // DtdProcessing.Prohibit with a null resolver, so this file was safe - but
+            // "safe because of a framework default nobody wrote down" is not a posture for
+            // a parser whose input is ANOTHER organisation's Confluence export. A future
+            // runtime, or a future edit that reaches for XDocument.Load's convenience
+            // overload, would flip it silently. Written out, the intent survives both.
+            //
+            //   DtdProcessing.Prohibit - a <!DOCTYPE> is an error, so no external entity
+            //                            can be declared and no billion-laughs expansion
+            //                            can be written.
+            //   XmlResolver = null     - nothing is fetched, from disk or the network,
+            //                            even if some other path did admit a DTD.
+            var settings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersFromEntities = 0,
+                MaxCharactersInDocument = maxBytes,
+                CloseInput = false,
+            };
+
+            using var reader = XmlReader.Create(entitiesXml, settings);
+            doc = XDocument.Load(reader);
         }
         catch (System.Xml.XmlException ex)
         {

@@ -147,6 +147,121 @@ internal static class MarkdownText
         .Replace("\n", string.Empty);
 
     /// <summary>
+    /// Schemes a link or image URL from the imported source is allowed to carry. Anything
+    /// else — <c>javascript:</c>, <c>data:</c>, <c>vbscript:</c>, <c>file:</c> and the rest
+    /// — is not escaped into safety by <see cref="EscapeLinkUrl"/>, which is breakout-safe
+    /// but scheme-blind, so it needs refusing on its own terms.
+    /// </summary>
+    private static readonly string[] AllowedLinkSchemes = ["http", "https", "mailto", "ftp", "tel"];
+
+    /// <summary>
+    /// Whether a URL from the Confluence source may be emitted as a Markdown destination.
+    ///
+    /// <para><b>This is importer-side hygiene, not the last line of defence</b> — and it is
+    /// written that way deliberately. The SPA already neutralises both shapes today: the
+    /// link mark blanks <c>javascript:</c>/<c>data:</c> hrefs, and the image node renders
+    /// only <c>attachment://</c> sources. But a converter whose output is safe only because
+    /// of what the renderer happens to do is a converter that has made the renderer's
+    /// behaviour part of its contract without saying so. Stored content should not contain
+    /// <c>[click](javascript:…)</c> in the first place.</para>
+    ///
+    /// <para>Relative URLs, fragments and protocol-relative URLs carry no scheme and are
+    /// allowed: they are ordinary wiki links, and they cannot execute. A "scheme" is only
+    /// recognised as one when the colon is preceded by a valid scheme name (RFC 3986:
+    /// letter, then letters/digits/<c>+ - .</c>) — so <c>page 1: notes</c> is text, not a
+    /// scheme, and <c>C:\share\file</c> is not either.</para>
+    /// </summary>
+    public static bool IsAllowedLinkUrl(string url)
+    {
+        var trimmed = url.Trim();
+
+        // Control characters (including the tab/newline a browser strips before parsing a
+        // URL) are how "java\tscript:" gets past a naive prefix check. Nothing legitimate
+        // needs them in a destination.
+        if (trimmed.Any(char.IsControl))
+        {
+            return false;
+        }
+
+        var colon = trimmed.IndexOf(':');
+        if (colon <= 0)
+        {
+            return true; // no scheme at all: relative, fragment, or "//host/path"
+        }
+
+        // A '/', '?' or '#' before the colon means the colon is inside a path or query,
+        // not a scheme delimiter.
+        var beforeColon = trimmed.AsSpan(0, colon);
+        if (beforeColon.IndexOfAny('/', '?', '#') >= 0)
+        {
+            return true;
+        }
+
+        if (!char.IsAsciiLetter(beforeColon[0]))
+        {
+            return true; // not a well-formed scheme, so not a scheme
+        }
+
+        foreach (var c in beforeColon[1..])
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c != '+' && c != '-' && c != '.')
+            {
+                return true;
+            }
+        }
+
+        return AllowedLinkSchemes.Contains(beforeColon.ToString(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A fenced code block's info string, reduced to something that can only ever BE an
+    /// info string.
+    ///
+    /// <para>A Confluence code macro carries whatever <c>language</c> its author typed, and
+    /// it was interpolated straight after the opening fence. A value containing a newline
+    /// therefore closed the info string and everything after it became live Markdown blocks
+    /// in stored content — headings, lists, tables, links — attributable to nobody. Not
+    /// XSS (the renderer takes ProseMirror JSON, never HTML) but a structure-spoofing
+    /// primitive an imported page's original author controls.</para>
+    ///
+    /// <para>Reduced rather than escaped: an info string has no escaping mechanism, so the
+    /// only safe answer is to keep the characters a language tag legitimately uses
+    /// (letters, digits, <c>+ - . # _</c> — <c>#</c> because <c>c#</c> is one) and drop the
+    /// rest. A value with nothing left is no language at all, which renders an untagged
+    /// fence — the harmless direction, and the same one a reserved language already
+    /// degrades to. Length-capped for the same reason: whatever survives ends up on the
+    /// fence's opening line, and a language tag that is longer than
+    /// <see cref="MaxFenceLanguageLength"/> characters is not a language tag.</para>
+    /// </summary>
+    public static string? SanitizeFenceLanguage(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language))
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder(language.Length);
+        foreach (var c in language.Trim())
+        {
+            if (sb.Length == MaxFenceLanguageLength)
+            {
+                break;
+            }
+
+            if (char.IsAsciiLetterOrDigit(c) || c is '+' or '-' or '.' or '#' or '_')
+            {
+                sb.Append(c);
+            }
+        }
+
+        return sb.Length == 0 ? null : sb.ToString();
+    }
+
+    /// <summary>The longest fence info string this importer will emit. "objective-c++" is
+    /// 13; nothing legitimate approaches this.</summary>
+    public const int MaxFenceLanguageLength = 32;
+
+    /// <summary>
     /// Prefixes every line of a (possibly multi-block) string with <paramref name="prefix"/>,
     /// used for blockquotes and callout directives. Blank lines get the trimmed prefix
     /// (bare "&gt;") so CommonMark treats them as blockquote continuation, not termination.

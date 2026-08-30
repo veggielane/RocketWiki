@@ -56,6 +56,8 @@ docker build -f Dockerfile.api -t rocketwiki/api:0.1.0 .
 # Vite INLINES VITE_* at build time: this image is permanently bound to this
 # authority/client id. A different Keycloak realm means a rebuild, not a
 # config change (limitation documented in Dockerfile.web).
+# VITE_OIDC_AUTHORITY is REQUIRED — the build refuses without it, and refuses
+# anything that is not an http(s) URL. See the next section.
 docker build -f Dockerfile.web \
   --build-arg VITE_OIDC_AUTHORITY=https://keycloak.internal/realms/rocketwiki \
   --build-arg VITE_OIDC_CLIENT_ID=rocketwiki-web \
@@ -64,6 +66,82 @@ docker build -f Dockerfile.web \
 
 Tag versions deliberately — `latest` and `imagePullPolicy: IfNotPresent`
 together are a classic stale-image trap on air-gapped nodes.
+
+### `VITE_OIDC_AUTHORITY` is required, at both ends
+
+The SPA fails closed without it: no realm, no sign-in, and a "Sign-in is not
+configured" screen instead of a guess. Correct — and on its own it only moves
+the failure from *users redirected to localhost* to *the image is a brick
+nobody notices until first login*. So both ends refuse:
+
+- **The image will not build without it.** `Dockerfile.web`'s
+  `oidc-authority-check` stage rejects an omitted authority *and* one that
+  isn't an `http(s)` URL, because `readOidcConfig` rejects the latter too and a
+  typo therefore ships the same unusable image as an omission. Deliberately
+  building an unusable image (to smoke-test nginx routing with no realm to
+  hand) needs `--build-arg ALLOW_UNCONFIGURED_OIDC=1`, which prints a loud
+  warning. It is checkable on its own: `docker build -f Dockerfile.web --target
+  oidc-authority-check .` costs one alpine layer, and CI runs exactly that.
+- **The chart will not render without it.** `web.oidcAuthority` is required and
+  pattern-checked. Its default is a placeholder on the reserved `.invalid` TLD,
+  which can never resolve, and the install NOTES say so by name.
+
+### The web image's Content-Security-Policy must match its build args
+
+The SPA is served with a real CSP (see
+`deploy/docker/nginx/default.conf.template` for the full directive-by-directive
+reasoning). Everything in it is fixed in the image **except** the two
+directives that have to name external origins, because those origins are
+baked into the bundle at *build* time — Vite inlines `VITE_*`, so the running
+nginx has no way to discover what the image was built against.
+
+`connect-src` is **derived** from `web.oidcAuthority`, so the origin sign-in
+needs and the origin the policy permits are one value stated once:
+
+```yaml
+web:
+  # The realm the image was BUILT with. connect-src becomes
+  # "'self' https://keycloak.internal" automatically.
+  oidcAuthority: "https://keycloak.internal/realms/rocketwiki"
+  csp:
+    # Only if the bundle also talks to something else — an OTLP collector, a
+    # second IdP. Setting this means you own the WHOLE list, Keycloak included.
+    connectSrc: ""
+    # Nothing to derive this from: draw.io is its own build arg.
+    frameSrc: "https://drawio.internal https://keycloak.internal"
+```
+
+| Build arg | Chart value | Why |
+|---|---|---|
+| `VITE_OIDC_AUTHORITY` | `web.oidcAuthority` (→ `connect-src`) | `oidc-client-ts` fetches discovery, token and userinfo over XHR from the Keycloak origin. |
+| `VITE_DRAWIO_URL` | `web.csp.frameSrc` | The diagram editor is an `<iframe>` on that origin. |
+| `VITE_OTEL_EXPORTER_OTLP_ENDPOINT` | `web.csp.connectSrc` (override) | Browser traces POST to the collector origin. |
+
+`'self'` already covers same-origin `ws`/`wss`, so `/hubs` needs nothing extra.
+Note the derivation takes the URL's **origin**, not the realm path: a CSP
+source is an origin, and `https://keycloak.internal/realms/rocketwiki` as
+written would be matched as a path prefix nobody ever requests.
+
+**A forgotten `frameSrc` breaks the diagram editor loudly at first use.** That
+is the deliberate trade: the alternative default — permit every origin — would
+fail silently and permanently, which is not the posture anything else here
+takes. An empty `frameSrc` is rejected by the values schema, because
+`frame-src ;` is an empty source list — the same as `'none'`, but by accident
+rather than by decision.
+
+The other headers need no configuration: `X-Frame-Options: DENY` plus
+`frame-ancestors 'none'` (the wiki is never framed), `X-Content-Type-Options:
+nosniff`, and `Referrer-Policy: no-referrer` — the last is stricter than the
+usual `strict-origin-when-cross-origin` on purpose, because page URLs here
+carry space keys and slugs and a slug can disclose as much as a title.
+
+**HSTS is automatic and conditional.** nginx emits
+`Strict-Transport-Security` only when `X-Forwarded-Proto: https` arrives, so a
+plain-HTTP deployment (the chart's `ingress.tls: []` default) never advertises
+it and a TLS-terminated one gets it with nobody remembering to switch it on.
+No `includeSubDomains` and no `preload`: this is an internal wiki whose
+siblings on the same parent domain are other people's services, and
+`includeSubDomains` would be making a decision about them from here.
 
 ## Getting images to an air-gapped network (design.md §15)
 
@@ -213,6 +291,32 @@ kubectl -n rocketwiki logs job/rocketwiki-migrate
 A failed migration Job is deliberately left behind for inspection (the
 hook-delete-policy cleans up only successful runs).
 
+The Job passes **no** `--connection` argument. It used to, expanded from the
+Secret — which put the database credentials into the container's argv, where
+`kubectl describe pod` shows them, `/proc/<pid>/cmdline` exposes them to
+anything else in the pod, and the container runtime records them. `efbundle`
+now reads `ROCKETWIKI_CONNECTIONSTRING` from the environment instead (via
+`RocketWikiDbContextFactory`), so the pod spec carries only a `secretKeyRef`
+and the value never leaves the container's own environment. If the variable is
+somehow empty the factory falls back to a `localhost` design-time placeholder,
+which cannot resolve inside the Job's container: it fails rather than migrating
+something unintended.
+
+The two operator CLIs (`RocketWiki.Importer`, `RocketWiki.Sync`) take the same
+value the same three ways, and prefer the same one:
+
+```sh
+# Best: nothing secret in argv at all.
+export ROCKETWIKI_CONNECTIONSTRING='Server=…;Encrypt=True;TrustServerCertificate=False'
+RocketWiki.Sync import --bundle /transfer --instance-id high --origin-instance-id low \
+                       --attachments-root /var/rocketwiki/attachments
+
+# Or from a mounted secret file (trailing newline is trimmed).
+RocketWiki.Sync import --connection-string-file /run/secrets/rocketwiki-db …
+
+# --connection-string still works, and still puts the credential in argv.
+```
+
 **Rollback — the honest part.** `helm rollback rocketwiki <revision>` rolls
 back *manifests only*. It does **not** roll back the database schema: EF
 down-migrations are not wired into any path here, and reversing a migration
@@ -289,7 +393,60 @@ want the endpoints unmapped even in-pod.
   matches it instead of defining it.
 - **Runtime SPA config**: if rebuilding the web image per environment
   becomes a real burden, move the OIDC settings from build-time `VITE_` vars
-  to a fetched `config.json` (a web/ change).
+  to a fetched `config.json` (a web/ change). That would also let the CSP's
+  external origins be derived rather than restated (see the CSP section
+  above), which is the only part of that policy an operator can get wrong.
+
+## Network posture: what this chart does and does not promise
+
+Stated plainly, because "the chart hardens it" is the kind of assumption that
+is only discovered to be false during an incident.
+
+**TLS terminates at the ingress, and the chart does not configure it.**
+`ingress.tls` defaults to `[]` and `ingress.host` to `""`, which serves the
+wiki over **plain HTTP on any host**. That default is not a recommendation —
+it is the only thing a chart can honestly default to when certificates are an
+operator concern (k3s's default cert, a corporate CA Secret, cert-manager).
+For any real deployment, set both:
+
+```yaml
+ingress:
+  host: wiki.internal
+  tls:
+    - secretName: rocketwiki-tls
+      hosts: [wiki.internal]
+```
+
+Until you do, the HSTS header is correctly absent (see the CSP section) and
+bearer tokens cross the network in the clear.
+
+**In-cluster hops are not encrypted by this chart, and two of them carry
+credentials.** The web→api hop is plain HTTP by design (nginx to a ClusterIP
+Service). The api→S3 hop follows whatever `api.fileStorage.s3.serviceUrl`
+says, and the default example is `http://` — which puts the S3 access key on
+the pod network on every request. Point it at `https://` against a MinIO/Ceph
+endpoint with a certificate the pod trusts. The api→SQL Server and
+api→Keycloak hops *are* covered: `Encrypt=True;TrustServerCertificate=False`
+in the connection string (see the Secret section) and `RequireHttpsMetadata`
+outside Development, respectively.
+
+**There is no `NetworkPolicy` in this chart, deliberately.** A useful policy
+has to name the egress this deployment actually needs — SQL Server, Keycloak,
+the object store, the OTLP collector — and every one of those is an address
+the chart never sees. A default-deny policy templated from values would either
+be wrong (blocking a hop the operator configured) or vacuous (allowing
+everything). It is left to the cluster's own policy layer, where those
+addresses are known. If the cluster has a CNI that enforces policy, a
+default-deny-ingress for the namespace plus explicit allows for the ingress
+controller → web/api is the shape to write; the pods' own ports are 8080
+only.
+
+**`automountServiceAccountToken` is not set on any pod.** None of the three
+containers talks to the Kubernetes API, so the token is unused — but it is
+still projected into every pod, which is one credential more than any of them
+needs. Setting `automountServiceAccountToken: false` on the pod specs is a
+one-line hardening that could not be verified running here, and is left as a
+follow-up rather than shipped unverified.
 
 ## Telemetry (design.md §15 "Telemetry is not audit")
 

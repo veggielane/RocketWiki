@@ -1,4 +1,6 @@
 using RocketWiki.Core.Access;
+using RocketWiki.Core.Content;
+using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
 using RocketWiki.Importer.Conversion;
@@ -261,16 +263,30 @@ public sealed class ConfluenceSpaceImporter
             foreach (var attachment in page.Attachments)
             {
                 await using var content = attachment.OpenContent();
-                var uploadResult = await _attachmentService.UploadAsync(
-                    new UploadAttachmentRequest(realPageId, attachment.FileName, attachment.ContentType, content),
-                    options.ImporterPrincipal, options.ActingUserId, options.AuditContext, cancellationToken);
+
+                PageMutationResult<Attachment> uploadResult;
+                try
+                {
+                    uploadResult = await _attachmentService.UploadAsync(
+                        new UploadAttachmentRequest(realPageId, attachment.FileName, attachment.ContentType, content),
+                        options.ImporterPrincipal, options.ActingUserId, options.AuditContext, cancellationToken);
+                }
+                catch (DecompressionLimitExceededException ex)
+                {
+                    // The export's attachment entry expanded past the importer's ceiling
+                    // (ConfluenceExportLimits) — a zip bomb, or an attachment genuinely
+                    // larger than this tool will buffer. Isolated to the one file, exactly
+                    // like a failed upload: the whole run must not be abandoned over one
+                    // attachment, and an operator needs the report to say which it was.
+                    RecordAttachmentFailure(
+                        attachmentFailuresByPage, page.ConfluencePageId, attachment.FileName, ex.Message);
+                    continue;
+                }
 
                 if (!uploadResult.IsSuccess)
                 {
-                    var failures = attachmentFailuresByPage.TryGetValue(page.ConfluencePageId, out var list)
-                        ? list
-                        : attachmentFailuresByPage[page.ConfluencePageId] = [];
-                    failures.Add($"'{attachment.FileName}': {DescribeError(uploadResult.Error)}");
+                    RecordAttachmentFailure(
+                        attachmentFailuresByPage, page.ConfluencePageId, attachment.FileName, DescribeError(uploadResult.Error));
                     continue;
                 }
 
@@ -510,6 +526,18 @@ public sealed class ConfluenceSpaceImporter
         }
 
         return (applied, failures);
+    }
+
+    /// <summary>One page's attachment failures, accumulated for the report. Both the
+    /// refused-upload and the over-ceiling paths land here, so an operator reading the
+    /// report sees one list rather than two kinds of absence.</summary>
+    private static void RecordAttachmentFailure(
+        Dictionary<string, List<string>> failuresByPage, string confluencePageId, string fileName, string reason)
+    {
+        var failures = failuresByPage.TryGetValue(confluencePageId, out var list)
+            ? list
+            : failuresByPage[confluencePageId] = [];
+        failures.Add($"'{fileName}': {reason}");
     }
 
     private static string DescribeError(PageMutationError? error) => error switch

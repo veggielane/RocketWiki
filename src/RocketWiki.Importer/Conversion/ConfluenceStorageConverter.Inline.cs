@@ -138,13 +138,51 @@ public sealed partial class ConfluenceStorageConverter
             text = href ?? string.Empty;
         }
 
-        return string.IsNullOrEmpty(href) ? text : $"[{text}]({MarkdownText.EscapeLinkUrl(href)})";
+        if (string.IsNullOrEmpty(href))
+        {
+            return text;
+        }
+
+        // Scheme allowlist (MarkdownText.IsAllowedLinkUrl): EscapeLinkUrl is breakout-safe
+        // but scheme-blind, so `javascript:` and `data:` hrefs used to land in stored
+        // content intact. The SPA neutralises them at render time, and that is exactly why
+        // this belongs here too - the converter should not be the layer whose output is
+        // safe only because of what some downstream component happens to do. Flattened to
+        // the link's own text, which keeps the words and drops the destination.
+        if (!MarkdownText.IsAllowedLinkUrl(href))
+        {
+            state.Report.Add(new ConversionIssue(
+                IssueSeverity.Lossy,
+                IssueCategory.DroppedElement,
+                "Link used a URL scheme this importer does not carry across (only http, https, mailto, ftp and tel "
+                + "are allowed, plus relative links); the link was flattened to plain text and its destination dropped.",
+                state.CurrentLocation,
+                href));
+            return text;
+        }
+
+        return $"[{text}]({MarkdownText.EscapeLinkUrl(href)})";
     }
 
     private static string RenderImgTag(XElement element, RenderState state)
     {
         var src = (string?)element.Attribute("src") ?? string.Empty;
         var alt = (string?)element.Attribute("alt") ?? string.Empty;
+
+        // Same allowlist as an anchor href, and the same reasoning - `data:` image sources
+        // in particular are how a payload rides in a src attribute.
+        if (!MarkdownText.IsAllowedLinkUrl(src))
+        {
+            state.Report.Add(new ConversionIssue(
+                IssueSeverity.Lossy,
+                IssueCategory.DroppedElement,
+                "Raw <img> element used a URL scheme this importer does not carry across; the image was dropped "
+                + "and replaced by its alt text.",
+                state.CurrentLocation,
+                src));
+            return MarkdownText.Escape(alt);
+        }
+
         state.Report.Add(new ConversionIssue(
             IssueSeverity.Info,
             IssueCategory.LossyTransform,

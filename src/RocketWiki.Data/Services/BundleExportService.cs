@@ -66,8 +66,40 @@ public class BundleExportService : IBundleExportService
     private async Task<ExportedBundleInfo> ExportBaselineCoreAsync(
         Guid spaceId, string outputDirectory, string localInstanceId, CancellationToken cancellationToken)
     {
-        var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == spaceId, cancellationToken)
+        // IgnoreQueryFilters: an archived space can still legitimately need a baseline
+        // (exported-ness and archival are independent) - the two checks below are about
+        // sync OWNERSHIP, not visibility.
+        var space = await _db.Spaces.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Id == spaceId, cancellationToken)
             ?? throw new InvalidOperationException($"Space {spaceId} not found.");
+
+        // design.md §12's two conditions for emitting sync content, enforced HERE rather
+        // than only in the CLI that happens to be the sole caller today.
+        //
+        // The incremental path has never had this problem: SyncOutboxWriter owns the gate,
+        // so nothing can journal an event for a space that should not emit one. The
+        // baseline path put the same rule in RocketWiki.Sync's argument handling instead,
+        // which means this public method - a full snapshot of a space's content, its
+        // restrictions and its attachment bytes - would happily produce a bundle for a
+        // REPLICA the moment a second caller appeared (an admin endpoint, a scheduled job).
+        // "A replica must never emit sync events for content it doesn't own" is an
+        // invariant of the export, not of one console tool's flag parsing.
+        //
+        // The CLI keeps its own copies: it can say WHY in an operator's language and exit
+        // 2, where this can only throw. Two checks of the same rule is the intended shape -
+        // the friendly one for humans, the structural one for the invariant.
+        if (!space.IsExported)
+        {
+            throw new InvalidOperationException(
+                $"Space '{space.Key}' is not flagged exported, so it must not emit a baseline bundle (design.md §12): " +
+                "the outbox only journals exported spaces, so this baseline would start a stream nothing continues.");
+        }
+
+        if (!string.Equals(space.OriginInstanceId, localInstanceId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Space '{space.Key}' originates from instance '{space.OriginInstanceId}', not '{localInstanceId}'. " +
+                "A replica must never emit sync content it does not own (design.md §12).");
+        }
 
         var livePages = await _db.Pages.Where(p => p.SpaceId == spaceId).ToListAsync(cancellationToken);
 

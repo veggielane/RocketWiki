@@ -54,8 +54,29 @@
     "web": {
       "type": "object",
       "properties": {
-        "replicaCount": { "type": "integer", "minimum": 0 }
-      }
+        "replicaCount": { "type": "integer", "minimum": 0 },
+        "oidcAuthority": {
+          "type": "string",
+          "pattern": "^https?://[^/?#\\s]+",
+          "description": "REQUIRED. The Keycloak realm URL the web image was built with (--build-arg VITE_OIDC_AUTHORITY). Pattern-checked rather than merely non-empty because readOidcConfig rejects anything that is not an http(s) URL and disables sign-in, so a typo ships the same unusable image as an omission - and because the chart derives the CSP's connect-src from this value's ORIGIN, which a scheme-less string has none of. The web image build refuses the same two cases (Dockerfile.web's oidc-authority-check stage); this is the deployment-side half of the same rule."
+        },
+        "csp": {
+          "type": "object",
+          "properties": {
+            "connectSrc": {
+              "type": "string",
+              "description": "Content-Security-Policy connect-src OVERRIDE. Empty (the default) means derive `'self' <origin of web.oidcAuthority>`, which is what sign-in needs and nothing more - so the common deployment states the authority once and the policy follows. Empty is therefore legal here, unlike frameSrc: it never reaches the header as an empty directive, because the derivation always produces both terms and the template fails the render if it cannot. Set this only to add MORE origins (an OTLP collector, a second IdP); you then own the whole list, Keycloak origin included."
+            },
+            "frameSrc": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Content-Security-Policy frame-src. minLength 1 because there is nothing to derive it from and an EMPTY string would substitute into the policy as `frame-src ;` - which browsers read as an empty source list, i.e. the same as 'none' but by accident rather than decision. Say \"'none'\" (the default) to forbid frames, never \"\". Must name the draw.io origin the image was built against (VITE_DRAWIO_URL) if the diagram editor is enabled."
+            }
+          },
+          "required": ["connectSrc", "frameSrc"]
+        }
+      },
+      "required": ["oidcAuthority", "csp"]
     }
   },
   "required": ["api"]

@@ -8,14 +8,84 @@
 #       --build-arg VITE_OIDC_CLIENT_ID=rocketwiki-web \
 #       -t rocketwiki/web:<tag> .
 #
-# STANDING CAVEAT (README.md "Current status"): never built, never run — no
-# container runtime has ever been available here. Correct by inspection only.
+# VERIFICATION STATUS, precisely (README.md "Current status" retired the blanket
+# "nothing has ever run" caveat on 2026-08-28; this file is partly covered by it):
+#
+#   Exercised on a real container runtime:
+#     - the oidc-authority-check stage below, in all five cases (missing,
+#       scheme-less, wrong scheme, valid, explicit opt-out) — and a full build of
+#       this file with no authority, which fails at that stage as intended;
+#     - the nginx stage's config: envsubst substitution, `nginx -t`, and live
+#       responses carrying every security header on every location, including a
+#       502 from the API proxy (see deploy/docker/nginx/default.conf.template).
+#
+#   NOT exercised here: the npm ci + `npm run build` stage, and therefore the
+#     assembled image as a whole. Correct by inspection only.
+
+# ---------------------------------------------------------------------------
+# Stage 0: the OIDC authority must be stated, and must be a URL.
+#
+# The SPA fails closed on a missing VITE_OIDC_AUTHORITY — it renders "Sign-in is
+# not configured" rather than guessing a realm — which is right, and which by
+# itself only moves the failure from "users are redirected to localhost" to "the
+# image is a brick nobody notices until first login". Nothing upstream ensured
+# the arg was ever passed. This stage is that missing half: an image that cannot
+# sign anyone in does not get built.
+#
+# Also checks the SHAPE, not just presence. `readOidcConfig` returns null for
+# anything that is not an http(s) URL, so a typo'd authority produces exactly
+# the same brick as an omitted one — with the added charm of looking configured.
+# The two accepted forms are the two that function.
+#
+# A separate, tiny stage on purpose: it is `docker build --target
+# oidc-authority-check` in CI, so the guard is proven for the cost of one alpine
+# layer instead of a full npm ci + vite build. `node:24-alpine` rather than a
+# fresh base so no second image is pulled.
+#
+# The opt-out is explicit and named because it has one real use — building the
+# image to smoke-test nginx routing with no realm to hand. Named, it cannot
+# happen by accident, which is the entire failure mode this stage exists for.
+# ---------------------------------------------------------------------------
+FROM node:24-alpine AS oidc-authority-check
+ARG VITE_OIDC_AUTHORITY
+ARG ALLOW_UNCONFIGURED_OIDC
+RUN set -eu; \
+    if [ "${ALLOW_UNCONFIGURED_OIDC:-}" = "1" ]; then \
+      echo "WARNING: building with ALLOW_UNCONFIGURED_OIDC=1." >&2; \
+      echo "WARNING: this image CANNOT sign anyone in. The SPA will render" >&2; \
+      echo "WARNING: \"Sign-in is not configured\" to every visitor. Do not deploy it." >&2; \
+      echo "unconfigured" > /oidc-authority.checked; \
+      exit 0; \
+    fi; \
+    case "${VITE_OIDC_AUTHORITY:-}" in \
+      https://?*|http://?*) ;; \
+      "") \
+        echo "ERROR: --build-arg VITE_OIDC_AUTHORITY=... is required." >&2; \
+        echo "ERROR: Vite inlines it at build time, so this image would be" >&2; \
+        echo "ERROR: permanently unable to sign anyone in - and would look" >&2; \
+        echo "ERROR: healthy until the first login attempt." >&2; \
+        echo "ERROR: e.g. https://keycloak.internal/realms/rocketwiki" >&2; \
+        echo "ERROR: (deliberately building an unusable image? pass" >&2; \
+        echo "ERROR:  --build-arg ALLOW_UNCONFIGURED_OIDC=1)" >&2; \
+        exit 1 ;; \
+      *) \
+        echo "ERROR: VITE_OIDC_AUTHORITY must be an http:// or https:// URL." >&2; \
+        echo "ERROR: got: ${VITE_OIDC_AUTHORITY}" >&2; \
+        echo "ERROR: readOidcConfig rejects anything else and disables sign-in," >&2; \
+        echo "ERROR: so a typo here ships the same brick as omitting it." >&2; \
+        exit 1 ;; \
+    esac; \
+    printf '%s' "$VITE_OIDC_AUTHORITY" > /oidc-authority.checked
 
 # ---------------------------------------------------------------------------
 # Stage 1: Vite build. node:24 to match README's stated toolchain (Node 24).
 # ---------------------------------------------------------------------------
 FROM node:24-alpine AS build
 WORKDIR /web
+
+# Makes the check above load-bearing rather than dead weight BuildKit would
+# happily skip: this stage cannot be built without building that one.
+COPY --from=oidc-authority-check /oidc-authority.checked /tmp/oidc-authority.checked
 
 # npm ci against the lockfile first, so the dependency layer caches.
 COPY web/package.json web/package-lock.json ./
@@ -33,10 +103,13 @@ COPY web/ ./
 # config.json fetch would lift it, but that is a web/ change not made here.
 #
 # What actually needs baking, per web/src usage today:
-#   - VITE_OIDC_AUTHORITY / VITE_OIDC_CLIENT_ID: the two that matter. Left
-#     unset, oidcConfig.ts falls back to http://localhost:8080/realms/rocketwiki
-#     — fine for a dev image, silently wrong for any real deployment, so CI
-#     should always pass them.
+#   - VITE_OIDC_AUTHORITY: REQUIRED, and enforced by the check stage above —
+#     oidcConfig.ts no longer falls back to a localhost realm (that default sent
+#     authorization requests to whatever was listening on port 8080 of the
+#     *user's own* machine); it disables sign-in instead, so an omitted arg
+#     produces an image that looks healthy and cannot log anybody in.
+#   - VITE_OIDC_CLIENT_ID: defaults to `rocketwiki-web` and cannot be silently
+#     wrong — Keycloak answers `invalid_client` at the first sign-in.
 #   - VITE_OIDC_REDIRECT_URI / VITE_OIDC_POST_LOGOUT_REDIRECT_URI: default to
 #     window.location.origin at runtime — correctly environment-relative, so
 #     baking them is only needed if an environment must override that.
@@ -71,12 +144,37 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 FROM nginxinc/nginx-unprivileged:stable-alpine
 
-# The config ships as a template; the image's entrypoint substitutes
-# ${API_UPSTREAM} at start (see the template's own header). The filter
-# restricts envsubst to exactly that variable so nginx's $-runtime-variables
-# can never be mangled by a stray environment collision.
+# The config ships as a template; the image's entrypoint substitutes these
+# three variables at start (see the template's own header). The filter names
+# exactly them, so nginx's $-runtime-variables can never be mangled by a stray
+# environment collision.
+#
+# CSP_CONNECT_SRC / CSP_FRAME_SRC are the Content-Security-Policy directives that
+# have to name EXTERNAL origins, and they are runtime values because the origins
+# themselves are baked in above at BUILD time — Vite inlines VITE_*, so nginx has
+# no way to read what this image was built against.
+#
+#   *** These must be set in step with the build args. ***
+#
+#   Built with VITE_OIDC_AUTHORITY=https://keycloak.internal/realms/rocketwiki?
+#     then run with CSP_CONNECT_SRC="'self' https://keycloak.internal"
+#     (oidc-client-ts fetches discovery/token/userinfo over XHR), and add the
+#     same origin to CSP_FRAME_SRC if silent renew falls back to its iframe.
+#   Built with VITE_DRAWIO_URL=https://drawio.internal?
+#     then run with CSP_FRAME_SRC="https://drawio.internal".
+#   Exporting traces to a collector on another origin?
+#     add it to CSP_CONNECT_SRC.
+#
+# The defaults below are the correct policy for an image built with NONE of
+# those — which is what an unconfigured build is, since VITE_OIDC_AUTHORITY and
+# VITE_DRAWIO_URL both fail closed with no default. Forgetting to widen them
+# breaks sign-in loudly at the first attempt; the alternative default (permit
+# everything) would fail silently and forever, which is not the trade this
+# codebase makes anywhere else.
 ENV API_UPSTREAM=api:8080 \
-    NGINX_ENVSUBST_FILTER=^API_UPSTREAM$
+    CSP_CONNECT_SRC="'self'" \
+    CSP_FRAME_SRC="'none'" \
+    NGINX_ENVSUBST_FILTER='^(API_UPSTREAM|CSP_CONNECT_SRC|CSP_FRAME_SRC)$'
 COPY deploy/docker/nginx/default.conf.template /etc/nginx/templates/default.conf.template
 
 COPY --from=build /web/dist /usr/share/nginx/html

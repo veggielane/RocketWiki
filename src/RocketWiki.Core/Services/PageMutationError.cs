@@ -51,6 +51,46 @@ public sealed record BundleChainMismatchError(string Reason) : PageMutationError
 /// <summary>The events.ndjson bytes inside the bundle don't hash to manifest.PayloadSha256 - corruption or tampering in transit.</summary>
 public sealed record BundlePayloadTamperedError(string Reason) : PageMutationError;
 
+/// <summary>
+/// A <c>blobs/*</c> entry's actual bytes do not hash to the content hash the bundle
+/// declares for them — the attachment-shaped sibling of
+/// <see cref="BundlePayloadTamperedError"/>, and refused in the same breath.
+///
+/// <para>design.md §12: the events file is covered by <c>manifest.PayloadSha256</c>, and
+/// that manifest is chained to the previous bundle's — but the attachment BYTES live in
+/// separate archive entries outside both. What binds them is that an entry is NAMED for
+/// the SHA-256 of its own content, and the event line that references it carries the same
+/// hex string (which <i>is</i> inside the payload hash). So recomputing the hash of the
+/// bytes and requiring it to equal the entry's name extends the existing chain over
+/// attachment content with no change to the bundle format: substituting a file would
+/// require a SHA-256 preimage, and renaming the entry to match different bytes breaks the
+/// reference from the (hash-covered) event line.</para>
+/// </summary>
+public sealed record BundleBlobTamperedError(string Reason) : PageMutationError;
+
+/// <summary>
+/// The bundle decompresses to more than <see cref="RocketWiki.Core.Sync.BundleLimits"/> allows — a zip
+/// bomb, a runaway export, or a corrupt archive. Refused rather than absorbed, because
+/// the alternative is the importing host running out of memory while holding content it
+/// has not yet verified.
+/// </summary>
+public sealed record BundleTooLargeError(string Reason) : PageMutationError;
+
+/// <summary>
+/// The bundle's manifest declares an origin instance that is not the one the operator
+/// said this stream comes from.
+///
+/// <para>design.md §12: every replica space, every <c>SyncImportState</c> position and
+/// every per-space sequence on the high side is keyed by the origin instance id the
+/// IMPORTER was given — and the id the bundle itself declares was, until this error
+/// existed, never read at all. So a bundle from instance A could be imported as if it came
+/// from B: the two streams' bundle numbers and hash chains would be spliced into one
+/// position, and the ordering guarantees that position exists to provide would be
+/// guarantees about nothing. Reached by operator misconfiguration far more easily than by
+/// forgery — one wrong <c>--origin-instance-id</c> on a scheduled job does it.</para>
+/// </summary>
+public sealed record BundleOriginMismatchError(string DeclaredInstanceId, string ExpectedInstanceId) : PageMutationError;
+
 /// <summary>data-model.md: SyncSpaceState.AppliedSequence is the finer-grained, per-space gap check that sits inside the coarser per-bundle one.</summary>
 public sealed record SpaceSequenceGapError(Guid SpaceId, long ExpectedSequence, long ActualSequence) : PageMutationError;
 
