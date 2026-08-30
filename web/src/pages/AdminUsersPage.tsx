@@ -8,29 +8,9 @@ import { RegistryDataGrid } from '../app/RegistryDataGrid'
 import { useDocumentTitle } from '../app/documentTitle'
 import { UserAvatar } from '../avatars/UserAvatar'
 import { formatTimestamp } from '../format/dateTime'
+import { MAX_PAGE_SIZE, PAGE_SIZE, shownFromParams } from './adminUsersPaging'
 
 type UserRow = NonNullable<NonNullable<AdminUsersQuery['users']>['nodes']>[number]
-
-/** The step "Show more" adds. */
-const PAGE_SIZE = 25
-
-/**
- * The server's own ceiling on `first`, mirrored here so the screen never asks
- * for a page it would be refused.
- *
- * It is Hot Chocolate's `MaxPageSize`, published on the field as
- * `@listSize(assumedSize: 50)`. Unlike the search connection — which clamps a
- * too-large `first` down and answers anyway — exceeding this one is an ERROR,
- * so the clamp has to happen on this side.
- */
-const MAX_PAGE_SIZE = 50
-
-/** How many rows the URL says are on screen; clamped, because a stale link is still a link somebody followed. */
-function shownFromParams(raw: string | null): number {
-  const parsed = Number(raw)
-  if (!Number.isFinite(parsed)) return PAGE_SIZE
-  return Math.min(Math.max(Math.trunc(parsed), PAGE_SIZE), MAX_PAGE_SIZE)
-}
 
 /**
  * The account roster (instance admins only, gated at the router and enforced

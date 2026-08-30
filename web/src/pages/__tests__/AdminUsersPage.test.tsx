@@ -5,6 +5,7 @@ import { Client, Provider as UrqlProvider, type Exchange, type Operation, Combin
 import { filter, map, pipe } from 'wonka'
 import { AdminUsersPage } from '../AdminUsersPage'
 import { AdminPage } from '../AdminPage'
+import { MAX_PAGE_SIZE } from '../adminUsersPaging'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../../test/axe'
 
@@ -174,12 +175,12 @@ describe('AdminUsersPage — how much is on screen lives in the URL', () => {
     // Unlike search, where the server clamps a too-large `first` and answers
     // anyway, exceeding this connection's page size is an ERROR — so the clamp
     // has to be on this side.
-    expect(lastFirst(renderUsers({ count: 40, entry: '/admin/users?show=5000' }))).toBe(50)
+    expect(lastFirst(renderUsers({ count: 40, entry: '/admin/users?show=5000' }))).toBe(MAX_PAGE_SIZE)
     expect(lastFirst(renderUsers({ count: 40, entry: '/admin/users?show=banana' }))).toBe(25)
   })
 
   it('stops offering more at the cap, and says why rather than going quiet', async () => {
-    renderUsers({ count: 200, totalCount: 200, entry: '/admin/users?show=50' })
+    renderUsers({ count: 200, totalCount: 200, entry: `/admin/users?show=${MAX_PAGE_SIZE}` })
     await screen.findByText('User 00')
 
     expect(screen.queryByRole('button', { name: /Show \d+ more/ })).not.toBeInTheDocument()
