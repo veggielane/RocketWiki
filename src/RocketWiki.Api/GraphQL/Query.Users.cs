@@ -77,7 +77,10 @@ public partial class Query
     /// </summary>
     [AuditAction("admin.users.view")]
     [UseAuditDispatch]
-    [UsePaging(IncludeTotalCount = true)]
+    // MaxPageSize 100, matching auditEvents — see its note. Same class of field
+    // (admin-only, no per-row canView filter), same cap, and the roster page can step
+    // its ?show= size to 100 without hitting a validation error the resolver never sees.
+    [UsePaging(IncludeTotalCount = true, MaxPageSize = 100)]
     public async Task<IQueryable<AdminUser>> Users(
         ClaimsPrincipal claimsPrincipal,
         [Service] RocketWikiDbContext db,

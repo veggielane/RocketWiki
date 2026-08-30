@@ -200,5 +200,30 @@ public sealed class UsersQueryTests(RocketWikiApiFactory factory) : IClassFixtur
 
         Assert.Equal([$"{marker} Adam", $"{marker} Mia", $"{marker} Zoe"], names);
     }
+    [Fact]
+    public async Task Users_WithTheLargestPageTheAdminUiAsksFor_IsNotRefusedForPageSize()
+    {
+        // The page-size cap is enforced at GraphQL VALIDATION, before the resolver and
+        // before the admin gate — so an over-cap request fails with "maximum allowed
+        // items per page were exceeded" no matter who asks. Only the real pipeline
+        // exercises that layer: a resolver-level test cannot see it, which is exactly how
+        // the same defect shipped on auditEvents and went unnoticed until someone opened
+        // the page.
+        await SeedUserAsync($"Cap {Guid.NewGuid():N}"[..18]);
 
+        var admin = factory.CreateClient();
+        admin.SetTestUser(sub: $"admin-{Guid.NewGuid()}", roles: ["admin"]);
+
+        using var result = await admin.PostGraphQLAsync(
+            "{ users(first: 100) { totalCount nodes { id displayName } } }");
+
+        if (result.RootElement.TryGetProperty("errors", out var errors))
+        {
+            Assert.DoesNotContain("maximum allowed items per page", errors.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        // And it really returned the roster, rather than merely failing differently.
+        Assert.True(result.RootElement.GetProperty("data").GetProperty("users")
+            .GetProperty("totalCount").GetInt32() >= 1);
+    }
 }

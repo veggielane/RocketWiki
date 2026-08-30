@@ -44,7 +44,14 @@ public partial class Query
     // slicing arguments control, and totalCount is a scalar outside sizedFields.
     [AuditAction("audit.view")]
     [UseAuditDispatch]
-    [UsePaging(IncludeTotalCount = true)]
+    // MaxPageSize 100 because AuditLogPage asks for 100, and the cap is enforced at
+    // GraphQL VALIDATION — before the resolver, before the admin gate — so the default
+    // 50 refused the audit log for every admin with "the maximum allowed items per page
+    // were exceeded". Safe at 100 for the same reason IncludeTotalCount is safe here and
+    // is not safe for search (§9.1): these rows carry no per-row canView filter, so page
+    // size reveals nothing a row wouldn't. Raised to what the page actually asks for and
+    // no further.
+    [UsePaging(IncludeTotalCount = true, MaxPageSize = 100)]
     public async Task<IQueryable<AuditEvent>> AuditEvents(
         AuditFilterInput filter,
         ClaimsPrincipal claimsPrincipal,

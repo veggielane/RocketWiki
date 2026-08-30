@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RocketWiki.Core.Access;
@@ -77,5 +78,29 @@ public sealed class AuditEventsQueryTests(RocketWikiApiFactory factory) : IClass
         var deniedAuditViewExists = await db.AuditEvents
             .AnyAsync(e => e.Action == "audit.view" && e.Outcome == AuditOutcome.Denied);
         Assert.True(deniedAuditViewExists, "A non-admin's auditEvents attempt must itself be recorded as a denial.");
+    }
+    [Fact]
+    public async Task AuditEvents_WithThePageSizeTheAuditLogPageAsksFor_IsNotRefusedForPageSize()
+    {
+        // AuditLogPage requests first: 100, and the connection's cap was 50 — so the
+        // audit log was refused for EVERY admin, at GraphQL validation, before the
+        // resolver ever ran. Nothing caught it: the integration tests here query with
+        // small page sizes and the SPA's tests mock the response, so the one layer that
+        // enforces the cap was the one layer nothing exercised.
+        var admin = factory.CreateClient();
+        admin.SetTestUser(sub: $"admin-{Guid.NewGuid()}", roles: ["admin"]);
+
+        using var result = await admin.PostGraphQLAsync("""
+            { auditEvents(filter: {}, first: 100) { totalCount nodes { action outcome } } }
+            """);
+
+        if (result.RootElement.TryGetProperty("errors", out var errors))
+        {
+            Assert.DoesNotContain("maximum allowed items per page", errors.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Non-vacuous: the query actually resolved rather than failing some other way.
+        Assert.Equal(JsonValueKind.Object,
+            result.RootElement.GetProperty("data").GetProperty("auditEvents").ValueKind);
     }
 }

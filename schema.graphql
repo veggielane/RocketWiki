@@ -21,7 +21,7 @@ type Query {
     before: String
   ): AuditEventsConnection
     @listSize(
-      assumedSize: 50
+      assumedSize: 100
       slicingArguments: ["first", "last"]
       slicingArgumentDefaultValue: 10
       sizedFields: ["edges", "nodes"]
@@ -78,7 +78,7 @@ type Query {
     before: String
   ): UsersConnection
     @listSize(
-      assumedSize: 50
+      assumedSize: 100
       slicingArguments: ["first", "last"]
       slicingArgumentDefaultValue: 10
       sizedFields: ["edges", "nodes"]
