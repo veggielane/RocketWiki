@@ -212,4 +212,37 @@ public sealed class RealtimeConnectionRegistryTests
         registry.RegisterConnection("other", otherUser, PrincipalFor("other"));
         Assert.True(registry.JoinRoom("site:/screen-0", Viewer("other", otherUser)));
     }
+
+    [Fact]
+    public void OrdinaryNavigation_NeverApproachesTheCap()
+    {
+        // The cap must be invisible in real use, or it becomes a bug report. A client
+        // navigating joins the new room and leaves the old, so it holds one room steadily
+        // and two for an instant — walk far more screens than the cap and confirm the
+        // budget never builds up.
+        var registry = new RealtimeConnectionRegistry();
+        var userId = Guid.NewGuid();
+        registry.RegisterConnection("navigator", userId, PrincipalFor("navigator"));
+
+        string? previous = null;
+        for (var screen = 0; screen < RealtimeConnectionRegistry.MaxRoomsPerConnection * 5; screen++)
+        {
+            var next = $"site:/screen-{screen}";
+
+            // Join-then-leave, the real order: the client is briefly in both so it never
+            // appears to have left presence entirely mid-navigation.
+            Assert.True(registry.JoinRoom(next, Viewer("navigator", userId)),
+                $"navigation to screen {screen} was refused; the cap is reachable by ordinary use.");
+
+            if (previous is not null)
+            {
+                registry.LeaveRoom(previous, "navigator");
+                Assert.Empty(registry.GetViewers(previous));
+            }
+
+            previous = next;
+        }
+
+        Assert.Single(registry.GetViewers(previous!));
+    }
 }

@@ -89,20 +89,27 @@ public sealed class RealtimeConnectionRegistry : IRealtimeConnectionRegistry
     }
 
     /// <summary>
-    /// The most rooms one connection may hold at once. A well-behaved client is in
-    /// exactly one — it leaves the old room as it navigates — so this is generous, not
-    /// tight; the point is that it is FINITE.
+    /// The most rooms one connection may hold <b>at once</b>. A well-behaved client is in
+    /// exactly one — it leaves the old room as it navigates — and the worst legitimate
+    /// transient is two, mid-navigation. Eight is deliberate headroom over that; the point
+    /// is that the number is finite, not that it is tight.
     ///
     /// <para>It exists because room keys are client-supplied and, for <c>site:</c> paths,
-    /// deliberately not validated against any route list (a screen name identifies no
-    /// resource, so there is nothing to authorize and open-ended routes like docs topics
-    /// must work). That is the right call for access control, and it leaves cardinality
-    /// unbounded: without a cap, one authenticated caller could grow _viewersByRoom by
-    /// joining endless distinct paths — compounded by empty buckets never being removed
-    /// (see LeaveRoom). Capping per connection bounds every room type at once and couples
-    /// to nothing.</para>
+    /// deliberately not validated against any route list — a screen name identifies no
+    /// resource, so there is nothing to authorize, and open-ended routes (docs topics)
+    /// must work. That is the right call for access control, and it leaves cardinality
+    /// unbounded, which before this feature it was not: presence rooms were bounded to
+    /// real viewable pages. Capping per connection restores a bound over every room type
+    /// at once and couples to no route list.</para>
+    ///
+    /// <para><b>This is the ACUTE bound only</b> — how much one connection can hold right
+    /// now. It does not address accumulation over time: <see cref="LeaveRoom"/> leaves an
+    /// emptied bucket in place, so rooms joined and left still accrue keys for the life of
+    /// the process. That is the race-safe empty-bucket removal tracked as task #37, and it
+    /// is deliberately not attempted here: removing a bucket races a joiner and can drop a
+    /// live viewer, which is a worse failure than a dictionary entry.</para>
     /// </summary>
-    internal const int MaxRoomsPerConnection = 16;
+    internal const int MaxRoomsPerConnection = 8;
 
     public bool JoinRoom(string roomKey, PresenceViewer viewer)
     {
