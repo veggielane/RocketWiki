@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using RocketWiki.Core.Search;
 using RocketWiki.Data.Services;
@@ -410,6 +411,158 @@ public class EmbeddingIndexerTests : SqliteTestBase
         // And the budget is a budget, not an amnesty: the new revision quarantines on
         // its own second failure.
         Assert.Equal(1, (await RunIndexerAsync(generator, options)).PagesQuarantined);
+    }
+
+    [Fact]
+    public async Task PagesInAnArchivedSpace_AreNotEmbedded()
+    {
+        // Archiving sets Space.IsDeleted, and both search legs exclude those spaces — so
+        // embedding their pages produced vectors nothing could return. The waste is the
+        // smaller half: it also kept shipping the content of archived spaces to the
+        // embedding endpoint, which is a poor answer to "we archived that space".
+        var pageId = SeedPage(TwoSectionContent("turbine", "nozzle"), updatedAt: Epoch);
+
+        using (var db = CreateContext())
+        {
+            var page = db.Pages.Single(p => p.Id == pageId);
+            var space = db.Spaces.IgnoreQueryFilters().Single(s => s.Id == page.SpaceId);
+            space.IsDeleted = true;
+            space.DeletedAtUtc = DateTime.UtcNow;
+            db.SaveChanges();
+        }
+
+        var generator = NewGenerator();
+        var run = await RunIndexerAsync(generator);
+
+        Assert.Equal(0, run.PagesEmbedded);
+        Assert.Equal(0, run.PagesPending);
+        Assert.Equal(0, generator.Attempts);
+
+        // The controlling half: un-archive and the same page embeds normally, so the
+        // absence above is the archive filter and not a broken fixture.
+        using (var db = CreateContext())
+        {
+            var page = db.Pages.Single(p => p.Id == pageId);
+            var space = db.Spaces.IgnoreQueryFilters().Single(s => s.Id == page.SpaceId);
+            space.IsDeleted = false;
+            space.DeletedAtUtc = null;
+            db.SaveChanges();
+        }
+
+        Assert.Equal(1, (await RunIndexerAsync(generator)).PagesEmbedded);
+    }
+
+    [Fact]
+    public async Task AnEndpointOutage_DoesNotPushHealthyPagesTowardsQuarantine()
+    {
+        // The fault domain is the endpoint; the attempt counter is per page. An outage
+        // walks the batch failing whichever pages happen to come up, so without this the
+        // ceiling added for poison pages becomes an outage amplifier: a long enough
+        // outage charges healthy pages five times each and quarantines content that was
+        // never the problem — semantic search silently missing pages after an incident
+        // that was already over.
+        for (var i = 0; i < 4; i++)
+        {
+            SeedPage(TwoSectionContent("turbine", "nozzle"), updatedAt: Epoch.AddMinutes(i));
+        }
+
+        var generator = NewGenerator();
+        generator.ThrowOnGenerate = new HttpRequestException("endpoint unreachable");
+        var options = Options(maxAttempts: 2, abortAfterConsecutiveFailures: 3);
+
+        // Two full polls' worth of outage. With the attempts charged, every page the
+        // outage touched twice would now be quarantined.
+        await RunIndexerAsync(generator, options);
+        var second = await RunIndexerAsync(generator, options);
+
+        Assert.True(second.Aborted);
+        Assert.Equal(0, second.PagesQuarantined);
+
+        using (var db = CreateContext())
+        {
+            // The backoff clock is still stamped — there is no point hammering a down
+            // endpoint — but no page carries a strike for it.
+            Assert.All(db.PageEmbeddingStates.ToList(), s => Assert.Equal(0, s.FailedAttempts));
+            Assert.All(db.PageEmbeddingStates.ToList(), s => Assert.NotNull(s.LastAttemptAtUtc));
+        }
+
+        // And the pages still embed once the endpoint returns.
+        generator.ThrowOnGenerate = null;
+        var recovered = await RunIndexerAsync(generator, options);
+        Assert.Equal(4, recovered.PagesEmbedded);
+        Assert.Equal(0, recovered.PagesQuarantined);
+    }
+
+    [Fact]
+    public async Task RunOnce_WhenTheEndpointEchoesTheRejectedInput_NoneOfItReachesTheLog()
+    {
+        // design.md §15: the few log sites that exist carry "only identifiers, enum names,
+        // and exception TYPE names — never titles, content, storage paths, query text".
+        //
+        // The indexer passed the exception OBJECT to ILogger, which renders it with
+        // ToString() — message and stack. The OpenAI client builds its message out of the
+        // endpoint's response body, and an OpenAI-compatible server rejecting an input
+        // commonly echoes that input straight back. So a page the endpoint dislikes wrote
+        // its own content into the logs, on the one emission channel §15's span and metric
+        // hygiene tests cannot intercept.
+        const string SentinelContent = "ZZSENTINELPAGEBODYZZ";
+        SeedPage(TwoSectionContent("turbine", SentinelContent), updatedAt: Epoch);
+
+        var generator = NewGenerator();
+        generator.ThrowOnGenerate = new InvalidOperationException(
+            $"400 Bad Request: the input could not be embedded. Input was: '{SentinelContent} lorem ipsum'");
+
+        var records = new List<string>();
+        using (var loggerFactory = LoggerFactory.Create(b => b.AddProvider(new CapturingLoggerProvider(records))))
+        {
+            using var db = CreateContext();
+            var indexer = new EmbeddingIndexer(db, generator, Options(), loggerFactory.CreateLogger<EmbeddingIndexer>());
+            var run = await indexer.RunOnceAsync();
+            Assert.Equal(1, run.PagesFailed);
+        }
+
+        // Non-vacuous: the failure really was logged, and the type name really is there —
+        // otherwise "no sentinel in the log" would prove only that nothing was logged.
+        Assert.NotEmpty(records);
+        Assert.Contains(records, r => r.Contains("InvalidOperationException", StringComparison.Ordinal));
+
+        Assert.DoesNotContain(records, r => r.Contains(SentinelContent, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Renders each record the way a real provider does — the formatted message plus the
+    /// exception's own ToString() — because that second part is exactly what passing the
+    /// exception object to ILogger adds, and exactly where the endpoint's echo appeared.
+    /// </summary>
+    private sealed class CapturingLoggerProvider(List<string> sink) : ILoggerProvider
+    {
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(sink);
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class CapturingLogger(List<string> sink) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => true;
+
+            public void Log<TState>(
+                LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                var rendered = formatter(state, exception);
+                if (exception is not null)
+                {
+                    rendered += Environment.NewLine + exception;
+                }
+
+                lock (sink)
+                {
+                    sink.Add(rendered);
+                }
+            }
+        }
     }
 
     [Fact]

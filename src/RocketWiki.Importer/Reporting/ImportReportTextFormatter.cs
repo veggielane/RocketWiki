@@ -24,6 +24,17 @@ public static class ImportReportTextFormatter
         sb.AppendLine($"Generated: {DateTimeOffset.UtcNow:u}");
         sb.AppendLine();
 
+        // Said once, at the top, because this file is not what it looks like. A dry
+        // run’s report contains every page’s converted Markdown and every original
+        // author’s email address — the content of the space, in plaintext, at whatever
+        // path --report named, with no marking and no access control. The wiki it is
+        // about may be export-controlled; the report is not, and nothing else says so.
+        sb.AppendLine("HANDLING: this report reproduces page content and author email addresses in");
+        sb.AppendLine("plaintext. It carries no protective marking of its own and nothing restricts");
+        sb.AppendLine("who can read the file. Treat it as at least as sensitive as the space it");
+        sb.AppendLine("describes, and delete it when the migration review is finished.");
+        sb.AppendLine();
+
         AppendSummary(sb, summary);
         AppendSourcePermissions(sb, report);
 
@@ -270,7 +281,12 @@ public static class ImportReportTextFormatter
             }
         }
 
-        if (includeMarkdown && !string.IsNullOrEmpty(page.ConvertedMarkdown))
+        // Also shown on a REAL import when the page did not land: PageImportOutcome’s
+        // own doc says the converted Markdown is carried so you can see what would
+        // have been saved when the save itself failed, and gating it purely on
+        // isDryRun made that stated purpose unreachable — exactly the case where the
+        // text is the only copy left outside the export.
+        if ((includeMarkdown || page.SkippedReason is not null) && !string.IsNullOrEmpty(page.ConvertedMarkdown))
         {
             sb.AppendLine("Converted Markdown preview:");
             sb.AppendLine("  " + page.ConvertedMarkdown.Replace("\n", "\n  "));
@@ -315,9 +331,31 @@ public static class ImportReportTextFormatter
         }
     }
 
+    /// <summary>
+    /// Prints <see cref="ConversionIssue.Detail"/> as well as the message. The converter
+    /// populates Detail at every issue site with the thing a reviewer needs — the source
+    /// snippet that was dropped, the macro name, the URL that may not resolve — and the
+    /// report used to discard all of it. "Unrecognized element was dropped" without the
+    /// snippet, and "verify this <c>&lt;img&gt;</c> still resolves" without the URL, are
+    /// both unactionable: the reviewer has to go back to the export and find it by hand.
+    /// </summary>
     private static void AppendIssueLine(StringBuilder sb, ConversionIssue issue)
     {
         var location = issue.Location is null ? string.Empty : $" [{issue.Location}]";
         sb.AppendLine($"  [{issue.Severity}/{issue.Category}]{location} {issue.Message}");
+
+        if (!string.IsNullOrWhiteSpace(issue.Detail))
+        {
+            // Collapsed to one line and bounded: a Detail can be a whole dropped element,
+            // and a report nobody can scroll through is its own kind of unreadable.
+            var detail = issue.Detail!.ReplaceLineEndings(" ").Trim();
+            const int MaxDetail = 300;
+            if (detail.Length > MaxDetail)
+            {
+                detail = detail[..MaxDetail] + "… (truncated)";
+            }
+
+            sb.AppendLine($"      detail: {detail}");
+        }
     }
 }

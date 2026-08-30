@@ -41,12 +41,19 @@ public sealed class EditSessionRegistry(IOptions<CoEditOptions> options, TimePro
 
         while (true)
         {
-            var created = false;
-            var session = _sessions.GetOrAdd(pageId, _ =>
-            {
-                created = true;
-                return new EditSession();
-            });
+            // "Did I create it?" is decided by REFERENCE, not by a flag set inside a value
+            // factory. ConcurrentDictionary.GetOrAdd may invoke the factory and still
+            // return another thread's value — documented behaviour, not a race in the
+            // dictionary — so the flag could be true for a session this thread did not
+            // add. Two joiners then both believed they had created it: each overwrote
+            // BaseRevisionNumber with its own read, and if a save landed between those
+            // two reads the base revision moved BACKWARDS, so the session's next
+            // updatePageContent failed its optimistic-concurrency check against a stale
+            // base. Both also counted a CoEditSessionsStarted. Allocating an EditSession
+            // that is usually thrown away is the cheaper half of that trade.
+            var candidate = new EditSession();
+            var session = _sessions.GetOrAdd(pageId, candidate);
+            var created = ReferenceEquals(session, candidate);
 
             lock (session.Lock)
             {

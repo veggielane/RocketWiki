@@ -858,7 +858,7 @@ public class BundleImportService : IBundleImportService
             // A fresh StorageKey local to THIS instance's own storage backend - the
             // low side's key is opaque and meaningless here (deliberately excluded
             // from the sync payload in the first place - see SyncOutboxWriter).
-            var storageKey = $"attachments/{now:yyyy'/'MM}/{Guid.CreateVersion7()}";
+            var storageKey = StorageKeys.ForAttachment(now);
 
             var blobEntry = archive.GetEntry($"blobs/{contentHashHex}");
             if (blobEntry is not null)

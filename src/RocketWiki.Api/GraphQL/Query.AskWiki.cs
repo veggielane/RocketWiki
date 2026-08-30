@@ -94,6 +94,17 @@ public partial class Query
             outcome.Answer, outcome.Citations, outcome.Unavailable, outcome.AggregateMarking);
     }
 
+    /// <summary>Bounds one field of one audit row; the refusal in AskWikiService is
+    /// the real guard, and this is what keeps the regulated record bounded even when
+    /// that guard is bypassed by an exception before it runs.</summary>
+    private static string TruncateForAudit(string question)
+    {
+        const int MaxAuditedQuestionChars = 4000;
+        return question.Length <= MaxAuditedQuestionChars
+            ? question
+            : question[..MaxAuditedQuestionChars] + "… (truncated)";
+    }
+
     private static Task RecordAskAsync(
         IAuditSink auditSink, string question, AskWikiOutcome? outcome, AskWikiAttempt attempt)
     {
@@ -118,7 +129,13 @@ public partial class Query
                 AuditOutcome.Success,
                 DetailsJson: JsonSerializer.Serialize(new
                 {
-                    question,
+                    // Truncated as a backstop. The service refuses an over-long
+                    // question before retrieval, so this should never bite — but
+                    // AuditEvent.DetailsJson has no length limit of its own, the table
+                    // is append-only, and this row is written even when the ask threw
+                    // before reaching any of the service’s own guards. A bound that
+                    // only exists one layer up is not a bound on what lands here.
+                    question = TruncateForAudit(question),
                     // An ask that threw has no disposition of its own — it never reached
                     // the point that records one — so it is named for what it is rather
                     // than borrowed from a completed outcome.

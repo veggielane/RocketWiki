@@ -47,7 +47,12 @@ public sealed class EmbeddingBackgroundService(
                 catch (Exception ex)
                 {
                     // §15: type only, never a message that could echo request content.
-                    logger.LogError(ex, "Embedding index run failed ({ExceptionType}); next poll retries", ex.GetType().Name);
+                    // The exception OBJECT is deliberately not passed: ILogger renders it
+                    // with ToString(), i.e. message + stack, and the OpenAI client builds
+                    // its message from the endpoint's response body — which commonly
+                    // echoes the rejected input back. That is page content, in a log, on
+                    // the one emission channel the §15 hygiene test cannot intercept.
+                    logger.LogError("Embedding index run failed ({ExceptionType}); next poll retries", ex.GetType().Name);
                 }
             }
         }

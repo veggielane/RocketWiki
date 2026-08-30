@@ -374,6 +374,60 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         Assert.Contains("turbopump", search.DetailsJson);
     }
 
+    [Fact]
+    public async Task SearchAudit_HasTheSameDetailsShapeOnBothChannels()
+    {
+        // design.md §7: one action name, one Details shape. AnalyticsService parses
+        // search.query rows without knowing which channel wrote them, so a key present
+        // on one channel and absent on the other silently changes what an analytics
+        // panel counts — which has already happened once here, with resultCount. The
+        // MCP tool asserted parity in a comment while omitting `labels` entirely;
+        // nothing compared the two rows, so the comment was the only guard.
+        var f = await SeedAsync();
+        var sub = $"mcp-shape-{Guid.NewGuid()}";
+
+        await using (var mcp = await CreateMcpClientAsync(sub, nationality: ["US"]))
+        {
+            var result = await mcp.CallToolAsync("search",
+                new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
+            Assert.NotEqual(true, result.IsError);
+        }
+
+        var graphqlClient = factory.CreateClient();
+        graphqlClient.SetTestUser(sub: $"gql-shape-{Guid.NewGuid()}", nationality: ["US"]);
+        using var searchResponse = await graphqlClient.PostGraphQLAsync($$"""
+            query { search(query: "turbopump", spaceKey: "{{f.SpaceKey}}") { totalCount } }
+            """);
+        Assert.False(searchResponse.RootElement.TryGetProperty("errors", out _));
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        var searchRows = await db.AuditEvents
+            .Where(e => e.Action == "search.query")
+            .OrderByDescending(e => e.Id)
+            .Take(50)
+            .ToListAsync();
+
+        var mcpKeys = DetailKeys(searchRows.First(r => r.Channel == AuditChannel.Mcp).DetailsJson);
+        var graphqlKeys = DetailKeys(searchRows.First(r => r.Channel == AuditChannel.GraphQl).DetailsJson);
+
+        // Non-vacuous: both really did carry the keys analytics reads.
+        Assert.Contains("resultCount", mcpKeys);
+        Assert.Contains("query", mcpKeys);
+
+        Assert.Equal(graphqlKeys, mcpKeys);
+    }
+
+    private static IReadOnlyList<string> DetailKeys(string? detailsJson)
+    {
+        Assert.NotNull(detailsJson);
+        using var document = System.Text.Json.JsonDocument.Parse(detailsJson!);
+        return document.RootElement.EnumerateObject()
+            .Select(property => property.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+    }
+
     // ---------- list_spaces ----------
 
     [Fact]
@@ -646,6 +700,51 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         var hit = Assert.Single(payload.GetProperty("hits").EnumerateArray());
         Assert.Equal(f.PageAId, hit.GetProperty("pageId").GetGuid());
         Assert.Equal("UK OFFICIAL", payload.GetProperty("aggregateMarking").GetString());
+    }
+
+    [Fact]
+    public async Task Clearance_AloneHidesAPageFromEveryMcpTool()
+    {
+        // §21.9 names MCP explicitly, and every other MCP visibility test here hides its
+        // page behind a NATIONALITY restriction — one even hands the caller TOP_SECRET so
+        // the marking cannot be what excludes it. So the clearance gate itself, on the
+        // channel whose client is typically an LLM, had no MCP coverage at all.
+        //
+        // Here the page carries no restriction whatsoever: the ONLY thing between the
+        // caller and the content is the classification level against their clearance.
+        var f = await SeedAsync();
+        await MarkAsync(f.PageAId, ClassificationLevel.Secret);
+
+        // No clearance claim at all — §21's fail-closed default admits OFFICIAL only.
+        await using var uncleared = await CreateMcpClientAsync($"mcp-uncleared-{Guid.NewGuid()}", nationality: ["GB"]);
+
+        var search = await uncleared.CallToolAsync("search",
+            new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
+        var hitIds = SingleJson(search).GetProperty("hits").EnumerateArray()
+            .Select(h => h.GetProperty("pageId").GetGuid()).ToList();
+        Assert.DoesNotContain(f.PageAId, hitIds);
+
+        // Absent, not redacted (§6.7): reading it directly is the same "not found" as a
+        // page that does not exist.
+        var direct = await uncleared.CallToolAsync("get_page",
+            new Dictionary<string, object?> { ["pageId"] = f.PageAId.ToString() });
+        Assert.Equal(true, direct.IsError);
+
+        var tree = await uncleared.CallToolAsync("get_page_tree",
+            new Dictionary<string, object?> { ["spaceKey"] = f.SpaceKey });
+        Assert.DoesNotContain(f.PageAId.ToString(), SingleJson(tree).GetRawText(), StringComparison.Ordinal);
+
+        // The controlling half: the SAME page, same restrictions (none), reached by a
+        // caller whose clearance admits it. Without this, the absences above could just
+        // as easily mean the page was never seeded.
+        await using var cleared = await CreateMcpClientAsync(
+            $"mcp-cleared-{Guid.NewGuid()}", nationality: ["GB"], clearance: "SECRET");
+
+        var clearedSearch = await cleared.CallToolAsync("search",
+            new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
+        var clearedIds = SingleJson(clearedSearch).GetProperty("hits").EnumerateArray()
+            .Select(h => h.GetProperty("pageId").GetGuid()).ToList();
+        Assert.Contains(f.PageAId, clearedIds);
     }
 
     [Fact]

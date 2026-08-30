@@ -169,6 +169,28 @@ public static class McpServerConfiguration
     /// denial reason — the same documented repo-wide gap as GraphQL reads, closing
     /// when Core's not-found-vs-denied read result lands.
     /// </summary>
+    /// <summary>
+    /// Whether a tool with no audit declaration must be refused rather than run.
+    ///
+    /// <para><b>Refusal is the default, and only positive proof that no such tool exists
+    /// lets a call through.</b> This filter is the only runtime enforcement of §7's "no
+    /// audit declaration, no tool run", and it used to make refusal conditional on the
+    /// tool collection being non-null: a null collection fell through to the SDK, so a
+    /// registered-but-undeclared tool would have executed unaudited. A null collection
+    /// proves nothing, least of all that the tool is unknown. Fail-closed means an
+    /// unanswerable question is answered "no" — the same rule §6.7 applies to a missing
+    /// attribute or an unknown group, applied here to audit itself.</para>
+    ///
+    /// <para>internal + InternalsVisibleTo so the decision is testable on its own, the
+    /// same reason <see cref="Audit.CurrentAuditContextAccessor"/> does it: reaching this
+    /// branch through the real SDK pipeline needs a registered-but-undeclared tool, which
+    /// a green build (AuditCoverageTests) makes impossible to have.</para>
+    /// </summary>
+    /// <param name="toolIsRegistered">null when the tool collection was unavailable —
+    /// "cannot tell", which is not the same answer as "no such tool".</param>
+    internal static bool ShouldRefuseUndeclaredTool(string? toolName, bool? toolIsRegistered) =>
+        toolName is not null && toolIsRegistered != false;
+
     private static void AddAuditAndTelemetryFilter(McpServerOptions options)
     {
         options.Filters.Request.CallToolFilters.Add(next =>
@@ -213,22 +235,26 @@ public static class McpServerConfiguration
 
                     if (!isDeclared)
                     {
-                        if (toolName is not null
-                            && toolCollection is not null
-                            && toolCollection.TryGetPrimitive(toolName, out _))
+                        // Null collection = "cannot tell", which is NOT "no such tool".
+                        bool? toolIsRegistered = toolCollection is null || toolName is null
+                            ? null
+                            : toolCollection.TryGetPrimitive(toolName, out _);
+
+                        if (!ShouldRefuseUndeclaredTool(toolName, toolIsRegistered))
                         {
-                            // Registered but undeclared — a green build makes this
-                            // unreachable (AuditCoverageTests); refusing rather than
-                            // running is §7's fail-closed applied to audit itself.
-                            outcome = ApiTelemetry.McpOutcomeUndeclared;
-                            throw new InvalidOperationException(
-                                $"MCP tool '{toolName}' has no audit declaration " +
-                                "([AuditAction]/[NoAudit], design.md §7) and will not be executed.");
+                            // Nothing to audit and nothing to run: let the SDK produce its
+                            // standard unknown-tool error.
+                            outcome = ApiTelemetry.McpOutcomeUnknownTool;
+                            return await next(context, cancellationToken);
                         }
 
-                        // Truly unknown tool: let the SDK produce its standard error.
-                        outcome = ApiTelemetry.McpOutcomeUnknownTool;
-                        return await next(context, cancellationToken);
+                        // Either the tool is registered but undeclared, or we cannot tell.
+                        // A green build makes the first unreachable (AuditCoverageTests);
+                        // both refuse.
+                        outcome = ApiTelemetry.McpOutcomeUndeclared;
+                        throw new InvalidOperationException(
+                            $"MCP tool '{toolName}' has no audit declaration " +
+                            "([AuditAction]/[NoAudit], design.md §7) and will not be executed.");
                     }
 
                     var result = await next(context, cancellationToken);

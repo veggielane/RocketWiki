@@ -1722,4 +1722,174 @@ public class BundleExportImportTests : SqliteTestBase
             if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
         }
     }
+
+    // --- Field completeness (design.md §12) -------------------------------------------
+    //
+    // A hand-listed payload builder plus a round-trip test that checks three fields is how
+    // a field gets silently dropped, and this file records that class of bug shipping
+    // TWICE — the baseline that was not a full snapshot, and the page icons. Both were
+    // fixed by adding another named per-field assertion, which is a reaction, not a guard.
+    // Below, the property list comes from reflection, so adding a column to Page breaks
+    // this test until someone decides whether it crosses; the decision, not the
+    // discovery, is what is written down by hand.
+
+    /// <summary>
+    /// Every scalar property of <see cref="Page"/>, mapped to the wire key it is exported
+    /// as, or to null with the reason it is not. Navigation properties are excluded by the
+    /// sweep itself — they are not fields, they are other tables.
+    /// </summary>
+    private static readonly Dictionary<string, string?> PageFieldExportContract = new(StringComparer.Ordinal)
+    {
+        ["Id"] = "pageId",
+        ["SpaceId"] = "spaceId",
+        ["ParentPageId"] = "parentPageId",
+        ["AncestorPath"] = "ancestorPath",
+        ["Slug"] = "slug",
+        ["Title"] = "title",
+        ["Icon"] = "icon",
+        ["SortOrder"] = "sortOrder",
+        ["CurrentRevisionNumber"] = "revisionNumber",
+        ["CurrentContent"] = "content",
+
+        // Deliberately not exported. Each is instance-local state about THIS side's copy,
+        // not a property of the content (design.md §12).
+        ["IsDeleted"] = null,        // deletion crosses as its own PageDelete event, never as a flag on an upsert
+        ["DeletedAtUtc"] = null,     // trash bookkeeping is local (data-model.md's 30-day window)
+        ["DeletedByUserId"] = null,  // naming the local user who trashed it would send an identity the other side has no row for
+        ["DeleteBatchId"] = null,    // groups a local subtree delete for local undo; meaningless elsewhere
+        ["CreatedAtUtc"] = null,     // the receiving row's own timestamps; revisions carry the authored times that matter
+        ["UpdatedAtUtc"] = null,
+    };
+
+    [Fact]
+    public void EveryPageField_IsEitherExported_OrExplicitlyDeclaredLocal()
+    {
+        var scalars = typeof(Page).GetProperties()
+            .Where(p => p.CanRead && p.CanWrite)
+            .Where(p => IsScalarField(p.PropertyType))
+            .Select(p => p.Name)
+            .ToList();
+
+        // Non-vacuous: a reflection query matching nothing would pass everything below.
+        Assert.True(scalars.Count > 10, $"Expected Page to expose its scalar columns; found {scalars.Count}.");
+        Assert.Contains("SortOrder", scalars);
+
+        var undecided = scalars.Where(name => !PageFieldExportContract.ContainsKey(name)).ToList();
+        Assert.True(undecided.Count == 0,
+            "These Page fields are neither exported nor declared instance-local, so a sync bundle would drop them " +
+            "in silence (design.md §12). Add the wire key to PageFieldExportContract, or map it to null with the " +
+            "reason it stays local:" + Environment.NewLine + "  " + string.Join(Environment.NewLine + "  ", undecided));
+
+        var stale = PageFieldExportContract.Keys.Where(name => !scalars.Contains(name)).ToList();
+        Assert.True(stale.Count == 0,
+            "These entries name Page fields that no longer exist; the contract has outlived what it describes:"
+            + Environment.NewLine + "  " + string.Join(Environment.NewLine + "  ", stale));
+    }
+
+    [Fact]
+    public async Task EveryFieldTheContractCallsExported_IsActuallyInTheBundle()
+    {
+        var actor = TestData.NewUser();
+        var space = NewExportedSpace();
+        var page = TestData.NewPage(space, "home");
+
+        // Non-default values, so a field that is exported but always written as its
+        // default cannot pass by coincidence — which is exactly how sortOrder went
+        // unproven: every payload in this file hand-wrote it as 0, and 0 is also the
+        // property's default.
+        page.SortOrder = 4321;
+        page.Icon = PageIcon.Rocket;
+        page.Title = "Home";
+        page.CurrentContent = "# Welcome";
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.Add(space);
+        lowContext.Pages.Add(page);
+        lowContext.SaveChanges();
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundle = await new BundleExportService(lowContext, storage)
+                .ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
+
+            var upsert = ReadFirstPageUpsertPayload(bundle.BundleFilePath);
+
+            var missing = PageFieldExportContract
+                .Where(entry => entry.Value is not null)
+                .Where(entry => !upsert.TryGetProperty(entry.Value!, out _))
+                .Select(entry => $"{entry.Key} (wire key '{entry.Value}')")
+                .ToList();
+
+            Assert.True(missing.Count == 0,
+                "The export contract says these fields cross, and the bundle does not contain them:"
+                + Environment.NewLine + "  " + string.Join(Environment.NewLine + "  ", missing));
+
+            // The two the round-trip never proved: both are exported AND strictly required
+            // on import (BundleImportService throws if either is absent), yet nothing
+            // asserted either actually survives.
+            Assert.Equal(4321, upsert.GetProperty("sortOrder").GetInt32());
+            Assert.Equal(page.AncestorPath, upsert.GetProperty("ancestorPath").GetString());
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                Assert.True((await new BundleImportService(highContext, storage)
+                    .ImportAsync(bundle.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var imported = highContext.Pages.Single(p => p.Id == page.Id);
+                Assert.Equal(4321, imported.SortOrder);
+                Assert.Equal(page.AncestorPath, imported.AncestorPath);
+                Assert.Equal(PageIcon.Rocket, imported.Icon);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    /// <summary>A field, as opposed to a navigation property to another table.</summary>
+    private static bool IsScalarField(Type type)
+    {
+        var underlying = Nullable.GetUnderlyingType(type) ?? type;
+        return underlying.IsPrimitive
+            || underlying.IsEnum
+            || underlying == typeof(string)
+            || underlying == typeof(Guid)
+            || underlying == typeof(DateTime)
+            || underlying == typeof(decimal);
+    }
+
+    private static System.Text.Json.JsonElement ReadFirstPageUpsertPayload(string bundlePath)
+    {
+        using var archive = System.IO.Compression.ZipFile.OpenRead(bundlePath);
+        using var stream = archive.GetEntry(BundleFormat.EventsEntryName(BundleFormat.CurrentVersion))!.Open();
+        using var reader = new StreamReader(stream);
+
+        while (reader.ReadLine() is { } line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            using var record = System.Text.Json.JsonDocument.Parse(line);
+            if (record.RootElement.GetProperty("eventType").GetString() != nameof(SyncEventType.PageUpsert))
+            {
+                continue;
+            }
+
+            // The line carries the payload as a STRING of JSON, not a nested object.
+            using var payload = System.Text.Json.JsonDocument.Parse(
+                record.RootElement.GetProperty("payloadJson").GetString()!);
+            return payload.RootElement.Clone(); // cloned: both documents die with this scope
+        }
+
+        throw new InvalidOperationException("The bundle contained no PageUpsert line.");
+    }
 }

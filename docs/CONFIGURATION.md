@@ -172,7 +172,7 @@ named.
 
 | Key | Default | Unset means | Read at |
 |---|---|---|---|
-| `VITE_OIDC_AUTHORITY` | `http://localhost:8080/realms/rocketwiki` | The dev default — point at the real realm everywhere else | `src/auth/oidcConfig.ts` |
+| `VITE_OIDC_AUTHORITY` | *(none — required)* | **Sign-in is disabled** and the app renders "Sign-in is not configured". Fails closed on purpose: a guessed authority sends every login to a host nobody chose | `src/auth/oidcConfig.ts` |
 | `VITE_OIDC_CLIENT_ID` | `rocketwiki-web` | n/a (has a default) | `src/auth/oidcConfig.ts` |
 | `VITE_OIDC_REDIRECT_URI` | `<origin>/auth/callback` | n/a (derived from the page origin) | `src/auth/oidcConfig.ts` |
 | `VITE_OIDC_POST_LOGOUT_REDIRECT_URI` | `<origin>` | n/a (derived) | `src/auth/oidcConfig.ts` |
@@ -182,7 +182,7 @@ named.
 | ⛔ `VITE_DRAWIO_URL` | *(none — deliberately)* | No external diagram editor loads; viewing is unaffected (diagrams are inline page content). Editing posts diagram content to this URL, hence no default | `src/editor/drawio/drawioConfig.ts` |
 | ⛔ `VITE_OTEL_EXPORTER_OTLP_ENDPOINT` | *(none — deliberately)* | Browser telemetry entirely off; the tracing SDK chunk is never even downloaded. Malformed values also mean off | `src/telemetry/config.ts` |
 | `VITE_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | *(none)* | Traces URL is `<base>/v1/traces`; set this to use a verbatim URL instead | `src/telemetry/config.ts` |
-| `VITE_OTEL_EXPORTER_OTLP_HEADERS` | *(none)* | No collector auth headers (`key=value,key2=value2` form) | `src/telemetry/config.ts` |
+| `VITE_OTEL_EXPORTER_OTLP_HEADERS` | *(none)* | No collector auth headers (`key=value,key2=value2` form). **Never a real secret** — every `VITE_*` value is inlined into the public bundle; terminate collector auth server-side | `src/telemetry/config.ts` |
 | `VITE_OTEL_SERVICE_NAME` | `rocketwiki-web` | n/a (has a default). Worth overriding per instance so replica traces are distinguishable | `src/telemetry/config.ts` |
 | `VITE_APP_VERSION` | *(none)* | `service.version` omitted entirely | `src/telemetry/config.ts` |
 | `VITE_API_TARGET` (dev server only) | `http://localhost:5079` | Dev proxy targets the API's standalone launch profile; under Aspire read the dynamic port off the dashboard and set this | `vite.config.ts` |

@@ -5,11 +5,20 @@ the intent survive that). design.md §15: SignalR presence groups and
 per-user notification fan-out live in a per-process singleton
 (RealtimeConnectionRegistry); at replicas > 1 they fragment silently — some
 users just stop receiving notifications, which is worse than an outage.
-Scaling out requires a Redis backplane in src/ first, and only then removing
-this guard in the same change.
+SignalR is not the only reason, and it is the one that has an obvious fix —
+so listing it alone is a trap: adding a Redis backplane would satisfy the
+stated precondition while silently breaking the OTHER one. The embedding
+background job (EmbeddingIndexer) has no claim protocol at all — no lease
+column, no UPDATE..OUTPUT, no application lock. Its scan is a plain read and
+its write a plain upsert, so two replicas would both select the same
+oldest-N due pages and race the unique index on PageEmbedding; the loser's
+unique-violation is caught by the job's generic failure handler and recorded
+as a PAGE failure, which now also counts towards that page's quarantine
+ceiling. Scale-out therefore needs BOTH a Redis backplane and a claim
+protocol for the indexer, in the same change that removes this guard.
 */ -}}
 {{- if gt (int .Values.api.replicaCount) 1 }}
-{{- fail "api.replicaCount > 1 is unsupported: SignalR presence/notifications are per-process state (design.md §15). Add a Redis backplane in src/ before removing this guard." }}
+{{- fail "api.replicaCount > 1 is unsupported: SignalR presence/notifications are per-process state, AND the embedding indexer has no claim protocol so replicas would race each other's pages (design.md §15/§9.2). Both need fixing before this guard comes out." }}
 {{- end }}
 {{- if and (eq .Values.api.fileStorage.provider "FileSystem") (not .Values.api.fileStorage.fileSystem.existingClaim) }}
 {{- fail "api.fileStorage.provider=FileSystem requires api.fileStorage.fileSystem.existingClaim: this chart does not create storage for state (design.md §15) — create a PVC deliberately and reference it." }}

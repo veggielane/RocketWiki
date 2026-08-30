@@ -32,4 +32,12 @@
     <ProjectReference Include="..\RocketWiki.Storage\RocketWiki.Storage.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Lets RocketWiki.Data.Tests sweep SyncOutboxWriter.Classify over every
+         IDomainEvent type by reflection (design.md §12): the outbox's default is
+         journal-nothing, so an event nobody classified syncs silently rather than
+         failing, and only an exhaustiveness test can catch that. -->
+    <InternalsVisibleTo Include="RocketWiki.Data.Tests" />
+  </ItemGroup>
+
 </Project>

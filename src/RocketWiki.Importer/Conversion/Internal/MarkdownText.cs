@@ -119,8 +119,32 @@ internal static class MarkdownText
         return text;
     }
 
-    /// <summary>Percent-encodes characters that would otherwise break a Markdown link's URL span.</summary>
-    public static string EscapeLinkUrl(string url) => url.Replace(" ", "%20").Replace(")", "%29");
+    /// <summary>
+    /// Percent-encodes the characters that would otherwise end a Markdown link's URL
+    /// span early. Space and <c>)</c> are the common ones — SharePoint and Jira URLs
+    /// carry both routinely — but <c>(</c> matters too: CommonMark balances parentheses
+    /// inside a destination, so an unmatched opening one swallows the rest of the line.
+    /// <c>&lt;</c> would start an autolink, and a raw newline ends the destination
+    /// outright.
+    ///
+    /// <para>Applied to EVERY destination the converter emits, links and images alike.
+    /// It used to be applied on the anchor path only, so exactly the URLs most likely to
+    /// contain a space — an image pasted from SharePoint — were the ones emitted raw, and
+    /// the image silently broke.</para>
+    ///
+    /// <para><c>%</c> is deliberately NOT escaped: Confluence URLs are routinely
+    /// percent-encoded already, so encoding the escape character would turn every
+    /// <c>%20</c> that arrives correct into a broken <c>%2520</c>. The cost is that a
+    /// literal <c>%</c> stays ambiguous, which breaks nothing that was working.</para>
+    /// </summary>
+    public static string EscapeLinkUrl(string url) => url
+        .Replace(" ", "%20")
+        .Replace("(", "%28")
+        .Replace(")", "%29")
+        .Replace("<", "%3C")
+        .Replace(">", "%3E")
+        .Replace("\r", string.Empty)
+        .Replace("\n", string.Empty);
 
     /// <summary>
     /// Prefixes every line of a (possibly multi-block) string with <paramref name="prefix"/>,

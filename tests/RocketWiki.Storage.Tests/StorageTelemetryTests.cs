@@ -165,4 +165,42 @@ public sealed class StorageTelemetryTests : IDisposable
 
         Assert.DoesNotContain("SENTINEL", span.DisplayName, StringComparison.OrdinalIgnoreCase);
     }
+    [Fact]
+    public void ACancelledOperation_IsNotRecordedAsAStorageFault()
+    {
+        // A client navigating away from a large attachment cancels the download. That
+        // arrived here as outcome "TaskCanceledException" with span status Error, so
+        // every abandoned download counted as a provider error — noise in precisely the
+        // signal an operator watches to decide whether the object store is healthy.
+        var (listener, captured) = ListenToStorage();
+        using (listener)
+        {
+            using (var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.OpenReadOperation))
+            {
+                operation.Fail(new TaskCanceledException("the caller went away"));
+            }
+        }
+
+        var span = Assert.Single(captured);
+        Assert.Equal(StorageTelemetry.CanceledOutcome, span.GetTagItem(StorageTelemetry.OutcomeTag));
+        Assert.NotEqual(ActivityStatusCode.Error, span.Status);
+    }
+
+    [Fact]
+    public void ARealStorageFault_IsStillRecordedAsAnError()
+    {
+        // The non-vacuity half: the cancellation branch must not swallow genuine faults.
+        var (listener, captured) = ListenToStorage();
+        using (listener)
+        {
+            using (var operation = StorageTelemetry.StartOperation(StorageTelemetry.S3Provider, StorageTelemetry.OpenReadOperation))
+            {
+                operation.Fail(new IOException("the disk is on fire"));
+            }
+        }
+
+        var span = Assert.Single(captured);
+        Assert.Equal(nameof(IOException), span.GetTagItem(StorageTelemetry.OutcomeTag));
+        Assert.Equal(ActivityStatusCode.Error, span.Status);
+    }
 }

@@ -31,10 +31,15 @@ public class CorpusGenerationTests
         Assert.EndsWith("\n", result.Markdown, StringComparison.Ordinal);
         AssertConsistentTableColumnCounts(fixture.Name, result.Markdown);
 
+        // Regenerated into the WORKING TREE on purpose: drift is enforced by CI failing
+        // on a dirty worktree under the corpus directory (.github/workflows/ci.yml), not
+        // by an assertion here. Which is why there is no assertion here any more — this
+        // used to end with Assert.Equal(result.Markdown, File.ReadAllText(path)),
+        // immediately after writing that exact string to that exact path. It asserted
+        // that the filesystem round-trips a string, and could not fail. The assertions
+        // that CAN fail are the shape checks above; the drift check is CI’s.
         var path = Path.Combine(GetCorpusDirectory(), fixture.Name + ".md");
         File.WriteAllText(path, result.Markdown, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-
-        Assert.Equal(result.Markdown, File.ReadAllText(path));
     }
 
     [Fact]

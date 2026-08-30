@@ -255,6 +255,17 @@ public sealed class AvatarEndpointTests(RocketWikiApiFactory factory) : IClassFi
 
         var userId = await LocalUserIdOf(sub);
 
+        string storageKey;
+        using (var beforeScope = factory.Services.CreateScope())
+        {
+            var beforeDb = beforeScope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+            storageKey = (await beforeDb.UserAvatars.AsNoTracking().SingleAsync(a => a.UserId == userId)).StorageKey;
+
+            // Non-vacuous: the object really was there before the clear.
+            var beforeStorage = beforeScope.ServiceProvider.GetRequiredService<RocketWiki.Storage.IFileStorage>();
+            Assert.True(await beforeStorage.ExistsAsync(storageKey, CancellationToken.None));
+        }
+
         var clear = await client.DeleteAsync("/avatars");
         Assert.Equal(HttpStatusCode.OK, clear.StatusCode);
         Assert.False(JsonDocument.Parse(await clear.Content.ReadAsStringAsync())
@@ -265,6 +276,14 @@ public sealed class AvatarEndpointTests(RocketWikiApiFactory factory) : IClassFi
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
         Assert.False(await db.UserAvatars.AnyAsync(a => a.UserId == userId));
+        // The bytes go too. Clearing removed the row and left the object behind
+        // forever, with no reason recorded — one orphan per user, that nothing will
+        // ever read again. Its sibling CustomEmojiService already deleted after commit,
+        // best-effort; there is no row left here to point at deleted bytes, which is
+        // the concern that justifies the RE-upload path keeping its orphan.
+        var storage2 = scope.ServiceProvider.GetRequiredService<RocketWiki.Storage.IFileStorage>();
+        Assert.False(await storage2.ExistsAsync(storageKey, CancellationToken.None),
+            "clearing an avatar must not leave its object in storage.");
 
         var rows = await db.AuditEvents.AsNoTracking()
             .Where(e => e.UserId == userId && e.Action.StartsWith("settings.avatar"))

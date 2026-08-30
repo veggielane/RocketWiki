@@ -74,7 +74,13 @@ public class SourcePermissionReportingTests
         Assert.Equal(2, result.Summary.SourceSpacePermissionCount);
 
         var text = ImportReportTextFormatter.Format("ENG", isDryRun: true, result.Report, result.Summary);
-        Assert.Contains("VIEWSPACE → group 'propulsion-engineers'", text, StringComparison.Ordinal);
+
+        // Grouped by Confluence permission type — the unit an admin actually re-applies —
+        // and every subject labelled as foreign, so "propulsion-engineers" is never read
+        // as a group that exists on this instance.
+        Assert.Contains("VIEWSPACE (2):", text, StringComparison.Ordinal);
+        Assert.Contains("Confluence group 'propulsion-engineers'", text, StringComparison.Ordinal);
+
         // The line worth shouting about: RocketWiki has no anonymous access to re-apply to.
         Assert.Contains("ANONYMOUS", text, StringComparison.Ordinal);
     }

@@ -52,7 +52,7 @@ public sealed class UserAvatarService(
 
         var now = DateTime.UtcNow;
         var contentHash = SHA256.HashData(canonicalPng);
-        var storageKey = $"avatars/{now:yyyy'/'MM}/{Guid.CreateVersion7()}";
+        var storageKey = StorageKeys.ForAvatar(now);
 
         // design.md §10 upload order: storage first, then the row + audit commit
         // together. On re-upload the row points at the NEW key; JANITOR(§10): the old
@@ -95,12 +95,36 @@ public sealed class UserAvatarService(
             return PageMutationResult<UserAvatarState>.Failure(new ValidationError("No avatar is set."));
         }
 
+        var clearedStorageKey = avatar.StorageKey;
         db.UserAvatars.Remove(avatar);
 
         db.AuditContext = auditContext;
         db.RaiseDomainEvent(new AvatarClearedEvent(actingUserId));
 
         await db.SaveChangesAsync(cancellationToken);
+
+        // Blob cleanup AFTER the commit, best-effort — the same shape
+        // CustomEmojiService.DeleteAsync uses, and for the same reasons: the row and
+        // its audit record must not be held hostage to storage availability, and a
+        // failed delete leaves an orphan for the janitor rather than data loss.
+        //
+        // Unlike the RE-upload path above, which deliberately orphans the old object
+        // (a failed commit there could otherwise leave a row pointing at deleted
+        // bytes), there is no row left here to point at anything. Clearing used to
+        // drop the row and leave the object forever, with no reason recorded — an
+        // avatar per user, kept indefinitely, that nothing will ever read again.
+        try
+        {
+            await fileStorage.DeleteAsync(clearedStorageKey, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Orphaned object; JANITOR(§10). Provider exception types differ
+            // (IOException vs AmazonS3Exception), hence the broad catch — cancellation
+            // still propagates, everything else is the janitor's problem.
+            _ = ex;
+        }
+
         return PageMutationResult<UserAvatarState>.Success(new UserAvatarState(HasAvatar: false));
     }
 

@@ -811,7 +811,7 @@ bullet keeps its own sharper caveat where one exists):
   forever. Building it is also not just "write the job": `IFileStorage`
   has no enumeration primitive (Save/OpenRead/Delete/Exists only), so a
   janitor that finds unreferenced objects requires an interface change
-  across both providers first.
+  across all three providers first (filesystem, S3, SQL Server).
 
 **Verified on real containers (2026-08-28).** The standing "nothing has ever
 run against real infrastructure" caveat is now retired. `aspire run` was

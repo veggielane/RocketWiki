@@ -112,8 +112,14 @@ public sealed partial class ConfluenceStorageConverter
     private static string RenderHeading(XElement element, RenderState state)
     {
         var level = element.Name.LocalName[1] - '0';
-        var text = RenderInlineTrimmed(element.Nodes(), state);
+
+        // Enter the section BEFORE rendering the heading’s own inline content. Any
+        // issue raised while rendering it (an unsupported macro in a heading, a link
+        // that will not resolve) is located by state.CurrentLocation, so rendering
+        // first filed those under the PREVIOUS section’s breadcrumb — pointing a
+        // reviewer at the wrong part of the page.
         state.EnterHeading(level, MarkdownText.NormalizeWhitespace(element.Value));
+        var text = RenderInlineTrimmed(element.Nodes(), state);
         return new string('#', level) + " " + text;
     }
 
@@ -140,9 +146,21 @@ public sealed partial class ConfluenceStorageConverter
     {
         var items = element.Elements().Where(e => e.HasLocalName("li")).ToList();
         var rendered = new List<string>(items.Count);
+
+        // <ol start="7"> is ordinary in migrated content — a procedure split across
+        // two blocks by a note or a screenshot. Numbering from 1 regardless silently
+        // renumbered the second half, so step 7 became step 1.
+        var start = 1;
+        if (ordered && (string?)element.Attribute("start") is { } rawStart
+            && int.TryParse(rawStart, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsedStart))
+        {
+            start = parsedStart;
+        }
+
         for (var i = 0; i < items.Count; i++)
         {
-            var marker = ordered ? $"{i + 1}. " : "- ";
+            var marker = ordered ? $"{start + i}. " : "- ";
             var combined = JoinBlocksForListItem(RenderBlocks(items[i].Nodes(), state));
             rendered.Add(ApplyMarker(combined, marker));
         }

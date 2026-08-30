@@ -30,6 +30,17 @@ whether a label name collides with one already in RocketWiki, and whether the re
 kind of thing worth discovering on the first, disposable trial space, not on the space
 that matters.
 
+## 1a. Handling the report file
+
+The report is not a summary — it reproduces **page content and author email addresses
+in plaintext**, and on a dry run that means every page of the space. It is written to
+whatever path `--report` names, with no protective marking of its own and nothing
+restricting who can read it.
+
+Treat it as at least as sensitive as the space it describes: keep it inside the same
+boundary, do not paste it into a ticket, and delete it once the migration review is
+finished. The report itself now carries this warning in its header.
+
 ## 2. Exit codes
 
 | Code | Meaning | What to do |
@@ -85,12 +96,19 @@ RocketWiki.Importer --export <path> --space-key <KEY> \
   --attachments-root <directory> \
   --acting-user-id <existing-rocketwiki-user-guid> \
   --importer-principal-id <sub-claim-value-for-the-importer> \
-  --grant-role <viewer|editor|space-admin> \
+  --grant-role <editor|space-admin> \
   --grant-expression '<access-rule-expression-json>' \
   --report import-report.txt
 ```
 
-`--grant-role`/`--grant-expression` decide who can see and edit the space once it exists.
+`--grant-role`/`--grant-expression` decide who can see and edit the space once it exists
+— **and, for the duration of the run, what the importer itself may write.** Every
+service call is made as the importer principal (group `confluence-importer`, no
+attributes), so a grant that principal does not satisfy, or a `viewer` role, would
+create the space and then refuse every page while still reporting success. Both are
+now refused up front, before the space key is consumed, naming the groups and
+attributes the principal actually has. If you want an attribute-based grant, run the
+import as a principal carrying that attribute — do not widen the grant to get past it.
 There is no default — Confluence's own space/page permissions are **not** translated by
 this tool (an automatic mapping is guaranteed wrong in one direction or the other: too
 open, which leaks content that was export-controlled under Confluence's model, or too
@@ -146,10 +164,13 @@ approach is wrong.
   attached to, present regardless of thread depth; a `parent` property, present only on a
   threaded reply, references another `Comment`. If a real export instead only sets
   `content`/`owner` on top-level comments and expects the owning page to be found by
-  walking up the `parent` chain, replies will silently vanish from the dry run's page
-  comment counts (see `ResolveAllComments`'s remarks — an unplaceable comment is dropped,
-  not guessed at). Compare the dry run's comment count against Confluence's own UI count
-  for a handful of pages with active discussion threads.
+  walking up the `parent` chain, replies will be dropped from the import (see
+  `ResolveAllComments`'s remarks — an unplaceable comment is dropped, not guessed at).
+  **They no longer vanish silently:** the reader counts them and the report carries a
+  pipeline note saying how many, which is the signal that the assumed property name is
+  wrong for your Confluence version. A large count there is the thing to act on. Still
+  worth comparing the dry run's comment count against Confluence's own UI count for a
+  handful of pages with active discussion threads.
 - **Label shape.** Two shapes are checked (`ResolveLabels`): a direct `labels` collection
   of `Label` objects on the `Page`, and an indirect `labellings` collection of join objects
   each carrying a `label` reference. A real export may use only one, the other, or neither
@@ -170,11 +191,16 @@ body that is not well-formed XML, or that uses a named HTML entity outside the
 converter's table (`&Aacute;`, `&oacute;`, `&frac12;`, `&dagger;` — most accented
 characters), cannot be converted at all.
 
-These are **isolated to the page or comment they occur on**. The page is still
-created, keeps its placeholder content, and appears under "Pages needing review" with
-`could not be converted` and the reason; the rest of the import continues. A comment
-that will not convert is skipped along with its replies, like any comment that fails
-to create.
+These are **isolated to the page or comment they occur on, and nothing is lost**. The
+page is imported with its original Confluence storage-format body preserved verbatim
+inside a fenced code block, and appears under "Pages needing review" with
+`could not be converted` and the reason. The rest of the import continues, and the
+page keeps its place in the tree so its children still import normally. A comment that
+will not convert is skipped along with its replies, like any comment that fails to
+create.
+
+The preserved page needs converting by hand — the text is all there, in one code
+block, with a note at the top of the page saying why.
 
 A dry run finds every one of them without touching the database, which is the cheapest
 way to deal with them: fix the source pages in Confluence, re-export, and re-run.

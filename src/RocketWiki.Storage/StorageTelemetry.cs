@@ -44,6 +44,9 @@ public static class StorageTelemetry
     public const string OutcomeTag = "rocketwiki.storage.outcome";
     public const string BytesTag = "rocketwiki.storage.bytes";
 
+    /// <summary>Fixed outcome tag for a caller that went away mid-operation — not a fault.</summary>
+    public const string CanceledOutcome = "canceled";
+
     public const string FileSystemProvider = "filesystem";
     public const string S3Provider = "s3";
     public const string SqlServerProvider = "sqlserver";
@@ -92,6 +95,18 @@ public static class StorageTelemetry
 
         public void Fail(Exception exception)
         {
+            // A client disconnecting mid-download is not a storage fault. It arrived
+            // here as outcome "TaskCanceledException" with span status Error, so a
+            // dashboard counted every abandoned download — a user navigating away from
+            // a large attachment — as a provider error. Given the error rate is what an
+            // operator watches to decide whether the object store is healthy, that is
+            // noise in exactly the signal that must stay trustworthy.
+            if (exception is OperationCanceledException)
+            {
+                _outcome = CanceledOutcome;
+                return;
+            }
+
             _outcome = exception.GetType().Name;
             _activity?.SetStatus(ActivityStatusCode.Error);
             // The type name only: an IOException's message carries the full filesystem

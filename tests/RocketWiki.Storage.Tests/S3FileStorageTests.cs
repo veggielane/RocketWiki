@@ -97,4 +97,81 @@ public sealed class S3FileStorageTests
     {
         Assert.Equal(expected, S3FileStorage.CanDisablePayloadSigning(serviceUrl));
     }
+
+    /// <summary>
+    /// The positive control for every rejection theory above, the same one
+    /// SqlServerFileStorageTests added deliberately. Without it those theories prove
+    /// nothing about WHERE validation happens: a provider that threw ArgumentException
+    /// for every key, or whose method body had been deleted entirely, would satisfy
+    /// them all. A well-formed key must get PAST validation and reach the SDK — here
+    /// a deliberately null client, so "reached the client" shows up as
+    /// NullReferenceException rather than ArgumentException.
+    /// </summary>
+    [Fact]
+    public async Task WellFormedKey_ReachesTheSdk_SoTheRejectionsAboveAreNotVacuous()
+    {
+        var thrown = await Record.ExceptionAsync(() => CreateStorage().SaveAsync(
+            "attachments/2026/08/well-formed.bin", Payload(), "application/octet-stream", CancellationToken.None));
+
+        Assert.NotNull(thrown);
+        Assert.IsNotType<ArgumentException>(thrown);
+    }
+    /// <summary>
+    /// The GetObjectResponse owns the stream and is itself IDisposable; returning the
+    /// bare ResponseStream dropped it, so the caller could not dispose what it never
+    /// received. SqlServerFileStorage built an explicit wrapper for the identical
+    /// ownership problem, with a MaxPoolSize=2 regression test, because leaking the
+    /// handle there exhausts the pool after a few hundred downloads. This asserts the
+    /// S3 provider now returns a stream that owns its response too.
+    /// </summary>
+    [Fact]
+    public async Task OpenRead_ReturnsAStreamThatDisposesTheOwningResponse()
+    {
+        var payload = new byte[] { 1, 2, 3, 4 };
+        var tracked = new TrackingStream(payload);
+        var response = new Amazon.S3.Model.GetObjectResponse { ResponseStream = tracked };
+        var storage = new S3FileStorage(
+            new StubS3Client(response),
+            Options.Create(new FileStorageOptions { S3 = new S3FileStorageOptions { Bucket = "test-bucket" } }));
+
+        var stream = await storage.OpenReadAsync("attachments/2026/08/object.bin", CancellationToken.None);
+
+        // Non-vacuous: the bytes really do come through the wrapper.
+        using (var buffer = new MemoryStream())
+        {
+            await stream.CopyToAsync(buffer);
+            Assert.Equal(payload, buffer.ToArray());
+        }
+
+        // The discriminating assertion: the caller must NOT be handed the response’s
+        // own stream. Handing that back is precisely what dropped the owning response,
+        // and "the inner stream got disposed" is true either way, so it proves nothing.
+        Assert.NotSame(tracked, stream);
+
+        Assert.False(tracked.Disposed);
+        await stream.DisposeAsync();
+        Assert.True(tracked.Disposed,
+            "Disposing the returned wrapper must dispose the response's stream too.");
+    }
+
+    /// <summary>Observes disposal through the stream the response hands out: the SDK's
+    /// response type seals its own disposal, so the tracking sits one level in.</summary>
+    private sealed class TrackingStream(byte[] payload) : MemoryStream(payload)
+    {
+        public bool Disposed { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            Disposed = true;
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>Answers exactly one GetObject; every other member is unreachable here.</summary>
+    private sealed class StubS3Client(Amazon.S3.Model.GetObjectResponse response) : Amazon.S3.AmazonS3Client("id", "secret", Amazon.RegionEndpoint.USEast1)
+    {
+        public override Task<Amazon.S3.Model.GetObjectResponse> GetObjectAsync(
+            string bucketName, string key, CancellationToken cancellationToken = default) =>
+            Task.FromResult(response);
+    }
 }

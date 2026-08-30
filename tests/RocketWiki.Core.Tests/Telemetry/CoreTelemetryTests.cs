@@ -98,7 +98,18 @@ public class CoreTelemetryTests
             PageAction.View,
             Principal(attributes: new() { ["nationality"] = ["SENTINEL-PRINCIPAL"] }));
 
-        foreach (var measurement in collector.GetMeasurementSnapshot())
+        var measurements = collector.GetMeasurementSnapshot();
+
+        // Non-vacuity first, and it matters more here than anywhere else in this file:
+        // this is the guard that nationality never reaches a metric. Iterating an empty
+        // snapshot passes every assertion below, so if CheckRestrictions ever stopped
+        // emitting rule_evaluations, the §15 export-control guard would go green while
+        // checking nothing at all. The sibling test one method up already opens with
+        // Assert.Single for exactly this reason.
+        Assert.NotEmpty(measurements);
+        Assert.Contains(measurements, m => m.Tags.ContainsKey(CoreTelemetry.DecisionTag));
+
+        foreach (var measurement in measurements)
         {
             foreach (var tag in measurement.Tags)
             {

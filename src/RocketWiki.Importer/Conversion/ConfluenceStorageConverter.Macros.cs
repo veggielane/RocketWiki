@@ -99,7 +99,7 @@ public sealed partial class ConfluenceStorageConverter
         var macroName = (string?)macro.Attribute(ConfluenceNamespaces.Ac + "name") ?? "unknown";
         return macroName switch
         {
-            "code" => RenderCodeMacro(macro),
+            "code" => RenderCodeMacro(macro, state),
             "info" => RenderCalloutMacro(macro, state, "info", macroName),
             "note" => RenderCalloutMacro(macro, state, "note", macroName),
             "warning" => RenderCalloutMacro(macro, state, "warning", macroName),
@@ -117,9 +117,40 @@ public sealed partial class ConfluenceStorageConverter
                 (string?)p.Attribute(ConfluenceNamespaces.Ac + "name"), name, StringComparison.OrdinalIgnoreCase))
             ?.Value;
 
-    private static string RenderCodeMacro(XElement macro)
+    /// <summary>
+    /// design.md §4 gives a handful of fence languages a MEANING rather than a
+    /// highlighting hint: the SPA decodes their bodies. <c>drawio</c> is base64 of an
+    /// editable SVG, <c>gitlab-file</c>/<c>gitlab-issues</c>/<c>page-list</c>/
+    /// <c>form-definition</c>/<c>form-list</c> carry structured bodies, and
+    /// <c>mermaid</c> is rendered as a diagram.
+    /// </summary>
+    private static readonly HashSet<string> ReservedFenceLanguages = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "drawio", "mermaid", "gitlab-file", "gitlab-issues", "page-list", "form-definition", "form-list",
+    };
+
+    private static string RenderCodeMacro(XElement macro, RenderState state)
     {
         var language = GetMacroParameter(macro, "language");
+
+        // A Confluence code macro carries whatever language string its author typed,
+        // and it was passed into the fence unvalidated. A block tagged "mermaid" or
+        // "drawio" therefore arrived as a RESERVED fence whose body the SPA tries to
+        // decode — Confluence source code presented to a base64 decoder or a diagram
+        // renderer. Dropped to an untagged fence instead, and reported: the content is
+        // intact and merely unhighlighted, which is the harmless direction.
+        if (language is not null && ReservedFenceLanguages.Contains(language))
+        {
+            state.Report.Add(new ConversionIssue(
+                IssueSeverity.Info,
+                IssueCategory.LossyTransform,
+                $"Code block declared language \"{language}\", which RocketWiki reserves for a fence it renders "
+                + "rather than highlights (design.md §4). The code was kept verbatim in an untagged fence so it "
+                + "is not fed to that renderer.",
+                state.CurrentLocation,
+                language));
+            language = null;
+        }
         var body = macro.Element(ConfluenceNamespaces.Ac + "plain-text-body")?.Value
                    ?? macro.Element(ConfluenceNamespaces.Ac + "rich-text-body")?.Value
                    ?? string.Empty;
@@ -154,7 +185,39 @@ public sealed partial class ConfluenceStorageConverter
         }
 
         var body = JoinBlocks(innerBlocks);
-        return $":::{directive}\n{body}\n:::";
+
+        // Widened past any directive fence already in the body, the same way the code
+        // fence widens past backticks. An info panel containing a note panel is
+        // ordinary Confluence, and a fixed ":::" produced four identical fences where
+        // the FIRST closing one terminated the outer callout — so the inner panel’s
+        // content and everything after it escaped the container entirely.
+        var fence = DirectiveFenceFor(body);
+        return $"{fence}{directive}\n{body}\n{fence}";
+    }
+
+    /// <summary>
+    /// A directive fence at least one colon longer than any run of colons already
+    /// opening a line in the body — the nesting rule the ":::" convention shares with
+    /// CommonMark’s code fences. Only line-initial runs count, because that is the
+    /// only position where a fence is a fence rather than text.
+    /// </summary>
+    private static string DirectiveFenceFor(string body)
+    {
+        var longest = 0;
+
+        foreach (var line in body.Split('\n'))
+        {
+            var trimmed = line.TrimStart();
+            var run = 0;
+            while (run < trimmed.Length && trimmed[run] == ':')
+            {
+                run++;
+            }
+
+            longest = Math.Max(longest, run);
+        }
+
+        return new string(':', Math.Max(3, longest + 1));
     }
 
     private static string? RenderTocMacro(RenderState state)
@@ -254,6 +317,26 @@ public sealed partial class ConfluenceStorageConverter
         else if (linkBody is not null)
         {
             displayText = RenderInlineTrimmed(linkBody.Nodes(), state);
+        }
+
+        // ac:anchor names a SECTION of the target. It is dropped — deliberately, and
+        // now visibly. Translating it would mean guessing: the anchor is Confluence’s
+        // own slug of a heading on the TARGET page, and for a cross-page link this
+        // converter has never seen that page’s headings, so it cannot know which
+        // RocketWiki anchor (§9.2’s cross-language algorithm) the heading will get. A
+        // wrong deep link that lands silently on the wrong section is worse than a
+        // whole-page link a reviewer was told about. The link with an anchor but no
+        // ri: child already reported; the far more common form below did not, which
+        // made this the quiet failure rather than the loud one.
+        var anchor = (string?)element.Attribute(ConfluenceNamespaces.Ac + "anchor");
+        if (!string.IsNullOrWhiteSpace(anchor) && (riPage is not null || riAttachment is not null))
+        {
+            state.Report.Add(new ConversionIssue(
+                IssueSeverity.Lossy,
+                IssueCategory.LossyTransform,
+                $"Link targeted the section \"{anchor}\" of another page; the section anchor was dropped and the link now points at the whole page. Re-point it by hand if the section matters.",
+                state.CurrentLocation,
+                anchor));
         }
 
         if (riPage is not null)
@@ -366,7 +449,7 @@ public sealed partial class ConfluenceStorageConverter
                 "Image references an external URL (ri:url) rather than a Confluence attachment; passed through as-is.",
                 state.CurrentLocation,
                 url));
-            return $"![{MarkdownText.Escape(alt ?? string.Empty)}]({url})";
+            return $"![{MarkdownText.Escape(alt ?? string.Empty)}]({MarkdownText.EscapeLinkUrl(url)})";
         }
 
         state.Report.Add(new ConversionIssue(

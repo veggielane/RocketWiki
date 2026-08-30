@@ -277,4 +277,55 @@ public sealed class EditSessionRegistryTests
         Assert.Null(registry.GetMember(pageB, "c1"));
         Assert.NotNull(registry.GetMember(pageB, "c2"));
     }
+    [Fact]
+    public void ConcurrentJoins_ProduceExactlyOneCreatedSession_AndOneBaseRevision()
+    {
+        // ConcurrentDictionary.GetOrAdd may invoke its value factory and still return
+        // ANOTHER thread's value — documented behaviour. The registry set its "created"
+        // flag inside that factory, so two joiners could both believe they created the
+        // session: each then wrote its own BaseRevisionNumber, and if a save landed
+        // between the two reads the base moved backwards and the session's next
+        // updatePageContent failed its optimistic-concurrency check against a stale base.
+        // Both also counted a session start.
+        var registry = CreateRegistry();
+        var pageId = Guid.NewGuid();
+        const int Racers = 64;
+
+        var outcomes = new EditSessionJoinOutcome[Racers];
+        using var start = new Barrier(Racers);
+
+        Parallel.For(0, Racers, i =>
+        {
+            start.SignalAndWait();
+            // Each racer reads a DIFFERENT current revision, so a session created by the
+            // wrong thread is visible as a base revision that isn't the winner's.
+            outcomes[i] = registry.Join(pageId, Member($"c{i}"), currentRevisionNumber: 100 + i);
+        });
+
+        Assert.Equal(1, outcomes.Count(o => o.SessionCreated));
+
+        // One session, one base revision, and it is the one the creating joiner supplied.
+        var bases = outcomes.Select(o => o.BaseRevisionNumber).Distinct().ToList();
+        Assert.Single(bases);
+    }
+
+    [Fact]
+    public void Join_ReportsCreatedOnlyForTheFirstJoiner()
+    {
+        // The sequential half of the same property, so the guard above cannot pass merely
+        // because the race never happened on this machine.
+        var registry = CreateRegistry();
+        var pageId = Guid.NewGuid();
+
+        var first = registry.Join(pageId, Member("c1"), currentRevisionNumber: 7);
+        var second = registry.Join(pageId, Member("c2"), currentRevisionNumber: 9);
+
+        Assert.True(first.SessionCreated);
+        Assert.False(second.SessionCreated);
+
+        // The second joiner adopts the session's base rather than resetting it — that
+        // reset is what moved the base backwards.
+        Assert.Equal(7, first.BaseRevisionNumber);
+        Assert.Equal(7, second.BaseRevisionNumber);
+    }
 }

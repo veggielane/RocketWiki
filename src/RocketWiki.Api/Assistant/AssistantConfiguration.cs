@@ -86,7 +86,9 @@ public static class AssistantConfiguration
             ChatModel: model,
             Timeout: TimeSpan.FromSeconds(builder.Configuration.GetValue("Ai:ChatTimeoutSeconds", 30)),
             MaxContextChars: builder.Configuration.GetValue("Ai:MaxContextChars", 24_000),
-            MaxRetrievedPages: builder.Configuration.GetValue("Ai:MaxRetrievedPages", 8));
+            MaxRetrievedPages: builder.Configuration.GetValue("Ai:MaxRetrievedPages", 8),
+            MaxQuestionChars: builder.Configuration.GetValue("Ai:MaxQuestionChars", 2000),
+            MaxOutputTokens: builder.Configuration.GetValue("Ai:MaxOutputTokens", 800));
 
         builder.Services.AddSingleton(options);
 

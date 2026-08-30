@@ -63,7 +63,17 @@ api:
   #   Keycloak__Audience              e.g. rocketwiki-api
   #   FileStorage__S3__AccessKey      S3/MinIO access key
   #   FileStorage__S3__SecretKey      S3/MinIO secret key
-  #   ConnectionStrings__embeddings   (later, milestone 7 — §9's external endpoint)
+  #
+  # Optional AI/integration endpoints. Each is fail-closed: absent means the
+  # feature is not registered at all, so a deployment that omits one gets a
+  # silently feature-less install rather than an error. They are listed here
+  # because "reachable only via api.extraEnv, undocumented" is the same thing as
+  # not shipping them.
+  #   ConnectionStrings__embeddings   semantic search (§9.2). Without it, search is
+  #                                   keyword-only — structurally, by design.
+  #   ConnectionStrings__assistant    the askWiki field (§9.5). Without it AND
+  #   Ai__ChatModel                   Ai__ChatModel, askWiki answers NOT_CONFIGURED.
+  #   GitLab__BaseUrl                 GitLab integration (§18). Absent = off.
   #
   # Optional, only with api.fileStorage.provider=SqlServer:
   #   FileStorage__SqlServer__ConnectionString

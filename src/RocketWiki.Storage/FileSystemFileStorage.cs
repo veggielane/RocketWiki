@@ -62,6 +62,13 @@ public sealed class FileSystemFileStorage : IFileStorage
         using var operation = StorageTelemetry.StartOperation(StorageTelemetry.FileSystemProvider, StorageTelemetry.OpenReadOperation);
         try
         {
+            // Observed rather than ignored. These methods return Task and do
+            // blocking I/O, so there is no await to carry the token — checking it
+            // on entry is the honest minimum, and it is what makes a cancelled
+            // caller land as StorageTelemetry.CanceledOutcome rather than as work
+            // the process did for nobody.
+            ct.ThrowIfCancellationRequested();
+
             var path = ResolvePath(key);
             if (!File.Exists(path))
             {
@@ -85,6 +92,13 @@ public sealed class FileSystemFileStorage : IFileStorage
         using var operation = StorageTelemetry.StartOperation(StorageTelemetry.FileSystemProvider, StorageTelemetry.DeleteOperation);
         try
         {
+            // Observed rather than ignored. These methods return Task and do
+            // blocking I/O, so there is no await to carry the token — checking it
+            // on entry is the honest minimum, and it is what makes a cancelled
+            // caller land as StorageTelemetry.CanceledOutcome rather than as work
+            // the process did for nobody.
+            ct.ThrowIfCancellationRequested();
+
             var path = ResolvePath(key);
             if (File.Exists(path))
             {
@@ -109,6 +123,13 @@ public sealed class FileSystemFileStorage : IFileStorage
         using var operation = StorageTelemetry.StartOperation(StorageTelemetry.FileSystemProvider, StorageTelemetry.ExistsOperation);
         try
         {
+            // Observed rather than ignored. These methods return Task and do
+            // blocking I/O, so there is no await to carry the token — checking it
+            // on entry is the honest minimum, and it is what makes a cancelled
+            // caller land as StorageTelemetry.CanceledOutcome rather than as work
+            // the process did for nobody.
+            ct.ThrowIfCancellationRequested();
+
             var path = ResolvePath(key);
             var exists = File.Exists(path);
             operation.SetOutcome(exists ? "found" : "not_found");

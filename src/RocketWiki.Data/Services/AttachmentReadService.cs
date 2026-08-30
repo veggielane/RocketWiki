@@ -29,18 +29,67 @@ public class AttachmentReadService : IAttachmentReadService
         _permissions = new PermissionContextLoader(db);
     }
 
+    /// <summary>
+    /// Composed from <see cref="ResolveForDownloadAsync"/> + <see cref="OpenContentAsync"/>
+    /// rather than duplicating either, so "authorize, then open" has exactly one
+    /// implementation and the two entry points cannot drift into different answers.
+    /// </summary>
     public async Task<AttachmentDownloadResult> DownloadAsync(Guid attachmentId, Principal principal, CancellationToken cancellationToken = default)
+    {
+        var access = await ResolveForDownloadAsync(attachmentId, principal, cancellationToken);
+
+        switch (access)
+        {
+            case AttachmentAccessResult.NotFound:
+                return new AttachmentDownloadResult.NotFound();
+
+            case AttachmentAccessResult.Denied denied:
+                return new AttachmentDownloadResult.Denied(denied.AttachmentId, denied.Reason);
+
+            case AttachmentAccessResult.Allowed allowed:
+                var content = await OpenContentAsync(allowed.Metadata, cancellationToken);
+                return content is null
+                    ? new AttachmentDownloadResult.BlobMissing(allowed.Metadata)
+                    : new AttachmentDownloadResult.Found(allowed.Metadata, content);
+
+            default:
+                // Fail closed on a union member nobody taught this method about.
+                return new AttachmentDownloadResult.NotFound();
+        }
+    }
+
+    public async Task<Stream?> OpenContentAsync(Attachment metadata, CancellationToken cancellationToken = default)
+    {
+        // Open and CATCH, rather than Exists-then-Open. The pre-check was both a race and
+        // a wasted round trip: between the two calls the object can vanish, and
+        // OpenReadAsync then throws FileNotFoundException with nothing anywhere in the
+        // codebase catching it — a raw, unstructured 500, which is exactly what
+        // design.md §10 and the BlobMissing branch exist to prevent. All three providers
+        // already converge on FileNotFoundException as the uniform missing signal,
+        // deliberately and by test, so catching it is cheaper, race-free, and lands on the
+        // same answer the pre-check was reaching for.
+        try
+        {
+            return await _fileStorage.OpenReadAsync(metadata.StorageKey, cancellationToken);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    public async Task<AttachmentAccessResult> ResolveForDownloadAsync(Guid attachmentId, Principal principal, CancellationToken cancellationToken = default)
     {
         var attachment = await _db.Attachments.FirstOrDefaultAsync(a => a.Id == attachmentId, cancellationToken);
         if (attachment is null)
         {
-            return new AttachmentDownloadResult.NotFound();
+            return new AttachmentAccessResult.NotFound();
         }
 
         var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == attachment.PageId, cancellationToken);
         if (page is null)
         {
-            return new AttachmentDownloadResult.NotFound();
+            return new AttachmentAccessResult.NotFound();
         }
 
         // Fail closed on an unresolvable space even though the permission computation
@@ -48,7 +97,7 @@ public class AttachmentReadService : IAttachmentReadService
         var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         if (space is null)
         {
-            return new AttachmentDownloadResult.NotFound();
+            return new AttachmentAccessResult.NotFound();
         }
 
         var permission = await ComputePermissionAsync(page, principal, cancellationToken);
@@ -58,29 +107,11 @@ public class AttachmentReadService : IAttachmentReadService
             // case above from the caller's point of view, once the route collapses it.
             // Internally Denied so the route can audit the failing restriction (§7)
             // before returning that identical 404.
-            return new AttachmentDownloadResult.Denied(
+            return new AttachmentAccessResult.Denied(
                 attachment.Id, permission.ViewDenialReason ?? "no-space-role");
         }
 
-        // Open and CATCH, rather than Exists-then-Open. The pre-check was both a race and
-        // a wasted round trip: between the two calls the object can vanish, and
-        // OpenReadAsync then throws FileNotFoundException with nothing anywhere in the
-        // codebase catching it — a raw, unstructured 500, which is exactly what
-        // design.md §10 and this BlobMissing branch exist to prevent. All three providers
-        // already converge on FileNotFoundException as the uniform missing signal,
-        // deliberately and by test, so catching it is cheaper, race-free, and lands on the
-        // same answer the pre-check was reaching for.
-        try
-        {
-            var stream = await _fileStorage.OpenReadAsync(attachment.StorageKey, cancellationToken);
-            return new AttachmentDownloadResult.Found(attachment, stream);
-        }
-        catch (FileNotFoundException)
-        {
-            // design.md §10: a flagged error, not a 500 - the caller legitimately can
-            // view this attachment, so there's nothing to hide about its metadata.
-            return new AttachmentDownloadResult.BlobMissing(attachment);
-        }
+        return new AttachmentAccessResult.Allowed(attachment);
     }
 
     /// <summary>

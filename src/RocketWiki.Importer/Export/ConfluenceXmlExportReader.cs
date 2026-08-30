@@ -105,7 +105,12 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
         var spaceName = graph.GetScalar(spaceObject, "name") ?? spaceKey;
         var spaceDescription = graph.GetScalar(spaceObject, "description");
 
-        var commentsByPageId = ResolveAllComments(graph);
+        // What this reader excludes is reported, not silently dropped: the import
+        // report’s "N of M pages" uses Pages.Count as M, which is already post-filter,
+        // so anything discarded here was invisible in both numbers.
+        var readerNotes = new List<string>();
+
+        var commentsByPageId = ResolveAllComments(graph, readerNotes);
         var restrictionsByPageId = ResolveAllContentRestrictions(graph);
 
         var pages = new List<ConfluenceExportPage>();
@@ -128,7 +133,7 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
             var attachments = graph.GetCollectionIds(pageObject, "attachments")
                 .Select(graph.ById)
                 .Where(a => a is not null)
-                .Select(a => BuildAttachment(graph, a!, archive))
+                .Select(a => BuildAttachment(graph, a!, archive, readerNotes))
                 .Where(a => a is not null)
                 .Select(a => a!)
                 .ToList();
@@ -141,8 +146,34 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
                 pageObject.Id, parentId, title, storageBody, author, createdAt, attachments, comments, labels, restrictions));
         }
 
+        // Blog posts are a separate Confluence content type with no RocketWiki
+        // equivalent, so they are not imported — but a space with 200 of them should
+        // not read as a space with none.
+        var blogPosts = graph.ObjectsOfClass("BlogPost")
+            .Count(b => graph.GetScalar(b, "contentStatus") is not { } status
+                || string.Equals(status, "current", StringComparison.OrdinalIgnoreCase));
+        if (blogPosts > 0)
+        {
+            readerNotes.Add(
+                $"{blogPosts} blog post(s) in the export were not imported: RocketWiki has no blog content type. "
+                + "Move anything worth keeping into a page in Confluence and re-export.");
+        }
+
+        // The home page is a page REFERENCE, and §12 already establishes that a
+        // default-page pointer is local curation rather than content. Reported so the
+        // admin knows to re-point it, rather than silently losing which page it was.
+        if (graph.GetReferenceId(spaceObject, "homePage") is { } homePageId
+            && graph.ById(homePageId) is { } homePage)
+        {
+            var homeTitle = graph.GetScalar(homePage, "title") ?? homePageId;
+            readerNotes.Add(
+                $"The Confluence space’s home page was \"{homeTitle}\". The imported space has no default page set; "
+                + "pick one deliberately once the import is reviewed.");
+        }
+
         var spacePermissions = ResolveSpacePermissions(graph, spaceObject.Id);
-        var space = new ConfluenceExportSpace(spaceKey, spaceName, spaceDescription, pages, spacePermissions);
+        var space = new ConfluenceExportSpace(
+            spaceKey, spaceName, spaceDescription, pages, spacePermissions, readerNotes);
         return new ConfluenceSpaceExport(archive, space);
     }
 
@@ -159,9 +190,11 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
     /// reader (see the class remarks) — a comment whose owning page can't be determined is
     /// dropped rather than guessed at.
     /// </remarks>
-    private static Dictionary<string, List<ConfluenceExportComment>> ResolveAllComments(EntityGraph graph)
+    private static Dictionary<string, List<ConfluenceExportComment>> ResolveAllComments(
+        EntityGraph graph, List<string> readerNotes)
     {
         var byPageId = new Dictionary<string, List<ConfluenceExportComment>>(StringComparer.Ordinal);
+        var unplaceable = 0;
 
         foreach (var commentObject in graph.ObjectsOfClass("Comment"))
         {
@@ -193,7 +226,11 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
 
             if (owningPageId is null)
             {
-                continue; // can't place this comment anywhere - dropped, not guessed at
+                // Dropped, not guessed at — but counted. RUNBOOK §5 warns that a
+                // property-name mismatch here makes replies "silently vanish"; this
+                // is the counter that makes that visible instead.
+                unplaceable++;
+                continue;
             }
 
             var body = ResolveStorageBody(graph, graph.GetCollectionIds(commentObject, "bodyContents"));
@@ -202,6 +239,14 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
 
             var comment = new ConfluenceExportComment(commentObject.Id, parentCommentId, body, author, createdAt);
             (byPageId.TryGetValue(owningPageId, out var list) ? list : byPageId[owningPageId] = []).Add(comment);
+        }
+
+        if (unplaceable > 0)
+        {
+            readerNotes.Add(
+                $"{unplaceable} comment(s) were dropped because their owning page could not be resolved from the export. "
+                + "This is the least certain part of the reader (see its class remarks); if the count is large, the "
+                + "export’s comment-ownership property name likely differs from the one assumed here.");
         }
 
         return byPageId;
@@ -352,7 +397,14 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
             var labelName = graph.ById(labelId) is { } labelObject ? graph.GetScalar(labelObject, "name") : null;
             if (labelName is not null)
             {
-                names.Add(NormalizeLabelName(labelName));
+                // An empty result means the export carried a name that was nothing but
+                // a namespace prefix; creating a Label from it would be worse than
+                // dropping it.
+                var normalized = NormalizeLabelName(labelName);
+                if (normalized.Length > 0)
+                {
+                    names.Add(normalized);
+                }
             }
         }
 
@@ -369,17 +421,40 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
                 : null;
             if (labelName is not null)
             {
-                names.Add(NormalizeLabelName(labelName));
+                // An empty result means the export carried a name that was nothing but
+                // a namespace prefix; creating a Label from it would be worse than
+                // dropping it.
+                var normalized = NormalizeLabelName(labelName);
+                if (normalized.Length > 0)
+                {
+                    names.Add(normalized);
+                }
             }
         }
 
         return names.Distinct(StringComparer.Ordinal).ToList();
     }
 
+    /// <summary>
+    /// Strips Confluence’s namespace prefix (<c>global:</c>, <c>team:</c>, …) from a
+    /// label. The prefix is Confluence’s own scoping concept and means nothing here.
+    ///
+    /// <para>The edge cases matter because whatever comes out becomes a Label row: a
+    /// name that is nothing but a prefix (<c>"global:"</c>) used to arrive intact, and
+    /// a bare <c>":"</c> could come through as a label literally called ":". Both now
+    /// fall back to the raw name only when there is nothing usable after the colon, and
+    /// an empty result is dropped by the caller rather than created.</para>
+    /// </summary>
     private static string NormalizeLabelName(string rawName)
     {
         var colonIndex = rawName.IndexOf(':');
-        return colonIndex > 0 && colonIndex < rawName.Length - 1 ? rawName[(colonIndex + 1)..] : rawName;
+        if (colonIndex < 0)
+        {
+            return rawName;
+        }
+
+        var afterPrefix = rawName[(colonIndex + 1)..].Trim();
+        return afterPrefix.Length > 0 ? afterPrefix : string.Empty;
     }
 
     private static string ResolveStorageBody(EntityGraph graph, IReadOnlyList<string> bodyContentIds)
@@ -440,11 +515,13 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
             : null;
     }
 
-    private static ConfluenceExportAttachment? BuildAttachment(EntityGraph graph, EntityObject attachmentObject, ZipArchive archive)
+    private static ConfluenceExportAttachment? BuildAttachment(
+        EntityGraph graph, EntityObject attachmentObject, ZipArchive archive, List<string> readerNotes)
     {
         var fileName = graph.GetScalar(attachmentObject, "fileName");
         if (fileName is null)
         {
+            readerNotes.Add($"Attachment {attachmentObject.Id} had no fileName in the export and was skipped.");
             return null;
         }
 
@@ -457,6 +534,12 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
             e.FullName.StartsWith($"attachments/{attachmentObject.Id}/", StringComparison.Ordinal));
         if (entry is null)
         {
+            // The row exists in entities.xml but no binary is present in the zip —
+            // an incomplete export. Invisible before this, unless some page happened
+            // to reference the attachment and the reviewer noticed a broken link.
+            readerNotes.Add(
+                $"Attachment '{fileName}' (id {attachmentObject.Id}) is listed in the export but its binary is "
+                + "missing from the archive; it was skipped and will not be imported.");
             return null;
         }
 

@@ -141,7 +141,91 @@ internal static class SyncOutboxWriter
         }
     }
 
-    private static SyncEventType? Classify(IDomainEvent domainEvent) => domainEvent switch
+    /// <summary>
+    /// Domain events that are deliberately NOT journalled, named as types so the decision
+    /// is enforceable rather than only commented.
+    ///
+    /// <para>This list exists because <see cref="Classify"/>'s default is <c>null</c> —
+    /// journal nothing — while its sibling consumer <c>DomainEventAuditMapper.Describe</c>
+    /// throws on an unrecognised event. Opposite defaults on the same event stream mean a
+    /// new content-bearing event added tomorrow gets audited but <b>silently never
+    /// syncs</b>, and silence is the one failure mode §12 cannot tolerate: the high side
+    /// has no way to know content is missing. Making the omissions explicit lets
+    /// SyncOutboxWriterCoverageTests require every <c>IDomainEvent</c> to be on one list
+    /// or the other, so adding an event forces the decision instead of defaulting it.</para>
+    ///
+    /// <para>Changing the default to "throw" was the alternative and is worse: it would
+    /// fail a user's mutation over a sync-classification gap, and §12 is explicit that
+    /// sync never blocks authoring on the low side.</para>
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<Type, string> DeliberatelyNotJournalled =
+        new Dictionary<Type, string>
+        {
+            [typeof(LabelCreatedEvent)] =
+                "Creating a label with nothing attached yet has no content-syncing implication; the import side upserts a Label row by name from an attach event's payload.",
+            [typeof(PagePropertyKeyCreatedEvent)] =
+                "The property-key registry is instance-local vocabulary with no space to journal against; the import side materializes whatever key a value event names (§20).",
+            [typeof(PagePropertyKeyDeletedEvent)] =
+                "Same as PagePropertyKeyCreatedEvent: instance-local vocabulary, not content.",
+
+            // Space lifecycle and identity. design.md §12's table is explicit that spaces
+            // are not a sync event type at all: import creates the replica row from the
+            // space key alone, so renaming, archiving or re-pointing a replica's default
+            // page is legitimate local curation on the high side, like grants — not a
+            // blocked content write.
+            [typeof(SpaceCreatedEvent)] =
+                "Spaces are not a sync event type (§12): import materializes the replica space from the space key carried on content events.",
+            [typeof(SpaceRenamedEvent)] =
+                "Space name and description are local identity, not content (§12); the high side curates its own replica's naming.",
+            [typeof(SpaceArchivedEvent)] =
+                "Archived state is local curation (§12) — the high side decides what its own replica shows.",
+            [typeof(SpaceRestoredEvent)] =
+                "Same as SpaceArchivedEvent: local curation of the replica (§12).",
+            [typeof(SpaceHomepageSetEvent)] =
+                "The default page is a page REFERENCE and each side holds a different subset of pages (§12), so a low-side homepage could name a page the high side has no row for.",
+            [typeof(SpaceExportChangedEvent)] =
+                "Whether a space is exported is the LOW side's own decision about what to send; the high side has no use for it and must never be able to change it.",
+
+            // Per-user state. None of it is content, and all of it is meaningless on the
+            // other instance: users are mirrored per instance and authorization always
+            // evaluates the token (§6.1), never another instance's copy of a preference.
+            [typeof(WatchAddedEvent)] =
+                "A watch is one user's subscription on this instance; notifications are instance-local (data-model.md).",
+            [typeof(WatchRemovedEvent)] =
+                "Same as WatchAddedEvent: per-user subscription state, not content.",
+            [typeof(NotificationMarkedReadEvent)] =
+                "Notification rows are instance-local and never synced (data-model.md).",
+            [typeof(AvatarSetEvent)] =
+                "UserAvatar is instance-local (data-model.md) — a profile picture is not content and each instance holds its own.",
+            [typeof(AvatarClearedEvent)] =
+                "Same as AvatarSetEvent: instance-local profile data.",
+
+            // Credentials must never cross the boundary in either direction. This one is
+            // not merely 'no need to sync' — journalling it would put a user's encrypted
+            // GitLab token into a bundle that leaves the low side.
+            [typeof(GitLabTokenSetEvent)] =
+                "GitLabCredential is instance-local and secret (data-model.md); a credential must never enter a bundle that crosses the boundary.",
+            [typeof(GitLabTokenClearedEvent)] =
+                "Same as GitLabTokenSetEvent: credential state never crosses the boundary.",
+
+            [typeof(CustomEmojiCreatedEvent)] =
+                "CustomEmoji is an admin-curated instance-local registry (data-model.md), not page content.",
+            [typeof(CustomEmojiDeletedEvent)] =
+                "Same as CustomEmojiCreatedEvent: instance-local registry.",
+
+            // The high side's own record of receiving a bundle. Journalling it would
+            // re-export the fact of an import back out of the instance that performed it.
+            [typeof(SyncImportedEvent)] =
+                "This IS the record of an import on the receiving side; journalling it would feed sync back into itself.",
+            [typeof(SyncImportRefusedEvent)] =
+                "Same as SyncImportedEvent: a receiving-side record, never content to forward.",
+        };
+
+    private static SyncEventType? Classify(IDomainEvent domainEvent) => ClassifyCore(domainEvent);
+
+
+    /// <summary>Internal for the coverage sweep; <see cref="Classify"/> is the call site.</summary>
+    internal static SyncEventType? ClassifyCore(IDomainEvent domainEvent) => domainEvent switch
     {
         PageCreatedEvent => SyncEventType.PageUpsert,
         PageContentUpdatedEvent => SyncEventType.PageUpsert,

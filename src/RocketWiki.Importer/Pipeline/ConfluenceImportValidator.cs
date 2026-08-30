@@ -32,6 +32,16 @@ public sealed class ConfluenceImportValidator
     {
         var report = new ImportReport();
         report.AddSourceSpacePermissions(export.Permissions);
+
+        // What the READER dropped before the pipeline ever saw it (blog posts,
+        // attachments with no binary, unplaceable comments, the home page). These
+        // never reach a page outcome, so pipeline notes are the only place they
+        // can appear at all.
+        foreach (var note in export.ReaderNotes)
+        {
+            report.AddNote(note);
+        }
+
         var plan = ImportTreePlanner.Plan(export);
         var resolver = new TwoPassPageIdResolver();
         var localPageIds = new Dictionary<string, Guid>(StringComparer.Ordinal);

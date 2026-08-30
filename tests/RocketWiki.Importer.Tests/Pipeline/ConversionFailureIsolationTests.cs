@@ -70,13 +70,71 @@ public class ConversionFailureIsolationTests
 
         var broken = result.Report.Pages.Single(p => p.Title == "Broken");
         Assert.Contains("could not be converted", broken.SkippedReason, StringComparison.Ordinal);
-        // It exists — pass 1 created it with placeholder content — and the report says so,
-        // because an admin who finds the page later needs to know why it is a stub.
         Assert.NotNull(broken.RocketWikiPageId);
-        Assert.Contains("placeholder", broken.SkippedReason, StringComparison.Ordinal);
+
+        // Nothing is lost. The page is imported with the ORIGINAL Confluence body kept
+        // verbatim in a fenced code block, not left as a placeholder stub: a page that
+        // looks migrated and is silently empty is discovered by whoever needed the
+        // content, months later.
+        var saved = _pageService.GetCreatedPage(broken.RocketWikiPageId!.Value)!;
+        Assert.Contains("&Aacute;ngel", saved.CurrentContent, StringComparison.Ordinal);
+        Assert.Contains("```", saved.CurrentContent, StringComparison.Ordinal);
+        Assert.Contains("could not be converted", saved.CurrentContent, StringComparison.Ordinal);
+        Assert.False(broken.ProducedEmptyContent);
 
         Assert.Equal(3, result.Report.Pages.Count);
         Assert.True(result.Report.NeedsReview);
+    }
+
+    [Fact]
+    public async Task Children_of_an_unconvertible_page_are_still_imported()
+    {
+        var export = new ConfluenceExportSpace("ENG", "Engineering", null,
+        [
+            Page("1", null, "Home", "<p>Fine.</p>"),
+            Page("2", "1", "Broken Parent", UnparseableBody),
+            Page("3", "2", "Child Of The Broken One", "<p>Still needed.</p>"),
+            Page("4", "3", "Grandchild", "<p>Also still needed.</p>"),
+        ]);
+
+        var result = await CreateImporter().ImportAsync(export, DefaultOptions());
+
+        // The subtree is the reason not to skip the page. A skipped parent takes every
+        // descendant with it (the importer skips a subtree when an ancestor fails to
+        // create), so one unparseable entity near the root of a real space would drop
+        // hundreds of perfectly convertible pages.
+        var child = result.Report.Pages.Single(p => p.Title == "Child Of The Broken One");
+        var grandchild = result.Report.Pages.Single(p => p.Title == "Grandchild");
+        Assert.Null(child.SkippedReason);
+        Assert.Null(grandchild.SkippedReason);
+        Assert.NotNull(child.RocketWikiPageId);
+        Assert.NotNull(grandchild.RocketWikiPageId);
+    }
+
+    [Fact]
+    public async Task A_preserved_body_containing_a_code_fence_does_not_break_out_of_its_block()
+    {
+        // A Confluence code macro holding three backticks is ordinary content. Emitted
+        // inside a three-backtick fence it would close the block early and spill the rest
+        // of the raw XHTML into the page as live Markdown — the one way this fallback
+        // could make things worse than the placeholder it replaced.
+        const string bodyWithFence = "<p>Run ``` then &Aacute;ngel said ````done````</p>";
+
+        var export = new ConfluenceExportSpace("ENG", "Engineering", null,
+            [Page("1", null, "Fenced", bodyWithFence)]);
+
+        var result = await CreateImporter().ImportAsync(export, DefaultOptions());
+
+        var outcome = Assert.Single(result.Report.Pages);
+        var saved = _pageService.GetCreatedPage(outcome.RocketWikiPageId!.Value)!;
+
+        Assert.Contains("`````", saved.CurrentContent, StringComparison.Ordinal);
+        Assert.Contains(bodyWithFence, saved.CurrentContent, StringComparison.Ordinal);
+
+        // The opening fence must be longer than the longest run inside the body, or the
+        // block closes on the body's own backticks.
+        var opening = saved.CurrentContent.Split('\n').First(l => l.StartsWith("`````", StringComparison.Ordinal));
+        Assert.StartsWith("`````xml", opening.Trim(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -172,8 +230,15 @@ public class ConversionFailureIsolationTests
         var result = new ConfluenceImportValidator().Validate(export);
 
         Assert.Equal(2, result.Report.Pages.Count);
-        Assert.Contains("could not be converted",
-            result.Report.Pages.Single(p => p.Title == "Broken").SkippedReason, StringComparison.Ordinal);
+
+        var broken = result.Report.Pages.Single(p => p.Title == "Broken");
+        Assert.Contains("could not be converted", broken.SkippedReason, StringComparison.Ordinal);
+        // Predicts the degrade too, not just the failure: the previewed Markdown is the
+        // preserved body the real run will save, so an operator can see what they will get
+        // before anything touches the database.
+        Assert.Contains("&Aacute;ngel", broken.ConvertedMarkdown, StringComparison.Ordinal);
+        Assert.False(broken.ProducedEmptyContent);
+
         Assert.Null(result.Report.Pages.Single(p => p.Title == "Home").SkippedReason);
         Assert.Equal(1, result.Summary.SkippedPageCount);
     }

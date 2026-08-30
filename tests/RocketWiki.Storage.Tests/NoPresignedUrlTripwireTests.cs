@@ -18,12 +18,19 @@ public sealed class NoPresignedUrlTripwireTests
     /// <summary>The interface AND every implementation: an implementation-only
     /// public method (not on IFileStorage) would still be reachable by anyone
     /// holding the concrete type, so the sweep must not stop at the contract.</summary>
-    private static readonly Type[] StorageSurface =
+    /// <summary>
+    /// The contract plus <b>every</b> implementation of it in the assembly, discovered
+    /// rather than listed. A hard-coded list is the wrong shape for a tripwire: the
+    /// thing it guards against is a NEW provider, and a new provider is exactly what a
+    /// hard-coded list does not contain. AuditCoverageTests makes the same argument
+    /// for its own sweep.
+    /// </summary>
+    private static Type[] StorageSurface =>
     [
         typeof(IFileStorage),
-        typeof(FileSystemFileStorage),
-        typeof(S3FileStorage),
-        typeof(SqlServerFileStorage),
+        .. typeof(IFileStorage).Assembly.GetTypes()
+            .Where(t => typeof(IFileStorage).IsAssignableFrom(t) && t is { IsAbstract: false, IsInterface: false })
+            .OrderBy(t => t.Name, StringComparer.Ordinal),
     ];
 
     private static readonly string[] ForbiddenNameFragments = ["url", "uri", "presign", "signedlink"];
@@ -33,6 +40,7 @@ public sealed class NoPresignedUrlTripwireTests
     {
         var problems = new List<string>();
         var sweptMembers = 0;
+        var declaredMemberNames = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var type in StorageSurface)
         {
@@ -40,6 +48,11 @@ public sealed class NoPresignedUrlTripwireTests
             foreach (var member in type.GetMembers(visible))
             {
                 sweptMembers++;
+                if (member.DeclaringType == type)
+                {
+                    declaredMemberNames.Add(member.Name);
+                }
+
                 foreach (var fragment in ForbiddenNameFragments)
                 {
                     if (member.Name.Contains(fragment, StringComparison.OrdinalIgnoreCase))
@@ -50,9 +63,20 @@ public sealed class NoPresignedUrlTripwireTests
             }
         }
 
-        // Non-vacuous: the interface alone contributes four methods; an empty sweep
-        // means the reflection flags broke, not that the surface went quiet.
+        // Non-vacuous, and it has to be asserted on DECLARED members. sweptMembers > 0
+        // could never fail: GetMembers without DeclaredOnly always returns the
+        // inherited Object members, so the old guard stayed green even if every
+        // storage method vanished and the sweep was inspecting ToString and Equals.
         Assert.True(sweptMembers > 0, "Reflection sweep of the storage surface found no members at all.");
+        // Discovery really found the providers, not just the interface: a query that
+        // silently matched nothing would still satisfy the member check above via
+        // IFileStorage alone.
+        Assert.True(StorageSurface.Length >= 4,
+            $"Expected the interface plus its implementations; discovered {StorageSurface.Length} type(s).");
+        foreach (var required in new[] { "SaveAsync", "OpenReadAsync", "DeleteAsync", "ExistsAsync" })
+        {
+            Assert.Contains(required, declaredMemberNames);
+        }
 
         Assert.True(problems.Count == 0,
             "design.md §10: \"No presigned URLs. Downloads always stream through the API: a presigned URL " +

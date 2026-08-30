@@ -182,8 +182,13 @@ public class AccessRuleAuditReplayTests
             DetailsJson = "not valid json {{{",
         };
 
-        var exception = Record.Exception(() => AccessRuleAuditReplay.ReconstructAsOf(new[] { malformed }, DateTime.UtcNow));
+        var state = AccessRuleAuditReplay.ReconstructAsOf(new[] { malformed }, DateTime.UtcNow);
 
-        Assert.Null(exception);
+        // "Skipped" is the actual claim, and only the second assertion makes it. On its
+        // own, "did not throw" also passes for a replay that swallowed the parse error
+        // and injected a half-built rule into the reconstructed state — which, for a
+        // replay used to answer "who could see this page on that date", is worse than
+        // the exception it was checking for.
+        Assert.Empty(state);
     }
 }

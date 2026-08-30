@@ -80,7 +80,10 @@ RUN dotnet publish src/RocketWiki.Api/RocketWiki.Api.csproj \
 # execution time with `--connection` (see the chart's migrate Job).
 # Tool version floats within the EF Core 10 line to match the 10.0.x runtime
 # packages RocketWiki.Data references.
-RUN dotnet tool install dotnet-ef --tool-path /tools --version "10.0.*" \
+# Pinned, not floated. "10.0.*" resolves to whatever is newest at build time, so two
+# builds of the same commit can bake different migration bundles — which is the one
+# artifact that has to be reproducible, since it is what runs against production data.
+RUN dotnet tool install dotnet-ef --tool-path /tools --version 10.0.11 \
  && /tools/dotnet-ef migrations bundle \
       --project src/RocketWiki.Data/RocketWiki.Data.csproj \
       --configuration Release \

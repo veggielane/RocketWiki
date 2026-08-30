@@ -138,7 +138,19 @@ public sealed partial class NotificationsHub
         }
         catch
         {
-            editSessions.Leave(pageId, Context.ConnectionId);
+            // The compensating Leave can produce a reseed demand, and dropping it
+            // deadlocks the session. If this joiner was the designated seeder with an
+            // empty log, LeaveLocked promotes the next member and returns a seeder_lost
+            // demand — but that member was already told role: "joiner" with an empty log,
+            // so it waits for an UpdateReceived nobody will ever send, and later joiners
+            // see SeederConnectionId populated and are not promoted either. Every other
+            // Leave call site delivers the demand; this one silently discarded it.
+            var departure = editSessions.Leave(pageId, Context.ConnectionId);
+            if (departure?.Demand is not null)
+            {
+                await SendReseedDemandAsync(pageId, departure.Demand);
+            }
+
             throw;
         }
 

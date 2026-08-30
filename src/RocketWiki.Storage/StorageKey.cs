@@ -22,9 +22,26 @@ namespace RocketWiki.Storage;
 /// object than the row names.</item>
 /// </list>
 /// <see cref="SqlServerFileStorage"/> stores keys as primary-key values, where none of
-/// the above is dangerous by itself — it applies the same rules so that a key which
-/// round-trips on one provider round-trips on all three, and a deployment can change
-/// providers without discovering that its keys were only ever legal on the old one.
+/// the above is dangerous by itself — it applies the same rules anyway, so a key
+/// rejected by one provider is rejected by all three and a deployment cannot discover
+/// on migration that its keys were only ever legal on the old one.
+///
+/// <para><b>Validation parity is not round-trip parity, and this comment used to claim
+/// it was.</b> A key these rules ACCEPT can still behave differently per provider,
+/// because the filesystem is not a key-value store:
+/// <list type="bullet">
+/// <item><b>Case.</b> S3 and the SQL Server table (BIN2 collation) treat
+/// <c>a/B</c> and <c>a/b</c> as two objects; NTFS and APFS do not.</item>
+/// <item><b>Trailing separators, doubled separators, trailing dots and spaces.</b>
+/// <c>a//b</c> and <c>a/b</c> are distinct objects in S3 and identical paths on
+/// Windows, which also strips a trailing <c>.</c> or space; a trailing <c>/</c> is a
+/// legal S3 key and a directory path on disk.</item>
+/// </list>
+/// None of this is reachable from RocketWiki's own keys — every one is generated
+/// (<c>attachments/{yyyy}/{MM}/{guid}</c> and friends), lowercase-hex, single-slashed
+/// and never user-supplied — which is why it has never bitten. It is written down
+/// because the promise this paragraph replaced would be believed by whoever first
+/// takes a key from somewhere else.</para>
 /// <see cref="FileSystemFileStorage"/> keeps its own rooted-path and
 /// resolved-path-stays-under-root checks on top — the containment proof only
 /// that provider can make.

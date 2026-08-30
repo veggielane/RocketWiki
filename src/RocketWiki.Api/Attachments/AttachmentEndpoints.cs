@@ -46,13 +46,21 @@ public static class AttachmentEndpoints
             return Results.NotFound();
         }
 
-        var result = await attachmentReadService.DownloadAsync(id, principal, cancellationToken);
+        // Resolve = authorize + metadata, WITHOUT touching storage. The conditional-request
+        // check below then happens after authorization and after the audit row, but before
+        // any blob is opened. Order matters in both directions: a 304 that skipped
+        // canView or the audit row would be a hole (§6.7/§7), and opening the object
+        // before evaluating If-None-Match — which is what this did — meant every repeat
+        // view paid an S3 HEAD plus a full GET whose bytes were then discarded. That is
+        // the common case here, not a rare one, precisely because Cache-Control is
+        // no-cache and every reuse is required to revalidate.
+        var result = await attachmentReadService.ResolveForDownloadAsync(id, principal, cancellationToken);
 
         switch (result)
         {
-            case AttachmentDownloadResult.Found found:
+            case AttachmentAccessResult.Allowed allowed:
                 await auditSink.RecordAsync(
-                    new AuditRecord("attachment.download", AuditOutcome.Success, AuditSubjectType.Attachment, found.Metadata.Id),
+                    new AuditRecord("attachment.download", AuditOutcome.Success, AuditSubjectType.Attachment, allowed.Metadata.Id),
                     cancellationToken);
                 // Uploader-supplied bytes under an uploader-supplied content type, so:
                 // nosniff (no browser second-guesses the declared type), on top of the
@@ -66,15 +74,32 @@ public static class AttachmentEndpoints
                 // after the same authorization and audit as a 200.
                 httpContext.Response.Headers[HeaderNames.XContentTypeOptions] = "nosniff";
                 httpContext.Response.Headers[HeaderNames.CacheControl] = "private, no-cache";
-                return Results.Stream(
-                    found.Content, found.Metadata.ContentType, found.Metadata.FileName,
-                    lastModified: null,
-                    entityTag: new EntityTagHeaderValue($"\"{found.Metadata.Id:N}\""));
 
-            case AttachmentDownloadResult.NotFound:
+                var entityTag = new EntityTagHeaderValue($"\"{allowed.Metadata.Id:N}\"");
+                if (IfNoneMatchSatisfied(httpContext.Request, entityTag))
+                {
+                    // Answered without opening the object at all. The framework would
+                    // have produced the same 304 from Results.Stream — but only after
+                    // the bytes had been fetched and thrown away.
+                    httpContext.Response.Headers[HeaderNames.ETag] = entityTag.ToString();
+                    return Results.StatusCode(StatusCodes.Status304NotModified);
+                }
+
+                var content = await attachmentReadService.OpenContentAsync(allowed.Metadata, cancellationToken);
+                if (content is null)
+                {
+                    return BlobMissing(httpContext, allowed.Metadata);
+                }
+
+                return Results.Stream(
+                    content, allowed.Metadata.ContentType, allowed.Metadata.FileName,
+                    lastModified: null,
+                    entityTag: entityTag);
+
+            case AttachmentAccessResult.NotFound:
                 return Results.NotFound();
 
-            case AttachmentDownloadResult.Denied denied:
+            case AttachmentAccessResult.Denied denied:
                 // design.md §6.7: "indistinguishable to the caller, not to the audit
                 // log" - the denial is recorded with the failing restriction (§7),
                 // then this returns the byte-identical Results.NotFound() the case
@@ -86,27 +111,50 @@ public static class AttachmentEndpoints
                     denied.AttachmentId, denied.Reason, cancellationToken);
                 return Results.NotFound();
 
-            case AttachmentDownloadResult.BlobMissing blobMissing:
-                // design.md §10: "surfaces as a flagged error, not a 500" - a raw
-                // unhandled exception (a real, unstructured 500) would give an operator
-                // nothing to go on. This is deliberately still a 500-range status
-                // (something is genuinely, operationally wrong - the caller legitimately
-                // can view this attachment, design.md says "nothing to hide here"), but
-                // a *structured*, logged one: ProblemDetails plus a server-side log line
-                // an operator can actually find and act on.
-                httpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("RocketWiki.Api.Attachments")
-                    .LogError(
-                        "Attachment {AttachmentId} exists and is viewable but has no matching object in storage.",
-                        blobMissing.Metadata.Id);
-                return Results.Problem(
-                    title: "Attachment content unavailable",
-                    detail: "The attachment record exists but its stored content could not be found. This has been logged for operator review.",
-                    statusCode: StatusCodes.Status500InternalServerError);
-
             default:
-                throw new NotSupportedException($"Unhandled {nameof(AttachmentDownloadResult)} case '{result.GetType().Name}'.");
+                throw new NotSupportedException($"Unhandled {nameof(AttachmentAccessResult)} case '{result.GetType().Name}'.");
         }
+    }
+
+    /// <summary>
+    /// design.md §10: "surfaces as a flagged error, not a 500" — a raw unhandled
+    /// exception (a real, unstructured 500) would give an operator nothing to go on.
+    /// Deliberately still a 500-range status (something is genuinely, operationally
+    /// wrong, and the caller legitimately can view this attachment, so design.md says
+    /// "nothing to hide here"), but a STRUCTURED, logged one: ProblemDetails plus a
+    /// server-side log line an operator can actually find and act on.
+    /// </summary>
+    private static IResult BlobMissing(HttpContext httpContext, Core.Entities.Attachment metadata)
+    {
+        httpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("RocketWiki.Api.Attachments")
+            .LogError(
+                "Attachment {AttachmentId} exists and is viewable but has no matching object in storage.",
+                metadata.Id);
+
+        return Results.Problem(
+            title: "Attachment content unavailable",
+            detail: "The attachment record exists but its stored content could not be found. This has been logged for operator review.",
+            statusCode: StatusCodes.Status500InternalServerError);
+    }
+
+    /// <summary>
+    /// RFC 9110 §13.1.2: If-None-Match matches on a WEAK comparison, and "*" matches any
+    /// existing representation. Hand-rolled rather than delegating to Results.Stream
+    /// because the whole point is to answer before the object is opened; the framework
+    /// still re-evaluates the same header on the 200 path, so the two cannot disagree
+    /// about what a match is.
+    /// </summary>
+    private static bool IfNoneMatchSatisfied(HttpRequest request, EntityTagHeaderValue entityTag)
+    {
+        var header = request.Headers[HeaderNames.IfNoneMatch];
+        if (header.Count == 0 || !EntityTagHeaderValue.TryParseList(header, out var candidates) || candidates is null)
+        {
+            return false;
+        }
+
+        return candidates.Any(candidate =>
+            candidate.Equals(EntityTagHeaderValue.Any) || candidate.Compare(entityTag, useStrongComparison: false));
     }
 
     [AuditAction("attachment.upload")]

@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using RocketWiki.Api.Ai;
@@ -51,7 +52,9 @@ public static class EmbeddingPipelineConfiguration
             Dimensions: dimensions ?? 1536,
             PollInterval: SecondsOrNull(builder.Configuration, "Ai:PollSeconds"),
             BatchSize: builder.Configuration.GetValue("Ai:BatchSize", 16),
-            FailureBackoff: SecondsOrNull(builder.Configuration, "Ai:FailureBackoffSeconds"));
+            FailureBackoff: SecondsOrNull(builder.Configuration, "Ai:FailureBackoffSeconds"),
+            MaxAttempts: builder.Configuration.GetValue("Ai:MaxAttempts", 5),
+            RequestTimeout: SecondsOrNull(builder.Configuration, "Ai:EmbeddingTimeoutSeconds"));
 
         builder.Services.AddSingleton(options);
 
@@ -63,7 +66,22 @@ public static class EmbeddingPipelineConfiguration
         builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(_ =>
             new OpenAIClient(
                     new ApiKeyCredential(string.IsNullOrEmpty(key) ? "unused" : key),
-                    new OpenAIClientOptions { Endpoint = new Uri(endpoint) })
+                    new OpenAIClientOptions
+                    {
+                        Endpoint = new Uri(endpoint),
+                        // The same posture as the assistant client (§9.5), which
+                        // documents itself as matching THIS one — it did not: this
+                        // client set neither, so a hung endpoint stalled a poll
+                        // iteration indefinitely and SDK-default retries ran
+                        // underneath the job's own 5-minute backoff, multiplying
+                        // every failure invisibly.
+                        NetworkTimeout = options.RequestTimeoutOrDefault,
+                        // No SDK retries: retrying is the JOB's decision, and it
+                        // already has one (backoff, attempt ceiling, next poll).
+                        // A second retry policy underneath that one is invisible to
+                        // the attempt count an operator reads.
+                        RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
+                    })
                 .GetEmbeddingClient(options.Model)
                 .AsIEmbeddingGenerator(options.Dimensions));
 

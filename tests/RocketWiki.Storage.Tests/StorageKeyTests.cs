@@ -21,7 +21,15 @@ public sealed class StorageKeyTests
     [InlineData("dot.in/segment..name")]
     public void Validate_AcceptsWellFormedKeys(string key)
     {
-        StorageKey.Validate(key);
+        // Asserted, not merely called: a [Theory] whose body is a bare call states
+        // "this does not throw" only by accident of xUnit’s failure model, and reads
+        // as if nothing is being checked. Record.Exception makes the claim explicit,
+        // and names the key when it breaks — six rows sharing one stack trace is the
+        // difference between a fix and a bisect.
+        var exception = Record.Exception(() => StorageKey.Validate(key));
+
+        Assert.True(exception is null,
+            $"StorageKey.Validate rejected the well-formed key '{key}': {exception?.Message}");
     }
 
     [Theory]

@@ -358,6 +358,9 @@ public static class ApiTelemetry
     public const string AssistantDispositionNotConfigured = "not_configured";
     public const string AssistantDispositionUnreachable = "unreachable";
 
+    /// <summary>Refused for exceeding Ai:MaxQuestionChars; nothing retrieved, nothing sent.</summary>
+    public const string AssistantDispositionQuestionTooLong = "question_too_long";
+
     /// <summary>
     /// The ask threw rather than returning a disposition — the caller disconnected
     /// mid-generation, or retrieval faulted (a vector-dimension mismatch propagates

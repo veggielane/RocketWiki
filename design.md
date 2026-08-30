@@ -1070,10 +1070,16 @@ embedding model, called through `Microsoft.Extensions.AI`'s
   (heading structure → expected anchor id), the same pattern as the
   Confluence converter corpus in §13. Porting the algorithm is required;
   reimplementing it is not.
-- Embedding runs as a **background job** fed by the domain-event pipeline
-  (page saved → re-embed), never blocking saves. Chunks are content-hashed so
-  only changed chunks re-embed. Failures retry; while the endpoint is down,
-  search degrades gracefully to FTS-only.
+- Embedding runs as a **background job driven by a state scan**, not by the
+  domain-event pipeline: a page is due when no `PageEmbeddingState` row records
+  its current revision as embedded. That was a deliberate change from the
+  event-subscription design this line used to describe, and the reasons are on
+  `PageEmbeddingState` itself — a scan also catches the sync CLI's
+  out-of-process imports (§9.4), which no in-process event hook would ever see,
+  and it is restart-safe, since a crash between save and embed loses nothing.
+  It never blocks saves. Chunks are content-hashed so only changed chunks
+  re-embed. Failures retry; while the endpoint is down, search degrades
+  gracefully to FTS-only.
 - **A page that can never be embedded must not starve the queue.** The scan
   is oldest-first and a page stays due until it succeeds, so one page the
   endpoint rejects for its own reasons — an oversized chunk, a provider
@@ -1579,11 +1585,12 @@ choice away.
 
 **Regenerating a corpus is not the same as enforcing it.** Both corpora
 rewrite themselves from their source implementation on every test run, so
-they cannot drift from *current* behaviour — but nothing yet fails when a
-regenerated file differs from the committed one. That last mile is a CI step
-which runs the suites and fails on a dirty working tree under the fixture
-directories. Until it exists, "regenerated and asserted" must not be read as
-"drift is impossible".
+they cannot drift from *current* behaviour — but that alone never fails when
+a regenerated file differs from the committed one. That last mile now exists:
+the CI job runs the suites and fails on a dirty working tree under
+`tests/fixtures/converted-markdown`, printing the diff. Drift is therefore
+caught in CI, not by an assertion in the generating test — which is why that
+test deliberately makes no claim about the file it just wrote.
 
 The importer converts tables at full §4 fidelity: merged cells become
 MultiMarkdown spans (adjacent-pipe colspans, `^^` rowspan continuations),
@@ -1603,12 +1610,25 @@ There is no transaction spanning an import — each service commits as it goes
 pages and every attachment already written, no report (it is produced after
 the loop), and a re-run blocked by the space key existing. The trigger is
 ordinary: any named HTML entity outside the converter's table, which is most
-accented characters. Unconvertible pages and comments are therefore reported
-like every other per-entity failure and the run continues, a dry run predicts
-exactly the same outcome, and the one remaining backstop — an unexpected
-infrastructure failure — returns the partial report rather than throwing, so
-what was written is always on record. There is still no resume: recovery from
-a part-way stop is to read the report, delete the partial space, and re-run.
+accented characters.
+
+Such a page is therefore **imported anyway, with its original Confluence body
+preserved verbatim inside a fenced code block**, and reported as a conversion
+failure. Of the three available outcomes this is the only one that loses
+nothing. Aborting is the worst. Importing an empty or placeholder page is the
+second worst: the page exists, looks migrated, and the content is simply gone,
+which nobody discovers until someone needs it. Skipping the page is worse
+still, because the importer skips a whole subtree when an ancestor is missing,
+so one bad entity near the root drops everything under it. Preserving the text
+keeps the page readable, searchable and convertible by hand, and keeps the tree
+intact. The fence is grown past any backtick run in the body, so a Confluence
+code macro cannot close the block early and spill raw XHTML into the page.
+
+Comments degrade the same way, a dry run predicts exactly the same outcome, and
+the one remaining backstop — an unexpected infrastructure failure — returns the
+partial report rather than throwing, so what was written is always on record.
+There is still no resume: recovery from a part-way stop is to read the report,
+delete the partial space, and re-run.
 
 Migration fidelity is a known risk — budget real time for it, and run trial
 imports early (see §16).
@@ -1793,6 +1813,16 @@ What k3s changes, concretely:
   per-user notification fan-out (§8) are per-process state. Either pin to
   one replica, or add Redis and accept it as a new dependency. Sticky
   sessions alone do not fix fan-out.
+- **And SignalR is not the only blocker — naming only it is a trap.** The
+  embedding background job (§9.2) has no claim protocol: no lease column, no
+  `UPDATE…OUTPUT`, no application lock. Its scan is a plain read and its write
+  a plain upsert, so two replicas select the same oldest-N due pages and race
+  the unique index on `PageEmbedding`. The loser's unique-violation is caught
+  by the job's generic failure handler and charged to the PAGE, which now also
+  counts towards that page's quarantine ceiling — so scaling out would slowly
+  remove pages from semantic search and report it as content failures. Adding
+  Redis alone satisfies the SignalR precondition and breaks this one silently.
+  Scale-out needs both, in the same change.
 - **Stateful services need real storage decisions.** k3s ships
   `local-path-provisioner`, which is node-local — fine for a single-node
   instance, wrong the moment the DB pod can reschedule. SQL Server and
@@ -1828,13 +1858,12 @@ artifact; Traefik upgrades `/hubs` WebSockets natively, and the web pod's
 nginx sets the upgrade headers explicitly on its own proxy hop), secrets by
 reference to one operator-created Secret, and both offline image paths
 (registry mirror via one values key, or `k3s ctr images import` with
-`pullPolicy: Never`). One honest gap: the health endpoints this section says
-to wire to probes are mapped only in the Development environment
-(ServiceDefaults), so the chart defaults to TCP probes and carries an `http`
-mode to flip on once `MapDefaultEndpoints` learns a config gate — a small
-src change deliberately not smuggled in with deployment work. `helm lint` /
-`helm template` pass; nothing has been applied to a cluster (see §16's
-standing caveat).
+`pullPolicy: Never`). The health-probe gap this paragraph used to record is
+closed: `MapDefaultEndpoints` now has its config gate
+(`IsDevelopment() || HealthEndpoints:Enabled`), the chart defaults
+`probes.mode: http`, and the api Deployment sets `HealthEndpoints__Enabled=true`.
+`helm lint` / `helm template` pass; nothing has been applied to a cluster (see
+§16's standing caveat).
 
 ### Telemetry is not audit
 
@@ -2160,8 +2189,9 @@ grants, whose DDL is not yet written (§7, §14). The k3s deployment (milestone
       scale-out from the start? — resolved: one replica, hard-locked.
       `values.schema.json` caps `api.replicaCount` at exactly 1 and the
       Deployment template fails the render on anything else; no Redis
-      dependency. Scale-out is a deliberate future chart change (backplane
-      included), not a values tweak.
+      dependency. Scale-out is a deliberate future chart change — a Redis
+      backplane AND a claim protocol for the embedding job (§15), together —
+      not a values tweak.
 - [x] "Ask the wiki" — resolved: both. MCP (§8) stays the path for users'
       own assistants; a built-in `askWiki` field (§9.5) now does RAG
       server-side under the caller's principal against a fail-closed
@@ -2962,6 +2992,22 @@ the gate added by hand. Both now have it; both are worth knowing about:
 - **`INotificationDispatcher`'s fan-out** lives in `RocketWiki.Api`, and
   `PermissionContextLoader` is internal to `RocketWiki.Data`, so it cannot use
   the loader at all. It loads the page's marking once per fan-out.
+
+**The tree's carry-the-value rule is deliberately not applied everywhere.** Ask-
+the-wiki and MCP search both *re-read* markings through `IPageMarkingReader`,
+separately from the rows `PermissionContextLoader` consulted while filtering — the
+opposite of what the tree does two paragraphs up, and it looks like an oversight
+until you see why the tree is the exception. The tree hand-rolls its own
+authorization to walk a space on a constant query budget, so the gated value is
+already in its hand and re-loading it would be gratuitously weaker. On the search
+and Ask paths the filtering happens inside `SearchService` and the display value is
+fetched once for the whole batch afterwards; threading the gate's internal rows out
+through the service boundary would widen a contract for a difference nobody can
+observe. The window is one batched query wide, both reads are of the same row, and
+a marking that changed inside it is reported by whichever of the two ran later —
+which is no worse than the answer a request arriving one second later would get.
+It is a consistent system-wide choice, made on purpose; the tree is the documented
+exception, not the rule.
 
 ### 21.10 Sync (§12)
 

@@ -1,4 +1,6 @@
-﻿using RocketWiki.Core.Services;
+﻿using RocketWiki.Core.Access;
+using RocketWiki.Core.Enums;
+using RocketWiki.Core.Services;
 using RocketWiki.Importer.Conversion;
 using RocketWiki.Importer.Export;
 using RocketWiki.Importer.Pipeline.Internal;
@@ -95,6 +97,56 @@ public sealed class ConfluenceSpaceImporter
         }
     }
 
+    /// <summary>
+    /// Why the supplied grant would make this import fail every page, or null if it is
+    /// usable. Checked against the importer's own principal, because that is who every
+    /// service call below is made as — the grant is not just the users' eventual access,
+    /// it is also the importer's own write permission for the duration of the run.
+    ///
+    /// <para>Both failures were silent and looked identical from the outside: space
+    /// created, every page refused, exit reporting success. The attribute case is the one
+    /// that matters for an export-control org, since an attr-based grant is the natural
+    /// shape here and the importer principal carries no attributes at all.</para>
+    /// </summary>
+    private static string? DescribeUnusableGrant(ImportOptions options)
+    {
+        var grant = options.InitialSpaceGrant;
+
+        if (grant.Role < SpaceRole.Editor)
+        {
+            return $"the initial space grant is '{grant.Role}', but creating pages needs Editor or higher " +
+                "(design.md §6.4). The space would be created and then every page would be refused. " +
+                "Re-run with --grant-role editor or space-admin; users can be narrowed afterwards.";
+        }
+
+        var evaluation = AccessRuleExpression.Evaluate(grant.ExpressionJson, options.ImporterPrincipal);
+        if (evaluation.IsMalformed)
+        {
+            return $"the initial grant expression could not be parsed: {evaluation.Error}. A malformed rule denies " +
+                "access (design.md §6.3), so every page would be refused.";
+        }
+
+        if (!evaluation.IsMatch)
+        {
+            // Naming the principal's actual groups/attributes is what turns this from
+            // "denied" into something fixable: the usual cause is an attr-based grant and
+            // an importer principal carrying no attributes, and nothing else says so.
+            var groups = options.ImporterPrincipal.Groups.Count > 0
+                ? string.Join(", ", options.ImporterPrincipal.Groups)
+                : "(none)";
+            var attributes = options.ImporterPrincipal.Attributes.Count > 0
+                ? string.Join(", ", options.ImporterPrincipal.Attributes.Keys.OrderBy(k => k, StringComparer.Ordinal))
+                : "(none)";
+
+            return "the importer principal does not satisfy the initial space grant, so every page creation would be " +
+                $"refused. The importer runs with groups [{groups}] and attributes [{attributes}]; a missing attribute " +
+                "fails closed (design.md §6.1). Grant a rule this principal matches, or run the import as a principal " +
+                "that matches the rule you want.";
+        }
+
+        return null;
+    }
+
     private async Task<ImportResult> ImportCoreAsync(
         ConfluenceExportSpace export, ImportOptions options, ImportReport report, CancellationToken cancellationToken)
     {
@@ -109,6 +161,28 @@ public sealed class ConfluenceSpaceImporter
         // still reports what the source restricted. design.md §13: reported, never
         // translated — nothing below reads this back to build a rule.
         report.AddSourceSpacePermissions(export.Permissions);
+
+        // What the READER dropped before the pipeline ever saw it (blog posts,
+        // attachments with no binary, unplaceable comments, the home page). These
+        // never reach a page outcome, so pipeline notes are the only place they
+        // can appear at all.
+        foreach (var note in export.ReaderNotes)
+        {
+            report.AddNote(note);
+        }
+
+
+        // Pre-flight, before the space key is consumed. Without it, a grant the importer
+        // cannot satisfy created the space and then failed EVERY page — and reported
+        // Success with "0 of 250 page(s) imported", leaving an empty space whose key is
+        // now taken and a re-run blocked. The operational pressure from that is straight
+        // towards {"everyone": true}, which §6.5.1 exists to prevent. Refusing up front
+        // costs nothing and leaves the key free.
+        if (DescribeUnusableGrant(options) is { } unusableGrant)
+        {
+            return new ImportResult(
+                false, null, report, ImportReportSummarizer.Summarize(report, export.Pages.Count), unusableGrant);
+        }
 
         var spaceResult = await _spaceService.CreateAsync(
             new CreateSpaceRequest(export.Key, export.Name, export.Description),

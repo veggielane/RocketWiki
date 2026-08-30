@@ -20,8 +20,20 @@ namespace RocketWiki.Api.Assistant;
 /// chars-not-tokens reasoning as ChunkerOptions).</param>
 /// <param name="MaxRetrievedPages">How many permission-filtered hits retrieval asks
 /// ISearchService for (Ai:MaxRetrievedPages, default 8).</param>
+/// <param name="MaxOutputTokens">Cap on the answer the model may generate
+/// (Ai:MaxOutputTokens, default 800). Without one the only bound was the 30s network
+/// timeout, so a rambling model held the request open for the whole of it.</param>
+/// <param name="MaxQuestionChars">Longest question this instance will accept
+/// (Ai:MaxQuestionChars, default 2000 ≈ 500 tokens). The ONLY bound on it before this
+/// existed was Kestrel’s default request size, so one authenticated user could send a
+/// ~30 MB question that flowed into a LIKE pattern, the model request body, and
+/// AuditEvent.DetailsJson — which is append-only and has no length limit of its own.
+/// Writing megabytes per ask into the regulated record is the part that does not
+/// clean up afterwards.</param>
 public sealed record AssistantOptions(
     string ChatModel,
     TimeSpan Timeout,
     int MaxContextChars,
-    int MaxRetrievedPages);
+    int MaxRetrievedPages,
+    int MaxQuestionChars = 2000,
+    int MaxOutputTokens = 800);

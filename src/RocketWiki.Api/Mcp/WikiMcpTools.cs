@@ -22,6 +22,18 @@ namespace RocketWiki.Api.Mcp;
 ///    <see cref="SpaceReads"/>) and never touch EF directly, so object-level
 ///    authorization (§6.7) is inherited, not reimplemented. There is no parallel,
 ///    subtly-different read path to keep honest.
+///
+///    <para><b>One deliberate difference, stated because it looks like a violation:</b>
+///    the search tool projects each hit's title, space key and snippet straight off the
+///    <see cref="ISearchService"/> record, while GraphQL's <c>SearchHitType</c> ignores
+///    exactly those fields and forces clients through <c>page { … }</c>. That rule exists
+///    because in a GraphQL response the same page can be reachable through several paths,
+///    so page data must flow through Page resolvers rather than around them. MCP has no
+///    resolver graph and no sub-selection: the payload IS the response, there is no
+///    second path to be inconsistent with, and every field here was computed by
+///    SearchService strictly after canView passed for that page. Routing it through the
+///    page reader a second time would buy a duplicate check, not a missing one. The gate
+///    is in SearchService; this is the one place to look for it.</para>
 /// 2. <b>Absent, never forbidden (§6.7).</b> A page or space the caller can't view
 ///    produces a result byte-identical to one that doesn't exist —
 ///    <see cref="PageNotFoundMessage"/>/<see cref="SpaceNotFoundMessage"/> are constants
@@ -93,14 +105,21 @@ public sealed class WikiMcpTools
         // audit table is the regulated record and the sanctioned home for content-ish
         // detail (it must NOT go to telemetry, §15).
         //
-        // The key is `resultCount`, matching Query.Search's row EXACTLY. One action name
+        // The shape matches Query.Search's row EXACTLY, `labels` included. One action name
         // must mean one Details shape: AnalyticsService.BuildSearchesAsync reads
         // `resultCount` to decide whether a search found nothing, so an MCP-flavoured
         // `results` key made every MCP search invisible to the zero-result panel while
         // still counting in the top-terms one. A reader of the audit table should never
         // have to know which channel wrote a row to parse it.
+        //
+        // `labels` is written as null rather than omitted, because this comment claimed
+        // an exact match while the key was simply absent — and absent and null are
+        // different answers to "did this search filter by label". Null is the true one:
+        // this tool has no labels argument, so no filter was applied. A future reader
+        // querying Details for label usage would otherwise have to know that MCP rows
+        // are shaped differently, which is the thing this row exists not to require.
         auditState.SetDetails(System.Text.Json.JsonSerializer.Serialize(
-            new { query, spaceKey, resultCount = hits.Count }));
+            new { query, spaceKey, labels = (string[]?)null, resultCount = hits.Count }));
 
         // §21.13: per-hit markings and an aggregate over exactly the hits being returned
         // — which are already permission-filtered, so nothing the caller cannot view can

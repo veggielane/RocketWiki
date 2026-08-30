@@ -1195,6 +1195,7 @@ enum AskWikiUnavailableReason {
   NOT_CONFIGURED
   UNREACHABLE
   NO_RESULTS
+  QUESTION_TOO_LONG
 }
 
 enum AuditChannel {

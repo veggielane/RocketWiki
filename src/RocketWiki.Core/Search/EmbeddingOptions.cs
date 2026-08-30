@@ -27,6 +27,10 @@ namespace RocketWiki.Core.Search;
 /// endpoint can never embed (oversized chunk, content that trips a provider filter) is
 /// retried forever, and because the scan is oldest-first it wins every batch and starves
 /// every page behind it. Quarantine is per-revision, so editing the page re-arms it.</param>
+/// <param name="RequestTimeout">Per-call network timeout on the embedding endpoint
+/// (<c>Ai:EmbeddingTimeoutSeconds</c>). Without one the SDK default applies and a hung
+/// endpoint stalls the whole poll iteration for as long as it likes — the job is
+/// sequential, so one page can hold up every page behind it without ever failing.</param>
 /// <param name="AbortAfterConsecutiveFailures">Failures in a row within one run after
 /// which the run gives up on the rest of the batch. One endpoint serves every page, so a
 /// run of failures means the endpoint is down and the remaining pages would only add
@@ -39,7 +43,8 @@ public sealed record EmbeddingOptions(
     int BatchSize = 16,
     TimeSpan? FailureBackoff = null,
     int MaxAttempts = 5,
-    int AbortAfterConsecutiveFailures = 3)
+    int AbortAfterConsecutiveFailures = 3,
+    TimeSpan? RequestTimeout = null)
 {
     public TimeSpan PollIntervalOrDefault => PollInterval ?? TimeSpan.FromSeconds(30);
 
@@ -49,4 +54,6 @@ public sealed record EmbeddingOptions(
     public int MaxAttemptsOrDefault => MaxAttempts > 0 ? MaxAttempts : 5;
 
     public int AbortAfterConsecutiveFailuresOrDefault => AbortAfterConsecutiveFailures > 0 ? AbortAfterConsecutiveFailures : 3;
+
+    public TimeSpan RequestTimeoutOrDefault => RequestTimeout ?? TimeSpan.FromSeconds(30);
 }

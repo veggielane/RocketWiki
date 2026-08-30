@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
@@ -65,9 +65,20 @@ public class EmbeddingIndexer
 
         await PurgeDeletedPagesAsync(cancellationToken);
 
-        // A page is due when no state row records its current revision as embedded.
+        // A page is due when no state row records its current revision as embedded —
+        // and its space is not archived. Archiving sets Space.IsDeleted, and both
+        // search legs already exclude those spaces, so embedding their pages produced
+        // vectors nothing could ever return. It is not only wasted work: it kept
+        // sending the content of archived spaces to the embedding endpoint, which is a
+        // poor answer to "we archived that space".
         var duePages = _db.Pages.Where(p =>
-            !_db.PageEmbeddingStates.Any(s => s.PageId == p.Id && s.EmbeddedRevisionNumber == p.CurrentRevisionNumber));
+            // Existence in _db.Spaces, not "not IsDeleted": the DbSet already carries
+            // the soft-delete query filter, so an archived space is simply absent from
+            // it and a predicate testing space.IsDeleted here could never match. Asking
+            // for existence instead also fails closed on a page whose space row is
+            // missing entirely.
+            _db.Spaces.Any(space => space.Id == p.SpaceId)
+            && !_db.PageEmbeddingStates.Any(s => s.PageId == p.Id && s.EmbeddedRevisionNumber == p.CurrentRevisionNumber));
 
         var pagesPending = await duePages.CountAsync(cancellationToken);
 
@@ -100,13 +111,25 @@ public class EmbeddingIndexer
         var consecutiveFailures = 0;
         var abortThreshold = _options.AbortAfterConsecutiveFailuresOrDefault;
 
+        // The pages blamed by the current unbroken run of failures, with the attempt count
+        // each had before. If the streak reaches the abort threshold the evidence says the
+        // ENDPOINT is down, not that these particular pages are bad — so their attempts are
+        // handed back. Without this, an outage walks the batch stamping healthy pages, and
+        // a long enough one would push them to MaxAttempts and quarantine content that was
+        // never the problem: the attempt ceiling turned from a poison-page guard into an
+        // outage amplifier. The fault domain is the endpoint; the counter is per page.
+        var streak = new List<(Guid PageId, int PriorAttempts)>();
+
         foreach (var page in batch)
         {
             try
             {
                 chunksEmbedded += await IndexPageAsync(page.Id, page.CurrentRevisionNumber, page.CurrentContent, cancellationToken);
                 embedded++;
+                // A success proves the endpoint is up, so every failure before it in
+                // this run really was that page’s own problem and its count stands.
                 consecutiveFailures = 0;
+                streak.Clear();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -117,22 +140,28 @@ public class EmbeddingIndexer
                 var attempts = await RecordFailureAsync(page.Id, page.CurrentRevisionNumber, cancellationToken);
                 failed++;
                 consecutiveFailures++;
+                streak.Add((page.Id, attempts - 1));
 
                 // §15: exception type + page id + the attempt count only — never chunk
-                // text, never the endpoint's echo of the request.
+                // text, never the endpoint's echo of the request. The exception OBJECT is
+                // deliberately NOT passed to ILogger: that renders it with ToString(), so
+                // message and stack enter the record, and the OpenAI client builds its
+                // message out of the endpoint's response body — which commonly echoes the
+                // rejected input straight back. A log line is the one emission channel
+                // §15's hygiene tests cannot intercept, so the type name is all it gets.
                 if (attempts >= maxAttempts)
                 {
                     // The one line an operator needs to find a poisoned page: everything
                     // else about this state is a count. Warning, not Error: search still
                     // works, this page is simply absent from the semantic half.
-                    _logger.LogWarning(ex,
+                    _logger.LogWarning(
                         "Embedding failed for page {PageId} revision {RevisionNumber} on attempt {Attempts} of {MaxAttempts} ({ExceptionType}); quarantining this revision — it will be retried when the page is next edited",
                         page.Id, page.CurrentRevisionNumber, attempts, maxAttempts, ex.GetType().Name);
                     pagesQuarantined++;
                 }
                 else
                 {
-                    _logger.LogWarning(ex,
+                    _logger.LogWarning(
                         "Embedding failed for page {PageId} revision {RevisionNumber} on attempt {Attempts} of {MaxAttempts} ({ExceptionType}); marked for retry after backoff",
                         page.Id, page.CurrentRevisionNumber, attempts, maxAttempts, ex.GetType().Name);
                 }
@@ -144,6 +173,8 @@ public class EmbeddingIndexer
                 // there hands one page the power to block every page behind it.
                 if (consecutiveFailures >= abortThreshold)
                 {
+                    // Endpoint-wide fault: give the attempts back before leaving.
+                    pagesQuarantined -= await UndoFailureAttemptsAsync(streak, cancellationToken);
                     aborted = true;
                     break;
                 }
@@ -273,6 +304,47 @@ public class EmbeddingIndexer
         // scan simply finds it due again.
         await _db.SaveChangesAsync(cancellationToken);
         return toEmbed.Count;
+    }
+
+    /// <summary>
+    /// Hands back the attempts charged to pages during a failure streak that turned out to
+    /// be an endpoint outage. <c>LastAttemptAtUtc</c> is deliberately left alone: the
+    /// backoff SHOULD still apply — there is no point hammering a down endpoint — but a
+    /// page must not move towards quarantine because the endpoint was unreachable while
+    /// its turn came round.
+    /// </summary>
+    /// <returns>How many of these pages were, wrongly, at or over the quarantine ceiling.</returns>
+    private async Task<int> UndoFailureAttemptsAsync(
+        IReadOnlyList<(Guid PageId, int PriorAttempts)> streak, CancellationToken cancellationToken)
+    {
+        if (streak.Count == 0)
+        {
+            return 0;
+        }
+
+        _db.ChangeTracker.Clear();
+
+        var maxAttempts = _options.MaxAttemptsOrDefault;
+        var unquarantined = 0;
+
+        foreach (var (pageId, priorAttempts) in streak)
+        {
+            var state = await _db.PageEmbeddingStates.FindAsync([pageId], cancellationToken);
+            if (state is null)
+            {
+                continue;
+            }
+
+            if (state.FailedAttempts >= maxAttempts && priorAttempts < maxAttempts)
+            {
+                unquarantined++;
+            }
+
+            state.FailedAttempts = priorAttempts;
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return unquarantined;
     }
 
     /// <returns>Consecutive failures now recorded against this revision.</returns>

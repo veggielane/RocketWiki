@@ -78,8 +78,23 @@ public sealed record ConfluenceExportSpace(
     string Name,
     string? Description,
     IReadOnlyList<ConfluenceExportPage> Pages,
-    IReadOnlyList<ConfluenceExportPermission>? Permissions = null)
+    IReadOnlyList<ConfluenceExportPermission>? Permissions = null,
+    IReadOnlyList<string>? ReaderNotes = null)
 {
     /// <summary>Space-level Confluence permissions, verbatim and untranslated — see <see cref="ConfluenceExportPermission"/>.</summary>
     public IReadOnlyList<ConfluenceExportPermission> Permissions { get; init; } = Permissions ?? [];
+
+    /// <summary>
+    /// What the READER dropped, in the reader's own words — blog posts, attachments
+    /// whose binary is missing from the zip, comments whose owning page could not be
+    /// resolved, a home page that has no equivalent here.
+    ///
+    /// <para>These used to be discarded silently, which made the import report's
+    /// "N of M pages" denominator quietly wrong: M is this list's <c>Pages.Count</c>,
+    /// already post-filter, so anything the reader excluded never appeared in either
+    /// number. A migration is judged on what did NOT arrive, and RUNBOOK §5 warns that
+    /// a property-name mismatch here makes "replies silently vanish" — with no counter
+    /// that would show it. The pipeline copies these into the report's pipeline notes.</para>
+    /// </summary>
+    public IReadOnlyList<string> ReaderNotes { get; init; } = ReaderNotes ?? [];
 }

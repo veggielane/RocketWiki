@@ -223,6 +223,75 @@ public class AttachmentServiceTests : SqliteTestBase
 
     // --- Download (read side) ---------------------------------------------------------
 
+    /// <summary>Refuses every storage call. Anything that authorizes should be able to
+    /// run against this untouched.</summary>
+    private sealed class ForbiddenFileStorage : IFileStorage
+    {
+        public Task SaveAsync(string key, Stream content, string contentType, CancellationToken ct) =>
+            throw new InvalidOperationException("Storage must not be touched here.");
+
+        public Task<Stream> OpenReadAsync(string key, CancellationToken ct) =>
+            throw new InvalidOperationException("Storage must not be touched here.");
+
+        public Task DeleteAsync(string key, CancellationToken ct) =>
+            throw new InvalidOperationException("Storage must not be touched here.");
+
+        public Task<bool> ExistsAsync(string key, CancellationToken ct) =>
+            throw new InvalidOperationException("Storage must not be touched here.");
+    }
+
+    [Fact]
+    public async Task ResolveForDownload_AuthorizesWithoutTouchingStorage()
+    {
+        // The property the conditional-request path depends on. Attachment responses are
+        // deliberately no-cache (§10), so every reuse revalidates and an ETag match is
+        // the COMMON case — and the route used to open the object before the framework
+        // evaluated If-None-Match, paying a HEAD plus a full GET for bytes it then threw
+        // away. Answering 304 without touching storage is only correct if authorization
+        // is fully decided first, which is exactly what this asserts: a storage that
+        // throws on every call, and a resolve that still reaches its verdict.
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(EditorGrant(space.Id));
+        var attachment = new Attachment
+        {
+            PageId = page.Id,
+            FileName = "spec.pdf",
+            ContentType = "application/pdf",
+            SizeBytes = 3,
+            ContentHash = new byte[32],
+            StorageKey = "attachments/2026/08/spec",
+            UploadedByUserId = actor.Id,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        context.Attachments.Add(attachment);
+        context.SaveChanges();
+
+        var readService = new AttachmentReadService(context, new ForbiddenFileStorage());
+
+        var allowed = await readService.ResolveForDownloadAsync(attachment.Id, EditorPrincipal());
+        Assert.Equal(attachment.Id, Assert.IsType<AttachmentAccessResult.Allowed>(allowed).Metadata.Id);
+
+        // The denial path must be equally storage-free — more so, in fact: a caller who
+        // cannot view the attachment must never cause a storage call on its behalf.
+        var restriction = ViewRestriction(page.Id, """{ "group": "top-secret" }""");
+        context.AccessRules.Add(restriction);
+        context.SaveChanges();
+
+        var denied = await readService.ResolveForDownloadAsync(attachment.Id, ViewerOnlyPrincipal());
+        Assert.Equal($"restriction:{page.Id}:{restriction.Id}",
+            Assert.IsType<AttachmentAccessResult.Denied>(denied).Reason);
+
+        var missing = await readService.ResolveForDownloadAsync(Guid.NewGuid(), EditorPrincipal());
+        Assert.IsType<AttachmentAccessResult.NotFound>(missing);
+    }
+
     [Fact]
     public async Task Download_ViaAttachmentReadService_ReturnsFoundWithCorrectBytes()
     {

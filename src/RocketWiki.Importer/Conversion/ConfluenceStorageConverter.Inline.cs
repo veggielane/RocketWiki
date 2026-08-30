@@ -92,8 +92,42 @@ public sealed partial class ConfluenceStorageConverter
     private static string Wrap(string content, string marker) =>
         string.IsNullOrEmpty(content) ? content : $"{marker}{content}{marker}";
 
-    private static string WrapCode(string content) =>
-        string.IsNullOrEmpty(content) ? content : $"`{content}`";
+    /// <summary>
+    /// Wraps inline code, widening the delimiter past any backtick run in the content
+    /// — the same rule the fenced-block path already applied, and for the same reason.
+    /// A single backtick around <c>use `git log` here</c> produced three fragments
+    /// instead of one code span, which is not a rare shape on a wiki: documentation
+    /// about Markdown, shell snippets and Confluence status macros all carry backticks.
+    ///
+    /// <para>CommonMark also strips one leading and one trailing space from a code
+    /// span, so content that itself begins or ends with a backtick needs padding —
+    /// otherwise the delimiter and the content run together and the span will not
+    /// parse.</para>
+    /// </summary>
+    private static string WrapCode(string content)
+    {
+        if (string.IsNullOrEmpty(content))
+        {
+            return content;
+        }
+
+        var longestRun = 0;
+        var currentRun = 0;
+        foreach (var c in content)
+        {
+            currentRun = c == '`' ? currentRun + 1 : 0;
+            longestRun = Math.Max(longestRun, currentRun);
+        }
+
+        if (longestRun == 0)
+        {
+            return $"`{content}`";
+        }
+
+        var delimiter = new string('`', longestRun + 1);
+        var padding = content.StartsWith('`') || content.EndsWith('`') ? " " : string.Empty;
+        return $"{delimiter}{padding}{content}{padding}{delimiter}";
+    }
 
     private static string RenderAnchor(XElement element, RenderState state)
     {
@@ -117,6 +151,6 @@ public sealed partial class ConfluenceStorageConverter
             "Raw <img> element referenced an external URL rather than a Confluence attachment; passed through as-is — verify it still resolves once migrated.",
             state.CurrentLocation,
             src));
-        return $"![{MarkdownText.Escape(alt)}]({src})";
+        return $"![{MarkdownText.Escape(alt)}]({MarkdownText.EscapeLinkUrl(src)})";
     }
 }

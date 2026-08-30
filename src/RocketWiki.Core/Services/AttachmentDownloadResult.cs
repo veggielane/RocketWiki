@@ -37,3 +37,27 @@ public abstract record AttachmentDownloadResult
     /// <summary>The row exists and is viewable, but IFileStorage has no matching object - an operational fault (design.md §10), not an authorization decision.</summary>
     public sealed record BlobMissing(Attachment Metadata) : AttachmentDownloadResult;
 }
+
+/// <summary>
+/// The outcome of authorizing an attachment download <b>without touching storage</b> —
+/// see <see cref="IAttachmentReadService.ResolveForDownloadAsync"/>. Deliberately its own
+/// union rather than an <see cref="AttachmentDownloadResult"/> carrying a null or empty
+/// stream: a <c>Found</c> whose Content is a placeholder is a trap for the next caller,
+/// and there is no BlobMissing case here because nothing has looked at the blob yet.
+/// </summary>
+public abstract record AttachmentAccessResult
+{
+    /// <summary>Viewable by this principal. Carries metadata only; bytes come from OpenContentAsync.</summary>
+    public sealed record Allowed(Attachment Metadata) : AttachmentAccessResult;
+
+    /// <summary>The attachment (or its page, or space) doesn't exist. Collapses to 404 at the route.</summary>
+    public sealed record NotFound : AttachmentAccessResult;
+
+    /// <summary>
+    /// Exists but fails canView. Same contract as
+    /// <see cref="AttachmentDownloadResult.Denied"/>: the reason is for the audit row
+    /// (§7/§15), and there is deliberately no metadata for the route to leak — it
+    /// collapses to the identical 404 as NotFound once recorded (§6.7).
+    /// </summary>
+    public sealed record Denied(Guid AttachmentId, string Reason) : AttachmentAccessResult;
+}

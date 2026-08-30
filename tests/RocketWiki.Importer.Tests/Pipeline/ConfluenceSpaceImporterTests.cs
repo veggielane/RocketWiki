@@ -110,8 +110,12 @@ public class ConfluenceSpaceImporterTests
     [Fact]
     public async Task Space_is_created_with_the_options_initial_grant()
     {
+        // The importer principal is IN the granted group. That is not incidental: the
+        // grant is also the importer's own write permission for the run, so a principal
+        // outside it would have created the space and then failed every page — this
+        // fixture used to do exactly that, and asserted the space creation anyway.
         var options = new ImportOptions(
-            Principal.Create("importer-sub", ["importers"]),
+            Principal.Create("importer-sub", ["engineering"]),
             Guid.NewGuid(),
             new AuditContext(AuditChannel.System, "test-import", "127.0.0.1"),
             new InitialSpaceGrant(SpaceRole.Editor, """{ "group": "engineering" }"""));

@@ -152,6 +152,22 @@ kubectl -n rocketwiki create secret generic rocketwiki-api \
   --from-literal=FileStorage__S3__SecretKey='CHANGE-ME'
 ```
 
+**The AI and integration endpoints go in this same Secret, and every one of them
+is fail-closed** — absent means the feature is not registered at all, so leaving
+one out gives you a silently feature-less install rather than an error:
+
+```sh
+  # Semantic search (design.md §9.2). Without it, search is keyword-only.
+  --from-literal=ConnectionStrings__embeddings='Endpoint=http://llm-gateway:8000/v1;Key=CHANGE-ME;Model=text-embedding-3-small'
+  # The askWiki assistant (§9.5). Needs an endpoint AND a model, or it answers
+  # NOT_CONFIGURED. The model can ride in the connection string as Model=… instead
+  # of the separate key; either is fine, and the separate key is the clearer one.
+  --from-literal=ConnectionStrings__assistant='Endpoint=http://llm-gateway:8000/v1;Key=CHANGE-ME'
+  --from-literal=Ai__ChatModel='llama-3.3-70b-instruct'
+  # GitLab integration (§18). Absent = off.
+  --from-literal=GitLab__BaseUrl='https://gitlab.internal'
+```
+
 The two `FileStorage__S3__*` keys are only needed with `provider=S3`; drop
 them for `FileSystem`. With `provider=SqlServer` you add nothing — blobs
 share `ConnectionStrings__rocketwiki` — unless you want them in a separate

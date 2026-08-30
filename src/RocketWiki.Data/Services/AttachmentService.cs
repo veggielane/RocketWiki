@@ -76,7 +76,7 @@ public class AttachmentService : IAttachmentService
             ContentType = request.ContentType,
             SizeBytes = buffer.Length,
             ContentHash = contentHash,
-            StorageKey = $"attachments/{DateTime.UtcNow:yyyy'/'MM}/{Guid.CreateVersion7()}",
+            StorageKey = StorageKeys.ForAttachment(DateTime.UtcNow),
             UploadedByUserId = actingUserId,
             CreatedAtUtc = DateTime.UtcNow,
         };
