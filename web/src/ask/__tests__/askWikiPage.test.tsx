@@ -70,11 +70,22 @@ const unavailable = (reason: NonNullable<Payload['unavailable']>): { askWiki: Pa
   askWiki: { answer: null, citations: [], unavailable: reason, aggregateMarking: null },
 })
 
+/**
+ * The assistant's status is answered for every render, because the page asks
+ * for it before anything is typed — that is the point of it being a status
+ * query rather than a field on the answer payload. `maxQuestionChars` is a
+ * parameter here so the boundary tests can drive the counter from whatever
+ * number the field reports, rather than from a constant baked into the SPA.
+ */
 function renderAsk(
   respond: (name: string, op: Operation) => Record<string, unknown> | undefined,
-  { route = '/ask' } = {},
+  { route = '/ask', maxQuestionChars = 2000 as number | null } = {},
 ) {
-  const mock = createMockUrqlClient(respond)
+  const mock = createMockUrqlClient((name, op) =>
+    name === 'AssistantStatus'
+      ? { assistantStatus: { configured: true, maxQuestionChars } }
+      : respond(name, op),
+  )
   const utils = render(
     <UrqlProvider value={mock.client}>
       <MemoryRouter initialEntries={[route]}>
@@ -179,7 +190,7 @@ describe('AskWikiPage — ask flow', () => {
     expect(field.tagName).toBe('TEXTAREA')
     fireEvent.change(field, { target: { value: 'multi\nline question' } })
     fireEvent.keyDown(field, { key: 'Enter', shiftKey: true })
-    expect(mock.operations).toHaveLength(0)
+    expect(mock.operations.filter((o) => o.name === 'AskWiki')).toHaveLength(0)
     expect(field).toHaveValue('multi\nline question')
     fireEvent.keyDown(field, { key: 'Enter' })
     expect(mock.operations.filter((o) => o.name === 'AskWiki')).toHaveLength(1)
@@ -191,7 +202,7 @@ describe('AskWikiPage — ask flow', () => {
     fireEvent.keyDown(field, { key: 'Enter' })
     fireEvent.change(field, { target: { value: '   \n ' } })
     fireEvent.keyDown(field, { key: 'Enter' })
-    expect(mock.operations).toHaveLength(0)
+    expect(mock.operations.filter((o) => o.name === 'AskWiki')).toHaveLength(0)
     // The persistent live region is always mounted — "nothing pending" is
     // it staying empty, not it being absent.
     expect(screen.getByRole('status')).toBeEmptyDOMElement()
@@ -201,7 +212,7 @@ describe('AskWikiPage — ask flow', () => {
     const { mock } = renderAsk(() => answered('a'), { route: '/ask?q=turbopump%20seals' })
     expect(screen.getByLabelText('Ask a question')).toHaveValue('turbopump seals')
     // Prefill only — an ask is a multi-second model call, never a navigation side effect.
-    expect(mock.operations).toHaveLength(0)
+    expect(mock.operations.filter((o) => o.name === 'AskWiki')).toHaveLength(0)
   })
 })
 
@@ -338,8 +349,13 @@ describe('AskWikiPage — unavailable payload facts (§18 degradation, never raw
   it('NOT_CONFIGURED: feature-absent copy replaces the composer, and every affordance collapses for the session', async () => {
     // Entry points rendered alongside the page — the same store must
     // collapse all of them from one NOT_CONFIGURED answer (the attempt is
-    // the probe; there is no assistant status query to gate on).
-    const mock = createMockUrqlClient(() => unavailable('NOT_CONFIGURED'))
+    // the probe — the status query reports shape, not availability, and
+    // pauses once the store has collapsed).
+    const mock = createMockUrqlClient((name) =>
+      name === 'AssistantStatus'
+        ? { assistantStatus: { configured: false, maxQuestionChars: null } }
+        : unavailable('NOT_CONFIGURED'),
+    )
     render(
       <UrqlProvider value={mock.client}>
         <MemoryRouter initialEntries={['/ask']}>
@@ -410,14 +426,30 @@ describe('AskWikiPage — QUESTION_TOO_LONG', () => {
     expect(await screen.findByText(new RegExp(`Yours was ${LONG.length.toLocaleString()} characters`))).toBeInTheDocument()
   })
 
-  it('quotes no invented character limit', async () => {
-    renderAsk(() => unavailable('QUESTION_TOO_LONG'))
+  it('names THIS instance’s limit, not the server default', async () => {
+    // The number has to come from `assistantStatus.maxQuestionChars`. A figure
+    // baked into the SPA would be right only on a default install and would
+    // tell someone on a lower-limit instance to cut to a length that would be
+    // refused all over again.
+    renderAsk(() => unavailable('QUESTION_TOO_LONG'), { maxQuestionChars: 350 })
     askQuestion(LONG)
 
     const copy = await screen.findByText(/too long for this wiki/)
-    // 2,000 is the server's DEFAULT, not this instance's answer. Printing it
-    // would teach a limit an operator may never have configured.
+    expect(copy).toHaveTextContent('This wiki accepts up to 350 characters.')
     expect(copy.textContent).not.toMatch(/2,?000/)
+  })
+
+  it('names no limit at all when the instance did not report one', async () => {
+    // Unconfigured assistant, anonymous caller, or a status query that failed —
+    // all arrive as null, and the copy falls back to exactly what it said
+    // before the field existed rather than to a guess.
+    renderAsk(() => unavailable('QUESTION_TOO_LONG'), { maxQuestionChars: null })
+    askQuestion(LONG)
+
+    const copy = await screen.findByText(/too long for this wiki/)
+    expect(copy).toHaveTextContent(/refused rather than shortened for you/)
+    expect(copy.textContent).not.toMatch(/accepts up to/)
+    expect(copy.textContent).not.toMatch(/\d/)
   })
 
   it('leaves the composer in place so the question can be shortened and re-asked', async () => {
@@ -442,6 +474,82 @@ describe('AskWikiPage — QUESTION_TOO_LONG', () => {
     renderAsk(() => unavailable('QUESTION_TOO_LONG'))
     askQuestion(LONG)
     await screen.findByText(/too long for this wiki/)
+    await expectNoAxeViolations()
+  })
+})
+
+/**
+ * The soft counter beside the composer.
+ *
+ * It exists so the refusal is not the first anyone hears about the limit — and
+ * it is soft on purpose: the number was fetched at mount and the server remains
+ * the authority, so this warns and never blocks. A disabled Ask button would be
+ * the client refusing on a figure that may have moved, with no way to explain
+ * itself; the designed refusal is a better outcome than that.
+ *
+ * Every length below is derived from the limit the mocked status query reports,
+ * never from a literal, so the counter cannot quietly agree with 2,000 alone.
+ */
+describe('AskWikiPage — question length counter', () => {
+  const type = (text: string) => fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: text } })
+  const counter = () => document.querySelector('[aria-live="polite"]')?.textContent ?? ''
+
+  it('says nothing while the question is well inside the limit', () => {
+    renderAsk(() => answered('a'), { maxQuestionChars: 400 })
+    type('x'.repeat(50))
+    expect(counter()).toBe('')
+  })
+
+  it('appears as the question approaches the limit', () => {
+    renderAsk(() => answered('a'), { maxQuestionChars: 400 })
+    type('x'.repeat(370))
+    expect(counter()).toContain('30 characters left of 400')
+  })
+
+  it('at exactly the limit it warns but does not claim the question is over', async () => {
+    // The server accepts a question of exactly MaxQuestionChars, so the counter
+    // must not say it will be refused.
+    renderAsk(() => answered('a'), { maxQuestionChars: 400 })
+    type('x'.repeat(400))
+    expect(counter()).toContain('0 characters left')
+    expect(counter()).not.toContain('over')
+    expect(screen.getByLabelText('Ask a question')).toBeValid()
+  })
+
+  it('one character later it says the question will be refused, not shortened', () => {
+    renderAsk(() => answered('a'), { maxQuestionChars: 400 })
+    type('x'.repeat(401))
+    expect(counter()).toContain('1 character over the 400 this wiki accepts')
+    expect(counter()).toContain('refused, not shortened')
+  })
+
+  it('warns but never blocks — Ask stays pressable and the question still goes', async () => {
+    const { mock } = renderAsk(() => answered('a'), { maxQuestionChars: 400 })
+    type('x'.repeat(500))
+
+    const ask = screen.getByRole('button', { name: 'Ask' })
+    expect(ask).toBeEnabled()
+    fireEvent.click(ask)
+
+    await waitFor(() => expect(mock.operations.filter((o) => o.name === 'AskWiki')).toHaveLength(1))
+  })
+
+  it('counts what will be SENT, not what is typed — the composer trims first', () => {
+    // Trailing whitespace the server never sees must not push the counter over.
+    renderAsk(() => answered('a'), { maxQuestionChars: 400 })
+    type(`${'x'.repeat(400)}${' '.repeat(50)}`)
+    expect(counter()).not.toContain('over')
+  })
+
+  it('says nothing when the instance reported no limit', () => {
+    renderAsk(() => answered('a'), { maxQuestionChars: null })
+    type('x'.repeat(100000))
+    expect(counter()).toBe('')
+  })
+
+  it('has no axe violations with the over-limit warning showing', async () => {
+    renderAsk(() => answered('a'), { maxQuestionChars: 400 })
+    type('x'.repeat(500))
     await expectNoAxeViolations()
   })
 })

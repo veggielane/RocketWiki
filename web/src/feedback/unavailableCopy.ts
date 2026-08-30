@@ -53,7 +53,17 @@ export function describeGitLabUnavailable(reason: GitLabUnavailableReason): Unav
  * Settings: the assistant endpoint is instance configuration, not a
  * per-user credential.
  */
-export function describeAskUnavailable(reason: AskWikiUnavailableReason | 'REQUEST_FAILED'): UnavailableCopy {
+export function describeAskUnavailable(
+  reason: AskWikiUnavailableReason | 'REQUEST_FAILED',
+  /**
+   * `assistantStatus.maxQuestionChars`, when it is known. Optional and
+   * nullable on purpose: null is what an unconfigured assistant reports and
+   * what a failed status query leaves behind, and in both cases the copy must
+   * fall back to naming no number at all rather than to a default this client
+   * invented. Only QUESTION_TOO_LONG reads it.
+   */
+  maxQuestionChars?: number | null,
+): UnavailableCopy {
   switch (reason) {
     case 'NO_RESULTS':
       return { summary: 'Nothing in the wiki you can view answers this.', pointsToSettings: false }
@@ -64,22 +74,27 @@ export function describeAskUnavailable(reason: AskWikiUnavailableReason | 'REQUE
       }
     case 'NOT_CONFIGURED':
       return { summary: "The wiki assistant isn't configured on this instance.", pointsToSettings: false }
-    case 'QUESTION_TOO_LONG':
+    case 'QUESTION_TOO_LONG': {
       // Says REFUSED, not trimmed, and that is the whole point of the copy.
       // The server rejects an over-long question outright rather than
       // truncating it, so that the person who wrote it decides what to cut
       // instead of silently getting an answer to some prefix of what they
       // asked. A generic "something went wrong" would throw that away.
-      //
-      // No number: the limit is per-instance configuration (`Ai:MaxQuestionChars`)
-      // and is not on the wire, so any figure quoted here would be this
-      // client's guess about someone else's deployment. The ask page adds the
-      // one length it can state truthfully — the one the user just typed.
+      const refused =
+        "That question is too long for this wiki, so it wasn't sent to the assistant and nothing was answered. It is refused rather than shortened for you, so that what gets cut is your choice."
+      // The limit, only when the instance has actually reported one. Before
+      // `assistantStatus` existed this sentence could not be written at all:
+      // `Ai:MaxQuestionChars` is per-instance configuration, and a figure
+      // guessed from the default would tell someone on a lower-limit instance
+      // to cut to a length that would be refused again.
+      if (typeof maxQuestionChars !== 'number' || maxQuestionChars <= 0) {
+        return { summary: refused, pointsToSettings: false }
+      }
       return {
-        summary:
-          "That question is too long for this wiki, so it wasn't sent to the assistant and nothing was answered. It is refused rather than shortened for you, so that what gets cut is your choice.",
+        summary: `${refused} This wiki accepts up to ${maxQuestionChars.toLocaleString()} characters.`,
         pointsToSettings: false,
       }
+    }
     case 'REQUEST_FAILED':
       return { summary: "Couldn't reach the wiki API to ask this. Check your connection and retry.", pointsToSettings: false }
   }

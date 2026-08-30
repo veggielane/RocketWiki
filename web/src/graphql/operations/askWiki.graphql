@@ -40,3 +40,19 @@ query AskWiki($question: String!) {
     }
   }
 }
+
+# The assistant's shape, asked BEFORE a question is sent — which is the whole
+# point of it being a status query rather than a field on `AskWikiPayload`. The
+# payload arrives with an answer, i.e. after the ask that a length warning
+# exists to prevent; a bound nobody can read until they have already hit it is
+# not a bound anyone can act on.
+#
+# `maxQuestionChars` is nullable: null when the assistant is unconfigured, which
+# is the honest shape rather than a zero or a sentinel — there is no feature, so
+# there is no bound. Anonymous callers get the same absent shape.
+query AssistantStatus {
+  assistantStatus {
+    configured
+    maxQuestionChars
+  }
+}

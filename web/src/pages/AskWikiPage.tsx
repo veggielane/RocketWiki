@@ -21,12 +21,14 @@ import { visuallyHidden } from '@mui/utils'
 import { useClient } from 'urql'
 import {
   AskWikiDocument,
+  useAssistantStatusQuery,
   type AggregateMarkingFragment,
   type AskWikiQuery,
   type AskWikiQueryVariables,
   type AskWikiUnavailableReason,
 } from '../graphql/generated/graphql'
 import { citationHref, type AskCitation } from '../ask/answerSegments'
+import { describeQuestionLength, questionLengthMessage } from '../ask/askQuestionLength'
 import { AnswerBody } from '../ask/AnswerBody'
 import { isAskWikiMarkedNotConfigured, markAskWikiNotConfigured, useAskWikiPossiblyAvailable } from '../ask/askAvailability'
 import { describeAskUnavailable } from '../feedback/unavailableCopy'
@@ -117,6 +119,25 @@ export function AskWikiPage() {
   const nextId = useRef(1)
   const possiblyAvailable = useAskWikiPossiblyAvailable()
 
+  /**
+   * The instance's own question limit, read BEFORE anything is asked — which is
+   * why it is a status query rather than a field on the answer payload. A bound
+   * you first learn about in the refusal is a bound you could not act on.
+   *
+   * Every failure mode collapses to `null`, and null means the counter says
+   * nothing and the refusal copy names no number: unconfigured assistant, an
+   * anonymous caller's absent shape, and a query that errored all leave the
+   * screen exactly as honest as it was before this field existed.
+   */
+  const [{ data: assistantStatus }] = useAssistantStatusQuery({ pause: !possiblyAvailable })
+  const maxQuestionChars = assistantStatus?.assistantStatus.maxQuestionChars ?? null
+
+  // Measured on what will actually be SENT: the composer trims before asking,
+  // so counting the untrimmed draft would nag about whitespace the server never
+  // sees.
+  const lengthState = describeQuestionLength(draft.trim().length, maxQuestionChars)
+  const lengthMessage = questionLengthMessage(lengthState)
+
   const busy = entries.some((e) => e.result.state === 'pending')
   // What the persistent live region below announces. The failure states
   // need no entry here: they render as role="alert" Alerts, which announce
@@ -181,7 +202,7 @@ export function AskWikiPage() {
                   {entry.question}
                 </Typography>
               </Paper>
-              <TranscriptResult entry={entry} onRetry={() => retry(entry)} />
+              <TranscriptResult entry={entry} onRetry={() => retry(entry)} maxQuestionChars={maxQuestionChars} />
             </Stack>
           ))}
         </Stack>
@@ -216,6 +237,12 @@ export function AskWikiPage() {
               maxRows={8}
               fullWidth
               autoFocus
+              // Flagged, never blocked. The server is the authority on the
+              // limit and this number was fetched at mount, so a disabled Ask
+              // button would be this client refusing on a figure that may have
+              // moved — and the designed refusal is a better outcome than a
+              // button that cannot be pressed and cannot explain itself.
+              error={lengthState.kind === 'over'}
               helperText="Enter to ask · Shift+Enter for a new line"
             />
             <Button
@@ -228,6 +255,28 @@ export function AskWikiPage() {
               Ask
             </Button>
           </Stack>
+          {/* Always mounted, empty until there is something to say. A live
+              region inserted together with its content is routinely not
+              announced — announcement is about mutations INSIDE an existing
+              region — and the whole point of this one is to reach someone who
+              is looking at the keyboard while they type, not at the field.
+              `polite`, because it changes on every keystroke near the limit.
+
+              Bare `aria-live`, not `role="status"`: the page already has one
+              status region for the ask itself, and a second would make "the
+              page's status" ambiguous to anything that looks one up. This is a
+              field-level hint that happens to need announcing, not a second
+              opinion about what the page is doing. */}
+          <Box aria-live="polite" sx={{ mt: 0.5 }}>
+            {lengthMessage !== null && (
+              <Typography
+                variant="caption"
+                color={lengthState.kind === 'over' ? 'error.main' : 'text.secondary'}
+              >
+                {lengthMessage}
+              </Typography>
+            )}
+          </Box>
         </Paper>
       ) : (
         <Alert severity="info">
@@ -244,7 +293,15 @@ export function AskWikiPage() {
   )
 }
 
-function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry: () => void }) {
+function TranscriptResult({
+  entry,
+  onRetry,
+  maxQuestionChars,
+}: {
+  entry: TranscriptEntry
+  onRetry: () => void
+  maxQuestionChars: number | null
+}) {
   const { result, question } = entry
   switch (result.state) {
     case 'pending':
@@ -357,7 +414,7 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
         case 'QUESTION_TOO_LONG':
           return (
             <Stack spacing={0.5}>
-              <Typography>{describeAskUnavailable('QUESTION_TOO_LONG').summary}</Typography>
+              <Typography>{describeAskUnavailable('QUESTION_TOO_LONG', maxQuestionChars).summary}</Typography>
               {/* The one length this client can state truthfully. The
                   instance's actual limit is server configuration and is not on
                   the wire, so quoting a figure for it would be a guess; the
