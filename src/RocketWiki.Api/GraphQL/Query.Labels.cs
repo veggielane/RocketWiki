@@ -3,6 +3,7 @@ using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Services;
 using RocketWiki.Data;
 
 namespace RocketWiki.Api.GraphQL;
@@ -94,8 +95,11 @@ public partial class Query
     private static async Task<IReadOnlyList<Guid>> GetViewableSpaceIdsAsync(
         RocketWikiDbContext db, Principal principal, string? spaceKey, CancellationToken cancellationToken)
     {
+        // Canonicalized like every other space-key filter, so ?spaceKey=eng narrows to
+        // ENG rather than to nothing (SpaceKeys.Canonical).
+        var canonicalKey = SpaceKeys.CanonicalOrNull(spaceKey);
         var spaces = await db.Spaces
-            .Where(s => spaceKey == null || s.Key == spaceKey)
+            .Where(s => canonicalKey == null || s.Key == canonicalKey)
             .Select(s => s.Id)
             .ToListAsync(cancellationToken);
         if (spaces.Count == 0)

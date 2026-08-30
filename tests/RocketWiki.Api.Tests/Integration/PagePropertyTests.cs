@@ -27,7 +27,7 @@ public sealed class PagePropertyTests(RocketWikiApiFactory factory) : IClassFixt
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"PP{Guid.NewGuid():N}"[..8], Name = "Property Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"PP{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Property Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {

@@ -25,7 +25,7 @@ public sealed class WatchStateReadTests(RocketWikiApiFactory factory) : IClassFi
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"WS{Guid.NewGuid():N}"[..8], Name = "Watch State Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"WS{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Watch State Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {

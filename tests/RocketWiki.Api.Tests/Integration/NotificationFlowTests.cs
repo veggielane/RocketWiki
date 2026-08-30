@@ -70,7 +70,7 @@ public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClass
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"NF{Guid.NewGuid():N}"[..8], Name = "Notification Flow Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"NF{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Notification Flow Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
@@ -622,7 +622,7 @@ public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClass
         await db.SaveChangesAsync();
 
         // OriginInstanceId != "standalone" (the API's default Instance:Id) -> replica.
-        var space = new Space { Key = $"RS{Guid.NewGuid():N}"[..8], Name = "Replica", OriginInstanceId = "low-side", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"RS{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Replica", OriginInstanceId = "low-side", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {

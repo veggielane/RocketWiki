@@ -207,7 +207,7 @@ public sealed class TelemetryRegistrationTests(RocketWikiApiFactory factory) : I
 
         var space = new Space
         {
-            Key = $"REG{Guid.NewGuid():N}"[..8],
+            Key = $"REG{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Telemetry Registration Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,

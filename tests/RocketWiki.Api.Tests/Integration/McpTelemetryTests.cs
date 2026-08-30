@@ -55,7 +55,7 @@ public sealed class McpTelemetryTests(RocketWikiApiFactory factory) : IClassFixt
 
         var space = new Space
         {
-            Key = $"MTL{Guid.NewGuid():N}"[..8],
+            Key = $"MTL{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "MCP Telemetry Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,

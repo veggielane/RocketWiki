@@ -68,7 +68,7 @@ export const TOP_LEVEL_PAGES: Record<string, string> = {
  * a line below, so the crumb spends itself on the thing the heading does not
  * repeat: which space you are in.
  */
-export function crumbsFor(pathname: string, pageSpaceKey?: string): Crumb[] {
+export function crumbsFor(pathname: string, canonicalSpaceKey?: string): Crumb[] {
   const [first, ...rest] = pathname.split('/').filter(Boolean)
 
   if (first === undefined) return [{ label: 'Spaces' }]
@@ -78,7 +78,12 @@ export function crumbsFor(pathname: string, pageSpaceKey?: string): Crumb[] {
     if (key === undefined) return [{ label: 'Spaces' }]
     if (key === 'new') return [SPACES, { label: 'New space' }]
     if (key === 'archived') return [SPACES, { label: 'Archived spaces' }]
-    const spaceKey = decodeURIComponent(key)
+    // The SERVER'S spelling of the key where the caller could resolve one, the
+    // URL's only as a fallback. URLs are case-insensitive now, so `/spaces/eng`
+    // and `/spaces/ENG` are one space — and a crumb echoing whichever casing
+    // was typed would label the same place two ways while the rail's picker
+    // showed the canonical name beside it.
+    const spaceKey = canonicalSpaceKey ?? decodeURIComponent(key)
     const space: Crumb = { label: spaceKey, to: `/spaces/${key}` }
     if (second === SYSTEM_SEGMENT && third !== undefined) {
       return [SPACES, space, { label: SPACE_SYSTEM_PAGES[third] ?? third }]
@@ -89,7 +94,7 @@ export function crumbsFor(pathname: string, pageSpaceKey?: string): Crumb[] {
 
   if (first === 'pages') {
     const space: Crumb | undefined =
-      pageSpaceKey === undefined ? undefined : { label: pageSpaceKey, to: `/spaces/${pageSpaceKey}` }
+      canonicalSpaceKey === undefined ? undefined : { label: canonicalSpaceKey, to: `/spaces/${canonicalSpaceKey}` }
     const sub = rest[1] === undefined ? undefined : PAGE_SUBPAGES[rest[1]]
     if (sub === undefined) {
       return space === undefined ? [{ label: 'Spaces' }] : [SPACES, { label: space.label }]
@@ -115,7 +120,7 @@ export function crumbsFor(pathname: string, pageSpaceKey?: string): Crumb[] {
  * supplied a better one (app/documentTitle.ts). The last crumb, because that is
  * the thing you are looking at.
  */
-export function routeTitleFor(pathname: string, pageSpaceKey?: string): string {
-  const crumbs = crumbsFor(pathname, pageSpaceKey)
+export function routeTitleFor(pathname: string, canonicalSpaceKey?: string): string {
+  const crumbs = crumbsFor(pathname, canonicalSpaceKey)
   return crumbs[crumbs.length - 1]?.label ?? 'RocketWiki'
 }

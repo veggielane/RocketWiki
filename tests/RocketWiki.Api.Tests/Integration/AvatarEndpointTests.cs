@@ -340,7 +340,7 @@ public sealed class AvatarEndpointTests(RocketWikiApiFactory factory) : IClassFi
             var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
             var space = new Space
             {
-                Key = $"AVG{Guid.NewGuid():N}"[..8],
+                Key = $"AVG{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
                 Name = "Avatar GraphQL Space",
                 OriginInstanceId = "standalone",
                 CreatedAtUtc = DateTime.UtcNow,

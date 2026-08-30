@@ -182,6 +182,14 @@ PageEmbedding (per-chunk vectors for semantic search — see §9; derived, never
   The slug is the page's *address* — `/spaces/{spaceKey}/{slug}`, unique across
   the whole space rather than among siblings, since the tree is absent from the
   URL so that moving a page never breaks a link (§17).
+  **Addresses are case-insensitive in both halves**: `/spaces/eng/my-page` and
+  `/spaces/ENG/My-Page` name the same page. Not via a case-insensitive
+  collation — that had the two database providers enforcing different rules —
+  but via canonical stored forms (space keys upper, slugs lower, applied at the
+  persistence seam) plus normalized lookups. Uniqueness follows the address
+  rather than the bytes, so `My-Page` beside `my-page` is refused as taken.
+  Full treatment in data-model.md, including why labels are deliberately
+  excluded: a label is a name, not an address.
 - **PageRevision** — immutable. `PageId`, revision number, Markdown content,
   title at time of save, author, timestamp, optional edit summary. Every save
   creates one. History UI diffs revisions as Markdown text diffs.

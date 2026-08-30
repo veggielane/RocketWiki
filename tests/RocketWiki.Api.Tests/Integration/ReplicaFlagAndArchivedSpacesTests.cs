@@ -34,7 +34,7 @@ public sealed class ReplicaFlagAndArchivedSpacesTests(RocketWikiApiFactory facto
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
         var space = new Space
         {
-            Key = $"RA{Guid.NewGuid():N}"[..8],
+            Key = $"RA{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Replica/Archive Space",
             OriginInstanceId = originInstanceId,
             CreatedAtUtc = DateTime.UtcNow,

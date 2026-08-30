@@ -45,7 +45,7 @@ public sealed class ReplicaAndSyncStatusTests(RocketWikiApiFactory factory) : IC
         // must still not matter, the invariant sits beneath every grant (§6.4).
         var space = new Space
         {
-            Key = $"RP{Guid.NewGuid():N}"[..8],
+            Key = $"RP{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Replica Space",
             OriginInstanceId = LowOrigin,
             CreatedAtUtc = DateTime.UtcNow,
@@ -187,7 +187,7 @@ public sealed class ReplicaAndSyncStatusTests(RocketWikiApiFactory factory) : IC
             {
                 low.Database.EnsureCreated();
                 var author = new User { Subject = "low-author", DisplayName = "Low Author", AttributesJson = "{}", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
-                var space = new Space { Key = $"SY{Guid.NewGuid():N}"[..8], Name = "Synced", OriginInstanceId = LowOrigin, IsExported = true, CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid() };
+                var space = new Space { Key = $"SY{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Synced", OriginInstanceId = LowOrigin, IsExported = true, CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid() };
                 spaceKey = space.Key;
                 spaceId = space.Id;
                 low.Users.Add(author);
@@ -267,7 +267,7 @@ public sealed class ReplicaAndSyncStatusTests(RocketWikiApiFactory factory) : IC
             var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
             // A native exported space on THIS instance (Instance:Id "standalone") with
             // one drained and two pending outbox events.
-            var space = new Space { Key = $"EX{Guid.NewGuid():N}"[..8], Name = "Exported", OriginInstanceId = "standalone", IsExported = true, LastOutboxSequence = 3, CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid() };
+            var space = new Space { Key = $"EX{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Exported", OriginInstanceId = "standalone", IsExported = true, LastOutboxSequence = 3, CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid() };
             spaceId = space.Id;
             spaceKey = space.Key;
             db.Spaces.Add(space);
@@ -279,7 +279,7 @@ public sealed class ReplicaAndSyncStatusTests(RocketWikiApiFactory factory) : IC
             // A replica flagged exported must NOT appear: only a native space can be
             // exported (design.md §12) - the status page must not present a replica as
             // an export source even if the flag is somehow set.
-            db.Spaces.Add(new Space { Key = $"BX{Guid.NewGuid():N}"[..8], Name = "Bogus", OriginInstanceId = LowOrigin, IsExported = true, CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid() });
+            db.Spaces.Add(new Space { Key = $"BX{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Bogus", OriginInstanceId = LowOrigin, IsExported = true, CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid() });
             await db.SaveChangesAsync();
         }
 

@@ -40,7 +40,7 @@ public sealed class PageAdversarialLeakTests(RocketWikiApiFactory factory) : ICl
 
         var space = new Space
         {
-            Key = $"ADV{Guid.NewGuid():N}"[..8],
+            Key = $"ADV{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Adversarial Test Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,

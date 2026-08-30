@@ -27,7 +27,7 @@ public sealed class DisplayNameResolutionTests(RocketWikiApiFactory factory) : I
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"DN{Guid.NewGuid():N}"[..8], Name = "Display Name Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"DN{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Display Name Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {

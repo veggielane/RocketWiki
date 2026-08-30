@@ -54,7 +54,7 @@ public sealed class EditSessionHubTests(RocketWikiApiFactory factory) : IClassFi
 
         var space = new Space
         {
-            Key = $"ES{Guid.NewGuid():N}"[..8],
+            Key = $"ES{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Edit Session Space",
             OriginInstanceId = originInstanceId ?? "standalone",
             CreatedAtUtc = DateTime.UtcNow,

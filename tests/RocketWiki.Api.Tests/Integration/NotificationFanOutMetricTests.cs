@@ -75,7 +75,7 @@ public sealed class NotificationFanOutMetricTests(RocketWikiApiFactory factory) 
             var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
             db.Users.Add(seeder);
             await db.SaveChangesAsync();
-            var space = new Space { Key = $"FM{Guid.NewGuid():N}"[..8], Name = "Fanout Metrics", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+            var space = new Space { Key = $"FM{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Fanout Metrics", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
             db.Spaces.Add(space);
             db.AccessRules.Add(new AccessRule
             {

@@ -37,12 +37,23 @@ public class PageReadService : IPageReadService
     public async Task<Guid?> FindPageIdBySlugAsync(
         string spaceKey, string slug, CancellationToken cancellationToken = default)
     {
+        // Both halves of the address are canonicalized before they meet the stored
+        // (canonical) values, which is what makes /spaces/ENG/My-Page and
+        // /spaces/eng/my-page resolve the same page. Normalizing HERE rather than in the
+        // resolver is deliberate: a new entry point - another resolver, an MCP tool, a
+        // future REST route - reaches a page by slug only through this method, so it
+        // inherits the rule, whereas an edge-level helper is exactly what a new entry
+        // point forgets. Storage is canonical too (RocketWikiDbContext), without which
+        // normalizing here would make the lookup ambiguous rather than case-insensitive.
+        var canonicalSlug = PageSlugs.Canonical(slug);
+        var canonicalSpaceKey = SpaceKeys.Canonical(spaceKey);
+
         // No permission filtering here by design — see the interface. The global query
         // filters still apply, so an archived space's pages are not addressable, and
         // IsDeleted keeps a trashed page's slug from resolving while the row survives
         // for restore.
         return await _db.Pages
-            .Where(p => !p.IsDeleted && p.Slug == slug && p.Space!.Key == spaceKey)
+            .Where(p => !p.IsDeleted && p.Slug == canonicalSlug && p.Space!.Key == canonicalSpaceKey)
             .Select(p => (Guid?)p.Id)
             .FirstOrDefaultAsync(cancellationToken);
     }

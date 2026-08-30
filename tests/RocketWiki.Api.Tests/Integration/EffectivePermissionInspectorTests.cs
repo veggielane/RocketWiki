@@ -40,7 +40,7 @@ public sealed class EffectivePermissionInspectorTests(RocketWikiApiFactory facto
         var now = DateTime.UtcNow;
         var space = new Space
         {
-            Key = $"EPI{Guid.NewGuid():N}"[..8],
+            Key = $"EPI{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Inspector Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = now,

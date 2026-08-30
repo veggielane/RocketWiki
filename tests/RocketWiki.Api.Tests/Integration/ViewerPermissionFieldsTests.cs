@@ -38,7 +38,7 @@ public sealed class ViewerPermissionFieldsTests(RocketWikiApiFactory factory) : 
         var now = DateTime.UtcNow;
         var space = new Space
         {
-            Key = $"VPF{Guid.NewGuid():N}"[..8],
+            Key = $"VPF{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Viewer Permission Fields Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = now,
@@ -91,7 +91,7 @@ public sealed class ViewerPermissionFieldsTests(RocketWikiApiFactory factory) : 
         // even its most generous grant.
         var replica = new Space
         {
-            Key = $"RPL{Guid.NewGuid():N}"[..8],
+            Key = $"RPL{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Replica Space",
             OriginInstanceId = "high-side",
             CreatedAtUtc = now,

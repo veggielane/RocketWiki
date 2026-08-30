@@ -150,7 +150,7 @@ public sealed class ParseRqlQueryTests(RocketWikiApiFactory factory) : IClassFix
     {
         // design.md §7/§22: no subject, no access decision, nothing read - and a
         // live-syntax-checking editor would otherwise write a row per keystroke.
-        var marker = $"nau{Guid.NewGuid():N}"[..12];
+        var marker = $"nau{Guid.NewGuid():N}"[..12].ToUpperInvariant();
         _ = await ParseAsync(CreateClient(), $"title ~ {marker}");
 
         using var scope = factory.Services.CreateScope();

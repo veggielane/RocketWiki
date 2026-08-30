@@ -268,6 +268,37 @@ describe('SpaceTreeNav collapsing', () => {
     expect(screen.queryByRole('link', { name: 'Static fire' })).toBeNull()
   })
 
+  /**
+   * URLs are case-insensitive: the server resolves /spaces/ENG/Launch-Notes to
+   * the same page as /spaces/eng/launch-notes. If the rail compared exactly, a
+   * correct URL would HALF-work — the page renders, because the server resolved
+   * it, while the tree neither highlights it nor opens the branch to it, which
+   * reads as a broken tree rather than as a casing difference.
+   */
+  describe('case-insensitive route matching', () => {
+    it('highlights the current page whatever case the URL used', async () => {
+      renderNav('/spaces/ENG/Launch-Notes')
+      const link = await screen.findByRole('link', { name: 'Launch notes' })
+      expect(link.closest('a')).toHaveClass('Mui-selected')
+    })
+
+    it('opens the branch to the current page whatever case the URL used', async () => {
+      // The same comparison drives "which ancestors must be expanded", so a
+      // wrong-case URL used to land on a page whose branch stayed folded.
+      renderNav('/spaces/ENG/Launch-Notes')
+      expect(await screen.findByRole('button', { name: 'Collapse Launch notes' })).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Static fire' })).toBeInTheDocument()
+    })
+
+    it('finds the space whatever case the key used', async () => {
+      // The picker resolves the space from the URL key; an exact match left it
+      // on "Choose a space" with no tree beneath it on a URL that resolves.
+      renderNav('/spaces/eng/launch-notes')
+      expect(await screen.findByRole('link', { name: 'Launch notes' })).toBeInTheDocument()
+      expect(screen.getByRole('combobox', { name: 'Space' })).toHaveTextContent('Engineering')
+    })
+  })
+
   it('lets an off-path branch be opened by hand', async () => {
     renderNav('/spaces/ENG/static-fire')
     const toggle = await screen.findByRole('button', { name: 'Expand Runbooks' })

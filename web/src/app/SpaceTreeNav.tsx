@@ -29,7 +29,7 @@ import {
 import { describeLoadFailure, describeNoSpaces, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { useIsInstanceAdmin } from '../auth/useIsInstanceAdmin'
 import { lookupPageIcon } from '../pages/pageIcons'
-import { SYSTEM_SEGMENT } from '../pages/pageSlug'
+import { SYSTEM_SEGMENT, sameSlug, sameSpaceKey } from '../pages/pageSlug'
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 
 /** One node of the nav tree. Only what the drawer renders — no labels, no markings. */
@@ -123,7 +123,7 @@ function ancestorsOfActive(nodes: NavNode[], activePageId?: string, activeSlug?:
   const found: string[] = []
   function walk(list: NavNode[], trail: string[]): boolean {
     for (const node of list) {
-      if (node.id === activePageId || node.slug === activeSlug) {
+      if (node.id === activePageId || sameSlug(node.slug, activeSlug)) {
         found.push(...trail, node.id)
         return true
       }
@@ -271,7 +271,9 @@ function PageTree({
                 // fires on the ordinary route; the id arm keeps /pages/{id}
                 // highlighting, which is what a search result or a notification
                 // still links to.
-                selected={node.id === activePageId || node.slug === activeSlug}
+                // Case-insensitive: the server resolves /spaces/ENG/My-Page,
+                // so an `===` here would load the page and fail to highlight it.
+                selected={node.id === activePageId || sameSlug(node.slug, activeSlug)}
                 sx={{ flex: 1, minWidth: 0, py: 0.25 }}
               >
                 <ListItemIcon sx={{ minWidth: 28 }}>
@@ -383,7 +385,7 @@ export function SpaceTreeNav() {
   // Only a page route needs this hop; a space route already names its space.
   const [{ data: pageRef }] = usePageSpaceRefQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
   const activeSpaceKey = routeSpaceKey ?? pageRef?.page?.spaceKey ?? undefined
-  const activeSpace = data?.spaces.find((s) => s.key === activeSpaceKey)
+  const activeSpace = data?.spaces.find((s) => sameSpaceKey(s.key, activeSpaceKey))
 
   // The tree has to be told what changes it (graphql/treeDependencies.ts) —
   // nothing the cache sees on its own connects a created page to this query.
@@ -500,7 +502,7 @@ export function SpaceTreeNav() {
                   // press at any time, and without this there would be no way
                   // back to the space's own page — trash, settings, the label
                   // filter — from a page route.
-                  if (space.key === activeSpaceKey) navigate(`/spaces/${space.key}`)
+                  if (sameSpaceKey(space.key, activeSpaceKey)) navigate(`/spaces/${space.key}`)
                 }}
               >
                 <SpaceOption space={space} />

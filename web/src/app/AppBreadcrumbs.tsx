@@ -1,8 +1,8 @@
 import { Breadcrumbs, Link, Typography } from '@mui/material'
 import NavigateNextIcon from '@mui/icons-material/NavigateNext'
 import { Link as RouterLink, useLocation } from 'react-router-dom'
-import { usePageSpaceRefQuery } from '../graphql/generated/graphql'
 import { crumbsFor } from './routeCrumbs'
+import { useCanonicalSpaceKey } from './useCanonicalSpaceKey'
 
 /**
  * The template's header breadcrumb: muted ancestors, a chevron separator in
@@ -15,13 +15,10 @@ import { crumbsFor } from './routeCrumbs'
  */
 export function AppBreadcrumbs() {
   const { pathname } = useLocation()
-  // Only a `/pages/{id}` route needs this hop, and the shell asks the same
-  // question for the same route — urql serves the second caller from cache
-  // rather than issuing a request.
-  const pageId = /^\/pages\/([^/]+)/.exec(pathname)?.[1]
-  const [{ data }] = usePageSpaceRefQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
-
-  const crumbs = crumbsFor(pathname, data?.page?.spaceKey ?? undefined)
+  // The server's spelling of the space key, not the URL's — see
+  // useCanonicalSpaceKey. Both of its queries are ones the shell and rail
+  // already run, so urql answers from cache rather than issuing a request.
+  const crumbs = crumbsFor(pathname, useCanonicalSpaceKey(pathname))
 
   return (
     <Breadcrumbs

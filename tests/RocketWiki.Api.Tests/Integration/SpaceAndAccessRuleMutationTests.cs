@@ -36,7 +36,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
     public async Task CreateSpace_AsInstanceAdmin_WithInitialGrant_Succeeds()
     {
         var client = AdminClient(factory);
-        var key = $"SP{Guid.NewGuid():N}"[..8];
+        var key = $"SP{Guid.NewGuid():N}"[..8].ToUpperInvariant();
 
         var result = await client.PostGraphQLAsync($$"""
             mutation {
@@ -63,7 +63,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
     public async Task CreateSpace_WithoutInstanceAdmin_ReturnsForbidden_AndPersistsNothing()
     {
         var client = PlainClient(factory);
-        var key = $"SP{Guid.NewGuid():N}"[..8];
+        var key = $"SP{Guid.NewGuid():N}"[..8].ToUpperInvariant();
 
         var result = await client.PostGraphQLAsync($$"""
             mutation {
@@ -87,7 +87,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
     public async Task ArchiveSpace_ThenRestoreSpace_RoundTrips()
     {
         var adminClient = AdminClient(factory);
-        var key = $"AR{Guid.NewGuid():N}"[..8];
+        var key = $"AR{Guid.NewGuid():N}"[..8].ToUpperInvariant();
         var createResult = await adminClient.PostGraphQLAsync($$"""
             mutation {
               createSpace(
@@ -216,7 +216,11 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
     private static async Task<(Guid Id, string Key)> CreateSpaceAsync(
         HttpClient adminClient, string prefix, string role = "SPACE_ADMIN")
     {
-        var key = $"{prefix}{Guid.NewGuid():N}"[..8];
+        // Canonical (upper) because that is what the server stores and echoes back —
+        // space keys are canonicalized on write so URLs can be case-insensitive. Sent in
+        // canonical form so this helper's returned key is the one the space actually has,
+        // rather than the casing a caller happened to type.
+        var key = $"{prefix}{Guid.NewGuid():N}"[..8].ToUpperInvariant();
         var result = await adminClient.PostGraphQLAsync($$"""
             mutation {
               createSpace(
@@ -257,7 +261,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
         var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
-        var space = new Space { Key = $"ZG{Guid.NewGuid():N}"[..8], Name = "Zero Grants", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"ZG{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Zero Grants", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         await db.SaveChangesAsync();
 
@@ -284,7 +288,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
         var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
-        var space = new Space { Key = $"NA{Guid.NewGuid():N}"[..8], Name = "No Access", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"NA{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "No Access", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {

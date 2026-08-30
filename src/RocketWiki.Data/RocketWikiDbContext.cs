@@ -3,6 +3,7 @@ using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
+using RocketWiki.Core.Services;
 using RocketWiki.Core.Telemetry;
 using RocketWiki.Data.Telemetry;
 
@@ -177,6 +178,7 @@ public class RocketWikiDbContext : DbContext
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
+        EnsureCanonicalAddresses();
         EnsurePageMarkings();
         var telemetry = ProcessPendingDomainEvents();
         var result = base.SaveChanges(acceptAllChangesOnSuccess);
@@ -186,11 +188,58 @@ public class RocketWikiDbContext : DbContext
 
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
+        EnsureCanonicalAddresses();
         EnsurePageMarkings();
         var telemetry = ProcessPendingDomainEvents();
         var result = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
         telemetry.RecordCommitted();
         return result;
+    }
+
+    /// <summary>
+    /// The two halves of a page address — <c>Space.Key</c> and <c>Page.Slug</c> — are
+    /// stored in canonical form (upper and lower respectively, see
+    /// <see cref="SpaceKeys.Canonical"/> / <see cref="PageSlugs.Canonical"/>), enforced
+    /// at the persistence seam rather than by each write path remembering. Same shape and
+    /// same reasoning as <see cref="EnsurePageMarkings"/> below: an invariant that lives
+    /// in one structural place cannot be lost one call site at a time.
+    ///
+    /// <para>It is what makes URLs case-insensitive <b>safely</b>. Normalising only the
+    /// lookups would leave <c>my-page</c> and <c>My-Page</c> both storable — the BIN2
+    /// index (data-model.md) sees them as different — and then one URL would address two
+    /// pages with no defined winner. Canonical storage collapses that: a case-sensitive
+    /// unique index over uniformly-cased values enforces case-insensitive uniqueness.</para>
+    ///
+    /// <para><b>A backstop, not the feature.</b> The mutation services canonicalize the
+    /// caller's input up front, because they also have to run their "is this slug taken"
+    /// pre-check against the canonical value — a pre-check on the raw value would pass and
+    /// then hit the unique index at commit, turning a clean ValidationError into a 500.
+    /// What this covers is everything else: the sync importer applying a bundle written by
+    /// an instance older than this rule, and any future write path. Like EnsurePageMarkings
+    /// it touches the database not at all.</para>
+    ///
+    /// <para>Modified as well as Added: nothing mutates either column today, but a future
+    /// "rename this page's slug" would otherwise be exactly the call site that forgets.</para>
+    /// </summary>
+    private void EnsureCanonicalAddresses()
+    {
+        foreach (var entry in ChangeTracker.Entries<Page>())
+        {
+            if (entry.State is EntityState.Added or EntityState.Modified
+                && PageSlugs.Canonical(entry.Entity.Slug) is var slug && slug != entry.Entity.Slug)
+            {
+                entry.Entity.Slug = slug;
+            }
+        }
+
+        foreach (var entry in ChangeTracker.Entries<Space>())
+        {
+            if (entry.State is EntityState.Added or EntityState.Modified
+                && SpaceKeys.Canonical(entry.Entity.Key) is var key && key != entry.Entity.Key)
+            {
+                entry.Entity.Key = key;
+            }
+        }
     }
 
     /// <summary>

@@ -44,7 +44,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"HB{Guid.NewGuid():N}"[..8], Name = "Hub Test Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"HB{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Hub Test Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {

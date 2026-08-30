@@ -24,7 +24,7 @@ public sealed class AuditEventsTotalCountTests(RocketWikiApiFactory factory) : I
         var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
-        var space = new Space { Key = $"TC{Guid.NewGuid():N}"[..8], Name = "Total Count Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"TC{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Total Count Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {

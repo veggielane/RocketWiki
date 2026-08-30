@@ -50,7 +50,7 @@ public sealed class EditSessionContributorAndCapTests(RocketWikiApiFactory facto
 
         var space = new Space
         {
-            Key = $"EC{Guid.NewGuid():N}"[..8],
+            Key = $"EC{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Contributor Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,

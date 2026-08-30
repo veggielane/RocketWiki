@@ -41,7 +41,7 @@ public sealed class PageRestrictionsReadTests(RocketWikiApiFactory factory) : IC
         var now = DateTime.UtcNow;
         var space = new Space
         {
-            Key = $"PRR{Guid.NewGuid():N}"[..8],
+            Key = $"PRR{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Restrictions Read Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = now,

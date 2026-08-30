@@ -26,7 +26,7 @@ public sealed class CommentAndLabelMutationTests(RocketWikiApiFactory factory) :
         db.Users.Add(creator);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"CML{Guid.NewGuid():N}"[..8], Name = "Comment/Label Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id };
+        var space = new Space { Key = $"CML{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Comment/Label Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
@@ -84,7 +84,7 @@ public sealed class CommentAndLabelMutationTests(RocketWikiApiFactory factory) :
         db.Users.Add(creator);
         await db.SaveChangesAsync();
         // No SpaceGrant at all - nobody has any role, so nobody can view or comment.
-        var space = new Space { Key = $"NOG{Guid.NewGuid():N}"[..8], Name = "No Grants Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id };
+        var space = new Space { Key = $"NOG{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "No Grants Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id };
         db.Spaces.Add(space);
         var page = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "p", Title = "Page", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
         db.Pages.Add(page);

@@ -67,26 +67,42 @@ public class PageService : IPageService
             return PageMutationResult<Page>.Failure(new ForbiddenError(permission.EditDenialReason ?? "forbidden"));
         }
 
+        // URLs are case-insensitive, so a slug is canonicalized (trimmed, lower-cased)
+        // before anything else looks at it. Both generators already emit lower case, but
+        // the create dialog lets the slug be hand-edited and any GraphQL client can send
+        // whatever it likes - so this is the point where "My-Page" becomes "my-page".
+        //
+        // It has to happen BEFORE the two checks below, not just on the way into the row:
+        // the taken-check compares against stored slugs, which are canonical, and under
+        // the BIN2 index (data-model.md) a raw "My-Page" would not match a stored
+        // "my-page". The check would pass, the canonical form would then collide at
+        // commit, and a clean ValidationError would arrive as a unique-index 500.
+        // RocketWikiDbContext canonicalizes at the persistence seam too, as the backstop
+        // for write paths that are not this one.
+        var slug = PageSlugs.Canonical(request.Slug);
+
         // A slug that a route would swallow produces a page that is created and then
         // permanently unreachable, so it is refused rather than accepted. Checked here,
         // on the server, because a client that has not been updated must not be able to
         // skip it.
-        if (PageSlugs.IsReserved(request.Slug))
+        if (PageSlugs.IsReserved(slug))
         {
             return PageMutationResult<Page>.Failure(new ValidationError(
-                $"Slug '{request.Slug}' is reserved — a page cannot use it, because /spaces/{{key}}/{request.Slug} already addresses something else."));
+                $"Slug '{slug}' is reserved — a page cannot use it, because /spaces/{{key}}/{slug} already addresses something else."));
         }
 
         // Unique per SPACE, not per parent: the slug is the page's address
         // (/spaces/{key}/{slug}) and the hierarchy is deliberately absent from it, so
         // that moving a page never changes its URL. Two pages under different parents
-        // sharing a slug would make that address ambiguous.
+        // sharing a slug would make that address ambiguous. Case-insensitively unique,
+        // as of canonical storage: "My-Page" and "my-page" are one address, so they are
+        // one slug, and the second one is refused here rather than at the index.
         var slugTaken = await _db.Pages.AnyAsync(
-            p => p.SpaceId == space.Id && !p.IsDeleted && p.Slug == request.Slug,
+            p => p.SpaceId == space.Id && !p.IsDeleted && p.Slug == slug,
             cancellationToken);
         if (slugTaken)
         {
-            return PageMutationResult<Page>.Failure(new ValidationError($"Slug '{request.Slug}' is already used by another page in this space."));
+            return PageMutationResult<Page>.Failure(new ValidationError($"Slug '{slug}' is already used by another page in this space."));
         }
 
         var now = DateTime.UtcNow;
@@ -95,7 +111,7 @@ public class PageService : IPageService
             SpaceId = space.Id,
             ParentPageId = parent?.Id,
             AncestorPath = parent is null ? "/" : $"{parent.AncestorPath}{parent.Id}/",
-            Slug = request.Slug,
+            Slug = slug,
             Title = request.Title,
             Icon = request.Icon,
             CurrentContent = request.Content,

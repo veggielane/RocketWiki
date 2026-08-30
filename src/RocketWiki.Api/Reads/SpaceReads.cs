@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Services;
 using RocketWiki.Data;
 
 namespace RocketWiki.Api.Reads;
@@ -60,7 +61,12 @@ internal static class SpaceReads
     public static async Task<SpaceReadResult> GetViewableSpaceByKeyAsync(
         RocketWikiDbContext db, Principal principal, string key, CancellationToken cancellationToken)
     {
-        var space = await db.Spaces.FirstOrDefaultAsync(s => s.Key == key, cancellationToken);
+        // Canonicalized so /spaces/eng and /spaces/ENG name the same space (see
+        // SpaceKeys.Canonical). This is the one copy of "look a space up by key" that
+        // both GraphQL and MCP go through, which is why the normalization belongs here
+        // rather than in either caller.
+        var canonicalKey = SpaceKeys.Canonical(key);
+        var space = await db.Spaces.FirstOrDefaultAsync(s => s.Key == canonicalKey, cancellationToken);
         if (space is null)
         {
             return new SpaceReadResult.NotFound();

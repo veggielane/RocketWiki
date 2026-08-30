@@ -93,6 +93,20 @@ describe('crumbsFor', () => {
     expect(PAGE_SUBPAGES.permissions).toBe('Permissions')
   })
 
+  it('prefers the server-canonical space key over the casing in the URL', () => {
+    // URLs are case-insensitive now, so /spaces/eng and /spaces/ENG are one
+    // space. A crumb echoing whichever casing was typed would label the same
+    // place two ways, beside a rail picker showing the canonical name.
+    expect(crumbsFor('/spaces/eng/-/trash', 'ENG').map((c) => c.label)).toEqual(['Spaces', 'ENG', 'Trash'])
+    // The link still points at the URL's own key: it resolves either way, and
+    // rewriting it here would be a redirect disguised as a label.
+    expect(crumbsFor('/spaces/eng/-/trash', 'ENG')[1]?.to).toBe('/spaces/eng')
+  })
+
+  it('falls back to the URL key when no canonical one is known', () => {
+    expect(crumbsFor('/spaces/eng/-/trash').map((c) => c.label)).toEqual(['Spaces', 'eng', 'Trash'])
+  })
+
   it('stops at the space for a page route rather than guessing a title from a slug', () => {
     expect(crumbsFor('/spaces/PROP/stage-two-ignition-anomaly').map((c) => c.label)).toEqual(['Spaces', 'PROP'])
   })

@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Query;
+using RocketWiki.Core.Services;
 
 namespace RocketWiki.Data.Services;
 
@@ -84,6 +85,27 @@ internal static class RqlQueryCompiler
         _ => throw new ArgumentOutOfRangeException(nameof(predicate), predicate.Field, "Unhandled RQL field."),
     };
 
+    /// <summary>
+    /// Label names match <b>exactly</b>, and deliberately do not follow
+    /// <see cref="CompileSpace"/> into case-insensitivity.
+    ///
+    /// <para>A space key is an <i>address</i> — half of <c>/spaces/{key}/{slug}</c>, typed
+    /// by hand, pasted from chat, and case-folded for the same reason every URL is. A
+    /// label is a <i>name</i>: user-chosen, offered by a picker rather than typed from
+    /// memory, and displayed back as written. Folding it would mean either a normalized
+    /// column beside the display name (the PagePropertyKey.KeyNormalized shape, and a real
+    /// product decision about whether "Design" and "design" are one label) or a LOWER()
+    /// comparison that gives up the index. Neither follows from "URLs are
+    /// case-insensitive", so neither is done here.</para>
+    ///
+    /// <para>The BIN2 collation (data-model.md) made this comparison <i>consistent</i>
+    /// rather than stricter in any tier that mattered: SQL Server used to fold it while
+    /// SQLite did not, so the two tiers were enforcing different rules and the looser one
+    /// was the one under test. It is now ordinal everywhere, matching §6.3's doctrine for
+    /// every other user-supplied token. The visible consequence, stated rather than
+    /// discovered: a space can now hold both "Design" and "design" as separate labels on
+    /// SQL Server, as it always could on SQLite.</para>
+    /// </summary>
     private static Expression<Func<Page, bool>> CompileLabel(RqlNode.Predicate predicate)
     {
         switch (predicate.Operator)
@@ -106,12 +128,19 @@ internal static class RqlQueryCompiler
     /// <c>space = "BLACKPROJECT"</c> becomes "no space id matches" whether that key names a
     /// space the caller cannot see or no space at all — identical predicates, identical
     /// empty results, no branch between them.
+    ///
+    /// <para>The key is canonicalized before the lookup, so <c>space = "eng"</c> and
+    /// <c>space = "ENG"</c> are the same query — a space key means the same thing in RQL
+    /// as it does in a URL. The map's own keys come from <c>Space.Key</c>, which is stored
+    /// canonically, so this is a comparison between two canonical forms and stays the
+    /// in-memory ordinal lookup it always was. Note this deliberately does NOT extend to
+    /// <c>label</c>: see <see cref="CompileLabel"/>.</para>
     /// </summary>
     private static Expression<Func<Page, bool>> CompileSpace(
         RqlNode.Predicate predicate, RqlCompilationContext context)
     {
         var spaceIds = TextValues(predicate)
-            .Select(key => context.SpaceIdsByKey.TryGetValue(key, out var id) ? (Guid?)id : null)
+            .Select(key => context.SpaceIdsByKey.TryGetValue(SpaceKeys.Canonical(key), out var id) ? (Guid?)id : null)
             .Where(id => id is not null)
             .Select(id => id!.Value)
             .Distinct()

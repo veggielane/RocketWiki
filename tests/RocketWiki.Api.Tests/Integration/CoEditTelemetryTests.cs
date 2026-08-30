@@ -57,7 +57,7 @@ public sealed class CoEditTelemetryTests(RocketWikiApiFactory factory) : IClassF
 
         var space = new Space
         {
-            Key = $"CT{Guid.NewGuid():N}"[..8], Name = "CoEdit Telemetry Space", OriginInstanceId = "standalone",
+            Key = $"CT{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "CoEdit Telemetry Space", OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id,
         };
         db.Spaces.Add(space);

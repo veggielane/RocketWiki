@@ -202,22 +202,68 @@ offer the rule builder an `engineering` that no token spelling ever matches —
 
 **On an existing database this migration cannot fail and cannot invalidate a
 row.** CI → BIN2 only ever *relaxes* uniqueness, and the unique index already
-prevented a colliding pair from existing, so there is nothing to reconcile. It
-does change *lookup* semantics on a live instance: a stored `ENG` stops
-matching a query for `eng`.
+prevented a colliding pair from existing, so there is nothing to reconcile.
 
-For `Page.Slug` that costs almost nothing in practice, because both slug
-generators already emit lowercase — the SPA's `slugifyTitle`
-(`web/src/pages/pageSlug.ts`) lowercases and then strips everything outside
-`[a-z0-9-]`, and the Confluence importer's `Slugifier` does the same with
-`char.ToLowerInvariant` over ASCII letters and digits. No slug the product
-*derives* can contain an uppercase character, so no URL it produced can break.
-The residual case is a slug **typed by hand**: the create dialog lets the user
-override the derived value, and `PageService.CreatePageAsync` stores what it is
-given verbatim (no case normalization, no character validation beyond the
-reserved `-` segment). If case-insensitive page URLs are wanted, the place to
-decide it is slug *validation* on write — not a collation that would put the
-two tiers back out of step.
+### Canonical forms, and why URLs are still case-insensitive
+
+A case-sensitive index would ordinarily make `/spaces/eng/my-page` a 404 next
+to `/spaces/ENG/My-Page`. It does not, because the two halves of a page address
+are stored in **canonical form** and every lookup **normalizes its input**
+before comparing:
+
+| | Canonical form | Applied by |
+|---|---|---|
+| `Space.Key` | trimmed, UPPER (`ENG`) | `SpaceKeys.Canonical` |
+| `Page.Slug` | trimmed, lower (`my-page`) | `PageSlugs.Canonical` |
+
+Both halves are required and neither works alone. Canonical storage without
+normalized lookups 404s the casing the user typed. Normalized lookups without
+canonical storage are *ambiguous*: `my-page` and `My-Page` could both exist —
+BIN2 sees them as different — and one URL would then address two pages with no
+defined winner. Together they also give something a case-insensitive collation
+could not: a case-sensitive unique index over uniformly-cased values enforces
+**case-insensitive uniqueness**, so creating `My-Page` beside `my-page` is
+refused as taken.
+
+Storage is canonicalized at the **persistence seam**
+(`RocketWikiDbContext.EnsureCanonicalAddresses`, the shape `EnsurePageMarkings`
+established) so no write path can lose it — including the sync importer, which
+may apply a bundle written by an instance older than this rule. The mutation
+services canonicalize the caller's input *as well*, because their "is this
+taken" pre-check has to run against the canonical value: a pre-check on the raw
+value would pass and then hit the unique index at commit, turning a clean
+`ValidationError` into a 500.
+
+Lookups normalize **in the services** rather than at the resolver edge, and the
+choice is deliberate: a new entry point — another resolver, an MCP tool, a
+future REST route — reaches a page or space by name only through
+`PageReadService.FindPageIdBySlugAsync`, `SpaceReads`, `SearchService`,
+`AnalyticsService` or the label listings, so it inherits the rule; an
+edge-level helper is exactly the thing a new entry point forgets.
+
+The `CanonicalizeSpaceKeysAndPageSlugs` migration folds existing rows. It
+**fails loudly** rather than corrupting if two live rows would collide, which
+only a database that spent time between the two migrations can hold.
+
+Two consequences worth stating. **Slug generation was already lowercase on both
+sides** — the SPA's `slugifyTitle` (`web/src/pages/pageSlug.ts`) and the
+Confluence importer's `Slugifier` — so this changes nothing about slugs the
+product *derives*; what it fixes is the hand-edited slug the create dialog
+allows. And **`AuditEvent.SpaceKey` is deliberately not migrated**: the audit
+table is append-only (design.md §7), and rewriting historical rows to tidy a
+report is the wrong instinct. Rows written before this land carry whatever
+casing they were given.
+
+**Labels are deliberately not part of this.** A space key is an address; a label
+is a user-chosen *name*, offered by a picker and displayed as written. Folding
+it would need either a normalized column beside the display name (the
+`PagePropertyKey.KeyNormalized` shape, and a real product decision about whether
+`Design` and `design` are one label) or a `LOWER()` comparison that gives up the
+index — neither of which follows from "URLs are case-insensitive". Label
+matching is therefore ordinal on both providers now, which is *consistent* where
+it used to differ per tier. The visible consequence: a space can hold both
+`Design` and `design` as separate labels on SQL Server, as it always could on
+SQLite.
 
 Hard delete, no query filter — and a key in use cannot be deleted at all
 (the service refuses, naming the usage count), so there is nothing for a

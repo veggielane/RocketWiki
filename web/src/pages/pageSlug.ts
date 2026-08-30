@@ -62,6 +62,41 @@ export function isUsableSlug(slug: string): boolean {
 }
 
 /**
+ * The stored form of a slug someone typed by hand.
+ *
+ * URLs are case-insensitive: the server stores slugs lowercased and resolves a
+ * request whatever case it arrives in. Case-folding ONLY — deliberately not the
+ * full `slugifyTitle` treatment, which strips punctuation, collapses whitespace
+ * to hyphens and trims leading/trailing ones. Running that on every keystroke
+ * would fight the typist: a typed space would become a hyphen before the next
+ * letter arrived, and a trailing hyphen would be eaten as it was typed, so
+ * "post-mortem" could not be reached one character at a time. Lowercasing is
+ * idempotent, removes nothing and cannot move the caret, which is what makes it
+ * safe to apply live.
+ */
+export function canonicalSlug(slug: string): string {
+  return slug.toLowerCase()
+}
+
+/**
+ * Do a stored slug and one out of a URL name the same page?
+ *
+ * The server now resolves `/spaces/ENG/My-Page` to the same page as
+ * `/spaces/eng/my-page`, so a client-side `===` against a route param would
+ * make a correct URL half-work: the page loads (the server resolved it) while
+ * the tree fails to highlight it and the crumb disagrees, which reads as a bug
+ * in the tree rather than as a URL casing difference.
+ */
+export function sameSlug(a: string | null | undefined, b: string | null | undefined): boolean {
+  return a != null && b != null && a.toLowerCase() === b.toLowerCase()
+}
+
+/** The same rule for space keys, which are canonicalised server-side too. */
+export function sameSpaceKey(a: string | null | undefined, b: string | null | undefined): boolean {
+  return a != null && b != null && a.toLowerCase() === b.toLowerCase()
+}
+
+/**
  * Where to send someone who should end up looking at a page.
  *
  * Prefers the readable address, because that is what someone copies out of the

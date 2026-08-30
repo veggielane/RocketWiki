@@ -33,7 +33,7 @@ public sealed class AttachmentEndpointTests(RocketWikiApiFactory factory) : ICla
 
         var space = new Space
         {
-            Key = $"ATT{Guid.NewGuid():N}"[..8],
+            Key = $"ATT{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Attachment Test Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,
@@ -123,7 +123,7 @@ public sealed class AttachmentEndpointTests(RocketWikiApiFactory factory) : ICla
         db.Users.Add(creator);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"VWR{Guid.NewGuid():N}"[..8], Name = "Viewer Only Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id };
+        var space = new Space { Key = $"VWR{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Viewer Only Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id };
         db.Spaces.Add(space);
         // Only a Viewer grant - nobody can edit, so nobody can upload.
         db.AccessRules.Add(new AccessRule

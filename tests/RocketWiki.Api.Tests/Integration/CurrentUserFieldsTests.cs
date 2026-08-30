@@ -107,7 +107,7 @@ public sealed class CurrentUserFieldsTests(RocketWikiApiFactory factory) : IClas
         var now = DateTime.UtcNow;
         var space = new Space
         {
-            Key = $"CUF{Guid.NewGuid():N}"[..8],
+            Key = $"CUF{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "CurrentUser Fields Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = now,

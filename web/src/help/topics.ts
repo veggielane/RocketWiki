@@ -90,6 +90,15 @@ export const HELP_SECTIONS: HelpSection[] = [
 
 export const HELP_TOPICS: HelpTopic[] = HELP_SECTIONS.flatMap((s) => s.topics)
 
+/**
+ * Case-insensitive, like every other address in the app. These slugs are
+ * resolved entirely client-side — there is no server lookup to be lenient on
+ * this reader's behalf — so `/-/docs/Markings` would 404 while
+ * `/spaces/ENG/My-Page` resolves, and the one URL scheme a lost reader is most
+ * likely to have retyped by hand would be the strictest one in the product.
+ */
 export function findHelpTopic(slug: string | undefined): HelpTopic | undefined {
-  return HELP_TOPICS.find((t) => t.slug === slug)
+  if (slug === undefined) return undefined
+  const wanted = slug.toLowerCase()
+  return HELP_TOPICS.find((t) => t.slug.toLowerCase() === wanted)
 }

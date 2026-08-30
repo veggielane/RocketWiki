@@ -117,10 +117,15 @@ public sealed class AnalyticsService(RocketWikiDbContext db, IPageReadService pa
     private async Task<List<Space>?> ResolveAdministeredSpacesAsync(
         string? spaceKey, Principal principal, bool isInstanceAdmin, CancellationToken cancellationToken)
     {
+        // Canonicalized like every other space-key filter (SpaceKeys.Canonical), so a
+        // report requested for "eng" is the ENG report rather than the
+        // not-an-administrator refusal a non-matching key produces.
+        var canonicalKey = SpaceKeys.CanonicalOrNull(spaceKey);
+
         // No archived filter of its own: the DbContext's global query filter already
         // excludes them, and restating it here would be a second rule to keep in step.
         var candidates = await db.Spaces
-            .Where(s => spaceKey == null || s.Key == spaceKey)
+            .Where(s => canonicalKey == null || s.Key == canonicalKey)
             .ToListAsync(cancellationToken);
         if (candidates.Count == 0)
         {

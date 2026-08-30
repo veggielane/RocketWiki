@@ -25,7 +25,7 @@ public sealed class LabelIdReadPathTests(RocketWikiApiFactory factory) : IClassF
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"LI{Guid.NewGuid():N}"[..8], Name = "Label Id Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"LI{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Label Id Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
@@ -85,7 +85,7 @@ public sealed class LabelIdReadPathTests(RocketWikiApiFactory factory) : IClassF
         var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
-        var space = new Space { Key = $"LN{Guid.NewGuid():N}"[..8], Name = "No Role Labels", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"LN{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "No Role Labels", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.Labels.Add(new Label { SpaceId = space.Id, Name = $"hidden-{Guid.NewGuid():N}"[..14] });
         await db.SaveChangesAsync();

@@ -564,7 +564,7 @@ public sealed class PageQueryTests(RocketWikiApiFactory factory) : IClassFixture
         var (space, _) = await SeedSpaceAsync();
         await SeedPageAsync(space, "audited", "Audited Page");
 
-        var marker = $"aud{Guid.NewGuid():N}"[..12];
+        var marker = $"aud{Guid.NewGuid():N}"[..12].ToUpperInvariant();
         var client = CreateUserClient();
         using var _ = await RunAsync(client, $"space = {space.Key} AND title ~ {marker}");
 
@@ -588,7 +588,7 @@ public sealed class PageQueryTests(RocketWikiApiFactory factory) : IClassFixture
         // A page full of list widgets issues several queries in one request; dedup keys on
         // the query text so the second is not swallowed as a duplicate of the first.
         var (space, _) = await SeedSpaceAsync();
-        var marker = $"dup{Guid.NewGuid():N}"[..12];
+        var marker = $"dup{Guid.NewGuid():N}"[..12].ToUpperInvariant();
 
         using var _ = await CreateUserClient().PostGraphQLAsync($$"""
             query {
@@ -606,7 +606,7 @@ public sealed class PageQueryTests(RocketWikiApiFactory factory) : IClassFixture
     [Fact]
     public async Task AnInvalidQueryIsStillAudited()
     {
-        var marker = $"bad{Guid.NewGuid():N}"[..12];
+        var marker = $"bad{Guid.NewGuid():N}"[..12].ToUpperInvariant();
         using var _ = await RunAsync(CreateUserClient(), $"clearance = {marker}");
 
         using var scope = factory.Services.CreateScope();

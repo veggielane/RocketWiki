@@ -4,11 +4,11 @@ import { Box, LinearProgress, Stack, useMediaQuery, useTheme } from '@mui/materi
 import { visuallyHidden } from '@mui/utils'
 import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
 import { useEmojiRegistryFeed } from '../emoji/useEmojiRegistry'
-import { usePageSpaceRefQuery } from '../graphql/generated/graphql'
 import { AppHeader } from './AppHeader'
 import { SideMenu } from './SideMenu'
 import { PageTitleContext, composeDocumentTitle } from './documentTitle'
 import { routeTitleFor } from './routeCrumbs'
+import { useCanonicalSpaceKey } from './useCanonicalSpaceKey'
 
 /**
  * The reading measure for everything in the content region. The template's
@@ -63,12 +63,16 @@ export function AppShell() {
   // Identity-stable so `useDocumentTitle`'s effect does not re-fire every render.
   const registerPageTitle = useCallback((title: string | null) => setPageTitle(title), [])
 
-  // A `/pages/{id}` route names no space in its URL. The breadcrumb asks the
-  // same question for the same route, and urql serves the second caller from
-  // cache rather than issuing a request.
-  const pageId = /^\/pages\/([^/]+)/.exec(pathname)?.[1]
-  const [{ data: pageRef }] = usePageSpaceRefQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
-  const title = pageTitle ?? routeTitleFor(pathname, pageRef?.page?.spaceKey ?? undefined)
+  // The server's spelling of the space key, so a tab opened at `/spaces/eng`
+  // is titled the same as one opened at `/spaces/ENG`. Same hook the breadcrumb
+  // uses, over queries the rail already runs — urql serves both from cache.
+  //
+  // Called on its own line, not inline in the `??` below: the right-hand side of
+  // `??` is skipped when the left is non-null, so a screen that had registered
+  // its own title would silently stop calling the hook and change the hook order
+  // between renders.
+  const canonicalSpaceKey = useCanonicalSpaceKey(pathname)
+  const title = pageTitle ?? routeTitleFor(pathname, canonicalSpaceKey)
 
   useEffect(() => {
     document.title = composeDocumentTitle(title)

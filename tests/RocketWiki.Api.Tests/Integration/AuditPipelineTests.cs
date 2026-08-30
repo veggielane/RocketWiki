@@ -23,7 +23,7 @@ public sealed class AuditPipelineTests(RocketWikiApiFactory factory) : IClassFix
     [Fact]
     public async Task Mutation_WithoutAuditContext_ThrowsAndPersistsNothing()
     {
-        var space = new Space { Key = $"AUD{Guid.NewGuid():N}"[..8], Name = "Audit Test Space", CreatedAtUtc = DateTime.UtcNow };
+        var space = new Space { Key = $"AUD{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Audit Test Space", CreatedAtUtc = DateTime.UtcNow };
         var page = new Page { SpaceId = space.Id, Title = "Test Page", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
 
         using (var scope = factory.Services.CreateScope())

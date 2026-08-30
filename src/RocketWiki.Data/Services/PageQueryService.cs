@@ -115,11 +115,13 @@ public sealed class PageQueryService : IPageQueryService
     /// page in the batch", which is precisely what that overload is for
     /// (<see cref="NotificationReadModelService"/> is the other caller). One query.</para>
     ///
-    /// <para>Ordinal keying, matching <c>SearchService</c>'s <c>s.Key == spaceKey</c> and
-    /// design.md §6.3's exact-match doctrine. A caller who types the wrong case gets the
-    /// empty result a nonexistent key gets, which is the correct behaviour even though it is
-    /// the less friendly one: any case folding here would be a second, looser notion of
-    /// space identity.</para>
+    /// <para>Ordinal keying, and it stays ordinal now that space keys are
+    /// case-insensitive: both sides of the comparison are canonical rather than
+    /// case-folded at compare time. <c>Space.Key</c> is stored canonically
+    /// (RocketWikiDbContext), and <c>RqlQueryCompiler.CompileSpace</c> canonicalizes the
+    /// key an author wrote before looking it up here — so <c>space = "eng"</c> finds ENG
+    /// without this map ever holding a second, looser notion of space identity. That was
+    /// the thing worth avoiding, not the case-insensitivity itself.</para>
     /// </summary>
     private async Task<Dictionary<string, Guid>> LoadSpacesWithAnyRoleAsync(
         Principal principal, CancellationToken cancellationToken)

@@ -1,6 +1,11 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
+using RocketWiki.Core.Events;
+using RocketWiki.Core.Services;
+using RocketWiki.Data.Services;
 using Xunit;
 
 namespace RocketWiki.SqlServer.Tests;
@@ -20,6 +25,8 @@ namespace RocketWiki.SqlServer.Tests;
 /// </summary>
 public sealed class MigrationTests : SqlServerTestBase
 {
+    private static readonly AuditContext AuditCtx = new(AuditChannel.GraphQl, "req-migration", "127.0.0.1");
+
     public MigrationTests(SqlServerContainerFixture fixture)
         : base(fixture)
     {
@@ -47,7 +54,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260829092438_SpaceUniquePageSlug", applied);
         Assert.Contains("20260829134601_AddPageEntries", applied);
         Assert.Contains("20260829192825_BinaryCollationOnStringKeys", applied);
-        Assert.Equal(14, applied.Count);
+        Assert.Contains("20260830055858_CanonicalizeSpaceKeysAndPageSlugs", applied);
+        Assert.Equal(15, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -339,10 +347,12 @@ public sealed class MigrationTests : SqlServerTestBase
                     $"SELECT collation_name FROM sys.columns WHERE object_id = OBJECT_ID('{table}') AND name = '{column}'"));
         }
 
-        // The behaviour, through the unique index that used to fold them together: two
-        // spaces differing only in key case now coexist here exactly as they do on
-        // SQLite. (Whether an instance SHOULD have both is a curation question; the point
-        // is that one answer holds everywhere, rather than the engine deciding.)
+        // The behaviour the two migrations produce TOGETHER, which is the part worth
+        // pinning: BIN2 makes the engine compare ordinally, and canonical storage
+        // (RocketWikiDbContext) makes every stored value one case — so a case-sensitive
+        // unique index enforces case-INsensitive uniqueness. Writing "eng" beside "ENG"
+        // is therefore not two spaces here and one on SQL Server, as it used to be; it is
+        // the same space on both, and the second write collides.
         using var context = CreateContext();
         var actor = Guid.NewGuid();
         context.Users.Add(new User
@@ -352,23 +362,77 @@ public sealed class MigrationTests : SqlServerTestBase
         });
         context.Spaces.Add(new Space
         {
-            Key = "ENG", Name = "Upper", OriginInstanceId = "local-instance",
+            Key = "eng", Name = "Lower on the way in", OriginInstanceId = "local-instance",
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = actor,
         });
-        context.Spaces.Add(new Space
-        {
-            Key = "eng", Name = "Lower", OriginInstanceId = "local-instance",
-            CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = actor,
-        });
-
         await context.SaveChangesAsync();
 
-        Assert.Equal(2, await ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM Spaces WHERE [Key] IN ('ENG', 'eng')"));
-        // And a lookup no longer folds: the ordinal predicate the application writes is
-        // now the ordinal predicate the engine runs (design.md §6.3).
-        Assert.Equal(1, await ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM Spaces WHERE [Key] = 'eng'"));
+        // Stored canonically regardless of what the caller wrote.
+        Assert.Equal(1, await ExecuteScalarAsync<int>("SELECT COUNT(*) FROM Spaces WHERE [Key] = 'ENG'"));
+        Assert.Equal(0, await ExecuteScalarAsync<int>("SELECT COUNT(*) FROM Spaces WHERE [Key] = 'eng'"));
+
+        using var second = CreateContext();
+        second.Spaces.Add(new Space
+        {
+            Key = "EnG", Name = "A third casing", OriginInstanceId = "local-instance",
+            CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = actor,
+        });
+        await Assert.ThrowsAsync<DbUpdateException>(() => second.SaveChangesAsync());
+    }
+
+    /// <summary>
+    /// The URL round trip on a real engine (design.md §17): a page created with a
+    /// hand-edited mixed-case slug stores lower-case and is addressable in any casing,
+    /// in the same space addressed in any casing.
+    ///
+    /// <para>This tier specifically, because slugs and keys are exactly the class where
+    /// the two providers used to disagree — SQL Server folded case in its default
+    /// collation and SQLite did not, so a SQLite-only proof of case-insensitivity would
+    /// prove nothing about production, and before BinaryCollationOnStringKeys it would
+    /// have passed for the wrong reason (the engine folding, not the application
+    /// canonicalizing).</para>
+    /// </summary>
+    [SqlServerFact]
+    public async Task PageAddress_IsCaseInsensitive_OverTheRealEngine()
+    {
+        using var context = CreateContext();
+        var actor = new User
+        {
+            Subject = $"slug-{Guid.NewGuid()}", DisplayName = "Seeder",
+            CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow,
+        };
+        context.Users.Add(actor);
+        await context.SaveChangesAsync();
+
+        var space = (await new SpaceService(context, "local-instance").CreateAsync(
+            new CreateSpaceRequest("mIxEd", "Mixed", null),
+            new InitialSpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }"""),
+            isInstanceAdmin: true, actor.Id, AuditCtx)).Value;
+        Assert.Equal("MIXED", space.Key);
+
+        var page = (await new PageService(context, "local-instance").CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "My-Runbook", "My Runbook", "# Runbook"),
+            Principal.Create("seed-sub", []), actor.Id, AuditCtx)).Value;
+        Assert.Equal("my-runbook", page.Slug);
+
+        // Every casing of the address resolves the same page - including the one the
+        // author actually typed, which is no longer the stored form.
+        var reads = new PageReadService(context);
+        foreach (var (key, slug) in new[]
+        {
+            ("MIXED", "my-runbook"), ("mixed", "MY-RUNBOOK"), ("mIxEd", "My-Runbook"),
+        })
+        {
+            Assert.Equal(page.Id, await reads.FindPageIdBySlugAsync(key, slug));
+        }
+
+        // And slug uniqueness is case-insensitive with it: the same address in another
+        // casing is refused as taken, not accepted as a second page.
+        var duplicate = await new PageService(context, "local-instance").CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "MY-RUNBOOK", "Clash", "# Clash"),
+            Principal.Create("seed-sub", []), actor.Id, AuditCtx);
+        Assert.False(duplicate.IsSuccess);
+        Assert.IsType<ValidationError>(duplicate.Error);
     }
 
     [SqlServerFact]

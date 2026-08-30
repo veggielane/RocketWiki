@@ -15,6 +15,7 @@ import {
 import { useAnalyticsQuery, useSpaceListQuery } from '../graphql/generated/graphql'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
+import { sameSpaceKey } from './pageSlug'
 import { ActivityChart } from '../analytics/ActivityChart'
 
 /** Windows offered, in days. Kept short and round — a date-range picker invites
@@ -62,7 +63,10 @@ export function AnalyticsPage() {
   // Names the space in the heading. The same query the rail runs on every
   // route, so urql answers it from cache rather than issuing a request.
   const [{ data: spaceList }] = useSpaceListQuery({ pause: !spaceKey })
-  const spaceName = spaceList?.spaces.find((s) => s.key === spaceKey)?.name
+  // Case-insensitive: `spaceKey` is a route param and the server resolves it
+  // whatever case it arrives in, so an exact match would leave the heading
+  // falling back to the raw URL key on a correctly-resolving address.
+  const spaceName = spaceList?.spaces.find((s) => sameSpaceKey(s.key, spaceKey))?.name
   useDocumentTitle(spaceKey ? `Analytics — ${spaceName ?? spaceKey}` : 'Site analytics')
 
   if (fetching) {

@@ -48,7 +48,7 @@ public sealed class AttachmentSizeLimitTests : IClassFixture<RocketWikiApiFactor
         db.Users.Add(creator);
         var space = new Space
         {
-            Key = $"SZL{Guid.NewGuid():N}"[..8],
+            Key = $"SZL{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Size Limit Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,

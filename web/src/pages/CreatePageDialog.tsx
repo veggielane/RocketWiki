@@ -10,7 +10,7 @@ import {
   Stack,
   TextField,
 } from '@mui/material'
-import { isReservedSlug, isUsableSlug, slugifyTitle } from './pageSlug'
+import { canonicalSlug, isReservedSlug, isUsableSlug, slugifyTitle } from './pageSlug'
 import type { ParentOption } from './parentOptions'
 import { PageIconPicker } from './PageIconPicker'
 import type { PageIcon } from '../graphql/generated/graphql'
@@ -147,7 +147,12 @@ export function CreatePageDialog({
             value={effectiveSlug}
             onChange={(e) => {
               setSlugEdited(true)
-              setSlug(e.target.value)
+              // Folded to lower case in the field itself, not just on submit.
+              // The server stores slugs lowercased, so a field showing `My-Page`
+              // while the page is created at `my-page` would be the UI promising
+              // an address the server does not keep — and the first the author
+              // hears of it is the URL after Create.
+              setSlug(canonicalSlug(e.target.value))
             }}
             fullWidth
             helperText={
@@ -155,7 +160,7 @@ export function CreatePageDialog({
                 ? `"-" is reserved for this space's own settings pages — pick another slug.`
                 : title.trim().length > 0 && !isUsableSlug(effectiveSlug)
                   ? 'This title has no characters a URL can use — type a slug.'
-                  : 'The page address: /spaces/{key}/{slug}. Derived from the title until you change it.'
+                  : 'The page address: /spaces/{key}/{slug}. Always lower case; derived from the title until you change it.'
             }
             error={title.trim().length > 0 && !isUsableSlug(effectiveSlug)}
           />

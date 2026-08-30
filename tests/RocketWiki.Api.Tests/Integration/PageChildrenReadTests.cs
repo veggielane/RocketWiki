@@ -55,7 +55,7 @@ public sealed class PageChildrenReadTests(RocketWikiApiFactory factory) : IClass
         var now = DateTime.UtcNow;
         var space = new Space
         {
-            Key = $"KID{Guid.NewGuid():N}"[..8], Name = "Children Space",
+            Key = $"KID{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Children Space",
             OriginInstanceId = "standalone", CreatedAtUtc = now, CreatedByUserId = creator.Id,
         };
         db.Spaces.Add(space);

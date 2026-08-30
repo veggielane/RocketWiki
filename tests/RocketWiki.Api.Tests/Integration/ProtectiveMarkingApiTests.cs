@@ -47,7 +47,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
         var space = new Space
         {
-            Key = $"PMK{Guid.NewGuid():N}"[..8],
+            Key = $"PMK{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Protective Marking Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,
@@ -601,7 +601,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
             var now = DateTime.UtcNow;
             var space = new Space
             {
-                Key = $"ANC{Guid.NewGuid():N}"[..8], Name = "Ancestor Space",
+                Key = $"ANC{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Ancestor Space",
                 OriginInstanceId = "standalone", CreatedAtUtc = now, CreatedByUserId = creator.Id,
             };
             db.Spaces.Add(space);

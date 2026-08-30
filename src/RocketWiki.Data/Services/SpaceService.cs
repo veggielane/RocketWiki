@@ -35,16 +35,25 @@ public class SpaceService : ISpaceService
             return PageMutationResult<Space>.Failure(new ValidationError($"Invalid initial grant expression: {parseError}"));
         }
 
-        var keyTaken = await _db.Spaces.AnyAsync(s => s.Key == request.Key, cancellationToken);
+        // URLs are case-insensitive, so a key is canonicalized (trimmed, upper-cased)
+        // before anything else looks at it — see SpaceKeys.Canonical. Canonicalized here
+        // rather than only at the persistence seam for the same reason PageService
+        // canonicalizes a slug: the taken-check below compares against stored keys, which
+        // are canonical, and under the BIN2 index a raw "eng" would not match a stored
+        // "ENG" — the check would pass and the unique index would then turn a clean
+        // ValidationError into a 500.
+        var key = SpaceKeys.Canonical(request.Key);
+
+        var keyTaken = await _db.Spaces.AnyAsync(s => s.Key == key, cancellationToken);
         if (keyTaken)
         {
-            return PageMutationResult<Space>.Failure(new ValidationError($"Space key '{request.Key}' is already in use."));
+            return PageMutationResult<Space>.Failure(new ValidationError($"Space key '{key}' is already in use."));
         }
 
         var now = DateTime.UtcNow;
         var space = new Space
         {
-            Key = request.Key,
+            Key = key,
             Name = request.Name,
             Description = request.Description,
             OriginInstanceId = _localInstanceId, // native space - created here, not a replica

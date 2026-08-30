@@ -76,11 +76,18 @@ public class SearchService : ISearchService
 
         var overFetchCount = maxResults * OverFetchMultiplier;
 
-        var keywordCandidates = _db.Database.ProviderName == SqlServerProviderName
-            ? await SearchViaFullTextAsync(request.Query, request.SpaceKey, overFetchCount, cancellationToken)
-            : await SearchViaLikeAsync(request.Query, request.SpaceKey, overFetchCount, cancellationToken);
+        // Canonicalized once, here, rather than in each of the four branches below - the
+        // space facet reaches the database through all of them (two raw-SQL, two LINQ),
+        // and normalizing per-branch is how one of them would eventually be missed.
+        // Stored keys are canonical (RocketWikiDbContext), so this is what lets a facet
+        // of "eng" narrow to ENG under the BIN2 index.
+        var spaceKey = SpaceKeys.CanonicalOrNull(request.SpaceKey);
 
-        var vectorHits = await SearchViaVectorsAsync(request.Query, request.SpaceKey, overFetchCount, cancellationToken);
+        var keywordCandidates = _db.Database.ProviderName == SqlServerProviderName
+            ? await SearchViaFullTextAsync(request.Query, spaceKey, overFetchCount, cancellationToken)
+            : await SearchViaLikeAsync(request.Query, spaceKey, overFetchCount, cancellationToken);
+
+        var vectorHits = await SearchViaVectorsAsync(request.Query, spaceKey, overFetchCount, cancellationToken);
 
         var (candidates, chunkHints) = await FuseAsync(keywordCandidates, vectorHits, cancellationToken);
 

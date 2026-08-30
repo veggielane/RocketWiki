@@ -289,6 +289,11 @@ public class BundleImportService : IBundleImportService
         page.SpaceId = payload.GetProperty("spaceId").GetGuid();
         page.ParentPageId = GetNullableGuid(payload, "parentPageId");
         page.AncestorPath = payload.GetProperty("ancestorPath").GetString()!;
+        // Assigned raw on purpose: RocketWikiDbContext canonicalizes Slug at the
+        // persistence seam, which is precisely the case this import is - a bundle written
+        // by an instance older than the case-insensitive-URL rule can carry a mixed-case
+        // slug, and it must land in the replica's canonical form rather than as an address
+        // that resolves on low and 404s on high. Same for the replica space's Key below.
         page.Slug = payload.GetProperty("slug").GetString()!;
         page.Title = payload.GetProperty("title").GetString()!;
         // Optional on the wire (bundles written before icons existed have no such

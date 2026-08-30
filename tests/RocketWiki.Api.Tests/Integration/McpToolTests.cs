@@ -62,7 +62,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
 
         var space = new Space
         {
-            Key = $"MCP{Guid.NewGuid():N}"[..8],
+            Key = $"MCP{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "MCP Test Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,
@@ -390,7 +390,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
             var creator = await db.Users.FirstAsync();
             var hidden = new Space
             {
-                Key = $"HID{Guid.NewGuid():N}"[..8],
+                Key = $"HID{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
                 Name = "Hidden Space",
                 OriginInstanceId = "standalone",
                 CreatedAtUtc = DateTime.UtcNow,
@@ -469,7 +469,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
             var creator = await db.Users.FirstAsync();
             var ungranted = new Space
             {
-                Key = $"UGR{Guid.NewGuid():N}"[..8],
+                Key = $"UGR{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
                 Name = "Ungranted",
                 OriginInstanceId = "standalone",
                 CreatedAtUtc = DateTime.UtcNow,
@@ -525,7 +525,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
             var creator = await db.Users.FirstAsync();
             var ungranted = new Space
             {
-                Key = $"UGA{Guid.NewGuid():N}"[..8],
+                Key = $"UGA{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
                 Name = "Ungranted Audited",
                 OriginInstanceId = "standalone",
                 CreatedAtUtc = DateTime.UtcNow,

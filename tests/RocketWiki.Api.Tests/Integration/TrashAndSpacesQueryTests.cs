@@ -19,7 +19,7 @@ public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : ICl
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
 
-        var space = new Space { Key = $"TR{Guid.NewGuid():N}"[..8], Name = "Trash Test Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"TR{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Trash Test Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
@@ -78,7 +78,7 @@ public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : ICl
         var otherSeeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Other Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
         db.Users.Add(otherSeeder);
         await db.SaveChangesAsync();
-        var spaceTheyCannotSee = new Space { Key = $"HD{Guid.NewGuid():N}"[..8], Name = "Hidden Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = otherSeeder.Id };
+        var spaceTheyCannotSee = new Space { Key = $"HD{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Hidden Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = otherSeeder.Id };
         db.Spaces.Add(spaceTheyCannotSee);
         // No grant at all for this space - nobody has any role in it.
         await db.SaveChangesAsync();
@@ -102,7 +102,7 @@ public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : ICl
         var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
-        var space = new Space { Key = $"NR{Guid.NewGuid():N}"[..8], Name = "No Role Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"NR{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "No Role Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         await db.SaveChangesAsync();
 
@@ -121,7 +121,7 @@ public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : ICl
         var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
         db.Users.Add(seeder);
         await db.SaveChangesAsync();
-        var space = new Space { Key = $"GR{Guid.NewGuid():N}"[..8], Name = "Grants Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
+        var space = new Space { Key = $"GR{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Grants Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
         // Two grants: everyone is a Viewer, and a specific "boss" group is SpaceAdmin.
         db.AccessRules.Add(new AccessRule

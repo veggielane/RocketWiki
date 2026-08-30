@@ -274,4 +274,141 @@ public class PageSlugAddressTests : SqliteTestBase
         Assert.Equal(newParent.Id, (await context.Pages.AsNoTracking()
             .FirstAsync(p => p.Id == created.Value.Id)).ParentPageId);
     }
+
+    // --- Case-insensitive addressing -------------------------------------------------
+
+    /// <summary>
+    /// Both generators already emit lower case, but the create dialog lets the slug be
+    /// hand-edited and any GraphQL client can send what it likes — so the canonical form
+    /// is applied on write rather than assumed. Storing it is what lets the lookup
+    /// normalize without becoming ambiguous: with "My-Page" and "my-page" both storable,
+    /// one address would resolve to two pages.
+    /// </summary>
+    [Fact]
+    public async Task CreatePage_WithAHandEditedMixedCaseSlug_StoresTheCanonicalLowerCaseForm()
+    {
+        var (context, space, actor) = await SeedAsync();
+        using var _ = context;
+
+        var created = await new PageService(context, LocalInstanceId).CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "  My-Runbook  ", "My Runbook", "# a"),
+            EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.True(created.IsSuccess);
+        Assert.Equal("my-runbook", created.Value.Slug);
+        Assert.Equal("my-runbook", (await context.Pages.AsNoTracking()
+            .FirstAsync(p => p.Id == created.Value.Id)).Slug);
+    }
+
+    /// <summary>A URL is case-insensitive in both halves — the space key and the slug —
+    /// so every casing of an address names the same page.</summary>
+    [Theory]
+    [InlineData("ENG", "launch-notes")]
+    [InlineData("eng", "launch-notes")]
+    [InlineData("ENG", "LAUNCH-NOTES")]
+    [InlineData("eNg", "Launch-Notes")]
+    public async Task FindPageIdBySlug_ResolvesRegardlessOfCase(string spaceKey, string slug)
+    {
+        var (context, space, actor) = await SeedAsync();
+        using var _ = context;
+        Assert.Equal("ENG", space.Key); // TestData's key, canonical on write
+
+        var created = await new PageService(context, LocalInstanceId).CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "launch-notes", "Launch notes", "# a"),
+            EditorPrincipal(), actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+
+        Assert.Equal(created.Value.Id, await new PageReadService(context).FindPageIdBySlugAsync(spaceKey, slug));
+    }
+
+    /// <summary>
+    /// Uniqueness follows the address, not the bytes: two slugs that fold together are
+    /// one address, so the second is refused at create time with the ordinary
+    /// ValidationError rather than reaching the unique index as a 500 (which is what a
+    /// taken-check on the raw value, rather than the canonical one, would have produced).
+    /// </summary>
+    [Fact]
+    public async Task CreatePage_WithASlugDifferingOnlyInCase_IsRefusedAsTaken()
+    {
+        var (context, space, actor) = await SeedAsync();
+        using var _ = context;
+        var service = new PageService(context, LocalInstanceId);
+
+        Assert.True((await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "my-page", "First", "# a"),
+            EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+
+        var clash = await service.CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "My-Page", "Second", "# b"),
+            EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(clash.IsSuccess);
+        Assert.IsType<ValidationError>(clash.Error);
+    }
+
+    /// <summary>The reserved-segment refusal is applied to the canonical form too, so
+    /// padding or casing cannot smuggle a page onto the one address a space route
+    /// already owns.</summary>
+    [Fact]
+    public async Task CreatePage_WithTheSystemSegmentAfterCanonicalization_IsStillRefused()
+    {
+        var (context, space, actor) = await SeedAsync();
+        using var _ = context;
+
+        var created = await new PageService(context, LocalInstanceId).CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "  -  ", "Sneaky", "# a"),
+            EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(created.IsSuccess);
+        Assert.IsType<ValidationError>(created.Error);
+    }
+
+    /// <summary>
+    /// A space key is canonicalized on write too — upper, the ENG shape data-model.md's
+    /// own example uses — and a key differing only in case is the same space, so the
+    /// second create is refused rather than producing a second space one URL would
+    /// address ambiguously.
+    /// </summary>
+    [Fact]
+    public async Task CreateSpace_CanonicalizesTheKey_AndRefusesOneDifferingOnlyInCase()
+    {
+        var actor = TestData.NewUser();
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var grant = new InitialSpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }""");
+
+        var created = await service.CreateAsync(
+            new CreateSpaceRequest(" mIxEd ", "Mixed", null), grant, isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+        Assert.Equal("MIXED", created.Value.Key);
+
+        var clash = await service.CreateAsync(
+            new CreateSpaceRequest("mixed", "Clash", null), grant, isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.False(clash.IsSuccess);
+        Assert.IsType<ValidationError>(clash.Error);
+    }
+
+    /// <summary>
+    /// design.md §12: a bundle written by an instance older than this rule can carry a
+    /// mixed-case slug, and it must land canonical on the replica — otherwise the page
+    /// would be addressable on low and 404 on high. Covered by the persistence-seam
+    /// backstop rather than by the importer remembering, which is the point of putting it
+    /// there; asserted through a direct write for the same reason.
+    /// </summary>
+    [Fact]
+    public async Task AWriteThatBypassesTheServices_IsStillCanonicalizedAtThePersistenceSeam()
+    {
+        var (context, space, _) = await SeedAsync();
+        using var _unused = context;
+
+        var page = TestData.NewPage(space, "Imported-Slug");
+        context.Pages.Add(page);
+        context.SaveChanges();
+
+        Assert.Equal("imported-slug", (await context.Pages.AsNoTracking()
+            .FirstAsync(p => p.Id == page.Id)).Slug);
+    }
 }

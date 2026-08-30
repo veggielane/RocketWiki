@@ -33,6 +33,39 @@ describe('CreatePageDialog', () => {
     expect(slugBox().value).toBe('static-fire-notes')
   })
 
+  it('folds a hand-typed slug to lower case in the field itself', () => {
+    // The server stores slugs lowercased, so a field reading "My-Page" while the
+    // page is created at "my-page" would be the UI promising an address the
+    // server does not keep — first noticed in the URL bar after Create.
+    open()
+    fireEvent.change(slugBox(), { target: { value: 'SF-2026' } })
+    expect(slugBox().value).toBe('sf-2026')
+  })
+
+  it('folds as you type without eating characters mid-word', () => {
+    // Case-folding only. A full re-slugify per keystroke would trim the trailing
+    // hyphen and "post-mortem" could never be typed one character at a time.
+    open()
+    fireEvent.change(slugBox(), { target: { value: 'Post-' } })
+    expect(slugBox().value).toBe('post-')
+    fireEvent.change(slugBox(), { target: { value: 'post-Mortem' } })
+    expect(slugBox().value).toBe('post-mortem')
+  })
+
+  it('submits the folded slug, not the typed one', () => {
+    const onConfirm = vi.fn()
+    open({ onConfirm })
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Static fire' } })
+    fireEvent.change(slugBox(), { target: { value: 'SF-2026' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(onConfirm).toHaveBeenCalledWith({
+      title: 'Static fire',
+      slug: 'sf-2026',
+      parentPageId: null,
+      icon: null,
+    })
+  })
+
   it('stops tracking the title once the slug is edited by hand', () => {
     // A slug is part of the page's URL — silently rewriting one someone set
     // deliberately would be the wrong kind of helpful.

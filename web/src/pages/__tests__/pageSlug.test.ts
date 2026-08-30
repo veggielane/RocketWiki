@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { isReservedSlug, isUsableSlug, pageHref, slugifyTitle } from '../pageSlug'
+import {
+  canonicalSlug,
+  isReservedSlug,
+  isUsableSlug,
+  pageHref,
+  sameSlug,
+  sameSpaceKey,
+  slugifyTitle,
+} from '../pageSlug'
 
 describe('slugifyTitle', () => {
   it('lowercases and hyphenates', () => {
@@ -87,5 +95,53 @@ describe('pageHref', () => {
 
   it('encodes both segments', () => {
     expect(pageHref('R&D', 'a b', 'page-1')).toBe('/spaces/R%26D/a%20b')
+  })
+})
+
+/**
+ * URLs are case-insensitive: the server stores slugs lowercased and resolves a
+ * request whatever case it arrives in. The client has to agree, or a correct URL
+ * half-works — the page loads because the server resolved it, while the tree
+ * fails to highlight it and the crumb disagrees.
+ */
+describe('canonicalSlug', () => {
+  it('folds case', () => {
+    expect(canonicalSlug('My-Page')).toBe('my-page')
+    expect(canonicalSlug('SF-2026')).toBe('sf-2026')
+  })
+
+  it('changes nothing else, so it is safe to run on every keystroke', () => {
+    // Deliberately NOT slugifyTitle: that strips punctuation, turns spaces into
+    // hyphens and trims trailing ones, so applied live a typed space would
+    // become a hyphen before the next letter arrived and "post-mortem" could
+    // not be reached one character at a time.
+    expect(canonicalSlug('post-')).toBe('post-')
+    expect(canonicalSlug('a b')).toBe('a b')
+    expect(canonicalSlug('what?')).toBe('what?')
+  })
+
+  it('is idempotent', () => {
+    expect(canonicalSlug(canonicalSlug('My-Page'))).toBe(canonicalSlug('My-Page'))
+  })
+})
+
+describe('sameSlug / sameSpaceKey', () => {
+  it('match across case, so a wrong-case URL still highlights its page', () => {
+    expect(sameSlug('my-page', 'My-Page')).toBe(true)
+    expect(sameSlug('my-page', 'MY-PAGE')).toBe(true)
+    expect(sameSpaceKey('ENG', 'eng')).toBe(true)
+  })
+
+  it('still distinguishes genuinely different names', () => {
+    expect(sameSlug('my-page', 'my-other-page')).toBe(false)
+    expect(sameSpaceKey('ENG', 'OPS')).toBe(false)
+  })
+
+  it('treats absent as matching nothing, including another absent', () => {
+    // A page route carries no slug and a space route no page id; two unknowns
+    // are not the same place, and `undefined === undefined` would say they were.
+    expect(sameSlug(undefined, undefined)).toBe(false)
+    expect(sameSlug('my-page', undefined)).toBe(false)
+    expect(sameSpaceKey(null, null)).toBe(false)
   })
 })

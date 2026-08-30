@@ -73,7 +73,7 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
 
         var space = new Space
         {
-            Key = $"TEL{Guid.NewGuid():N}"[..8],
+            Key = $"TEL{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Telemetry Hygiene Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,

@@ -40,7 +40,7 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
 
         var space = new Space
         {
-            Key = $"DRA{Guid.NewGuid():N}"[..8],
+            Key = $"DRA{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Denied Read Audit Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = DateTime.UtcNow,
@@ -255,7 +255,7 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
             db.Users.Add(creator);
             var space = new Space
             {
-                Key = $"NGR{Guid.NewGuid():N}"[..8],
+                Key = $"NGR{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
                 Name = "No Grants Space",
                 OriginInstanceId = "standalone",
                 CreatedAtUtc = DateTime.UtcNow,
@@ -305,7 +305,7 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
             db.Users.Add(creator);
             var space = new Space
             {
-                Key = $"NSR{Guid.NewGuid():N}"[..8],
+                Key = $"NSR{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
                 Name = "No Role Space",
                 OriginInstanceId = "standalone",
                 CreatedAtUtc = DateTime.UtcNow,
@@ -319,7 +319,7 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
 
         var client = factory.CreateClient();
         client.SetTestUser(sub: $"roleless-{Guid.NewGuid()}");
-        var missingKey = $"MIS{Guid.NewGuid():N}"[..8];
+        var missingKey = $"MIS{Guid.NewGuid():N}"[..8].ToUpperInvariant();
 
         var deniedResponse = await client.PostAsJsonAsync("/graphql", new { query = $$"""{ space(key: "{{spaceKey}}") { id name } }""" });
 

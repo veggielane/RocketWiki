@@ -42,7 +42,7 @@ public sealed class PageTreeRestrictionMarkerTests(RocketWikiApiFactory factory)
         var now = DateTime.UtcNow;
         var space = new Space
         {
-            Key = $"TRM{Guid.NewGuid():N}"[..8],
+            Key = $"TRM{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
             Name = "Tree Marker Space",
             OriginInstanceId = "standalone",
             CreatedAtUtc = now,
