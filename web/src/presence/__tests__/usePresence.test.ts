@@ -111,3 +111,68 @@ describe('usePresence', () => {
     expect(transport.leftPages).toEqual(['page-1'])
   })
 })
+
+/**
+ * Presence after a transient drop.
+ *
+ * `withAutomaticReconnect` comes back on a NEW ConnectionId, and hub groups are
+ * keyed on connection id — so the page group still holds only the dead one. The
+ * viewer disappears from everyone else's list and receives no further
+ * ViewersChanged/PointerMoved, silently, until they navigate. Nothing leaks
+ * (server-side cleanup is correct); presence just dies. The co-edit provider
+ * already rejoined on this signal — this half was simply missing.
+ */
+describe('usePresence — rejoin after reconnect', () => {
+  it('rejoins the page when the connection comes back', () => {
+    const transport = new FakePresenceTransport()
+    renderHook(() => usePresence('page-1', transport))
+    expect(transport.joinedPages).toEqual(['page-1'])
+
+    act(() => transport.emitReconnected())
+
+    expect(transport.joinedPages).toEqual(['page-1', 'page-1'])
+    // A rejoin is not a leave — the old connection is already gone server-side.
+    expect(transport.leftPages).toEqual([])
+  })
+
+  it('rejoins the page currently being viewed, not the one joined at mount', () => {
+    const transport = new FakePresenceTransport()
+    const { rerender } = renderHook(({ pageId }) => usePresence(pageId, transport), {
+      initialProps: { pageId: 'page-1' },
+    })
+    rerender({ pageId: 'page-2' })
+    const before = transport.joinedPages.length
+
+    act(() => transport.emitReconnected())
+
+    expect(transport.joinedPages).toHaveLength(before + 1)
+    expect(transport.joinedPages.at(-1)).toBe('page-2')
+  })
+
+  it('drops the pointers held from before the drop', () => {
+    // They are positions from a connection that no longer exists; the fresh
+    // ViewersChanged that follows the rejoin is the authority.
+    const transport = new FakePresenceTransport()
+    const { result } = renderHook(() => usePresence('page-1', transport))
+    act(() => {
+      transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00', hasAvatar: false }])
+      transport.emitPointer({ userId: 'u1', displayName: 'Ada', colour: '#f00', x: 0.5, y: 0.5 })
+    })
+    expect(result.current.pointers.size).toBe(1)
+
+    act(() => transport.emitReconnected())
+
+    expect(result.current.pointers.size).toBe(0)
+  })
+
+  it('stops rejoining once unmounted — a torn-down page must not come back', () => {
+    const transport = new FakePresenceTransport()
+    const { unmount } = renderHook(() => usePresence('page-1', transport))
+    unmount()
+    const joinsAfterUnmount = transport.joinedPages.length
+
+    act(() => transport.emitReconnected())
+
+    expect(transport.joinedPages).toHaveLength(joinsAfterUnmount)
+  })
+})

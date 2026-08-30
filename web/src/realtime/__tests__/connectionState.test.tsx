@@ -23,6 +23,7 @@ function makeTransport() {
     onViewersChanged: () => () => {},
     onPointerMoved: () => () => {},
     sendPointerPosition: () => {},
+    onReconnected: () => () => {},
     onConnectionStateChanged: (handler) => {
       emit = handler
       return () => {
@@ -62,6 +63,7 @@ describe('useRealtimeConnection', () => {
       onViewersChanged: () => () => {},
       onPointerMoved: () => () => {},
       sendPointerPosition: () => {},
+      onReconnected: () => () => {},
     }
     render(<Probe transport={silent} />)
     expect(screen.getByTestId('state')).toHaveTextContent('connected')
@@ -75,6 +77,7 @@ describe('useRealtimeConnection', () => {
       onViewersChanged: () => () => {},
       onPointerMoved: () => () => {},
       sendPointerPosition: () => {},
+      onReconnected: () => () => {},
       onConnectionStateChanged: () => unsubscribe,
     }
     const { unmount } = render(<Probe transport={transport} />)

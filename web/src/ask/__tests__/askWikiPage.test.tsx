@@ -375,3 +375,73 @@ describe('AskWikiPage — unavailable payload facts (§18 degradation, never raw
     expect(mock.operations).toHaveLength(0)
   })
 })
+
+/**
+ * A question the server refused for length.
+ *
+ * The refusal is the design: an over-long question is rejected outright rather
+ * than truncated, so the person who wrote it decides what to cut instead of
+ * silently receiving an answer to some prefix of what they asked. Softening
+ * that into a generic failure would throw away the only reason the server
+ * behaves this way.
+ */
+describe('AskWikiPage — QUESTION_TOO_LONG', () => {
+  // Trimmed, because the composer trims before sending — the length the page
+  // reports is the length of what actually went.
+  const LONG = 'why does the turbopump cavitate '.repeat(80).trim()
+
+  it('says it was refused, not shortened, and that nothing was answered', async () => {
+    renderAsk(() => unavailable('QUESTION_TOO_LONG'))
+    askQuestion(LONG)
+
+    const copy = await screen.findByText(/too long for this wiki/)
+    expect(copy).toHaveTextContent(/refused rather than shortened for you/)
+    expect(copy).toHaveTextContent(/nothing was answered/)
+  })
+
+  it('states the length of the question the user actually sent', async () => {
+    // The instance's limit is server configuration and is not on the wire, so
+    // the SPA cannot quote it without guessing. What it can state truthfully is
+    // the size of what was just typed — which is also what tells you how much
+    // to cut.
+    renderAsk(() => unavailable('QUESTION_TOO_LONG'))
+    askQuestion(LONG)
+
+    expect(await screen.findByText(new RegExp(`Yours was ${LONG.length.toLocaleString()} characters`))).toBeInTheDocument()
+  })
+
+  it('quotes no invented character limit', async () => {
+    renderAsk(() => unavailable('QUESTION_TOO_LONG'))
+    askQuestion(LONG)
+
+    const copy = await screen.findByText(/too long for this wiki/)
+    // 2,000 is the server's DEFAULT, not this instance's answer. Printing it
+    // would teach a limit an operator may never have configured.
+    expect(copy.textContent).not.toMatch(/2,?000/)
+  })
+
+  it('leaves the composer in place so the question can be shortened and re-asked', async () => {
+    renderAsk(() => unavailable('QUESTION_TOO_LONG'))
+    askQuestion(LONG)
+    await screen.findByText(/too long for this wiki/)
+
+    expect(screen.getByLabelText('Ask a question')).toBeInTheDocument()
+  })
+
+  it('offers a search escape hatch that is not itself over-long', async () => {
+    renderAsk(() => unavailable('QUESTION_TOO_LONG'))
+    askQuestion(LONG)
+
+    const link = await screen.findByRole('link', { name: 'search for the words' })
+    const href = link.getAttribute('href') ?? ''
+    expect(href.startsWith('/search?q=')).toBe(true)
+    expect(href.length).toBeLessThan(LONG.length)
+  })
+
+  it('has no axe violations in the refused state', async () => {
+    renderAsk(() => unavailable('QUESTION_TOO_LONG'))
+    askQuestion(LONG)
+    await screen.findByText(/too long for this wiki/)
+    await expectNoAxeViolations()
+  })
+})

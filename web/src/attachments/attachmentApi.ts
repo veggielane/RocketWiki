@@ -8,6 +8,20 @@ import { authHeaders } from '../http/authedFetch'
  */
 const ATTACHMENTS_BASE = '/attachments'
 
+/**
+ * Every id that reaches these routes is interpolated through here.
+ *
+ * Neither id is typed by this app. `pageId` comes from the route, and — the
+ * one that matters — the download id is whatever follows `attachment://` in
+ * page Markdown (`editor/nodes/AttachmentImageView.tsx` slices the scheme off
+ * and passes the rest through). Page content is written by other users, so an
+ * author could store `![x](attachment://../../users/someone/avatar)` and every
+ * reader's browser would issue an authenticated same-origin GET to that path.
+ * Encoding keeps an id one path segment, whatever it contains — the same fix
+ * the emoji routes already apply to their names.
+ */
+const segment = (value: string): string => encodeURIComponent(value)
+
 export interface UploadedAttachment {
   id: string
   fileName: string
@@ -20,7 +34,7 @@ export async function uploadAttachment(pageId: string, file: File): Promise<Uplo
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(`${ATTACHMENTS_BASE}/${pageId}`, {
+  const response = await fetch(`${ATTACHMENTS_BASE}/${segment(pageId)}`, {
     method: 'POST',
     headers: authHeaders(),
     body: formData,
@@ -42,7 +56,7 @@ export async function uploadAttachment(pageId: string, file: File): Promise<Uplo
  * and attachment list actually consume this.
  */
 export async function fetchAttachmentBlob(id: string): Promise<Blob> {
-  const response = await fetch(`${ATTACHMENTS_BASE}/${id}`, { headers: authHeaders() })
+  const response = await fetch(`${ATTACHMENTS_BASE}/${segment(id)}`, { headers: authHeaders() })
   if (!response.ok) {
     // Deliberately the same error for "doesn't exist" and "exists but you
     // can't view it" — design.md §6.7's "absent rather than forbidden"

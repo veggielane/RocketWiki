@@ -64,6 +64,22 @@ export function describeAskUnavailable(reason: AskWikiUnavailableReason | 'REQUE
       }
     case 'NOT_CONFIGURED':
       return { summary: "The wiki assistant isn't configured on this instance.", pointsToSettings: false }
+    case 'QUESTION_TOO_LONG':
+      // Says REFUSED, not trimmed, and that is the whole point of the copy.
+      // The server rejects an over-long question outright rather than
+      // truncating it, so that the person who wrote it decides what to cut
+      // instead of silently getting an answer to some prefix of what they
+      // asked. A generic "something went wrong" would throw that away.
+      //
+      // No number: the limit is per-instance configuration (`Ai:MaxQuestionChars`)
+      // and is not on the wire, so any figure quoted here would be this
+      // client's guess about someone else's deployment. The ask page adds the
+      // one length it can state truthfully — the one the user just typed.
+      return {
+        summary:
+          "That question is too long for this wiki, so it wasn't sent to the assistant and nothing was answered. It is refused rather than shortened for you, so that what gets cut is your choice.",
+        pointsToSettings: false,
+      }
     case 'REQUEST_FAILED':
       return { summary: "Couldn't reach the wiki API to ask this. Check your connection and retry.", pointsToSettings: false }
   }

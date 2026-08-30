@@ -354,6 +354,24 @@ function TranscriptResult({ entry, onRetry }: { entry: TranscriptEntry; onRetry:
           // The page-level alert (rendered where the composer was) carries
           // the full explanation; this keeps the transcript honest.
           return <Typography color="text.secondary">{describeAskUnavailable('NOT_CONFIGURED').summary}</Typography>
+        case 'QUESTION_TOO_LONG':
+          return (
+            <Stack spacing={0.5}>
+              <Typography>{describeAskUnavailable('QUESTION_TOO_LONG').summary}</Typography>
+              {/* The one length this client can state truthfully. The
+                  instance's actual limit is server configuration and is not on
+                  the wire, so quoting a figure for it would be a guess; the
+                  size of what you just sent is a fact, and it is what tells you
+                  how much to cut. */}
+              <Typography variant="body2" color="text.secondary">
+                Yours was {question.length.toLocaleString()} characters. Shorten it and ask again, or{' '}
+                <Link component={RouterLink} to={`/search?q=${encodeURIComponent(question.slice(0, 200))}`}>
+                  search for the words
+                </Link>{' '}
+                instead.
+              </Typography>
+            </Stack>
+          )
       }
       break
     case 'failed':

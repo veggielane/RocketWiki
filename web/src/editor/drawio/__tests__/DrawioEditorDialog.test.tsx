@@ -127,3 +127,59 @@ describe('DrawioEditorDialog — message wiring around the protocol session', ()
     expect(onSave).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * The frame's privileges.
+ *
+ * The editor host is external by configuration and everything this session does
+ * is JSON `postMessage` (drawioEmbed.ts: init → load → save → export → exit,
+ * `autosave: 0`). It therefore needs no ability to navigate the top frame, open
+ * a window, submit a form or download a file — and with no `sandbox` attribute
+ * it held all four.
+ */
+describe('DrawioEditorDialog — iframe privileges', () => {
+  const sandboxOf = () =>
+    (screen.getByTitle('draw.io diagram editor').getAttribute('sandbox') ?? '').split(' ').filter(Boolean)
+
+  it('grants scripts and same-origin, and nothing else', () => {
+    renderDialog()
+    expect(sandboxOf().sort()).toEqual(['allow-same-origin', 'allow-scripts'])
+  })
+
+  it('withholds the privileges a compromised editor host would want', () => {
+    renderDialog()
+    const granted = sandboxOf()
+    for (const withheld of [
+      'allow-top-navigation',
+      'allow-top-navigation-by-user-activation',
+      'allow-popups',
+      'allow-downloads',
+      'allow-forms',
+      'allow-modals',
+      'allow-pointer-lock',
+      'allow-presentation',
+    ]) {
+      expect(granted).not.toContain(withheld)
+    }
+  })
+
+  it('asks for no powerful features at all', () => {
+    renderDialog()
+    expect(screen.getByTitle('draw.io diagram editor')).toHaveAttribute('allow', '')
+  })
+
+  it('keeps allow-same-origin, because the origin check depends on it', async () => {
+    // An opaque-origin frame posts with `event.origin === "null"`, which the
+    // listener rejects — so dropping this grant would not harden the dialog, it
+    // would stop the handshake completing at all. This is that rejection, and
+    // therefore the reason the grant stays.
+    renderDialog()
+    const iframe = screen.getByTitle<HTMLIFrameElement>('draw.io diagram editor')
+    const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage')
+
+    deliver(iframe, JSON.stringify({ event: 'init' }), 'null')
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(postMessage).not.toHaveBeenCalled()
+  })
+})

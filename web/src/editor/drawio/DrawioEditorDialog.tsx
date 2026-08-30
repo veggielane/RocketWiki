@@ -169,6 +169,31 @@ export function DrawioEditorDialog({ open, payload, alt, onSave, onClose, config
             ref={iframeRef}
             src={buildEmbedUrl(resolvedConfig)}
             title="draw.io diagram editor"
+            // The two grants the embed protocol actually needs, and nothing
+            // else. Everything this session does is JSON `postMessage`
+            // (drawioEmbed.ts: init → load → save → export → exit, with
+            // `autosave: 0`), so the editor never needs to navigate the top
+            // frame, open a window, submit a form, or download a file — and a
+            // compromised or misconfigured editor host held all four.
+            //
+            //   allow-scripts     — it is a JavaScript application.
+            //   allow-same-origin — load-bearing twice over. draw.io needs its
+            //     own origin for its storage and config, and an opaque-origin
+            //     frame posts messages with `event.origin === "null"`, which
+            //     the listener above rejects: without this the handshake never
+            //     completes and the editor never loads at all.
+            //
+            // The usual caveat about `allow-scripts allow-same-origin` — that a
+            // frame can reach up and delete its own sandbox attribute — needs
+            // the framed document to be same-origin with THIS document. The
+            // editor is an external host by construction (VITE_DRAWIO_URL, with
+            // no default), so it cannot reach this DOM and the restriction
+            // holds.
+            sandbox="allow-scripts allow-same-origin"
+            // An empty Permissions-Policy allowlist: no camera, microphone,
+            // geolocation, clipboard-read or anything else, stated rather than
+            // left to the cross-origin defaults.
+            allow=""
             sx={{ border: 0, width: '100%', flexGrow: 1, minHeight: 0 }}
           />
         )}

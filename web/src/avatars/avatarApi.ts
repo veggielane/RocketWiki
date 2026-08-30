@@ -68,9 +68,17 @@ export async function clearAvatar(): Promise<{ hasAvatar: boolean }> {
  * on any non-OK status; callers fall back to initials without ever showing
  * the status to the user (an avatar-less user and a fetch failure look
  * identical, by design).
+ *
+ * **`userId` is untrusted.** The co-editing caret renderer passes ids straight
+ * out of a remote peer's Yjs awareness payload, which the hub relays opaquely
+ * without interpreting — so the value is chosen by another user's client, not
+ * by the server. Unencoded, a peer advertising `../../something` would make
+ * every co-editor's browser issue an authenticated same-origin GET to a path of
+ * the peer's choosing. `encodeURIComponent` keeps it one path segment, which is
+ * all this route was ever addressing.
  */
 export async function fetchAvatarBlob(userId: string): Promise<Blob> {
-  const response = await fetch(`/users/${userId}/avatar`, { headers: authHeaders() })
+  const response = await fetch(`/users/${encodeURIComponent(userId)}/avatar`, { headers: authHeaders() })
   if (!response.ok) {
     throw new Error('avatar unavailable')
   }

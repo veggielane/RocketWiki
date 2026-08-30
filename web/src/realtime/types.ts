@@ -157,6 +157,19 @@ export interface PresenceTransport {
    */
   sendPointerPosition(pageId: string, x: number, y: number): void
   /**
+   * Fires after the underlying connection auto-reconnects.
+   *
+   * Required, not optional, because presence cannot be correct without it.
+   * `withAutomaticReconnect` comes back with a NEW ConnectionId and hub groups
+   * are keyed on connection id, so a page group still holds only the dead one:
+   * the viewer disappears from everyone else's list and receives nothing
+   * further, silently, until they navigate. A transport that cannot report a
+   * reconnect cannot support presence — unlike `onConnectionStateChanged`
+   * below, where having no signal degrades to the honest default of "assume
+   * up".
+   */
+  onReconnected(handler: () => void): () => void
+  /**
    * Whether the hub is actually up. Both SignalR transports call
    * `.withAutomaticReconnect()`, and only `onreconnected` was ever registered —
    * so the app could observe RECOVERY but never LOSS. Nothing told the user the
