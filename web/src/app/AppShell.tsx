@@ -8,28 +8,9 @@ import { AppHeader } from './AppHeader'
 import { SideMenu } from './SideMenu'
 import { PageTitleContext, composeDocumentTitle } from './documentTitle'
 import { routeTitleFor } from './routeCrumbs'
-import { useCanonicalSpaceKey } from './useCanonicalSpaceKey'
+import { useCanonicalSpace } from './useCanonicalSpaceKey'
+import { measureFor } from './contentMeasure'
 
-/**
- * The reading measure for everything in the content region. The template's
- * dashboard runs nearly full-bleed, which suits a grid of cards and not a wiki:
- * prose at 1150px is a 150-character line. The header strip shares the value so
- * the two read as one column rather than as a full-width bar over a narrow one.
- */
-const CONTENT_MAX_WIDTH = 960
-
-/**
- * The measure for screens that are tables rather than prose. The audit log's
- * columns alone sum past 1100px, so at 960 it horizontally scrolled at every
- * viewport size — a scan-across-columns screen inside a measure designed for a
- * 90-character line. Matched by prefix so a new admin table inherits it.
- */
-const WIDE_MAX_WIDTH = 1400
-const WIDE_ROUTES = ['/admin/audit', '/admin/analytics', '/admin/sync']
-
-function measureFor(pathname: string): number {
-  return WIDE_ROUTES.some((route) => pathname.startsWith(route)) ? WIDE_MAX_WIDTH : CONTENT_MAX_WIDTH
-}
 
 /**
  * The app's frame, following the MUI Dashboard template's layout: a navigation
@@ -71,8 +52,8 @@ export function AppShell() {
   // `??` is skipped when the left is non-null, so a screen that had registered
   // its own title would silently stop calling the hook and change the hook order
   // between renders.
-  const canonicalSpaceKey = useCanonicalSpaceKey(pathname)
-  const title = pageTitle ?? routeTitleFor(pathname, canonicalSpaceKey)
+  const canonicalSpace = useCanonicalSpace(pathname)
+  const title = pageTitle ?? routeTitleFor(pathname, canonicalSpace)
 
   useEffect(() => {
     document.title = composeDocumentTitle(title)

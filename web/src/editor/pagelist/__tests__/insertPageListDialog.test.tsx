@@ -235,3 +235,12 @@ describe('the toolbar writes the fence', () => {
     expect(ref.current?.getMarkdown()).toBe('```page-list\nquery = label = "safety"\nlimit = 20\n```\n')
   })
 })
+
+describe('opening the dialog', () => {
+  it('puts focus in the first filter rather than on the dialog paper', () => {
+    // The family's autofocus convention: a keyboard user should be able to type
+    // straight away, not Tab in past the title.
+    renderDialog()
+    expect(screen.getByLabelText('Labels')).toHaveFocus()
+  })
+})

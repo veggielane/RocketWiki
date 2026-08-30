@@ -129,6 +129,13 @@ export type LoadFailureReason =
    */
   | 'NATIONALITY_VOCABULARY'
   | 'SYNC_STATUS'
+  /**
+   * The usage report (design.md §7). Distinct from the null the server returns
+   * to a caller who administers neither the instance nor the space: that is an
+   * answer, this is the absence of one, and the screen said the same sentence
+   * for both — telling an admin whose API was down that they lacked permission.
+   */
+  | 'ANALYTICS'
   /** The notification inbox — a failed read must not read as an empty one. */
   | 'NOTIFICATIONS'
   | 'SEARCH'
@@ -168,6 +175,8 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       return { summary: "Couldn't load notifications.", pointsToSettings: false }
     case 'SYNC_STATUS':
       return { summary: "Couldn't load sync status.", pointsToSettings: false }
+    case 'ANALYTICS':
+      return { summary: "Couldn't load the usage report.", pointsToSettings: false }
     case 'SEARCH':
       return { summary: "Couldn't search — there's no live API in this environment yet.", pointsToSettings: false }
   }
@@ -188,6 +197,7 @@ export type WriteFailureReason =
   /** Creating a space, and restoring a trashed batch — each its screen's primary action. */
   | 'SPACE'
   | 'RESTORE_PAGE'
+  | 'RESTORE_SPACE'
   /** Watching/unwatching a page or space. */
   | 'WATCH'
   /** Submitting a record through a `form-definition` fence. */
@@ -197,6 +207,8 @@ export function describeWriteFailure(reason: WriteFailureReason): UnavailableCop
   switch (reason) {
     case 'SPACE':
       return { summary: "Couldn't reach the API — the space wasn't created.", pointsToSettings: false }
+    case 'RESTORE_SPACE':
+      return { summary: "Couldn't reach the API — the space wasn't restored.", pointsToSettings: false }
     case 'RESTORE_PAGE':
       return { summary: "Couldn't reach the API — nothing was restored.", pointsToSettings: false }
     case 'WATCH':

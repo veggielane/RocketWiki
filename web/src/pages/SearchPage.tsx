@@ -29,6 +29,30 @@ type SearchEdge = SearchPagesQuery['search']['edges'][number]
 /** Long enough that a typed word is one request, short enough to feel live. */
 const SEARCH_DEBOUNCE_MS = 300
 
+/** The server's own page size when `first` is omitted, and the step "Show more" adds. */
+const PAGE_SIZE = 20
+
+/**
+ * `MaxSearchResults` server-side: the resolver materialises at most this many
+ * permission-filtered hits, so `first` is clamped here and `totalCount`
+ * saturates here. Both facts matter to this screen — it must never ask for more
+ * than the server can honour, and must never print the cap as an exact total.
+ */
+const MAX_RESULTS = 100
+
+/**
+ * How many results the URL says are on screen.
+ *
+ * Clamped rather than validated: a hand-edited or stale `?show=` is a link
+ * somebody followed, not an error to show them, and the server clamps the same
+ * range anyway. Anything unreadable falls back to one page.
+ */
+function shownFromParams(raw: string | null): number {
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) return PAGE_SIZE
+  return Math.min(Math.max(Math.trunc(parsed), PAGE_SIZE), MAX_RESULTS)
+}
+
 /**
  * design.md §9: hybrid keyword + semantic ranking is entirely a server
  * concern — this just renders whatever order the server returns. Each
@@ -53,8 +77,20 @@ export function SearchPage() {
   // becomes a request.
   const [draft, setDraft] = useState(query)
   const debouncedDraft = useDebouncedValue(draft, SEARCH_DEBOUNCE_MS)
-  const [after, setAfter] = useState<string | undefined>(undefined)
-  const [edges, setEdges] = useState<SearchEdge[]>([])
+
+  /**
+   * How far down the results the reader has gone — in the URL, like everything
+   * else on this screen.
+   *
+   * It used to be a cursor plus an accumulated `edges` array in component
+   * state, and neither could be restored: refreshing, sharing the link or
+   * pressing Back after opening the ninth result dropped you back to the first
+   * twenty. A cursor names a boundary, so replaying an accumulated run meant
+   * replaying every request that built it. A COUNT names the run itself, and
+   * `search(first:)` fetches it in one go — so there is no accumulation to keep
+   * and no second source of truth for what is on screen.
+   */
+  const shown = shownFromParams(params.get('show'))
 
   /**
    * The last `q` THIS component wrote. It is what tells "the debounce settled,
@@ -96,6 +132,10 @@ export function SearchPage() {
       withParam((next) => {
         if (debouncedDraft) next.set('q', debouncedDraft)
         else next.delete('q')
+        // A new search starts at the first page. Dropped here rather than in an
+        // effect keyed on the query: an effect would also fire on mount and wipe
+        // the `show` of a link somebody had just followed.
+        next.delete('show')
       }),
       { replace: true },
     )
@@ -108,11 +148,15 @@ export function SearchPage() {
     setDraft(query)
   }, [query])
 
+  // Every filter change is also a new search, so each of these drops `show`:
+  // narrowing to one space while looking at result 60 has no result 60 to
+  // return to.
   const setSpaceKey = (value: string | null) =>
     setParams(
       withParam((next) => {
         if (value) next.set('space', value)
         else next.delete('space')
+        next.delete('show')
       }),
       { replace: true },
     )
@@ -122,6 +166,7 @@ export function SearchPage() {
       withParam((next) => {
         next.delete('label')
         for (const label of values) next.append('label', label)
+        next.delete('show')
       }),
       { replace: true },
     )
@@ -131,34 +176,38 @@ export function SearchPage() {
       withParam((next) => {
         next.delete('space')
         next.delete('label')
+        next.delete('show')
       }),
       { replace: true },
     )
 
-  const hasFilters = spaceKey !== null || labels.length > 0
+  /**
+   * Pushed, not replaced — this one IS a step somebody took, and Back should
+   * undo it rather than leave the page.
+   */
+  const showMore = () =>
+    setParams(
+      withParam((next) => {
+        next.set('show', String(Math.min(shown + PAGE_SIZE, MAX_RESULTS)))
+      }),
+    )
 
-  // A genuinely new search (query/space/labels changed) starts pagination
-  // over — otherwise "Load more" would keep paging through stale results
-  // for the previous query. Keyed on the joined labels rather than the array,
-  // which `getAll` rebuilds on every render. JSON rather than a join, so a
-  // label containing the separator cannot collide with two labels.
-  const labelKey = JSON.stringify(labels)
-  useEffect(() => {
-    setAfter(undefined)
-    setEdges([])
-  }, [query, spaceKey, labelKey])
+  const hasFilters = spaceKey !== null || labels.length > 0
 
   const [{ data: facetData }] = useSearchFacetsQuery({ variables: { spaceKey: spaceKey ?? undefined } })
   const [{ data, fetching, error }] = useSearchPagesQuery({
-    variables: { query, spaceKey: spaceKey ?? undefined, labels: labels.length > 0 ? labels : undefined, after },
+    variables: {
+      query,
+      spaceKey: spaceKey ?? undefined,
+      labels: labels.length > 0 ? labels : undefined,
+      first: shown,
+    },
     pause: query.trim().length === 0,
   })
 
-  useEffect(() => {
-    if (!data) return
-    setEdges((prev) => (after ? [...prev, ...data.search.edges] : data.search.edges))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data])
+  // Straight from the response. There is no accumulated copy to drift from it:
+  // one `first` is one request is one list.
+  const edges: SearchEdge[] = data?.search.edges ?? []
 
   return (
     <Stack spacing={2}>
@@ -220,8 +269,18 @@ export function SearchPage() {
           {/* A live region, so the result count reaches someone who is still in
               the query field and cannot see the list change. The ask page
               already does this for its answers; search did not. */}
+          {/* "At least 100" when the counter is at its cap, never "100".
+              `totalCount` saturates at MAX_RESULTS by design (§6.7), so at that
+              value it means "100 or more" and the difference between 100 hits
+              and 5,000 is not knowable here. Printing the cap as an exact total
+              would be the screen inventing precision the server refused to
+              give it — and it is why nothing below derives a page count from
+              this number either. */}
           <Typography variant="body2" color="text.secondary" role="status" aria-live="polite">
-            {data.search.totalCount} result{data.search.totalCount === 1 ? '' : 's'}
+            {data.search.totalCount >= MAX_RESULTS
+              ? `At least ${MAX_RESULTS} results`
+              : `${data.search.totalCount} result${data.search.totalCount === 1 ? '' : 's'}`}
+            {edges.length < data.search.totalCount ? ` — showing ${edges.length}` : ''}
           </Typography>
           {/* design.md §21.13: a result list is a compilation and carries the
               classification of its most sensitive constituent. The aggregate
@@ -291,15 +350,18 @@ export function SearchPage() {
           {/* Prefills /ask with this query; hides itself for the session
               once the assistant is known NOT_CONFIGURED. */}
           <AskWikiSearchNudge query={query} />
+          {/* `hasNextPage`, never a comparison against `totalCount` — the total
+              saturates and would claim more results exist at exactly 100
+              forever. */}
           {data.search.pageInfo.hasNextPage && (
             <Button
               variant="outlined"
               size="small"
               disabled={fetching}
-              onClick={() => setAfter(data.search.pageInfo.endCursor ?? undefined)}
+              onClick={showMore}
               sx={{ alignSelf: 'flex-start' }}
             >
-              {fetching ? 'Loading…' : 'Load more'}
+              {fetching ? 'Loading…' : `Show ${PAGE_SIZE} more`}
             </Button>
           )}
         </>

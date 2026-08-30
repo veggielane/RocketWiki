@@ -2,7 +2,7 @@ import { Breadcrumbs, Link, Typography } from '@mui/material'
 import NavigateNextIcon from '@mui/icons-material/NavigateNext'
 import { Link as RouterLink, useLocation } from 'react-router-dom'
 import { crumbsFor } from './routeCrumbs'
-import { useCanonicalSpaceKey } from './useCanonicalSpaceKey'
+import { useCanonicalSpace } from './useCanonicalSpaceKey'
 
 /**
  * The template's header breadcrumb: muted ancestors, a chevron separator in
@@ -15,10 +15,11 @@ import { useCanonicalSpaceKey } from './useCanonicalSpaceKey'
  */
 export function AppBreadcrumbs() {
   const { pathname } = useLocation()
-  // The server's spelling of the space key, not the URL's — see
-  // useCanonicalSpaceKey. Both of its queries are ones the shell and rail
-  // already run, so urql answers from cache rather than issuing a request.
-  const crumbs = crumbsFor(pathname, useCanonicalSpaceKey(pathname))
+  // The space's NAME, as the server spells it — not the key, and not the
+  // casing that happened to be typed into the URL. Both underlying queries are
+  // ones the shell and rail already run, so urql answers from cache.
+  const space = useCanonicalSpace(pathname)
+  const crumbs = crumbsFor(pathname, space)
 
   return (
     <Breadcrumbs
@@ -31,8 +32,14 @@ export function AppBreadcrumbs() {
         '& .MuiBreadcrumbs-li': { minWidth: 0 },
       }}
     >
-      {crumbs.map((crumb, index) =>
-        crumb.to === undefined || index === crumbs.length - 1 ? (
+      {/* A crumb is a link whenever it HAS a destination — including the last
+          one. The old rule ("last crumb is always plain text") assumed the last
+          crumb is always where you are, which is false on a page route: there
+          the final crumb names the SPACE while you are looking at a page, so
+          rendering it as bold "you are here" was both a dead end and a lie
+          about your location. */}
+      {crumbs.map((crumb) =>
+        crumb.to === undefined ? (
           <Typography key={crumb.label} noWrap sx={{ color: 'text.primary', fontWeight: 600 }}>
             {crumb.label}
           </Typography>

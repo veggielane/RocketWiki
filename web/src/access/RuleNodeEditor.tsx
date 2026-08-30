@@ -31,6 +31,7 @@ import {
   createUserCondition,
   findNode,
   type BuilderNode,
+  type IssueField,
   type ValidationIssue,
 } from './builderState'
 
@@ -60,8 +61,22 @@ interface RuleNodeEditorProps extends RuleNodeEditorActions {
   depth: number
 }
 
-function issuesFor(issues: ValidationIssue[], nodeId: string): string[] {
-  return issues.filter((i) => i.nodeId === nodeId).map((i) => i.message)
+function issuesFor(issues: ValidationIssue[], nodeId: string): ValidationIssue[] {
+  return issues.filter((i) => i.nodeId === nodeId)
+}
+
+/**
+ * The messages for one control, joined for its helper line — `''` when there
+ * are none, so a caller can use it as both the condition and the text.
+ *
+ * Routed by the issue's `field` tag. Matching on the message text is what let
+ * `'Values must not be empty.'` fall through every branch and appear nowhere.
+ */
+function messagesFor(issues: ValidationIssue[], field: IssueField): string {
+  return issues
+    .filter((i) => i.field === field)
+    .map((i) => i.message)
+    .join(' ')
 }
 
 /**
@@ -146,7 +161,7 @@ function RuleGroupBody({
   ...rest
 }: RuleNodeEditorProps & {
   node: Extract<BuilderNode, { kind: 'allOf' | 'anyOf' }>
-  myIssues: string[]
+  myIssues: ValidationIssue[]
   kindSelect: ReactNode
   removeButton: ReactNode
 }) {
@@ -186,7 +201,7 @@ function RuleGroupBody({
         // line associated with nothing, so a screen reader met them only by
         // walking into them. The group's own controls point at it below.
         <FormHelperText error id={`${nodeId}-issues`} role="alert" sx={{ mb: 1 }}>
-          {myIssues.join(' ')}
+          {myIssues.map((i) => i.message).join(' ')}
         </FormHelperText>
       )}
 
@@ -233,10 +248,19 @@ function RuleLeafBody({
   onUpdate,
 }: RuleNodeEditorProps & {
   node: Extract<BuilderNode, { kind: 'everyone' | 'group' | 'user' | 'attr' }>
-  myIssues: string[]
+  myIssues: ValidationIssue[]
   kindSelect: ReactNode
   removeButton: ReactNode
 }) {
+  // One line per control, routed by tag. `'Values must not be empty.'` used to
+  // match neither of the two prose tests this row ran, so it turned nothing red
+  // and printed nowhere — a rule that could not be saved, with no field marked
+  // and no sentence explaining it.
+  const groupIssues = messagesFor(myIssues, 'group')
+  const userIssues = messagesFor(myIssues, 'user')
+  const attributeIssues = messagesFor(myIssues, 'attribute')
+  const valueIssues = messagesFor(myIssues, 'values')
+
   return (
     <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
       {kindSelect}
@@ -254,7 +278,7 @@ function RuleLeafBody({
           renderInput={(params) => (
             // Every issue, not just `myIssues[0]` — a field with two problems
             // reported one, so fixing it surfaced the next one as if it were new.
-            <TextField {...params} label="Group" error={myIssues.length > 0} helperText={myIssues.join(' ')} />
+            <TextField {...params} label="Group" error={groupIssues !== ''} helperText={groupIssues} />
           )}
           sx={{ flexGrow: 1, maxWidth: 320, minWidth: 240 }}
         />
@@ -266,15 +290,15 @@ function RuleLeafBody({
           label="User ID"
           value={node.userId}
           onChange={(e) => onUpdate(nodeId, (n) => (n.kind === 'user' ? { ...n, userId: e.target.value } : n))}
-          error={myIssues.length > 0}
-          helperText={myIssues.length > 0 ? myIssues.join(' ') : 'No user directory yet — enter the subject id.'}
+          error={userIssues !== ''}
+          helperText={userIssues !== '' ? userIssues : 'No user directory yet — enter the subject id.'}
           sx={{ flexGrow: 1, maxWidth: 320 }}
         />
       )}
 
       {node.kind === 'attr' && (
         <>
-          <FormControl size="small" error={myIssues.some((m) => m.includes('Attribute'))} sx={{ minWidth: 200 }}>
+          <FormControl size="small" error={attributeIssues !== ''} sx={{ minWidth: 200 }}>
             <InputLabel id={`${nodeId}-attribute-label`}>Attribute</InputLabel>
             <Select
               labelId={`${nodeId}-attribute-label`}
@@ -294,6 +318,11 @@ function RuleLeafBody({
                 </MenuItem>
               ))}
             </Select>
+            {/* Written down, not just coloured red. `'Attribute is required.'`
+                had nowhere to go: the Select turned red and the sentence
+                explaining why was discarded — and colour alone is not a message
+                (WCAG 1.4.1). */}
+            <FormHelperText>{attributeIssues !== '' ? attributeIssues : 'Which registered attribute to test.'}</FormHelperText>
           </FormControl>
           <Autocomplete
             multiple
@@ -312,8 +341,8 @@ function RuleLeafBody({
               <TextField
                 {...params}
                 label="In"
-                error={myIssues.some((m) => m.includes('value'))}
-                helperText={myIssues.find((m) => m.includes('value'))}
+                error={valueIssues !== ''}
+                helperText={valueIssues !== '' ? valueIssues : 'The values this attribute must be one of.'}
               />
             )}
             sx={{ flexGrow: 1, minWidth: 240 }}

@@ -143,6 +143,7 @@ export function InsertPageListDialog({ open, onClose, onInsert }: InsertPageList
               <Autocomplete
                 multiple
                 freeSolo
+                size="small"
                 options={labelOptions}
                 value={builder.labels}
                 onChange={(_e, labels: string[]) => setBuilder((b) => ({ ...b, labels }))}
@@ -150,7 +151,12 @@ export function InsertPageListDialog({ open, onClose, onInsert }: InsertPageList
                   labels.map((label, index) => <Chip size="small" label={label} {...getItemProps({ index })} key={label} />)
                 }
                 renderInput={(params) => (
-                  <TextField {...params} label="Labels" helperText="Pick existing labels, or type one and press Enter." />
+                  <TextField
+                    {...params}
+                    autoFocus
+                    label="Labels"
+                    helperText="Pick existing labels, or type one and press Enter."
+                  />
                 )}
               />
               <FormControl>
@@ -174,6 +180,7 @@ export function InsertPageListDialog({ open, onClose, onInsert }: InsertPageList
               </FormControl>
               <Autocomplete
                 multiple
+                size="small"
                 options={spaces.map((space) => space.key)}
                 getOptionLabel={(key) => {
                   const space = spaces.find((s) => s.key === key)
@@ -194,6 +201,7 @@ export function InsertPageListDialog({ open, onClose, onInsert }: InsertPageList
                 value={builder.sort}
                 onChange={(e) => setBuilder((b) => ({ ...b, sort: e.target.value as PageListSort }))}
                 fullWidth
+                size="small"
               >
                 {SORT_OPTIONS.map((option) => (
                   <MenuItem key={option.value} value={option.value}>
@@ -208,6 +216,7 @@ export function InsertPageListDialog({ open, onClose, onInsert }: InsertPageList
               value={rawQuery}
               onChange={(e) => setRawQuery(e.target.value)}
               fullWidth
+              size="small"
               multiline
               minRows={2}
               slotProps={{ htmlInput: { spellCheck: false } }}
@@ -220,6 +229,7 @@ export function InsertPageListDialog({ open, onClose, onInsert }: InsertPageList
             value={limit}
             onChange={(e) => setLimit(e.target.value)}
             fullWidth
+            size="small"
             error={!limitValid}
             helperText={limitValid ? 'Optional. The server caps a page list at 100 results.' : 'A whole number above zero.'}
           />

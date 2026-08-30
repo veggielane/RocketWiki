@@ -27,7 +27,14 @@ export function PresencePointers({ pointers }: PresencePointersProps) {
     return null
   }
   return (
-    <Box sx={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 10 }}>
+    <Box
+      // The WHOLE overlay is decorative. The cursor `<svg>` was already
+      // hidden, but the name label beside it was not — so every remote viewer's
+      // display name was live text in the accessibility tree, appearing and
+      // disappearing inside the page's reading order as people moved a mouse.
+      aria-hidden
+      sx={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 10 }}
+    >
       {[...pointers.entries()].map(([userId, position]) => (
         <Box
           key={userId}
@@ -35,7 +42,13 @@ export function PresencePointers({ pointers }: PresencePointersProps) {
             position: 'absolute',
             left: `${position.x * 100}%`,
             top: `${position.y * 100}%`,
+            // Smoothing between 20-per-second samples — but not for a reader
+            // who has asked the OS for less motion. These are other people's
+            // cursors gliding over text being read, which is exactly the
+            // involuntary movement the preference exists to stop, and there is
+            // no setting anywhere to turn presence cursors off.
             transition: 'left 80ms linear, top 80ms linear',
+            '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
           }}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">

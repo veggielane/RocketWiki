@@ -30,7 +30,19 @@ export function usePresence(pageId: string, transport: PresenceTransport): UsePr
     void transport.joinPage(pageId)
 
     const unsubscribeViewers = transport.onViewersChanged((next) => {
-      if (!cancelled) setViewers(next)
+      if (cancelled) return
+      setViewers(next)
+      // Drop the cursors of anyone who has left. `pointers` was only ever
+      // ADDED to — never pruned except on page change or unmount — so a viewer
+      // who navigated away left their cursor and name label painted on the
+      // overlay indefinitely, over content someone else was reading. The
+      // viewer list IS the authority on who is present, so this is where the
+      // pruning belongs.
+      setPointers((prev) => {
+        const present = new Set(next.map((viewer) => viewer.userId))
+        if ([...prev.keys()].every((userId) => present.has(userId))) return prev
+        return new Map([...prev].filter(([userId]) => present.has(userId)))
+      })
     })
     const unsubscribePointers = transport.onPointerMoved((position: PointerPosition) => {
       if (cancelled) return

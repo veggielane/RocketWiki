@@ -52,8 +52,87 @@ export function CodeBlockView(props: NodeViewProps) {
   if (language === 'form-list') {
     return <FormFence {...props} kind="form-list" />
   }
+  return <PlainCodeBlock {...props} />
+}
+
+/**
+ * The languages the picker offers. Design §4 lists "Code blocks with language"
+ * as supported, and the only way to set one was the stock CommonMark input rule
+ * (typing ```` ```js ```` at the start of a block) — undiscoverable, and
+ * one-way: nothing could change or clear an existing block's language.
+ *
+ * Deliberately excludes every RESERVED fence language (mermaid, drawio,
+ * gitlab-file, gitlab-issues, page-list, form-definition, form-list). Those are
+ * widgets whose bodies have their own grammar, and switching a block of
+ * JavaScript into one from here would produce a fence the widget cannot parse.
+ * They are reached from the toolbar, which also writes a valid body.
+ */
+const CODE_LANGUAGES = [
+  'bash',
+  'c',
+  'cpp',
+  'csharp',
+  'css',
+  'diff',
+  'go',
+  'html',
+  'ini',
+  'java',
+  'javascript',
+  'json',
+  'kotlin',
+  'markdown',
+  'powershell',
+  'python',
+  'ruby',
+  'rust',
+  'sql',
+  'typescript',
+  'xml',
+  'yaml',
+] as const
+
+/**
+ * An ordinary fenced code block, plus the control that says — and sets — which
+ * language it is. Read mode shows the language as a plain label and nothing
+ * else: it is information about the block, not a control.
+ *
+ * The picker writes `node.attrs.language`, which is exactly what the Markdown
+ * serializer emits after the opening fence (`toMarkdown.ts`) and what the
+ * parser reads back off it, so the round trip needs no new plumbing — the
+ * attribute was always there, with nothing in the UI able to reach it.
+ */
+function PlainCodeBlock({ node, editor, updateAttributes }: NodeViewProps) {
+  const language = (node.attrs.language as string | null) ?? ''
+
   return (
-    <NodeViewWrapper>
+    <NodeViewWrapper className="rw-code-block-wrapper">
+      {editor.isEditable ? (
+        <select
+          className="rw-code-language"
+          value={language}
+          aria-label="Code language"
+          // `contentEditable={false}`: without it ProseMirror treats the select
+          // as part of the document and typing in the block can land inside it.
+          contentEditable={false}
+          onChange={(e) => updateAttributes({ language: e.target.value === '' ? null : e.target.value })}
+        >
+          {/* "Plain text" is a real choice, not the absence of one — a block
+              whose language was set by the input rule has to be clearable. */}
+          <option value="">Plain text</option>
+          {CODE_LANGUAGES.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      ) : (
+        language !== '' && (
+          <span className="rw-code-language-label" aria-hidden>
+            {language}
+          </span>
+        )
+      )}
       <pre className="rw-code-block" spellCheck={false}>
         <NodeViewContent<'code'> as="code" />
       </pre>

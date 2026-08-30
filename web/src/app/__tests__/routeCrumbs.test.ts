@@ -72,6 +72,9 @@ describe('route label maps stay in step with the router', () => {
   })
 })
 
+/** A resolved space, as the shell hands one to `crumbsFor`. */
+const PROP = { key: 'PROP', name: 'Propulsion' }
+
 describe('crumbsFor', () => {
   it('writes out a space system page rather than echoing the URL segment', () => {
     expect(crumbsFor('/spaces/PROP/-/browse').map((c) => c.label)).toEqual(['Spaces', 'PROP', 'Browse pages'])
@@ -81,8 +84,19 @@ describe('crumbsFor', () => {
   it('gives the details and history screens a crumb of their own', () => {
     // Both fell through to a bare space crumb, so the two most-visited page
     // sub-screens said nothing about being sub-screens.
-    expect(crumbsFor('/pages/p1/details', 'PROP').map((c) => c.label)).toEqual(['Spaces', 'PROP', 'Details'])
-    expect(crumbsFor('/pages/p1/history', 'PROP').map((c) => c.label)).toEqual(['Spaces', 'PROP', 'History'])
+    expect(crumbsFor('/pages/p1/details', PROP).map((c) => c.label)).toEqual(['Spaces', 'Propulsion', 'Details'])
+    expect(crumbsFor('/pages/p1/history', PROP).map((c) => c.label)).toEqual(['Spaces', 'Propulsion', 'History'])
+  })
+
+  it('keeps the space crumb a LINK on a page route', () => {
+    // The space's `to` used to be dropped, and the breadcrumb rendered the last
+    // crumb as plain text — so every page view was a dead end whose only
+    // working link was "Spaces", all the way to the root.
+    const crumbs = crumbsFor('/spaces/PROP/stage-two-ignition-anomaly', PROP)
+    expect(crumbs.at(-1)?.to).toBe('/spaces/PROP')
+
+    const byId = crumbsFor('/pages/p1', PROP)
+    expect(byId.at(-1)?.to).toBe('/spaces/PROP')
   })
 
   it('calls a space-level role assignment "Grants", as design.md §6.5 does', () => {
@@ -93,17 +107,18 @@ describe('crumbsFor', () => {
     expect(PAGE_SUBPAGES.permissions).toBe('Permissions')
   })
 
-  it('prefers the server-canonical space key over the casing in the URL', () => {
-    // URLs are case-insensitive now, so /spaces/eng and /spaces/ENG are one
-    // space. A crumb echoing whichever casing was typed would label the same
-    // place two ways, beside a rail picker showing the canonical name.
-    expect(crumbsFor('/spaces/eng/-/trash', 'ENG').map((c) => c.label)).toEqual(['Spaces', 'ENG', 'Trash'])
+  it("labels the space with its NAME, not its key or the URL's casing", () => {
+    // `PageHeader` states "always the NAME, never the key", and the crumb
+    // directly above it was rendering the key — so the trash screen read
+    // "Spaces / PROP / Trash" over a header saying "Trash / Propulsion", the
+    // exact pair that rule exists to prevent.
+    expect(crumbsFor('/spaces/prop/-/trash', PROP).map((c) => c.label)).toEqual(['Spaces', 'Propulsion', 'Trash'])
     // The link still points at the URL's own key: it resolves either way, and
     // rewriting it here would be a redirect disguised as a label.
-    expect(crumbsFor('/spaces/eng/-/trash', 'ENG')[1]?.to).toBe('/spaces/eng')
+    expect(crumbsFor('/spaces/prop/-/trash', PROP)[1]?.to).toBe('/spaces/prop')
   })
 
-  it('falls back to the URL key when no canonical one is known', () => {
+  it('falls back to the URL key when no space has resolved yet', () => {
     expect(crumbsFor('/spaces/eng/-/trash').map((c) => c.label)).toEqual(['Spaces', 'eng', 'Trash'])
   })
 

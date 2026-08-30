@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField } from '@mui/material'
 import type { GitLabFileRef } from '../../gitlab/fenceBody'
 import { useDialogFullScreen } from '../../app/useDialogFullScreen'
+import { InsertRequirements } from '../InsertRequirements'
 
 export interface InsertGitLabFileDialogProps {
   open: boolean
@@ -30,7 +31,11 @@ export function InsertGitLabFileDialog({ open, onClose, onInsert }: InsertGitLab
     }
   }
 
-  const canInsert = project.trim().length > 0 && path.trim().length > 0
+  const missing = [
+    ...(project.trim().length === 0 ? ['a project'] : []),
+    ...(path.trim().length === 0 ? ['a file path'] : []),
+  ]
+  const canInsert = missing.length === 0
 
   const handleInsert = () => {
     if (!canInsert) return
@@ -45,15 +50,19 @@ export function InsertGitLabFileDialog({ open, onClose, onInsert }: InsertGitLab
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth fullScreen={fullScreen}>
-      <DialogTitle>Embed GitLab file</DialogTitle>
+      {/* "Insert …", like every other dialog on this toolbar. "Embed" over a
+          button that says Insert named the same act two ways. */}
+      <DialogTitle>Insert GitLab file</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
+            autoFocus
             label="Project"
             value={project}
             onChange={(e) => setProject(e.target.value)}
             required
             fullWidth
+            size="small"
             helperText="Numeric id or namespaced path, e.g. propulsion/turbopump"
           />
           <TextField
@@ -62,6 +71,7 @@ export function InsertGitLabFileDialog({ open, onClose, onInsert }: InsertGitLab
             onChange={(e) => setPath(e.target.value)}
             required
             fullWidth
+            size="small"
             helperText="Path within the repository, e.g. docs/spec.md"
           />
           <TextField
@@ -69,8 +79,10 @@ export function InsertGitLabFileDialog({ open, onClose, onInsert }: InsertGitLab
             value={ref}
             onChange={(e) => setRef(e.target.value)}
             fullWidth
+            size="small"
             helperText="Branch, tag, or commit — defaults to HEAD."
           />
+          <InsertRequirements missing={missing} />
         </Stack>
       </DialogContent>
       <DialogActions>

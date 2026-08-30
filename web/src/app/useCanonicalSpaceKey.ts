@@ -24,18 +24,33 @@ import { sameSpaceKey } from '../pages/pageSlug'
  * indistinguishable from one that does not exist, and this is a label.
  */
 export function useCanonicalSpaceKey(pathname: string): string | undefined {
+  return useCanonicalSpace(pathname)?.key
+}
+
+/**
+ * The space this route is in, as the SERVER spells it — key and name.
+ *
+ * The name matters because `PageHeader` states the rule explicitly ("always the
+ * space/page NAME, never its key") while the breadcrumb directly above it was
+ * still rendering the key: the trash screen read `Spaces / PROP / Trash` in the
+ * crumb and "Trash / Propulsion" in the header, which is the exact pair that
+ * rule was written to stop, stacked vertically instead of side by side.
+ */
+export function useCanonicalSpace(pathname: string): { key: string; name: string } | undefined {
   const pageId = /^\/pages\/([^/]+)/.exec(pathname)?.[1]
   const urlSpaceKey = /^\/spaces\/([^/]+)/.exec(pathname)?.[1]
   const decodedUrlKey = urlSpaceKey ? decodeURIComponent(urlSpaceKey) : undefined
 
   const [{ data: pageRef }] = usePageSpaceRefQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
-  // Only for a `/spaces/…` route: on a page route the key arrives already
-  // canonical from the page itself, so there is nothing to match.
-  const [{ data: spaceList }] = useSpaceListQuery({ pause: !decodedUrlKey })
+  // The list is what carries names, and the rail loads it on every route, so
+  // both arms below are served from cache.
+  const [{ data: spaceList }] = useSpaceListQuery({ pause: !decodedUrlKey && !pageId })
 
-  if (pageId) return pageRef?.page?.spaceKey ?? undefined
-  if (!decodedUrlKey) return undefined
+  // A page route names no space in its URL; the page read supplies the key,
+  // and the list turns it into a name.
+  const key = pageId ? (pageRef?.page?.spaceKey ?? undefined) : decodedUrlKey
+  if (!key) return undefined
   // `new` and `archived` are sibling routes, not space keys — they match no
   // space and correctly fall through to undefined.
-  return spaceList?.spaces.find((space) => sameSpaceKey(space.key, decodedUrlKey))?.key
+  return spaceList?.spaces.find((space) => sameSpaceKey(space.key, key))
 }

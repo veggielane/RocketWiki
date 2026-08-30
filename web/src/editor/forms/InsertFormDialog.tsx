@@ -24,6 +24,8 @@ import {
   buildFormListFenceBody,
   type FormFieldDraft,
 } from '../../forms/fenceBody'
+import { useDialogFullScreen } from '../../app/useDialogFullScreen'
+import { InsertRequirements } from '../InsertRequirements'
 
 const FIELD_TYPES: { value: FormFieldType; label: string }[] = [
   { value: 'TEXT', label: 'Text' },
@@ -58,23 +60,41 @@ export function InsertFormDialog({
   /** Called with each fence body to insert, in order. */
   onInsert: (fences: { language: 'form-definition' | 'form-list'; body: string }[]) => void
 }) {
+  const fullScreen = useDialogFullScreen()
   const [collection, setCollection] = useState('')
   const [fields, setFields] = useState<FormFieldDraft[]>([emptyField()])
   const [alsoList, setAlsoList] = useState(true)
+
+  // Reset on OPEN, not on close. Resetting on the way out is the same outcome
+  // only as long as every exit runs through a handler that remembers to do it —
+  // and the family's one real bug was exactly that gap (CreatePageDialog's
+  // success path). Adjusting during render against a tracked copy is the idiom
+  // the other four fence dialogs already use, and it survives a programmatic
+  // close, so a reopen is always a fresh form by construction.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (wasOpen !== open) {
+    setWasOpen(open)
+    if (open) {
+      setCollection('')
+      setFields([emptyField()])
+      setAlsoList(true)
+    }
+  }
 
   const named = fields.filter((f) => f.name.trim().length > 0)
   const selectsWithoutOptions = named.filter(
     (f) => f.type === 'SELECT' && f.options.split(',').every((o) => o.trim().length === 0),
   )
   const duplicate = named.length !== new Set(named.map((f) => f.name.trim().toLowerCase())).size
-  const canInsert =
-    collection.trim().length > 0 && named.length > 0 && selectsWithoutOptions.length === 0 && !duplicate
-
-  const reset = () => {
-    setCollection('')
-    setFields([emptyField()])
-    setAlsoList(true)
-  }
+  // The two headline requirements were the only ones with nowhere to appear:
+  // the duplicate-name and empty-choices problems already had Alerts, so a
+  // blank collection or an unnamed field was the case where Insert simply died
+  // in silence.
+  const missing = [
+    ...(collection.trim().length === 0 ? ['a collection name'] : []),
+    ...(named.length === 0 ? ['at least one named field'] : []),
+  ]
+  const canInsert = missing.length === 0 && selectsWithoutOptions.length === 0 && !duplicate
 
   const handleInsert = () => {
     const draft = { collection, fields: named }
@@ -90,7 +110,6 @@ export function InsertFormDialog({
       })
     }
     onInsert(fences)
-    reset()
     onClose()
   }
 
@@ -100,18 +119,23 @@ export function InsertFormDialog({
   return (
     <Dialog
       open={open}
-      onClose={() => {
-        reset()
+      // A backdrop click must not take an arbitrarily long field list with it.
+      // This dialog is the family's tallest and its content is entirely typed;
+      // Escape and Cancel remain the ways out, both of which are deliberate.
+      onClose={(_event, reason) => {
+        if (reason === 'backdropClick') return
         onClose()
       }}
       fullWidth
       maxWidth="sm"
+      fullScreen={fullScreen}
     >
-      <DialogTitle>Insert a form</DialogTitle>
+      <DialogTitle>Insert form</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
             autoFocus
+            required
             label="Collection"
             value={collection}
             onChange={(e) => setCollection(e.target.value)}
@@ -205,17 +229,11 @@ export function InsertFormDialog({
             control={<Switch checked={alsoList} onChange={(e) => setAlsoList(e.target.checked)} />}
             label="Also insert a table of the records"
           />
+          <InsertRequirements missing={missing} />
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button
-          onClick={() => {
-            reset()
-            onClose()
-          }}
-        >
-          Cancel
-        </Button>
+        <Button onClick={onClose}>Cancel</Button>
         <Button variant="contained" disabled={!canInsert} onClick={handleInsert}>
           Insert
         </Button>

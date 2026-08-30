@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle } from '@mui/material'
 
 export interface ConfirmDialogProps {
@@ -47,24 +47,48 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  /**
+   * What the dialog said while it was open, kept for the close transition.
+   *
+   * Callers derive the title from the same state their confirm handler clears —
+   * `Delete :${name}:?` from a `name` that becomes null the moment you press
+   * Delete. MUI keeps the paper mounted for ~200ms while it fades, so the last
+   * thing the user read on the way out was `Delete :null:?`. Holding the open
+   * content here fixes it for every caller at once, rather than asking each one
+   * to keep a shadow copy of state it has just finished with.
+   *
+   * Keyed on the title, which is the identity of what is being confirmed — the
+   * body and the verb come from the same state in every caller, so a title that
+   * has not changed means none of them have.
+   */
+  const [held, setHeld] = useState({ title, children, confirmLabel })
+  const [heldTitle, setHeldTitle] = useState(title)
+  if (open && heldTitle !== title) {
+    setHeldTitle(title)
+    setHeld({ title, children, confirmLabel })
+  }
+  const shown = open ? { title, children, confirmLabel } : held
+
   // Centred at every width, deliberately — see app/useDialogFullScreen.ts. A
   // whole phone screen given over to one sentence and two buttons reads as a
   // page you navigated to rather than a question you were asked.
   return (
     <Dialog open={open} onClose={onCancel}>
-      <DialogTitle>{title}</DialogTitle>
+      <DialogTitle>{shown.title}</DialogTitle>
       <DialogContent>
-        <DialogContentText component="div">{children}</DialogContentText>
+        <DialogContentText component="div">{shown.children}</DialogContentText>
       </DialogContent>
       <DialogActions>
         {/* Default focus on Cancel, never on the destructive action — a stray
             Enter (easy to hit while already anxious about what you are about to
             do) must not confirm. */}
-        <Button autoFocus onClick={onCancel}>
+        <Button autoFocus onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
-        <Button color={tone} variant="contained" disabled={busy} onClick={onConfirm}>
-          {confirmLabel}
+        {/* `loading`, not just `disabled`: a button that greys out on click and
+            then sits there says nothing about whether anything is happening. */}
+        <Button color={tone} variant="contained" loading={busy} onClick={onConfirm}>
+          {shown.confirmLabel}
         </Button>
       </DialogActions>
     </Dialog>

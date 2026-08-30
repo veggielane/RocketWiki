@@ -39,6 +39,17 @@ export function DrawioEditorDialog({ open, payload, alt, onSave, onClose, config
   // one save gesture for the whole edit, so Cancel discards both alike.
   const [altDraft, setAltDraft] = useState(alt)
 
+  // Re-seeded on open, like the fence-insert dialogs. Today the only caller
+  // mounts this conditionally, so mount-time state happens to be enough — but
+  // that is the caller's accident, not this component's contract, and a second
+  // caller that keeps it mounted would silently edit one diagram's alt text
+  // into the next.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (wasOpen !== open) {
+    setWasOpen(open)
+    if (open) setAltDraft(alt)
+  }
+
   // Keep the latest callbacks reachable from the (per-open) session without
   // tearing the handshake down every parent re-render.
   const saveRef = useRef(onSave)
@@ -115,7 +126,15 @@ export function DrawioEditorDialog({ open, payload, alt, onSave, onClose, config
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      // The dialog with the most to lose in the whole app: a stray click on the
+      // 8px of backdrop around a 92vh paper would discard an entire diagram
+      // editing session AND the alt draft, with no undo — the iframe holds the
+      // only copy until Save and Exit. Escape and Cancel still close, because
+      // both are deliberate acts.
+      onClose={(_event, reason) => {
+        if (reason === 'backdropClick') return
+        onClose()
+      }}
       maxWidth="xl"
       fullWidth
       aria-labelledby="drawio-dialog-title"

@@ -20,7 +20,7 @@ const SPACE_ROLE_LABELS: Record<string, string> = {
 export function PermissionInspector({ detail }: { detail: EffectivePermissionDetail }) {
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">
+      <Typography variant="h6" component="h2">
         Why can {detail.userDisplayName} {detail.canView ? '' : "n't"} see this page?
       </Typography>
 

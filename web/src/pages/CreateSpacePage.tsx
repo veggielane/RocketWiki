@@ -110,7 +110,7 @@ export function CreateSpacePage() {
       />
 
       <Paper variant="outlined" sx={{ p: 2 }}>
-        <Typography variant="h6" gutterBottom>
+        <Typography variant="h6" component="h2" gutterBottom>
           Initial grant
         </Typography>
         <Alert severity="info" variant="outlined" sx={{ mb: 2 }}>

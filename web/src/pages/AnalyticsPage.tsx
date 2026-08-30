@@ -3,6 +3,7 @@ import { Link as RouterLink, useParams } from 'react-router-dom'
 import {
   Alert,
   Box,
+  Button,
   Divider,
   Link,
   MenuItem,
@@ -12,7 +13,9 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import { useAnalyticsQuery, useSpaceListQuery } from '../graphql/generated/graphql'
+import RefreshIcon from '@mui/icons-material/Refresh'
+import { useAnalyticsQuery, useSpaceListQuery, type AnalyticsQuery } from '../graphql/generated/graphql'
+import { describeLoadFailure } from '../feedback/unavailableCopy'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { sameSpaceKey } from './pageSlug'
@@ -56,7 +59,7 @@ export function AnalyticsPage() {
     return { fromUtc: start.toISOString(), toUtc: end.toISOString() }
   }, [days])
 
-  const [{ data, fetching, error }] = useAnalyticsQuery({
+  const [{ data, fetching, error }, refetch] = useAnalyticsQuery({
     variables: { spaceKey: spaceKey ?? null, fromUtc, toUtc },
   })
 
@@ -69,69 +72,93 @@ export function AnalyticsPage() {
   const spaceName = spaceList?.spaces.find((s) => sameSpaceKey(s.key, spaceKey))?.name
   useDocumentTitle(spaceKey ? `Analytics — ${spaceName ?? spaceKey}` : 'Site analytics')
 
-    // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
+  const report = data?.analytics
+  // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
   // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
   // away on every post-write refetch: content, scroll position and keyboard
   // focus all went with it. `&& !data` keeps the rendered screen up while the
   // re-read happens underneath it.
-  if (fetching && !data) {
-    return <Skeleton variant="rectangular" height={420} />
-  }
+  const loadingFirstTime = fetching && !data
 
-  const report = data?.analytics
-  if (error || !report) {
-    return (
-      <Alert severity="info">
-        {spaceKey
-          ? 'Analytics for this space are available to its space admins and to instance admins.'
-          : 'Site analytics are available to instance admins.'}
-      </Alert>
-    )
-  }
+  return (
+    <Stack spacing={3}>
+      {/* The header is rendered unconditionally, on every branch. It used to be
+          replaced wholesale by a skeleton and then by an Alert, which is how a
+          screen ends up with no <h1> in either of the two states a first-time
+          visitor is most likely to hit. The Period select rides in the header's
+          own `actions` slot rather than in a hand-rolled space-between row. */}
+      <PageHeader
+        title={spaceKey ? 'Analytics' : 'Site analytics'}
+        // The space's NAME, from the space list the rail already has
+        // cached — this heading used to read `Analytics: PROP` while its
+        // siblings said `Trash — Propulsion`, the same space under two
+        // names on adjacent screens. Falls back to the key only while the
+        // list is still in flight.
+        subject={spaceKey ? { label: spaceName ?? spaceKey, to: `/spaces/${spaceKey}` } : undefined}
+        // Says what the numbers are OF. A report filtered by clearance that
+        // presented itself as the whole space would be quietly misleading.
+        description={
+          report
+            ? `Counted over the ${report.scope.visiblePageCount} page${
+                report.scope.visiblePageCount === 1 ? '' : 's'
+              } you can view.`
+            : undefined
+        }
+        actions={
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <TextField
+              select
+              size="small"
+              label="Period"
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value))}
+              sx={{ minWidth: 160 }}
+            >
+              {PERIODS.map((period) => (
+                <MenuItem key={period.days} value={period.days}>
+                  {period.label}
+                </MenuItem>
+              ))}
+            </TextField>
+            <Button
+              startIcon={<RefreshIcon />}
+              onClick={() => refetch({ requestPolicy: 'network-only' })}
+              disabled={fetching}
+            >
+              Refresh
+            </Button>
+          </Stack>
+        }
+      />
 
+      {loadingFirstTime && <Skeleton variant="rectangular" height={420} />}
+
+      {/* A failed request and a server null are different facts. The one
+          sentence that used to cover both told an admin whose API was down that
+          they lacked permission — and left them looking for someone to grant it. */}
+      {!loadingFirstTime && error && <Alert severity="info">{describeLoadFailure('ANALYTICS').summary}</Alert>}
+      {!loadingFirstTime && !error && !report && (
+        <Alert severity="info">
+          {spaceKey
+            ? 'Analytics for this space are available to its space admins and to instance admins.'
+            : 'Site analytics are available to instance admins.'}
+        </Alert>
+      )}
+
+      {report && <AnalyticsReport report={report} />}
+    </Stack>
+  )
+}
+
+type AnalyticsReportData = NonNullable<AnalyticsQuery['analytics']>
+
+/** The report itself, once there is one — split out so the header above can render on every branch. */
+function AnalyticsReport({ report }: { report: AnalyticsReportData }) {
   const totalViews = report.activity.reduce((n, point) => n + point.views, 0)
   const totalEdits = report.activity.reduce((n, point) => n + point.edits, 0)
 
   return (
     <Stack spacing={3}>
-      <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap" }}>
-        {/* flexGrow on the title, not just space-between: with both children
-            sized to their content the selector sat mid-header rather than at the
-            right edge. */}
-        <Box sx={{ flexGrow: 1, minWidth: 240 }}>
-          <PageHeader
-            title={spaceKey ? 'Analytics' : 'Site analytics'}
-            // The space's NAME, from the space list the rail already has
-            // cached — this heading used to read `Analytics: PROP` while its
-            // siblings said `Trash — Propulsion`, the same space under two
-            // names on adjacent screens. Falls back to the key only while the
-            // list is still in flight.
-            subject={
-              spaceKey ? { label: spaceName ?? spaceKey, to: `/spaces/${spaceKey}` } : undefined
-            }
-            // Says what the numbers are OF. A report filtered by clearance that
-            // presented itself as the whole space would be quietly misleading.
-            description={`Counted over the ${report.scope.visiblePageCount} page${
-              report.scope.visiblePageCount === 1 ? '' : 's'
-            } you can view.`}
-          />
-        </Box>
-        <TextField
-          select
-          size="small"
-          label="Period"
-          value={days}
-          onChange={(e) => setDays(Number(e.target.value))}
-          sx={{ minWidth: 160 }}
-        >
-          {PERIODS.map((period) => (
-            <MenuItem key={period.days} value={period.days}>
-              {period.label}
-            </MenuItem>
-          ))}
-        </TextField>
-      </Stack>
-
       <Stack direction="row" spacing={2} useFlexGap sx={{ flexWrap: "wrap" }}>
         <StatTile label="Views" value={totalViews} />
         <StatTile label="Edits" value={totalEdits} />

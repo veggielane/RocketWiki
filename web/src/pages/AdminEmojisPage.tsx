@@ -5,6 +5,7 @@ import {
   Button,
   IconButton,
   Paper,
+  Snackbar,
   Stack,
   TextField,
   Tooltip,
@@ -14,6 +15,7 @@ import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import { type GridColDef } from '@mui/x-data-grid'
 import { useCustomEmojisQuery, type CustomEmojisQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { ConfirmDialog } from '../feedback/ConfirmDialog'
 import { PageHeader } from '../app/PageHeader'
 import { RegistryDataGrid } from '../app/RegistryDataGrid'
@@ -49,7 +51,13 @@ export function AdminEmojisPage() {
   const [name, setName] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
-  const [feedback, setFeedback] = useState<{ severity: 'success' | 'warning'; message: string } | null>(null)
+  // Split in two, deliberately. One `severity`-carrying state cannot take the
+  // right surface for both outcomes: a success is transient and belongs in an
+  // auto-hiding Snackbar, while a refusal has to stay until it is read
+  // (web/README.md's feedback rule). Sharing one slot is what kept this screen
+  // out of the convergence the other six screens made.
+  const [notice, setNotice] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   const nameInvalid = name.length > 0 && !isValidEmojiName(name)
@@ -77,32 +85,36 @@ export function AdminEmojisPage() {
   const handleUpload = async () => {
     if (!file || !isValidEmojiName(name)) return
     setBusy(true)
-    setFeedback(null)
+    setActionError(null)
     try {
       const created = await uploadEmoji(name, file)
-      setFeedback({ severity: 'success', message: `Added :${created.name}:` })
+      setNotice(`Added :${created.name}:`)
       setName('')
       setFile(null)
       refetch({ requestPolicy: 'network-only' })
     } catch (err) {
-      setFeedback({ severity: 'warning', message: describeFailure(err) })
+      setActionError(describeFailure(err))
     } finally {
       setBusy(false)
     }
   }
 
   const handleDelete = async (emojiName: string) => {
-    setConfirmDelete(null)
+    // The dialog stays open for the duration and closes when the server has
+    // answered. Closing it first left the delete in flight behind a screen that
+    // said nothing was happening, and made `busy` — which the dialog accepts —
+    // impossible to show.
     setBusy(true)
-    setFeedback(null)
+    setActionError(null)
     try {
       await deleteEmoji(emojiName)
-      setFeedback({ severity: 'success', message: `Deleted :${emojiName}: — existing content shows the literal text.` })
+      setNotice(`Deleted :${emojiName}: — existing content shows the literal text.`)
       refetch({ requestPolicy: 'network-only' })
     } catch (err) {
-      setFeedback({ severity: 'warning', message: describeFailure(err) })
+      setActionError(describeFailure(err))
     } finally {
       setBusy(false)
+      setConfirmDelete(null)
     }
   }
 
@@ -127,15 +139,20 @@ export function AdminEmojisPage() {
       sortable: false,
       renderCell: (params) => (
         <Tooltip title={`Delete :${params.row.name}:`}>
-          <IconButton
-            size="small"
-            color="error"
-            aria-label={`Delete :${params.row.name}:`}
-            disabled={busy}
-            onClick={() => setConfirmDelete(params.row.name)}
-          >
-            <DeleteOutlinedIcon fontSize="small" />
-          </IconButton>
+          {/* The span is load-bearing: a disabled button fires no pointer
+              events, so a Tooltip attached straight to one goes silent exactly
+              when someone is most likely to hover it asking why. */}
+          <span>
+            <IconButton
+              size="small"
+              color="error"
+              aria-label={`Delete :${params.row.name}:`}
+              disabled={busy}
+              onClick={() => setConfirmDelete(params.row.name)}
+            >
+              <DeleteOutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
         </Tooltip>
       ),
     },
@@ -156,9 +173,9 @@ export function AdminEmojisPage() {
         }
       />
 
-      {feedback && (
-        <Alert severity={feedback.severity} onClose={() => setFeedback(null)}>
-          {feedback.message}
+      {actionError && (
+        <Alert severity="warning" onClose={() => setActionError(null)}>
+          {actionError}
         </Alert>
       )}
 
@@ -184,9 +201,9 @@ export function AdminEmojisPage() {
             aria-label="Choose emoji image"
             onChange={(e) => {
               const chosen = e.target.files?.[0] ?? null
-              setFeedback(null)
+              setActionError(null)
               if (chosen && !EMOJI_ACCEPTED_TYPES.includes(chosen.type)) {
-                setFeedback({ severity: 'warning', message: 'Emojis can be PNG, JPEG, WebP, or GIF images.' })
+                setActionError('Emojis can be PNG, JPEG, WebP, or GIF images.')
               } else {
                 setFile(chosen)
               }
@@ -230,12 +247,23 @@ export function AdminEmojisPage() {
         open={confirmDelete !== null}
         title={`Delete :${confirmDelete}:?`}
         confirmLabel="Delete"
+        busy={busy}
         onCancel={() => setConfirmDelete(null)}
         onConfirm={() => confirmDelete && void handleDelete(confirmDelete)}
       >
         Pages and comments using it will show the literal <code>:{confirmDelete}:</code> text instead. The name
         becomes available again immediately.
       </ConfirmDialog>
+
+      {/* Success is transient and requires no action, so it takes the Snackbar
+          — web/README.md's rule, and the surface the other six screens already
+          converged on. It was stuck in an inline Alert only because one state
+          held refusals too. */}
+      <Snackbar open={notice !== null} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setNotice(null)}>
+        <Alert severity="success" onClose={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      </Snackbar>
     </Stack>
   )
 }

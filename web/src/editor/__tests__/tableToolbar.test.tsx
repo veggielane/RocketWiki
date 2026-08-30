@@ -65,7 +65,7 @@ describe('editor toolbar — axe pass (WCAG 2.2 AA policy, test/axe.ts)', () => 
       { name: 'banana', etag: '"b1"' },
     ])
     renderToolbar(TWO_BY_TWO)
-    screen.getByRole('group', { name: 'Table cell controls' })
+    screen.getByRole('group', { name: 'Table controls' })
     await expectNoAxeViolations()
     fireEvent.click(screen.getByRole('button', { name: 'Insert emoji' }))
     await screen.findByRole('listbox', { name: 'Custom emojis' })
@@ -77,12 +77,12 @@ describe('editor toolbar — axe pass (WCAG 2.2 AA policy, test/axe.ts)', () => 
 describe('contextual table controls', () => {
   it('are absent while the selection is outside any table', () => {
     renderToolbar('plain paragraph\n')
-    expect(screen.queryByRole('group', { name: 'Table cell controls' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Table controls' })).not.toBeInTheDocument()
   })
 
   it('appear when the selection is inside a table (and merge/split are disabled for a lone caret)', () => {
     renderToolbar(TWO_BY_TWO) // initial selection lands in the first header cell
-    expect(screen.getByRole('group', { name: 'Table cell controls' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Table controls' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Merge cells' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Split cell' })).toBeDisabled()
   })

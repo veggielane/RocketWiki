@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, TextField } from '@mui/material'
 import type { GitLabIssuesSpec } from '../../gitlab/fenceBody'
 import { useDialogFullScreen } from '../../app/useDialogFullScreen'
+import { InsertRequirements } from '../InsertRequirements'
 
 export interface InsertGitLabIssuesDialogProps {
   open: boolean
@@ -42,7 +43,11 @@ export function InsertGitLabIssuesDialog({ open, onClose, onInsert }: InsertGitL
   }
 
   const firstValid = first.length === 0 || /^\d+$/.test(first)
-  const canInsert = project.trim().length > 0 && firstValid
+  const missing = [
+    ...(project.trim().length === 0 ? ['a project'] : []),
+    ...(firstValid ? [] : ['a whole number for max results']),
+  ]
+  const canInsert = missing.length === 0
 
   const handleInsert = () => {
     if (!canInsert) return
@@ -68,14 +73,16 @@ export function InsertGitLabIssuesDialog({ open, onClose, onInsert }: InsertGitL
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
+            autoFocus
             label="Project"
             value={project}
             onChange={(e) => setProject(e.target.value)}
             required
             fullWidth
+            size="small"
             helperText="Numeric id or namespaced path, e.g. propulsion/turbopump"
           />
-          <TextField label="State" select value={state} onChange={(e) => setState(e.target.value)} fullWidth>
+          <TextField label="State" select value={state} onChange={(e) => setState(e.target.value)} fullWidth size="small">
             <MenuItem value="">Any</MenuItem>
             <MenuItem value="opened">Open</MenuItem>
             <MenuItem value="closed">Closed</MenuItem>
@@ -85,16 +92,30 @@ export function InsertGitLabIssuesDialog({ open, onClose, onInsert }: InsertGitL
             value={labels}
             onChange={(e) => setLabels(e.target.value)}
             fullWidth
+            size="small"
             helperText="Comma-separated, e.g. bug,priority::high"
           />
-          <TextField label="Search" value={search} onChange={(e) => setSearch(e.target.value)} fullWidth />
-          <TextField label="Milestone" value={milestone} onChange={(e) => setMilestone(e.target.value)} fullWidth />
-          <TextField label="Order by" select value={orderBy} onChange={(e) => setOrderBy(e.target.value)} fullWidth>
+          <TextField label="Search" value={search} onChange={(e) => setSearch(e.target.value)} fullWidth size="small" />
+          <TextField
+            label="Milestone"
+            value={milestone}
+            onChange={(e) => setMilestone(e.target.value)}
+            fullWidth
+            size="small"
+          />
+          <TextField
+            label="Order by"
+            select
+            value={orderBy}
+            onChange={(e) => setOrderBy(e.target.value)}
+            fullWidth
+            size="small"
+          >
             <MenuItem value="">Default</MenuItem>
             <MenuItem value="created_at">Created</MenuItem>
             <MenuItem value="updated_at">Updated</MenuItem>
           </TextField>
-          <TextField label="Sort" select value={sort} onChange={(e) => setSort(e.target.value)} fullWidth>
+          <TextField label="Sort" select value={sort} onChange={(e) => setSort(e.target.value)} fullWidth size="small">
             <MenuItem value="">Default</MenuItem>
             <MenuItem value="desc">Newest first</MenuItem>
             <MenuItem value="asc">Oldest first</MenuItem>
@@ -104,9 +125,11 @@ export function InsertGitLabIssuesDialog({ open, onClose, onInsert }: InsertGitL
             value={first}
             onChange={(e) => setFirst(e.target.value)}
             fullWidth
+            size="small"
             error={!firstValid}
             helperText={firstValid ? 'Defaults to 20; the server caps at 50.' : 'Digits only.'}
           />
+          <InsertRequirements missing={missing} />
         </Stack>
       </DialogContent>
       <DialogActions>

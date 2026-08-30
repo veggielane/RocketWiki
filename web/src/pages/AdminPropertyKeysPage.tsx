@@ -90,7 +90,9 @@ export function AdminPropertyKeysPage() {
   }
 
   const handleDelete = async (row: KeyRow) => {
-    setConfirmDelete(null)
+    // The dialog stays open until the server has answered — this delete can be
+    // REFUSED (the key is in use), and closing first meant the question
+    // disappeared before its answer arrived.
     setBusy(true)
     setRefusal(null)
     try {
@@ -110,6 +112,7 @@ export function AdminPropertyKeysPage() {
       refetch({ requestPolicy: 'network-only' })
     } finally {
       setBusy(false)
+      setConfirmDelete(null)
     }
   }
 
@@ -226,6 +229,7 @@ export function AdminPropertyKeysPage() {
         open={confirmDelete !== null}
         title={`Delete ${confirmDelete?.key}?`}
         confirmLabel="Delete"
+        busy={busy}
         onCancel={() => setConfirmDelete(null)}
         onConfirm={() => confirmDelete && void handleDelete(confirmDelete)}
       >

@@ -154,14 +154,25 @@ describe('CreatePageDialog', () => {
     await expectNoAxeViolations()
   })
 
-  it('clears its fields on cancel, so reopening starts fresh', () => {
-    const { onCancel } = open()
+  it('starts fresh on every reopen, however the last one ended', () => {
+    // Reset moved from Cancel to open. Both callers keep this mounted and the
+    // SUCCESS path closes it without going through Cancel, so resetting on the
+    // way out meant the next "New page" opened onto the last page's title,
+    // slug and icon. Reopening is now the reset, whichever way it closed.
+    const props = { parentLabel: 'Engineering', onCancel: vi.fn(), onConfirm: vi.fn() }
+    const { rerender } = render(<CreatePageDialog open {...props} />)
+
     fireEvent.change(titleBox(), { target: { value: 'Discarded' } })
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Icon' }))
     fireEvent.click(screen.getByRole('option', { name: 'Rocket' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(onCancel).toHaveBeenCalled()
+    expect(props.onCancel).toHaveBeenCalled()
+
+    rerender(<CreatePageDialog open={false} {...props} />)
+    rerender(<CreatePageDialog open {...props} />)
+
     expect(titleBox()).toHaveValue('')
+    expect(slugBox().value).toBe('')
     expect(screen.getByRole('combobox', { name: 'Icon' })).toHaveTextContent('No icon')
   })
 })

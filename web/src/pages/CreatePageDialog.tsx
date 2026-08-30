@@ -84,24 +84,29 @@ export function CreatePageDialog({
     setParentPageId(defaultParentId)
   }
 
-  const reset = () => {
-    setTitle('')
-    setSlug('')
-    setSlugEdited(false)
-    setParentPageId(defaultParentId)
-    setIcon(null)
-  }
-
-  const handleCancel = () => {
-    reset()
-    onCancel()
+  // Reset on OPEN, not on Cancel. Both callers keep this mounted and only
+  // toggle `open`, and the success path closes it without going through
+  // Cancel — so resetting on the way out left the previous page's title, slug
+  // and icon sitting in the fields the next time someone clicked "New page".
+  // Adjusting during render is the same idiom as `trackedDefault` above, and it
+  // holds however the dialog was closed.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (wasOpen !== open) {
+    setWasOpen(open)
+    if (open) {
+      setTitle('')
+      setSlug('')
+      setSlugEdited(false)
+      setParentPageId(defaultParentId)
+      setIcon(null)
+    }
   }
 
   const effectiveSlug = slugEdited ? slug : slugifyTitle(title)
   const canCreate = title.trim().length > 0 && isUsableSlug(effectiveSlug) && !busy
 
   return (
-    <Dialog open={open} onClose={handleCancel} fullWidth maxWidth="sm" fullScreen={fullScreen}>
+    <Dialog open={open} onClose={onCancel} fullWidth maxWidth="sm" fullScreen={fullScreen}>
       <DialogTitle>New page in {parentLabel}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
@@ -167,7 +172,7 @@ export function CreatePageDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleCancel}>Cancel</Button>
+        <Button onClick={onCancel}>Cancel</Button>
         <Button
           variant="contained"
           disabled={!canCreate}

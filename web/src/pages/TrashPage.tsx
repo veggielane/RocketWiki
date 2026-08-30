@@ -1,9 +1,10 @@
 import { useParams } from 'react-router-dom'
 import { useMemo, useState } from 'react'
-import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
+import { Alert, Button, List, ListItem, ListItemText, Skeleton, Snackbar, Stack, Typography } from '@mui/material'
 import { useRestorePageMutation, useSpaceTrashQuery } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
 import { describeLoadFailure, describeWriteFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { groupTrashBatches } from '../trash/groupTrashBatches'
 import { describeExpiry } from '../trash/trashCountdown'
 import { UserAvatar } from '../avatars/UserAvatar'
@@ -27,7 +28,13 @@ export function TrashPage() {
   })
   const [, restorePage] = useRestorePageMutation()
   const [restoringId, setRestoringId] = useState<string | null>(null)
-  const [message, setMessage] = useState<{ severity: 'success' | 'warning'; text: string } | null>(null)
+  // Split in two, deliberately. One `severity`-carrying state cannot take the
+  // right surface for both outcomes: a success is transient and belongs in an
+  // auto-hiding Snackbar, while a refusal has to stay until it is read
+  // (web/README.md's feedback rule). Sharing one slot is what kept this screen
+  // out of the convergence the other six screens made.
+  const [notice, setNotice] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const batches = useMemo(
     () =>
@@ -48,65 +55,69 @@ export function TrashPage() {
 
   const handleRestore = async (batchId: string, rootPageId: string) => {
     setRestoringId(batchId)
-    setMessage(null)
+    setActionError(null)
     const result = await restorePage({ input: { pageId: rootPageId } })
     setRestoringId(null)
     // Same silent-failure hole as the create-space button: with no `data`,
     // `describeMutationError` returns null and Restore appeared to do nothing.
     if (result.error !== undefined) {
-      setMessage({ severity: 'warning', text: describeWriteFailure('RESTORE_PAGE').summary })
+      setActionError(describeWriteFailure('RESTORE_PAGE').summary)
       return
     }
     const payload = result.data?.restorePage
     const replica = asReadOnlyReplica(payload?.error)
     if (replica) {
-      setMessage({
-        severity: 'warning',
-        text: `${replicaBadgeLabel(replica.originInstanceId)}. ${REPLICA_EXPLANATION}`,
-      })
+      setActionError(`${replicaBadgeLabel(replica.originInstanceId)}. ${REPLICA_EXPLANATION}`)
       return
     }
     const errorText = describeMutationError(payload?.error)
     if (errorText) {
-      setMessage({ severity: 'warning', text: errorText })
+      setActionError(errorText)
       return
     }
     if (payload?.summary) {
       const count = payload.summary.restoredPageCount
-      setMessage({ severity: 'success', text: `Restored ${count} page${count === 1 ? '' : 's'}.` })
+      setNotice(`Restored ${count} page${count === 1 ? '' : 's'}.`)
       refetch({ requestPolicy: 'network-only' })
     }
   }
 
-    // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
+  // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
   // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
   // away on every post-write refetch: content, scroll position and keyboard
   // focus all went with it. `&& !data` keeps the rendered screen up while the
   // re-read happens underneath it.
-  if (fetching && !data) {
-    return (
-      <Stack spacing={1}>
-        <Skeleton variant="text" width="40%" height={48} />
-        <Skeleton variant="rectangular" height={300} />
-      </Stack>
-    )
-  }
-
-  if (error || !data?.space) {
-    return <Alert severity="info">{describeLoadFailure('TRASH').summary}</Alert>
-  }
+  const loadingFirstTime = fetching && !data
+  const space = data?.space ?? null
 
   return (
     <Stack spacing={2}>
-      <PageHeader title="Trash" subject={{ label: data.space.name, to: `/spaces/${data.space.key}` }} />
+      {/* The heading renders on every branch. Both the loading skeleton and the
+          failure Alert used to REPLACE the whole screen, taking the only <h1>
+          with them — so the two states a first-time visitor is most likely to
+          meet were the two with no heading to land on. The space name joins it
+          when the read succeeds. */}
+      <PageHeader
+        title="Trash"
+        subject={space ? { label: space.name, to: `/spaces/${space.key}` } : undefined}
+      />
 
-      {message && (
-        <Alert severity={message.severity} onClose={() => setMessage(null)}>
-          {message.text}
+      {loadingFirstTime && <Skeleton variant="rectangular" height={300} />}
+
+      {!loadingFirstTime && (error || !space) && (
+        <Alert severity="info">{describeLoadFailure('TRASH').summary}</Alert>
+      )}
+
+      {actionError && (
+        <Alert severity="warning" onClose={() => setActionError(null)}>
+          {actionError}
         </Alert>
       )}
 
-      {batches.length === 0 ? (
+      {/* Neither the sentence nor the list belongs to a screen that has not
+          loaded or has failed — an empty <List> under an error Alert is the
+          shape of a successful, empty read. */}
+      {!loadingFirstTime && space && (batches.length === 0 ? (
         <Typography color="text.secondary">
           Trash is empty — deleted pages land here and can be restored for 30 days.
         </Typography>
@@ -163,7 +174,17 @@ export function TrashPage() {
             </ListItem>
           ))}
         </List>
-      )}
+      ))}
+
+      {/* Success is transient and requires no action, so it takes the Snackbar
+          — web/README.md's rule, and the surface the other six screens already
+          converged on. It was stuck in an inline Alert only because one state
+          held refusals too. */}
+      <Snackbar open={notice !== null} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setNotice(null)}>
+        <Alert severity="success" onClose={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      </Snackbar>
     </Stack>
   )
 }

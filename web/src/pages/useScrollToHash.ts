@@ -16,16 +16,23 @@ export function useScrollToHash(readyDependency: unknown): void {
     const hash = location.hash.slice(1)
     if (!hash) return
 
+    // Honours `prefers-reduced-motion`: a long smooth scroll to a deep heading
+    // is precisely the kind of large involuntary movement the preference is
+    // for. The destination is identical either way — only the journey changes.
+    const behavior: ScrollBehavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+      ? 'auto'
+      : 'smooth'
+
     const existing = document.getElementById(hash)
     if (existing) {
-      existing.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      existing.scrollIntoView({ behavior, block: 'start' })
       return
     }
 
     const observer = new MutationObserver(() => {
       const el = document.getElementById(hash)
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        el.scrollIntoView({ behavior, block: 'start' })
         observer.disconnect()
       }
     })

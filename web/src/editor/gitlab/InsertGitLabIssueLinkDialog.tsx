@@ -11,6 +11,7 @@ import {
 } from '@mui/material'
 import { parseGitLabIssueUrl, type GitLabIssueRef } from '../../gitlab/issueScheme'
 import { useDialogFullScreen } from '../../app/useDialogFullScreen'
+import { InsertRequirements } from '../InsertRequirements'
 
 export interface InsertGitLabIssueLinkDialogProps {
   open: boolean
@@ -54,7 +55,11 @@ export function InsertGitLabIssueLinkDialog({ open, initialText, onClose, onInse
   }
 
   const iidValid = /^\d+$/.test(iid)
-  const canInsert = project.trim().length > 0 && iidValid
+  const missing = [
+    ...(project.trim().length === 0 ? ['a project'] : []),
+    ...(iidValid ? [] : [iid.length === 0 ? 'an issue number' : 'a numeric issue number']),
+  ]
+  const canInsert = missing.length === 0
   const effectiveText = text.trim().length > 0 ? text.trim() : `${project}#${iid}`
 
   const handleInsert = () => {
@@ -69,10 +74,12 @@ export function InsertGitLabIssueLinkDialog({ open, initialText, onClose, onInse
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <TextField
+            autoFocus
             label="Paste a GitLab issue URL (optional)"
             value={url}
             onChange={(e) => handleUrlChange(e.target.value)}
             fullWidth
+            size="small"
             helperText="Fills in project and issue number — only those are stored, never the host."
           />
           <TextField
@@ -81,6 +88,7 @@ export function InsertGitLabIssueLinkDialog({ open, initialText, onClose, onInse
             onChange={(e) => setProject(e.target.value)}
             required
             fullWidth
+            size="small"
             helperText="Numeric id or namespaced path, e.g. propulsion/turbopump"
           />
           <TextField
@@ -89,14 +97,21 @@ export function InsertGitLabIssueLinkDialog({ open, initialText, onClose, onInse
             onChange={(e) => setIid(e.target.value)}
             required
             fullWidth
+            size="small"
             error={iid.length > 0 && !iidValid}
-            helperText={iid.length > 0 && !iidValid ? 'Digits only (the issue iid).' : undefined}
+            // A helper slot that empties once the value is valid drops a line of
+            // height and shifts every field below it mid-typing. Every other
+            // field in the family keeps a fallback string; so does this one.
+            helperText={iid.length > 0 && !iidValid ? 'Digits only (the issue iid).' : 'The issue iid, e.g. 42.'}
           />
-          <TextField label="Link text" value={text} onChange={(e) => setText(e.target.value)} fullWidth />
-          <Typography variant="caption" color="text.secondary">
+          <TextField label="Link text" value={text} onChange={(e) => setText(e.target.value)} fullWidth size="small" />
+          {/* Politely announced, like the page-list dialog's read-out: it is a
+              live preview of what gets stored, and it changes as you type. */}
+          <Typography variant="caption" color="text.secondary" aria-live="polite">
             The page stores gitlab-issue://{project.trim() || '{project}'}/{iidValid ? iid : '{iid}'} — live state
             renders when the page is viewed.
           </Typography>
+          <InsertRequirements missing={missing} />
         </Stack>
       </DialogContent>
       <DialogActions>

@@ -707,3 +707,39 @@
 .collaboration-carets__selection {
   pointer-events: none;
 }
+
+/* --- Code block language control (design.md §4: "code blocks with language") -
+   The picker sits above the fence rather than floating over it: a corner
+   overlay would cover the first line of a short block, which is where the
+   interesting line usually is. `contentEditable=false` lives on the element
+   itself (CodeBlockView.tsx) so ProseMirror treats it as chrome. */
+.rw-code-block-wrapper {
+  margin: 0 0 0.75em;
+}
+
+.rw-code-language,
+.rw-code-language-label {
+  display: inline-block;
+  margin-bottom: 0.25em;
+  font-size: 0.75em;
+  font-family: 'JetBrains Mono', Consolas, Menlo, monospace;
+  color: var(--rw-muted, #5b6270);
+}
+
+.rw-code-language {
+  background: var(--rw-code-bg, #f2f3f5);
+  border: 1px solid var(--rw-border, #c9ccd1);
+  border-radius: 4px;
+  /* WCAG 2.5.8: a bare <select> at 0.75em lands well under the 24px floor. */
+  min-height: 24px;
+  padding: 0 0.4em;
+}
+
+.rw-code-language:focus-visible {
+  outline: 2px solid var(--rw-link, #1a56db);
+  outline-offset: 1px;
+}
+
+.rw-code-block-wrapper .rw-code-block {
+  margin: 0;
+}

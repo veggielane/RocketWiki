@@ -120,8 +120,21 @@ function toRuleNode(node: BuilderNode): RuleNode {
 
 // ---- Validation — the emission gate ----
 
+/**
+ * Which control an issue belongs to.
+ *
+ * A tag, not a substring of the message. The editor used to decide where to
+ * show an error by testing the English prose — `m.includes('value')` — and
+ * `'Values must not be empty.'` starts with a capital V, so that issue matched
+ * nothing and was never displayed at all: the rule stayed un-saveable with no
+ * field marked and no sentence anywhere on screen. Prose is for reading;
+ * routing needs something the compiler can check.
+ */
+export type IssueField = 'children' | 'group' | 'user' | 'attribute' | 'values'
+
 export interface ValidationIssue {
   nodeId: string
+  field: IssueField
   message: string
 }
 
@@ -130,7 +143,7 @@ function collectIssues(node: BuilderNode, issues: ValidationIssue[]): void {
     case 'allOf':
     case 'anyOf':
       if (node.children.length === 0) {
-        issues.push({ nodeId: node.id, message: 'A group needs at least one condition.' })
+        issues.push({ nodeId: node.id, field: 'children', message: 'A group needs at least one condition.' })
       }
       for (const child of node.children) {
         collectIssues(child, issues)
@@ -140,22 +153,22 @@ function collectIssues(node: BuilderNode, issues: ValidationIssue[]): void {
       break
     case 'group':
       if (node.group.trim().length === 0) {
-        issues.push({ nodeId: node.id, message: 'Group name is required.' })
+        issues.push({ nodeId: node.id, field: 'group', message: 'Group name is required.' })
       }
       break
     case 'user':
       if (node.userId.trim().length === 0) {
-        issues.push({ nodeId: node.id, message: 'User is required.' })
+        issues.push({ nodeId: node.id, field: 'user', message: 'User is required.' })
       }
       break
     case 'attr':
       if (node.attribute.trim().length === 0) {
-        issues.push({ nodeId: node.id, message: 'Attribute is required.' })
+        issues.push({ nodeId: node.id, field: 'attribute', message: 'Attribute is required.' })
       }
       if (node.in.length === 0) {
-        issues.push({ nodeId: node.id, message: 'At least one value is required.' })
+        issues.push({ nodeId: node.id, field: 'values', message: 'At least one value is required.' })
       } else if (node.in.some((v) => v.trim().length === 0)) {
-        issues.push({ nodeId: node.id, message: 'Values must not be empty.' })
+        issues.push({ nodeId: node.id, field: 'values', message: 'Values must not be empty.' })
       }
       break
   }

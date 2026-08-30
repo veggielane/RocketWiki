@@ -1,5 +1,5 @@
 import { useRef, useState, type MouseEvent } from 'react'
-import { getMarkRange, type Editor } from '@tiptap/core'
+import { getMarkRange, type ChainedCommands, type Editor } from '@tiptap/core'
 import { useEditorState } from '@tiptap/react'
 import {
   Box,
@@ -28,6 +28,9 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined'
 import BugReportOutlinedIcon from '@mui/icons-material/BugReportOutlined'
 import FormatListBulletedAddIcon from '@mui/icons-material/PlaylistAddOutlined'
 import CallMergeIcon from '@mui/icons-material/CallMerge'
+import TableRowsOutlinedIcon from '@mui/icons-material/TableRowsOutlined'
+import ViewWeekOutlinedIcon from '@mui/icons-material/ViewWeekOutlined'
+import DeleteOutlinedIcon from '@mui/icons-material/DeleteOutlined'
 import CallSplitIcon from '@mui/icons-material/CallSplit'
 import FormatAlignLeftIcon from '@mui/icons-material/FormatAlignLeft'
 import FormatAlignCenterIcon from '@mui/icons-material/FormatAlignCenter'
@@ -95,6 +98,8 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const [pageListDialogOpen, setPageListDialogOpen] = useState(false)
   const [formDialogOpen, setFormDialogOpen] = useState(false)
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
+  const [rowMenuAnchor, setRowMenuAnchor] = useState<HTMLElement | null>(null)
+  const [columnMenuAnchor, setColumnMenuAnchor] = useState<HTMLElement | null>(null)
   // §15/§18 fail-closed extends to UI affordances: no GitLab:BaseUrl means
   // the feature is absent, so the whole GitLab menu is hidden, not disabled.
   const [{ data: gitlabStatusData }] = useGitLabStatusQuery()
@@ -197,6 +202,19 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
 
   const insertTable = () => {
     editor.chain().focus().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run()
+  }
+
+  /**
+   * Runs one structural table command and closes the menu it came from.
+   * `focus()` first, because the click moved focus to the menu item and every
+   * one of these acts on the cell the caret is in.
+   */
+  const runTableCommand = (
+    command: (chain: ChainedCommands) => ChainedCommands,
+    closeMenu: (anchor: null) => void,
+  ) => {
+    command(editor.chain().focus()).run()
+    closeMenu(null)
   }
 
   const insertMermaid = () => {
@@ -485,7 +503,90 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
       {tableState && (
         <>
           <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }} role="group" aria-label="Table cell controls">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }} role="group" aria-label="Table controls">
+            {/*
+              Row and column structure. None of this existed: the toolbar could
+              insert a 2×2 and then merge, split and align its cells, but a
+              column could never be ADDED at all — TipTap's Tab-in-last-cell
+              adds a row and nothing adds a column — and a table inserted by
+              mistake could only be removed by selecting across its whole node,
+              with Enter inside a cell remapped to a hard break so the usual
+              escape hatch was gone too. The merge/split/align controls that did
+              exist implied a table model far richer than the one shipped.
+
+              Menus rather than six more icons: the toolbar already wraps at the
+              app's 960px measure, and "add a row" is a two-step thought
+              (which side?) that a menu states and an icon cannot.
+            */}
+            <Tooltip title="Rows">
+              <IconButton
+                size="small"
+                onClick={(e) => setRowMenuAnchor(e.currentTarget)}
+                aria-label="Row actions"
+                aria-haspopup="menu"
+              >
+                <TableRowsOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Menu anchorEl={rowMenuAnchor} open={Boolean(rowMenuAnchor)} onClose={() => setRowMenuAnchor(null)}>
+              <MenuItem onClick={() => runTableCommand((c) => c.addRowBefore(), setRowMenuAnchor)}>
+                Insert row above
+              </MenuItem>
+              <MenuItem onClick={() => runTableCommand((c) => c.addRowAfter(), setRowMenuAnchor)}>
+                Insert row below
+              </MenuItem>
+              <Divider />
+              <MenuItem
+                onClick={() => runTableCommand((c) => c.deleteRow(), setRowMenuAnchor)}
+                sx={{ color: 'error.main' }}
+              >
+                Delete row
+              </MenuItem>
+            </Menu>
+
+            <Tooltip title="Columns">
+              <IconButton
+                size="small"
+                onClick={(e) => setColumnMenuAnchor(e.currentTarget)}
+                aria-label="Column actions"
+                aria-haspopup="menu"
+              >
+                <ViewWeekOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Menu
+              anchorEl={columnMenuAnchor}
+              open={Boolean(columnMenuAnchor)}
+              onClose={() => setColumnMenuAnchor(null)}
+            >
+              <MenuItem onClick={() => runTableCommand((c) => c.addColumnBefore(), setColumnMenuAnchor)}>
+                Insert column left
+              </MenuItem>
+              <MenuItem onClick={() => runTableCommand((c) => c.addColumnAfter(), setColumnMenuAnchor)}>
+                Insert column right
+              </MenuItem>
+              <Divider />
+              <MenuItem
+                onClick={() => runTableCommand((c) => c.deleteColumn(), setColumnMenuAnchor)}
+                sx={{ color: 'error.main' }}
+              >
+                Delete column
+              </MenuItem>
+            </Menu>
+
+            <Tooltip title="Delete table">
+              <IconButton
+                size="small"
+                color="error"
+                onClick={() => editor.chain().focus().deleteTable().run()}
+                aria-label="Delete table"
+              >
+                <DeleteOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+
             <Tooltip
               title={
                 tableState.mergeCrossesHeader

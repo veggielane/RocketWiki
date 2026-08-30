@@ -10,13 +10,12 @@ import {
   TextField,
   ToggleButton,
   ToggleButtonGroup,
-  useMediaQuery,
-  useTheme,
 } from '@mui/material'
 import { usePageSpaceRefQuery, useSpacePageTreeQuery } from '../graphql/generated/graphql'
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 import { useCurrentPageId } from '../pages/pageContext'
 import { flattenParentOptions } from '../pages/parentOptions'
+import { useDialogFullScreen } from '../app/useDialogFullScreen'
 
 /**
  * The two link targets design.md §4 gives the editor: an ordinary external URL
@@ -73,8 +72,7 @@ export function InsertLinkDialog({
   onSubmit,
   onRemove,
 }: InsertLinkDialogProps) {
-  const theme = useTheme()
-  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'))
+  const fullScreen = useDialogFullScreen()
   // Seeded from the props at mount as well as re-seeded on open below: the
   // toolbar keeps this mounted and toggles `open`, but a caller that mounts it
   // already open (and every test does) would otherwise get empty fields.
@@ -148,6 +146,7 @@ export function InsertLinkDialog({
             value={text}
             onChange={(e) => setText(e.target.value)}
             fullWidth
+            size="small"
             autoFocus
             helperText="What the link reads as in the page."
           />
@@ -158,6 +157,7 @@ export function InsertLinkDialog({
               value={href}
               onChange={(e) => setHref(e.target.value)}
               fullWidth
+              size="small"
               // Only flagged once there is something to be wrong about — an
               // empty field on a freshly opened dialog is not an error.
               error={href.trim().length > 0 && !isUsableHref(href)}
@@ -169,6 +169,7 @@ export function InsertLinkDialog({
             />
           ) : (
             <Autocomplete
+              size="small"
               options={pageOptions}
               getOptionLabel={(option) => option.title}
               isOptionEqualToValue={(option, value) => option.id === value.id}

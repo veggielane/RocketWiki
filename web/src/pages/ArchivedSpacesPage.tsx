@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
+import { Alert, Button, List, ListItem, ListItemText, Skeleton, Snackbar, Stack, Typography } from '@mui/material'
 import { useArchivedSpacesQuery, useRestoreSpaceMutation } from '../graphql/generated/graphql'
-import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { describeLoadFailure, describeWriteFailure } from '../feedback/unavailableCopy'
+import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { formatTimestamp } from '../format/dateTime'
@@ -20,21 +21,34 @@ export function ArchivedSpacesPage() {
   const [{ data, fetching, error }, refetch] = useArchivedSpacesQuery()
   const [, restoreSpace] = useRestoreSpaceMutation()
   const [restoringId, setRestoringId] = useState<string | null>(null)
-  const [message, setMessage] = useState<{ severity: 'success' | 'warning'; text: string } | null>(null)
+  // Split in two, deliberately. One `severity`-carrying state cannot take the
+  // right surface for both outcomes: a success is transient and belongs in an
+  // auto-hiding Snackbar, while a refusal has to stay until it is read
+  // (web/README.md's feedback rule). Sharing one slot is what kept this screen
+  // out of the convergence the other six screens made.
+  const [notice, setNotice] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const handleRestore = async (spaceId: string, name: string) => {
     setRestoringId(spaceId)
-    setMessage(null)
+    setActionError(null)
     const result = await restoreSpace({ input: { spaceId } })
     setRestoringId(null)
+    // A transport failure carries no payload, so the typed-error helper returns
+    // null and the button would appear to do nothing — the same hole the create
+    // and restore actions had.
+    if (result.error !== undefined) {
+      setActionError(describeWriteFailure('RESTORE_SPACE').summary)
+      return
+    }
     const payload = result.data?.restoreSpace
     const errorText = describeMutationError(payload?.error)
     if (errorText) {
-      setMessage({ severity: 'warning', text: errorText })
+      setActionError(errorText)
       return
     }
     if (payload?.space) {
-      setMessage({ severity: 'success', text: `Restored "${name}".` })
+      setNotice(`Restored "${name}".`)
       refetch({ requestPolicy: 'network-only' })
     }
   }
@@ -43,9 +57,9 @@ export function ArchivedSpacesPage() {
     <Stack spacing={2}>
       <PageHeader title="Archived spaces" subject={{ label: 'Spaces', to: '/' }} />
 
-      {message && (
-        <Alert severity={message.severity} onClose={() => setMessage(null)}>
-          {message.text}
+      {actionError && (
+        <Alert severity="warning" onClose={() => setActionError(null)}>
+          {actionError}
         </Alert>
       )}
 
@@ -81,6 +95,16 @@ export function ArchivedSpacesPage() {
           ))}
         </List>
       )}
+
+      {/* Success is transient and requires no action, so it takes the Snackbar
+          — web/README.md's rule, and the surface the other six screens already
+          converged on. It was stuck in an inline Alert only because one state
+          held refusals too. */}
+      <Snackbar open={notice !== null} autoHideDuration={SNACKBAR_AUTO_HIDE_MS} onClose={() => setNotice(null)}>
+        <Alert severity="success" onClose={() => setNotice(null)}>
+          {notice}
+        </Alert>
+      </Snackbar>
     </Stack>
   )
 }

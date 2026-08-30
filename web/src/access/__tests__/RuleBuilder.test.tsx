@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { RuleBuilder } from '../RuleBuilder'
-import { allOf, group, user } from '../ruleTypes'
+import { allOf, attr, group, user } from '../ruleTypes'
 import { serializeRuleNode } from '../ruleSerializer'
 import { expectNoAxeViolations } from '../../test/axe'
 import type { ValidationResult } from '../builderState'
@@ -82,5 +82,53 @@ describe('RuleBuilder', () => {
         '{"allOf":[{"group":"engineering"},{"user":"sub-1"}]}',
       )
     }
+  })
+})
+
+/**
+ * Where a validation message ends up.
+ *
+ * The builder used to route issues by testing the English message text —
+ * `m.includes('value')` — and `'Values must not be empty.'` starts with a
+ * capital V, so it matched nothing: the rule refused to save, no field turned
+ * red, and the sentence appeared nowhere on screen. `'Attribute is required.'`
+ * had the opposite problem, colouring a Select that had no helper line to print
+ * it in. Both are routed by a `field` tag now.
+ */
+describe('rule validation messages reach the control they are about', () => {
+  const ATTRIBUTES = [{ key: 'clearance', displayName: 'Clearance', allowedValues: ['SC', 'DV'] }]
+
+  it('writes down "at least one value is required" under the In field', () => {
+    render(
+      <RuleBuilder initialValue={attr('clearance', [])} onChange={() => {}} groups={[]} attributes={ATTRIBUTES} />,
+    )
+
+    const field = screen.getByLabelText('In')
+    const helper = document.getElementById(field.getAttribute('aria-describedby')?.split(' ')[0] ?? '')
+    expect(helper?.textContent).toContain('At least one value is required.')
+  })
+
+  it('writes down "Values must not be empty." — the message that used to match no branch', () => {
+    render(
+      <RuleBuilder initialValue={attr('clearance', ['  '])} onChange={() => {}} groups={[]} attributes={ATTRIBUTES} />,
+    )
+
+    expect(screen.getByText('Values must not be empty.')).toBeInTheDocument()
+  })
+
+  it('writes down "Attribute is required." rather than only colouring the Select', () => {
+    render(<RuleBuilder initialValue={attr('', [])} onChange={() => {}} groups={[]} attributes={ATTRIBUTES} />)
+
+    expect(screen.getByText('Attribute is required.')).toBeInTheDocument()
+  })
+
+  it('keeps one field’s problem out of another field’s helper line', () => {
+    // Every issue on the node used to be joined into every control, so a blank
+    // attribute also claimed the In field was wrong.
+    render(<RuleBuilder initialValue={attr('', [])} onChange={() => {}} groups={[]} attributes={ATTRIBUTES} />)
+
+    const field = screen.getByLabelText('In')
+    const helper = document.getElementById(field.getAttribute('aria-describedby')?.split(' ')[0] ?? '')
+    expect(helper?.textContent).not.toContain('Attribute is required.')
   })
 })

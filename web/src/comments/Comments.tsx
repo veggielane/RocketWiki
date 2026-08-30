@@ -71,7 +71,9 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h5">Comments</Typography>
+      <Typography variant="h6" component="h2">
+        Comments
+      </Typography>
 
       {/* Empty-state voice (web/README.md): fact + consequence — but only
           promise the consequence to users who can actually comment. */}

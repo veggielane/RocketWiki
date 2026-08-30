@@ -1,4 +1,5 @@
-import { Alert, Chip, Paper, Stack, Typography } from '@mui/material'
+import { Alert, Button, Chip, Paper, Stack, Typography } from '@mui/material'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import { type GridColDef } from '@mui/x-data-grid'
 import { useSyncStatusQuery, type SyncStatusQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
@@ -77,12 +78,7 @@ function OriginCard({ origin }: { origin: Origin }) {
  */
 export function SyncStatusPage() {
   useDocumentTitle('Sync status')
-  const [{ data, fetching, error }] = useSyncStatusQuery()
-
-  if (error) {
-    return <Alert severity="info">{describeLoadFailure('SYNC_STATUS').summary}</Alert>
-  }
-
+  const [{ data, fetching, error }, refetch] = useSyncStatusQuery()
   const status = data?.syncStatus
 
   return (
@@ -90,37 +86,63 @@ export function SyncStatusPage() {
       <PageHeader
         title="Sync status"
         description={status ? <>This instance: <strong>{status.localInstanceId}</strong></> : undefined}
+        // The numbers on this page are the ones you re-check: pending events
+        // drain, imports arrive. Without this, reloading the browser was the
+        // only way to ask again.
+        actions={
+          <Button
+            startIcon={<RefreshIcon />}
+            onClick={() => refetch({ requestPolicy: 'network-only' })}
+            disabled={fetching}
+          >
+            Refresh
+          </Button>
+        }
       />
 
-      <Stack spacing={1}>
-        {/* `component="h2"` — a bare `variant="h6"` renders an <h6> element, so
-            these sections were jumping the document straight from h1 to h6.
-            Same fix on every section heading in this file. */}
-        <Typography variant="h6" component="h2">
-          Exported spaces (low → high outbox)
-        </Typography>
-        {status && status.exportedSpaces.length === 0 && (
-          <Typography color="text.secondary">No spaces are flagged for export from this instance.</Typography>
-        )}
-        <RegistryDataGrid
-          aria-label="Exported spaces"
-          rowCount={status?.exportedSpaces.length ?? 0}
-          rows={status?.exportedSpaces ?? []}
-          columns={exportedColumns}
-          getRowId={(row) => row.spaceId}
-          loading={fetching}
-        />
-      </Stack>
+      {/* Inline, with the heading still on screen. An early return replaced the
+          whole page — including its <h1> — with a sentence, so a screen reader
+          user who refreshed landed on a document with no heading at all. */}
+      {error && <Alert severity="info">{describeLoadFailure('SYNC_STATUS').summary}</Alert>}
 
-      <Stack spacing={1}>
-        <Typography variant="h6" component="h2">
-          Imported origins (bundles applied here)
-        </Typography>
-        {status && status.origins.length === 0 && (
-          <Typography color="text.secondary">No sync bundles have been imported into this instance.</Typography>
-        )}
-        {status?.origins.map((origin) => <OriginCard key={origin.originInstanceId} origin={origin} />)}
-      </Stack>
+      {!error && (
+        <>
+          <Stack spacing={1}>
+            {/* `component="h2"` — a bare `variant="h6"` renders an <h6> element, so
+                these sections were jumping the document straight from h1 to h6.
+                Same fix on every section heading in this file. */}
+            <Typography variant="h6" component="h2">
+              Exported spaces (low → high outbox)
+            </Typography>
+            {/* The sentence OR the table, never both: an empty grid announcing
+                "No rows" underneath a sentence that already said so is the same
+                fact twice, in the vocabulary of a component rather than of the
+                thing being described. */}
+            {status && status.exportedSpaces.length === 0 ? (
+              <Typography color="text.secondary">No spaces are flagged for export from this instance.</Typography>
+            ) : (
+              <RegistryDataGrid
+                aria-label="Exported spaces"
+                rowCount={status?.exportedSpaces.length ?? 0}
+                rows={status?.exportedSpaces ?? []}
+                columns={exportedColumns}
+                getRowId={(row) => row.spaceId}
+                loading={fetching}
+              />
+            )}
+          </Stack>
+
+          <Stack spacing={1}>
+            <Typography variant="h6" component="h2">
+              Imported origins (bundles applied here)
+            </Typography>
+            {status && status.origins.length === 0 && (
+              <Typography color="text.secondary">No sync bundles have been imported into this instance.</Typography>
+            )}
+            {status?.origins.map((origin) => <OriginCard key={origin.originInstanceId} origin={origin} />)}
+          </Stack>
+        </>
+      )}
     </Stack>
   )
 }

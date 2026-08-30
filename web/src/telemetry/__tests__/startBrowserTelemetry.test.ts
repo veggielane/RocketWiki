@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { context, propagation, trace } from '@opentelemetry/api'
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-web'
 import { startBrowserTelemetry } from '../startBrowserTelemetry'
@@ -45,8 +45,26 @@ vi.mock('@opentelemetry/exporter-trace-otlp-http', () => ({
 }))
 
 let started: TelemetryHandle | null = null
+/**
+ * The in-flight call, not just its result.
+ *
+ * `started = await start()` only assigns once the promise
+ * RESOLVES, so a call that overran the test timeout left `started` null while
+ * the SDK it created was very much alive — `afterEach` then tore down nothing,
+ * and the late resolution constructed its exporter during the NEXT test, which
+ * saw `otlp.configs` with two entries after its own `beforeEach` had cleared
+ * them. Holding the promise is what makes teardown cover the overrun case too.
+ */
+let starting: Promise<TelemetryHandle | null> | null = null
 let fetchStub: ReturnType<typeof vi.fn>
 const realFetch = globalThis.fetch
+
+/** Starts telemetry, recording the pending call so teardown can always reach it. */
+async function start(): Promise<TelemetryHandle | null> {
+  starting = startBrowserTelemetry()
+  started = await starting
+  return started
+}
 
 function isTracingActive(): boolean {
   const span = trace.getTracer('gate-test').startSpan('probe')
@@ -63,9 +81,28 @@ function recordSearchPageLoad(): void {
 }
 
 async function flush(): Promise<void> {
-  await started?.shutdown()
+  // Await the CALL, not the captured handle: a run that overran leaves the
+  // handle unassigned but the provider registered.
+  const handle = started ?? (await starting?.catch(() => null)) ?? null
+  await handle?.shutdown()
   started = null
+  starting = null
 }
+
+/**
+ * Resolve the dynamic `import('./tracing')` once, before any timed assertion.
+ *
+ * `startBrowserTelemetry` loads the tracing module lazily, and that first load
+ * pulls in the whole OpenTelemetry SDK chain — web tracer, instrumentations,
+ * exporters. Vite transforms it on demand, and under a full parallel suite that
+ * cold transform can take longer than a test's 5s budget, which is why this
+ * file passed in isolation and flaked in the suite. Warming the module cache
+ * here moves that cost outside every timed window — deterministically, rather
+ * than by raising the timeout and hoping.
+ */
+beforeAll(async () => {
+  await import('../tracing')
+})
 
 beforeEach(() => {
   otlp.exported.length = 0
@@ -88,13 +125,13 @@ describe('startBrowserTelemetry — disabled unless configured', () => {
     vi.stubEnv('VITE_OTEL_EXPORTER_OTLP_ENDPOINT', '')
     vi.stubEnv('VITE_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT', '')
 
-    expect(await startBrowserTelemetry()).toBeNull()
+    expect(await start()).toBeNull()
     expect(isTracingActive()).toBe(false)
   })
 
   it('builds no exporter and sends nothing when unconfigured', async () => {
     vi.stubEnv('VITE_OTEL_EXPORTER_OTLP_ENDPOINT', '')
-    await startBrowserTelemetry()
+    await start()
     isTracingActive()
 
     expect(otlp.configs).toHaveLength(0)
@@ -105,14 +142,14 @@ describe('startBrowserTelemetry — disabled unless configured', () => {
   it('does nothing when the configured endpoint is unusable', async () => {
     vi.stubEnv('VITE_OTEL_EXPORTER_OTLP_ENDPOINT', 'not a url')
 
-    expect(await startBrowserTelemetry()).toBeNull()
+    expect(await start()).toBeNull()
     expect(isTracingActive()).toBe(false)
     expect(otlp.configs).toHaveLength(0)
   })
 
   it('leaves globalThis.fetch unpatched when unconfigured', async () => {
     vi.stubEnv('VITE_OTEL_EXPORTER_OTLP_ENDPOINT', '')
-    await startBrowserTelemetry()
+    await start()
 
     expect(globalThis.fetch).toBe(fetchStub)
   })
@@ -124,14 +161,14 @@ describe('startBrowserTelemetry — enabled', () => {
   })
 
   it('starts tracing when an OTLP endpoint is configured', async () => {
-    started = await startBrowserTelemetry()
+    started = await start()
 
     expect(started).not.toBeNull()
     expect(isTracingActive()).toBe(true)
   })
 
   it('builds the exporter against the resolved traces endpoint', async () => {
-    started = await startBrowserTelemetry()
+    started = await start()
 
     expect(otlp.configs).toHaveLength(1)
     expect(otlp.configs[0].url).toBe('http://localhost:18889/v1/traces')
@@ -139,19 +176,19 @@ describe('startBrowserTelemetry — enabled', () => {
 
   it('passes configured headers through to the exporter', async () => {
     vi.stubEnv('VITE_OTEL_EXPORTER_OTLP_HEADERS', 'x-api-key=abc123')
-    started = await startBrowserTelemetry()
+    started = await start()
 
     expect(otlp.configs[0].headers).toEqual({ 'x-api-key': 'abc123' })
   })
 
   it('installs the fetch instrumentation', async () => {
-    started = await startBrowserTelemetry()
+    started = await start()
 
     expect(globalThis.fetch).not.toBe(fetchStub)
   })
 
   it('registers a traceparent-only propagator, never baggage', async () => {
-    started = await startBrowserTelemetry()
+    started = await start()
 
     // W3C `baggage` is a general-purpose key/value channel onto outbound
     // requests — exactly the shape of an accidental second record of user
@@ -162,7 +199,7 @@ describe('startBrowserTelemetry — enabled', () => {
 
   it('tags exported spans with the service resource attributes', async () => {
     vi.stubEnv('VITE_APP_VERSION', '1.4.0')
-    started = await startBrowserTelemetry()
+    started = await start()
     isTracingActive()
     await flush()
 
@@ -174,7 +211,7 @@ describe('startBrowserTelemetry — enabled', () => {
   it('redacts search text before the exporter ever sees the span', async () => {
     // The end of the chain: not "the redactor works" (redaction.test.ts covers
     // that) but "nothing in the assembled pipeline routes around it".
-    started = await startBrowserTelemetry()
+    started = await start()
     recordSearchPageLoad()
     await flush()
 

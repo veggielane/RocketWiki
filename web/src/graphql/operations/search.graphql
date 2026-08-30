@@ -1,5 +1,13 @@
-query SearchPages($query: String!, $spaceKey: String, $labels: [String!], $after: String) {
-  search(query: $query, spaceKey: $spaceKey, labels: $labels, after: $after) {
+# `first`, not `after`. How much of the result set is on screen is a NUMBER in
+# the URL (`?show=40`), and one request for that many rows reproduces the whole
+# list from cold — which is what makes a scrolled-to search bookmarkable,
+# shareable and survivable across Back. Cursor paging cannot do that: a cursor
+# names a boundary, not a run, so restoring N accumulated pages meant N requests
+# in sequence and there was no way to ask for the run in one. The server
+# materialises at most 100 permission-filtered hits whatever `first` says, so
+# asking for 40 instead of 20 costs the resolver nothing extra.
+query SearchPages($query: String!, $spaceKey: String, $labels: [String!], $first: Int) {
+  search(query: $query, spaceKey: $spaceKey, labels: $labels, first: $first) {
     # §21.13: the aggregate spans the WHOLE permission-filtered hit set — the
     # same set `totalCount` counts — not the edges of this one page, so every
     # page of the connection reports the same label and it never drops as you
@@ -11,10 +19,14 @@ query SearchPages($query: String!, $spaceKey: String, $labels: [String!], $after
     aggregateMarking {
       ...AggregateMarking
     }
+    # §6.7: `totalCount` SATURATES at 100 — an exact permission-filtered total
+    # would mean evaluating canView over the whole database, and a cheaper count
+    # would leak restricted pages into the number. So 100 means "at least 100",
+    # never "exactly 100", and `hasNextPage` is the only honest end-of-results
+    # signal. Nothing here may derive a page count from the total.
     totalCount
     pageInfo {
       hasNextPage
-      endCursor
     }
     edges {
       cursor
