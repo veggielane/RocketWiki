@@ -32,13 +32,21 @@ public sealed class RealtimeConnectionRegistry : IRealtimeConnectionRegistry
     /// otherwise be held without a lock.</para>
     /// </summary>
     private readonly ConcurrentDictionary<string, ConnectionInfo> _connections = new();
-    private readonly ConcurrentDictionary<Guid, ConcurrentDictionary<string, PresenceViewer>> _viewersByPage = new();
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<Guid, byte>> _pagesByConnection = new();
+    /// <summary>
+    /// Keyed by ROOM KEY, not page id. Presence began as a page-only feature so the room
+    /// was the page; site-wide cursors make any screen a room (see
+    /// <see cref="PresenceRoom"/>), and the registry deliberately knows nothing about what
+    /// a key means — the hub authorizes before anything reaches here, so a key in this
+    /// dictionary is one that already passed its own gate. Keeping the classification out
+    /// of the registry is what stops it acquiring a second, weaker opinion about access.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, PresenceViewer>> _viewersByRoom = new();
+    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _roomsByConnection = new();
 
     public void RegisterConnection(string connectionId, Guid userId, Principal principal) =>
         _connections[connectionId] = new ConnectionInfo(userId, principal);
 
-    public IReadOnlyList<Guid> UnregisterConnection(string connectionId)
+    public IReadOnlyList<string> UnregisterConnection(string connectionId)
     {
         // Removing this connection is the whole of the user-principal bookkeeping now:
         // GetConnectedPrincipal reads _connections directly, so a still-open tab (or a
@@ -46,18 +54,18 @@ public sealed class RealtimeConnectionRegistry : IRealtimeConnectionRegistry
         // to notice it exists.
         _connections.TryRemove(connectionId, out _);
 
-        if (!_pagesByConnection.TryRemove(connectionId, out var pages))
+        if (!_roomsByConnection.TryRemove(connectionId, out var rooms))
         {
             return [];
         }
 
-        var affectedPageIds = pages.Keys.ToList();
-        foreach (var pageId in affectedPageIds)
+        var affectedRoomKeys = rooms.Keys.ToList();
+        foreach (var roomKey in affectedRoomKeys)
         {
-            LeavePage(pageId, connectionId);
+            LeaveRoom(roomKey, connectionId);
         }
 
-        return affectedPageIds;
+        return affectedRoomKeys;
     }
 
     /// <summary>
@@ -80,21 +88,47 @@ public sealed class RealtimeConnectionRegistry : IRealtimeConnectionRegistry
         return null;
     }
 
-    public void JoinPage(Guid pageId, PresenceViewer viewer)
+    /// <summary>
+    /// The most rooms one connection may hold at once. A well-behaved client is in
+    /// exactly one — it leaves the old room as it navigates — so this is generous, not
+    /// tight; the point is that it is FINITE.
+    ///
+    /// <para>It exists because room keys are client-supplied and, for <c>site:</c> paths,
+    /// deliberately not validated against any route list (a screen name identifies no
+    /// resource, so there is nothing to authorize and open-ended routes like docs topics
+    /// must work). That is the right call for access control, and it leaves cardinality
+    /// unbounded: without a cap, one authenticated caller could grow _viewersByRoom by
+    /// joining endless distinct paths — compounded by empty buckets never being removed
+    /// (see LeaveRoom). Capping per connection bounds every room type at once and couples
+    /// to nothing.</para>
+    /// </summary>
+    internal const int MaxRoomsPerConnection = 16;
+
+    public bool JoinRoom(string roomKey, PresenceViewer viewer)
     {
-        _viewersByPage.GetOrAdd(pageId, static _ => new ConcurrentDictionary<string, PresenceViewer>())[viewer.ConnectionId] = viewer;
-        _pagesByConnection.GetOrAdd(viewer.ConnectionId, static _ => new ConcurrentDictionary<Guid, byte>())[pageId] = 0;
+        var rooms = _roomsByConnection.GetOrAdd(viewer.ConnectionId, static _ => new ConcurrentDictionary<string, byte>());
+
+        // Re-joining a room already held is idempotent and never counts against the cap:
+        // a client retrying a join it already made must not be refused for it.
+        if (!rooms.ContainsKey(roomKey) && rooms.Count >= MaxRoomsPerConnection)
+        {
+            return false;
+        }
+
+        _viewersByRoom.GetOrAdd(roomKey, static _ => new ConcurrentDictionary<string, PresenceViewer>())[viewer.ConnectionId] = viewer;
+        rooms[roomKey] = 0;
+        return true;
     }
 
-    public void LeavePage(Guid pageId, string connectionId)
+    public void LeaveRoom(string roomKey, string connectionId)
     {
-        if (_viewersByPage.TryGetValue(pageId, out var viewers))
+        if (_viewersByRoom.TryGetValue(roomKey, out var viewers))
         {
             viewers.TryRemove(connectionId, out _);
 
             // The now-empty bucket is deliberately LEFT IN PLACE, and this is a known
-            // leak: _viewersByPage grows by one entry per page ever viewed and never
-            // shrinks. Removing it here is not safe with this structure — JoinPage
+            // leak: _viewersByRoom grows by one entry per room ever joined and never
+            // shrinks. Removing it here is not safe with this structure — JoinRoom
             // reaches the bucket through GetOrAdd, so between "is it empty" and the
             // removal a joiner can populate the very instance being removed, and the
             // atomic key/value TryRemove does not help because the instance is
@@ -108,14 +142,14 @@ public sealed class RealtimeConnectionRegistry : IRealtimeConnectionRegistry
             // page in a dictionary — so it is recorded here rather than half-done.
         }
 
-        if (_pagesByConnection.TryGetValue(connectionId, out var pages))
+        if (_roomsByConnection.TryGetValue(connectionId, out var rooms))
         {
-            pages.TryRemove(pageId, out _);
+            rooms.TryRemove(roomKey, out _);
         }
     }
 
-    public IReadOnlyList<PresenceViewer> GetViewers(Guid pageId) =>
-        _viewersByPage.TryGetValue(pageId, out var viewers) ? viewers.Values.ToList() : [];
+    public IReadOnlyList<PresenceViewer> GetViewers(string roomKey) =>
+        _viewersByRoom.TryGetValue(roomKey, out var viewers) ? viewers.Values.ToList() : [];
 
     /// <summary>
     /// Every viewer currently present on any page, principal attached where one is known.
@@ -128,15 +162,15 @@ public sealed class RealtimeConnectionRegistry : IRealtimeConnectionRegistry
     /// exists. Silently exempting the one viewer whose identity the registry cannot state
     /// is backwards; the caller evicts them (§6.7).</para>
     /// </summary>
-    public IReadOnlyList<(Guid PageId, string ConnectionId, Principal? Principal)> GetAllPageConnections()
+    public IReadOnlyList<(string RoomKey, string ConnectionId, Principal? Principal)> GetAllRoomConnections()
     {
-        var result = new List<(Guid, string, Principal?)>();
-        foreach (var (pageId, viewers) in _viewersByPage)
+        var result = new List<(string, string, Principal?)>();
+        foreach (var (roomKey, viewers) in _viewersByRoom)
         {
             foreach (var connectionId in viewers.Keys)
             {
                 result.Add((
-                    pageId,
+                    roomKey,
                     connectionId,
                     _connections.TryGetValue(connectionId, out var info) ? info.Principal : null));
             }

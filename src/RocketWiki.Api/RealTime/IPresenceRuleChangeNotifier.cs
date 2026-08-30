@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RocketWiki.Api.Reads;
 using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -79,7 +80,7 @@ public sealed class PresenceRuleChangeNotifier(
 
         await ReauthorizeEditSessionsAsync();
 
-        var connections = registry.GetAllPageConnections();
+        var connections = registry.GetAllRoomConnections();
         if (connections.Count == 0)
         {
             return;
@@ -87,7 +88,7 @@ public sealed class PresenceRuleChangeNotifier(
 
         // design.md §15: the sweep re-checks every open presence connection, so its cost
         // scales with concurrent viewers - worth a span with the size of the working set
-        // it swept and how many it evicted. No connection ids, no user ids, no page ids
+        // it swept and how many it evicted. No connection ids, no user ids, no room keys
         // per eviction: this method's whole job is deciding who may no longer see what,
         // and recording that per-subject in a trace is precisely the second, unregulated
         // access record §15 exists to prevent.
@@ -102,15 +103,17 @@ public sealed class PresenceRuleChangeNotifier(
         using var scope = scopeFactory.CreateScope();
         var pageReadService = scope.ServiceProvider.GetRequiredService<IPageReadService>();
 
-        var affectedPages = new HashSet<Guid>();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var affectedRooms = new HashSet<string>(StringComparer.Ordinal);
         var evicted = 0;
-        foreach (var (pageId, connectionId, principal) in connections)
+        foreach (var (roomKey, connectionId, principal) in connections)
         {
             bool stillViewable;
             if (principal is null)
             {
                 // The registry knows this connection is present but cannot say who it is
-                // (see GetAllPageConnections). Unresolvable identity is not a reason to
+                // (see GetAllRoomConnections). Unresolvable identity is not a reason to
                 // leave someone in a page group — it is the clearest reason to remove
                 // them.
                 stillViewable = false;
@@ -123,8 +126,27 @@ public sealed class PresenceRuleChangeNotifier(
                     // eviction itself is a consequence of an access change (whose mutation
                     // was audited), not a user's read request, so there is no denied
                     // *read* to audit here.
-                    stillViewable = (await pageReadService.GetPageAsync(pageId, principal, CancellationToken.None))
-                        .ValueOrNull() is not null;
+                    // Re-checked BY ROOM TYPE, with the same gate the join applied. A
+                    // page room re-checks canView; a space room re-checks the space
+                    // role, which is what makes revoking a grant evict the space
+                    // browser too; a site room has no resource behind it, so no access
+                    // change can make it unviewable and it is never evicted here.
+                    //
+                    // A key that no longer parses evicts. The registry only ever
+                    // receives keys the hub already parsed, so that is unreachable
+                    // today - and unreachable is exactly when a default must fail
+                    // closed rather than assume.
+                    stillViewable = PresenceRoom.TryParse(roomKey, out var room) && room switch
+                    {
+                        PresenceRoom.Page page =>
+                            (await pageReadService.GetPageAsync(page.PageId, principal, CancellationToken.None))
+                                .ValueOrNull() is not null,
+                        PresenceRoom.Space space =>
+                            await SpaceReads.GetViewableSpaceByKeyAsync(
+                                db, principal, space.SpaceKey, CancellationToken.None) is SpaceReadResult.Found,
+                        PresenceRoom.Site => true,
+                        _ => false,
+                    };
                 }
                 catch (Exception)
                 {
@@ -149,11 +171,11 @@ public sealed class PresenceRuleChangeNotifier(
             // Registry first, then the SignalR group: the group removal is the half that
             // actually stops data reaching the client, so it must not be skipped because
             // the registry call threw.
-            registry.LeavePage(pageId, connectionId);
+            registry.LeaveRoom(roomKey, connectionId);
             try
             {
                 await hubContext.Groups.RemoveFromGroupAsync(
-                    connectionId, NotificationsHub.GroupName(pageId), CancellationToken.None);
+                    connectionId, roomKey, CancellationToken.None);
             }
             catch (Exception)
             {
@@ -161,19 +183,19 @@ public sealed class PresenceRuleChangeNotifier(
                 // the outcome we wanted. Anything else must still not stop the sweep.
             }
 
-            affectedPages.Add(pageId);
+            affectedRooms.Add(roomKey);
             evicted++;
         }
 
         ApiTelemetry.PresenceEvictions.Add(evicted);
         activity?.SetTag(ApiTelemetry.PresenceEvictedCountTag, evicted);
 
-        foreach (var pageId in affectedPages)
+        foreach (var roomKey in affectedRooms)
         {
-            var views = registry.GetViewers(pageId)
+            var views = registry.GetViewers(roomKey)
                 .Select(v => new { userId = v.UserId, displayName = v.DisplayName, colour = v.Colour, hasAvatar = v.HasAvatar })
                 .ToArray();
-            await hubContext.Clients.Group(NotificationsHub.GroupName(pageId))
+            await hubContext.Clients.Group(roomKey)
                 .SendAsync("ViewersChanged", views, CancellationToken.None);
         }
     }

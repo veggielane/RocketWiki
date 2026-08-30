@@ -2,9 +2,8 @@ using RocketWiki.Core.Access;
 
 namespace RocketWiki.Api.RealTime;
 
-/// <summary>One viewer's public presence facts (design.md §8: "payloads carry display name and colour only — never attributes").</summary>
 /// <summary>
-/// One viewer on a page, as presence broadcasts them. <paramref name="HasAvatar"/>
+/// One viewer in a presence room, as presence broadcasts them. <paramref name="HasAvatar"/>
 /// rides along for the same reason <c>UserRef</c> carries it (design.md §19): without
 /// it the SPA cannot tell "no avatar" from "not fetched yet", so it probes
 /// <c>GET /users/{id}/avatar</c> and takes a 404 for every viewer who has never
@@ -21,9 +20,10 @@ public sealed record PresenceViewer(
 /// fresh Hub instance per invocation and cannot hold this state themselves. Tracks two
 /// related things:
 ///
-/// 1. Who is viewing which page, backing the page-scoped presence groups (design.md
-///    §8: "page-scoped groups... authorized at join time... evicted and re-authorized
-///    when rules change").
+/// 1. Who is present in which ROOM, backing the presence groups (design.md §8:
+///    "page-scoped groups... authorized at join time... evicted and re-authorized when
+///    rules change"). Rooms generalize that: a page is one kind of room, a space and a
+///    global route are two more, and each carries its own gate.
 /// 2. Every currently-connected user's live Principal, so <see cref="INotificationDispatcher"/>
 ///    can evaluate canView for a recipient without needing their token directly (which
 ///    it has no way to obtain outside that user's own request) — only currently-connected
@@ -39,24 +39,34 @@ public interface IRealtimeConnectionRegistry
     /// <summary>Called once per connection (Hub.OnConnectedAsync), independent of any page join.</summary>
     void RegisterConnection(string connectionId, Guid userId, Principal principal);
 
-    /// <summary>Called once per connection (Hub.OnDisconnectedAsync). Returns every page the connection was still present on, so the caller can rebroadcast ViewersChanged for each.</summary>
-    IReadOnlyList<Guid> UnregisterConnection(string connectionId);
+    /// <summary>Called once per connection (Hub.OnDisconnectedAsync). Returns every ROOM the connection was still present in, so the caller can rebroadcast ViewersChanged for each.</summary>
+    IReadOnlyList<string> UnregisterConnection(string connectionId);
 
     /// <summary>Null if this user has no currently-open connection.</summary>
     Principal? GetConnectedPrincipal(Guid userId);
 
-    void JoinPage(Guid pageId, PresenceViewer viewer);
+    /// <summary>
+    /// Records presence in a room. <b>The key is opaque here on purpose.</b> Rooms carry
+    /// different authorization by type (see <see cref="PresenceRoom"/>) and the hub
+    /// applies it before calling this — giving the registry any opinion about what a key
+    /// means would be a second, weaker place for an access decision to live.
+    /// </summary>
+    /// <returns>False when this connection already holds the maximum number of rooms
+    /// and this would be a new one — the caller must then treat the join as refused and
+    /// must NOT add the connection to the SignalR group, or the client would receive a
+    /// room the registry has no record of it being in.</returns>
+    bool JoinRoom(string roomKey, PresenceViewer viewer);
 
-    void LeavePage(Guid pageId, string connectionId);
+    void LeaveRoom(string roomKey, string connectionId);
 
-    IReadOnlyList<PresenceViewer> GetViewers(Guid pageId);
+    IReadOnlyList<PresenceViewer> GetViewers(string roomKey);
 
     /// <summary>
-    /// Every (page, connection, principal) triple currently present on any page — the
+    /// Every (room, connection, principal) triple currently present anywhere — the
     /// working set <see cref="IPresenceRuleChangeNotifier"/> re-checks on an access change.
     ///
     /// <para><b>Principal is nullable, and a null one means "evict".</b> A viewer can be
-    /// present on a page with no matching connection entry — <c>JoinPage</c> registers
+    /// present in a room with no matching connection entry — <c>JoinRoom</c> registers
     /// presence without repairing a missing connection record, and the hub only calls
     /// <c>RegisterConnection</c> when the local User row already exists. This used to
     /// inner-join the two maps and silently drop such a viewer from the working set, which
@@ -64,5 +74,5 @@ public interface IRealtimeConnectionRegistry
     /// case where they were never re-checked. §6.7's shape is the opposite: a viewer whose
     /// principal cannot be resolved is exactly who should lose the group.</para>
     /// </summary>
-    IReadOnlyList<(Guid PageId, string ConnectionId, Principal? Principal)> GetAllPageConnections();
+    IReadOnlyList<(string RoomKey, string ConnectionId, Principal? Principal)> GetAllRoomConnections();
 }

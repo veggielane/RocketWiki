@@ -5,6 +5,8 @@ using Microsoft.Extensions.Options;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Telemetry;
+using RocketWiki.Api.Reads;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Services;
 using RocketWiki.Data;
 
@@ -59,6 +61,9 @@ public sealed partial class NotificationsHub : Hub
         this.db = db;
     }
 
+    /// <summary>The room key IS the SignalR group name — see <see cref="PresenceRoom"/>.
+    /// Kept for the page case because callers outside this hub (the rule-change sweep)
+    /// still name page groups directly.</summary>
     internal static string GroupName(Guid pageId) => $"page:{pageId}";
     internal static string UserGroupName(Guid userId) => $"user:{userId}";
 
@@ -88,11 +93,11 @@ public sealed partial class NotificationsHub : Hub
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        var affectedPageIds = registry.UnregisterConnection(Context.ConnectionId);
-        foreach (var pageId in affectedPageIds)
+        var affectedRoomKeys = registry.UnregisterConnection(Context.ConnectionId);
+        foreach (var roomKey in affectedRoomKeys)
         {
             ApiTelemetry.RecordPresenceLeave(ApiTelemetry.PresenceLeaveDisconnected);
-            await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
+            await Clients.Group(roomKey).SendAsync("ViewersChanged", ToPublicViews(roomKey));
         }
 
         // Edit sessions (design.md §8 co-editing): depart every session this
@@ -103,16 +108,22 @@ public sealed partial class NotificationsHub : Hub
     }
 
     /// <summary>
-    /// design.md §8: join is authorized by canView, same as any other read. A page the
-    /// caller cannot view simply never joins the group and never appears in
-    /// ViewersChanged — the same "absent, not forbidden" shape as everywhere else
-    /// (§6.7): a caller probing a restricted page id sees no different behaviour than
-    /// probing a nonexistent one.
+    /// design.md §8: join is authorized, always — what differs by room type is *how*.
+    /// A page room is canView, exactly as <c>JoinPage</c> was; a space room needs a role
+    /// in the space; a global route needs only a signed-in caller, which is safe solely
+    /// because the route comes from a fixed allowlist and carries no identifier.
+    ///
+    /// <para>Every refusal is the same silent return — "absent, not forbidden" (§6.7).
+    /// The space case is the one that matters most: a caller probing
+    /// <c>space:SECRET</c> must not be able to tell an invisible space from one that does
+    /// not exist, so both outcomes leave by the same branch, and the telemetry counter is
+    /// deliberately the same for both too. A counter split by reason would reintroduce the
+    /// distinction in the one place an operator could read it back out.</para>
     /// </summary>
     [NoAudit("Presence is deliberately unaudited (design.md §8: 'no table, no audit rows'; " +
         "data-model.md: 'Presence has no table') - the page view itself is already audited, and presence adds no new record. " +
         "Contrast JoinEditSession, which IS audited: joining an edit session consumes canEdit and opens a content-bearing channel.")]
-    public async Task JoinPage(Guid pageId)
+    public async Task JoinRoom(string roomKey)
     {
         var principal = PrincipalBuilder.Build(Context.User);
         if (principal is null)
@@ -121,17 +132,17 @@ public sealed partial class NotificationsHub : Hub
             return;
         }
 
-        // ValueOrNull: presence only needs "viewable or not". Denied joins are counted
-        // below but deliberately not audit-rowed - presence joins aren't audited at all
-        // yet (success or denial, no [AuditAction] exists for them), and recording only
-        // the denials would make the audit log imply joins are covered when they aren't.
-        var page = (await pageReadService.GetPageAsync(pageId, principal, Context.ConnectionAborted)).ValueOrNull();
-        if (page is null)
+        // Parse before authorize: an unknown prefix, a malformed page id, or a site route
+        // that is not on the allowlist never reaches a gate at all. There is no default
+        // branch that treats an unrecognised key as permissible.
+        if (!PresenceRoom.TryParse(roomKey, out var room))
         {
-            // Counted, not distinguished to the caller: the three silent-return branches
-            // in this method are indistinguishable over the wire on purpose (§6.7), and
-            // an aggregate count with no page id and no user id keeps it that way while
-            // still telling an operator which branch is firing.
+            ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceNotViewable);
+            return;
+        }
+
+        if (!await IsRoomJoinableAsync(room, principal))
+        {
             ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceNotViewable);
             return;
         }
@@ -153,42 +164,105 @@ public sealed partial class NotificationsHub : Hub
             return;
         }
 
-        await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(pageId));
-        registry.JoinPage(pageId, new PresenceViewer(
+        // Registry FIRST, group second. The registry owns the cap, and adding the
+        // connection to the SignalR group before knowing whether the join was accepted
+        // would leave a client receiving a room the registry says it is not in — which is
+        // the one inconsistency the eviction sweep cannot repair, because the sweep walks
+        // the registry.
+        var joined = registry.JoinRoom(room.Key, new PresenceViewer(
             Context.ConnectionId, user.Id, user.DisplayName, ColourFor(user.Id), user.HasAvatar));
+        if (!joined)
+        {
+            ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceNotViewable);
+            return;
+        }
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, room.Key);
         ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceJoined);
 
-        await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
+        await Clients.Group(room.Key).SendAsync("ViewersChanged", ToPublicViews(room.Key));
     }
+
+    /// <summary>
+    /// The per-type gate. Each branch answers one question and nothing else, and the
+    /// method returns a bare bool on purpose: the caller must not be able to tell WHY a
+    /// room was refused, because for a space room that reason is the leak (§6.7).
+    /// </summary>
+    private async Task<bool> IsRoomJoinableAsync(PresenceRoom room, Principal principal) => room switch
+    {
+        // Exactly what JoinPage did: ValueOrNull, because presence needs only
+        // "viewable or not" and a denial here is not separately audited.
+        PresenceRoom.Page page =>
+            (await pageReadService.GetPageAsync(page.PageId, principal, Context.ConnectionAborted)).ValueOrNull() is not null,
+
+        // Found vs NotFound vs Denied collapses to one bool HERE, at the boundary,
+        // which is what makes an invisible space indistinguishable from an absent one.
+        // SpaceReads returns the three-way split because its GraphQL callers must audit
+        // the denial; presence audits nothing, so it takes the collapse and no more.
+        PresenceRoom.Space space =>
+            await SpaceReads.GetViewableSpaceByKeyAsync(db, principal, space.SpaceKey, Context.ConnectionAborted)
+                is SpaceReadResult.Found,
+
+        // Authenticated is the whole gate, and it is already satisfied: PrincipalBuilder
+        // produced a principal above, and the hub itself requires authorization. The
+        // route was validated against the allowlist during parsing, so there is no
+        // resource here to check — that is the property that makes this safe, not an
+        // absence of checking.
+        PresenceRoom.Site => true,
+
+        // No default that admits. A room type added without a gate fails closed.
+        _ => false,
+    };
 
     /// <summary>
     /// design.md §8: "leaving a page is a route change, not an unmount" — the client
     /// calls this explicitly on every in-app navigation away, rather than relying on
     /// <see cref="OnDisconnectedAsync"/> (which only fires when the connection itself
     /// closes, not on a route change that keeps the same connection alive).
+    ///
+    /// <para>Unauthorized here is meaningless: leaving a room you are not in is a no-op,
+    /// and refusing to let someone leave would be the wrong failure. Parsing still
+    /// applies, so a malformed key does nothing.</para>
     /// </summary>
-    [NoAudit("Presence is deliberately unaudited (design.md §8) - see JoinPage.")]
-    public async Task LeavePage(Guid pageId)
+    [NoAudit("Presence is deliberately unaudited (design.md §8) - see JoinRoom.")]
+    public async Task LeaveRoom(string roomKey)
     {
-        registry.LeavePage(pageId, Context.ConnectionId);
+        if (!PresenceRoom.TryParse(roomKey, out var room))
+        {
+            return;
+        }
+
+        registry.LeaveRoom(room.Key, Context.ConnectionId);
         ApiTelemetry.RecordPresenceLeave(ApiTelemetry.PresenceLeaveExplicit);
-        await Clients.Group(GroupName(pageId)).SendAsync("ViewersChanged", ToPublicViews(pageId));
+        await Clients.Group(room.Key).SendAsync("ViewersChanged", ToPublicViews(room.Key));
     }
 
-    [NoAudit("Ephemeral presence broadcast, never persisted or audited (design.md §8) - see JoinPage.")]
-    public Task PointerMove(Guid pageId, double x, double y)
+    /// <summary>
+    /// Broadcasts a cursor to the room. <b>Membership is the authorization</b>: the
+    /// pointer is attributed from the registry's own record of this connection's
+    /// presence, so a caller who never joined (or was evicted by a rule change) has
+    /// nothing to attribute and is silently dropped. That is why this does not re-check
+    /// canView — it cannot broadcast under an identity the registry does not already hold.
+    /// </summary>
+    [NoAudit("Ephemeral presence broadcast, never persisted or audited (design.md §8) - see JoinRoom.")]
+    public Task PointerMove(string roomKey, double x, double y)
     {
-        var viewer = registry.GetViewers(pageId).FirstOrDefault(v => v.ConnectionId == Context.ConnectionId);
+        if (!PresenceRoom.TryParse(roomKey, out var room))
+        {
+            return Task.CompletedTask;
+        }
+
+        var viewer = registry.GetViewers(room.Key).FirstOrDefault(v => v.ConnectionId == Context.ConnectionId);
         if (viewer is null)
         {
-            // Never joined this page (or already evicted) - nothing to attribute the
+            // Never joined this room (or already evicted) - nothing to attribute the
             // pointer to, and broadcasting under no identity would be exactly the
             // "content, never attributes, never more than display name/colour" leak
             // design.md §8 warns against in the other direction.
             return Task.CompletedTask;
         }
 
-        return Clients.OthersInGroup(GroupName(pageId)).SendAsync("PointerMoved", new
+        return Clients.OthersInGroup(room.Key).SendAsync("PointerMoved", new
         {
             userId = viewer.UserId,
             displayName = viewer.DisplayName,
@@ -198,7 +272,30 @@ public sealed partial class NotificationsHub : Hub
         });
     }
 
-    private object[] ToPublicViews(Guid pageId) => registry.GetViewers(pageId)
+    // --- Transitional page-shaped adapters -------------------------------------------
+    //
+    // The SPA still calls these while it moves to the room API, so they stay working and
+    // stay THIN: each builds the page room key and defers, so there is exactly one
+    // implementation of joining and one gate. They are scheduled for removal once the
+    // frontend has switched — deleting them must not require re-reading any logic,
+    // because there is none here to lose.
+
+    /// <inheritdoc cref="JoinRoom"/>
+    [NoAudit("Presence is deliberately unaudited (design.md §8) - see JoinRoom.")]
+    public Task JoinPage(Guid pageId) => JoinRoom(new PresenceRoom.Page(pageId).Key);
+
+    /// <inheritdoc cref="LeaveRoom"/>
+    [NoAudit("Presence is deliberately unaudited (design.md §8) - see JoinRoom.")]
+    public Task LeavePage(Guid pageId) => LeaveRoom(new PresenceRoom.Page(pageId).Key);
+
+    // PointerMove has NO page-shaped adapter, because SignalR does not support
+    // overloading — two methods of one name is a startup exception, not a warning.
+    // The old call still works anyway: a SignalR client sends a GUID argument as a
+    // JSON string, so PointerMove(pageId, x, y) arrives here as the string form, and
+    // PresenceRoom.TryParse accepts a bare GUID as a page room precisely so that call
+    // keeps landing on the right room during the transition.
+
+    private object[] ToPublicViews(string roomKey) => registry.GetViewers(roomKey)
         .Select(v => (object)new
         {
             userId = v.UserId,

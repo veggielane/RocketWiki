@@ -20,6 +20,9 @@ public sealed class RealtimeConnectionRegistryTests
 {
     private static Principal PrincipalFor(string sub) => Principal.Create(sub, []);
 
+    /// <summary>Presence rooms are keyed by string now; a page is one kind of room.</summary>
+    private static string RoomKey(Guid pageId) => $"page:{pageId}";
+
     private static PresenceViewer Viewer(string connectionId, Guid userId) =>
         new(connectionId, userId, "Ada", "#abc", HasAvatar: false);
 
@@ -131,11 +134,11 @@ public sealed class RealtimeConnectionRegistryTests
         var knownUser = Guid.NewGuid();
 
         registry.RegisterConnection("known-conn", knownUser, PrincipalFor("ada"));
-        registry.JoinPage(pageId, Viewer("known-conn", knownUser));
+        registry.JoinRoom(RoomKey(pageId), Viewer("known-conn", knownUser));
         // Present, but never registered — the gap the inner join used to hide.
-        registry.JoinPage(pageId, Viewer("orphan-conn", Guid.NewGuid()));
+        registry.JoinRoom(RoomKey(pageId), Viewer("orphan-conn", Guid.NewGuid()));
 
-        var working = registry.GetAllPageConnections();
+        var working = registry.GetAllRoomConnections();
 
         Assert.Equal(2, working.Count);
         Assert.NotNull(Assert.Single(working, c => c.ConnectionId == "known-conn").Principal);
@@ -151,15 +154,62 @@ public sealed class RealtimeConnectionRegistryTests
         var userId = Guid.NewGuid();
 
         registry.RegisterConnection("conn", userId, PrincipalFor("ada"));
-        registry.JoinPage(firstPage, Viewer("conn", userId));
-        registry.JoinPage(secondPage, Viewer("conn", userId));
+        registry.JoinRoom(RoomKey(firstPage), Viewer("conn", userId));
+        registry.JoinRoom(RoomKey(secondPage), Viewer("conn", userId));
 
-        registry.LeavePage(firstPage, "conn");
-        Assert.Empty(registry.GetViewers(firstPage));
-        Assert.Single(registry.GetViewers(secondPage));
+        registry.LeaveRoom(RoomKey(firstPage), "conn");
+        Assert.Empty(registry.GetViewers(RoomKey(firstPage)));
+        Assert.Single(registry.GetViewers(RoomKey(secondPage)));
 
         var affected = registry.UnregisterConnection("conn");
-        Assert.Equal([secondPage], affected);
-        Assert.Empty(registry.GetViewers(secondPage));
+        Assert.Equal([RoomKey(secondPage)], affected);
+        Assert.Empty(registry.GetViewers(RoomKey(secondPage)));
+    }
+
+    [Fact]
+    public void AConnectionCannotHoldUnboundedRooms()
+    {
+        // Room keys are client-supplied, and site: paths are deliberately not validated
+        // against a route list — a screen name identifies no resource, so there is
+        // nothing to authorize, and open-ended routes (docs topics) must work. Right for
+        // access control, but it leaves cardinality unbounded: one authenticated caller
+        // could otherwise grow the registry by joining endless distinct paths, and empty
+        // buckets are never removed. The cap is what bounds it, for every room type.
+        var registry = new RealtimeConnectionRegistry();
+        var userId = Guid.NewGuid();
+        registry.RegisterConnection("greedy", userId, PrincipalFor("greedy"));
+
+        for (var i = 0; i < RealtimeConnectionRegistry.MaxRoomsPerConnection; i++)
+        {
+            Assert.True(registry.JoinRoom($"site:/screen-{i}", Viewer("greedy", userId)));
+        }
+
+        Assert.False(registry.JoinRoom("site:/one-too-many", Viewer("greedy", userId)));
+        Assert.Empty(registry.GetViewers("site:/one-too-many"));
+
+        // Re-joining a room already held stays idempotent — a client retrying a join it
+        // already made must not be refused for it.
+        Assert.True(registry.JoinRoom("site:/screen-0", Viewer("greedy", userId)));
+
+        // And leaving frees the budget, so ordinary navigation never hits the cap.
+        registry.LeaveRoom("site:/screen-0", "greedy");
+        Assert.True(registry.JoinRoom("site:/one-too-many", Viewer("greedy", userId)));
+    }
+
+    [Fact]
+    public void TheCapIsPerConnection_NotGlobal()
+    {
+        // Otherwise one busy user would start refusing everyone else.
+        var registry = new RealtimeConnectionRegistry();
+        var greedyUser = Guid.NewGuid();
+        registry.RegisterConnection("greedy", greedyUser, PrincipalFor("greedy"));
+        for (var i = 0; i < RealtimeConnectionRegistry.MaxRoomsPerConnection; i++)
+        {
+            registry.JoinRoom($"site:/screen-{i}", Viewer("greedy", greedyUser));
+        }
+
+        var otherUser = Guid.NewGuid();
+        registry.RegisterConnection("other", otherUser, PrincipalFor("other"));
+        Assert.True(registry.JoinRoom("site:/screen-0", Viewer("other", otherUser)));
     }
 }

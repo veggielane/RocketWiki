@@ -85,7 +85,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
         Assert.Single(views);
 
         var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
-        Assert.Single(registry.GetViewers(page.Id));
+        Assert.Single(registry.GetViewers($"page:{page.Id}"));
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
         // Absent, not forbidden (design.md §6.7): no exception, no event, just nothing
         // registered - the same shape probing a nonexistent page id would produce.
         var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
-        Assert.Empty(registry.GetViewers(page.Id));
+        Assert.Empty(registry.GetViewers($"page:{page.Id}"));
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
         await secondBroadcast.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
-        Assert.Empty(registry.GetViewers(page.Id));
+        Assert.Empty(registry.GetViewers($"page:{page.Id}"));
     }
 
     /// <summary>
@@ -183,7 +183,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
         await connection.InvokeAsync("JoinPage", page.Id);
 
         var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
-        Assert.Single(registry.GetViewers(page.Id));
+        Assert.Single(registry.GetViewers($"page:{page.Id}"));
 
         // Now restrict the page to a nationality this connection doesn't hold, via the
         // real createAccessRule mutation (as an instance admin, to exercise the actual
@@ -209,7 +209,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
         // this is just guarding against any residual async scheduling.
         await Task.Delay(TimeSpan.FromMilliseconds(200));
 
-        Assert.Empty(registry.GetViewers(page.Id));
+        Assert.Empty(registry.GetViewers($"page:{page.Id}"));
 
         // The half the registry assertion cannot see: the connection must no longer be a
         // MEMBER of the page group. Provoke a broadcast to that group by having someone
@@ -229,7 +229,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
         }
 
         // Non-vacuous: the newcomer IS in the group, so the broadcast really happened.
-        Assert.Single(registry.GetViewers(page.Id));
+        Assert.Single(registry.GetViewers($"page:{page.Id}"));
         _ = space;
     }
 
@@ -257,7 +257,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
         await connection.InvokeAsync("JoinPage", page.Id);
 
         var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
-        Assert.Single(registry.GetViewers(page.Id));
+        Assert.Single(registry.GetViewers($"page:{page.Id}"));
 
         // A cleared editor raises the page to SECRET. Nothing about the access RULES
         // changes - only the marking - which is exactly the case the sweep used to miss.
@@ -277,6 +277,206 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
 
         await Task.Delay(TimeSpan.FromMilliseconds(200));
 
-        Assert.Empty(registry.GetViewers(page.Id));
+        Assert.Empty(registry.GetViewers($"page:{page.Id}"));
+    }
+
+    /// <summary>
+    /// Seeds a space whose only grant requires the given nationality, so a caller without
+    /// it holds no role and the space is invisible to them.
+    /// </summary>
+    private async Task<Space> SeedSpaceAsync(string grantNationality)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
+        db.Users.Add(seeder);
+        await db.SaveChangesAsync();
+
+        var space = new Space
+        {
+            Key = $"RM{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
+            Name = "Room Space",
+            OriginInstanceId = "standalone",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = seeder.Id,
+        };
+        db.Spaces.Add(space);
+        db.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.SpaceGrant,
+            SpaceId = space.Id,
+            Role = SpaceRole.Viewer,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new AttrCondition("nationality", [grantNationality])),
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = seeder.Id,
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = seeder.Id,
+        });
+        await db.SaveChangesAsync();
+        return space;
+    }
+
+    [Fact]
+    public async Task JoinRoom_OnAViewableSpace_RegistersPresence()
+    {
+        // The control for the two refusal tests below: without it, "nothing registered"
+        // could mean the space room never works at all.
+        var space = await SeedSpaceAsync(grantNationality: "GB");
+        await using var connection = await ConnectAsync($"gb-{Guid.NewGuid()}", nationality: ["GB"]);
+
+        var viewersChanged = new TaskCompletionSource<object[]>();
+        connection.On<object[]>("ViewersChanged", views => viewersChanged.TrySetResult(views));
+
+        await connection.InvokeAsync("JoinRoom", $"space:{space.Key}:browse");
+        var views = await viewersChanged.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Single(views);
+        var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
+        Assert.Single(registry.GetViewers($"space:{space.Key}:browse"));
+    }
+
+    [Fact]
+    public async Task JoinRoom_OnAnInvisibleSpace_IsIndistinguishableFromANonexistentOne()
+    {
+        // §6.7's line for this feature. A space room must never become a way to learn
+        // that a space EXISTS: the refusal for a space the caller cannot see has to be
+        // byte-identical to the refusal for one that was never created.
+        //
+        // Both calls are made on the same connection, so anything that differed —
+        // an exception, an event, a delay-shaped difference in what the client observes —
+        // would show up as an asymmetry between these two halves.
+        var invisible = await SeedSpaceAsync(grantNationality: "US");
+        var neverExisted = $"NX{Guid.NewGuid():N}"[..8].ToUpperInvariant();
+
+        await using var connection = await ConnectAsync($"nz-{Guid.NewGuid()}", nationality: ["NZ"]);
+
+        var events = new List<object[]>();
+        connection.On<object[]>("ViewersChanged", views =>
+        {
+            lock (events)
+            {
+                events.Add(views);
+            }
+        });
+
+        var invisibleFault = await Record.ExceptionAsync(
+            () => connection.InvokeAsync("JoinRoom", $"space:{invisible.Key}:browse"));
+        var absentFault = await Record.ExceptionAsync(
+            () => connection.InvokeAsync("JoinRoom", $"space:{neverExisted}:browse"));
+
+        // Same outcome on the wire: no fault either time.
+        Assert.Null(invisibleFault);
+        Assert.Null(absentFault);
+
+        // Same outcome in the registry: nothing joined either room.
+        var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
+        Assert.Empty(registry.GetViewers($"space:{invisible.Key}:browse"));
+        Assert.Empty(registry.GetViewers($"space:{neverExisted}:browse"));
+
+        // And no broadcast escaped for either — a ViewersChanged naming the invisible
+        // space would confirm its existence just as loudly as an error would.
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+        lock (events)
+        {
+            Assert.Empty(events);
+        }
+    }
+
+    [Fact]
+    public async Task JoinRoom_OnAnAllowlistedSiteRoute_RegistersPresenceForAnyAuthenticatedUser()
+    {
+        // A global route carries no resource id, so being signed in is the whole gate —
+        // and that is only safe because the route came off a fixed allowlist.
+        await using var connection = await ConnectAsync($"anyone-{Guid.NewGuid()}");
+
+        var viewersChanged = new TaskCompletionSource<object[]>();
+        connection.On<object[]>("ViewersChanged", views => viewersChanged.TrySetResult(views));
+
+        await connection.InvokeAsync("JoinRoom", "site:/search");
+        await viewersChanged.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
+        Assert.Single(registry.GetViewers("site:/search"));
+    }
+
+    [Fact]
+    public async Task JoinRoom_OnAnUnknownRoomKey_RegistersNothing()
+    {
+        // The refusal that keeps the room key space bounded, and the one that stops an
+        // unrecognised prefix becoming a room with no gate at all.
+        await using var connection = await ConnectAsync($"prober-{Guid.NewGuid()}");
+        var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
+
+        foreach (var key in new[] { "everyone:all", "page:not-a-guid", "nonsense", "site:" })
+        {
+            var fault = await Record.ExceptionAsync(() => connection.InvokeAsync("JoinRoom", key));
+            Assert.Null(fault);
+            Assert.Empty(registry.GetViewers(key));
+        }
+    }
+
+    [Fact]
+    public async Task JoinPage_StillWorks_AndLandsInTheSameRoomAsJoinRoom()
+    {
+        // The transitional adapter. The SPA still calls JoinPage while it moves to rooms,
+        // and it must land in the room JoinRoom would have produced — otherwise the two
+        // clients see each other's absence during the changeover.
+        var (_, page) = await SeedViewablePageAsync();
+
+        await using var legacy = await ConnectAsync($"legacy-{Guid.NewGuid()}");
+        await using var modern = await ConnectAsync($"modern-{Guid.NewGuid()}");
+
+        await legacy.InvokeAsync("JoinPage", page.Id);
+        await modern.InvokeAsync("JoinRoom", $"page:{page.Id}");
+
+        var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
+        Assert.Equal(2, registry.GetViewers($"page:{page.Id}").Count);
+    }
+
+    [Fact]
+    public async Task TwoScreensOfOneSpace_ShareAuthorizationButAreSeparateRooms()
+    {
+        // The contract the SPA sends. Both screens need the same permission, so one
+        // authorization decision covers both — but a cursor position on the browser
+        // means nothing on the trash screen, so a viewer in one must not appear in the
+        // other. Getting this wrong in the other direction is what my first cut did:
+        // it authorized against "ENG:browse" as if that were a space key, and every
+        // space room was refused for everyone.
+        var space = await SeedSpaceAsync(grantNationality: "GB");
+
+        await using var onBrowse = await ConnectAsync($"browse-{Guid.NewGuid()}", nationality: ["GB"]);
+        await using var onTrash = await ConnectAsync($"trash-{Guid.NewGuid()}", nationality: ["GB"]);
+
+        await onBrowse.InvokeAsync("JoinRoom", $"space:{space.Key}:browse");
+        await onTrash.InvokeAsync("JoinRoom", $"space:{space.Key}:trash");
+
+        var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
+
+        // Both authorized: the gate read the space key, not the screen.
+        Assert.Single(registry.GetViewers($"space:{space.Key}:browse"));
+        Assert.Single(registry.GetViewers($"space:{space.Key}:trash"));
+
+        // And separate: neither sees the other.
+        Assert.DoesNotContain(registry.GetViewers($"space:{space.Key}:browse"),
+            v => v.ConnectionId == registry.GetViewers($"space:{space.Key}:trash")[0].ConnectionId);
+    }
+
+    [Fact]
+    public async Task DocsTopics_AreDistinctRooms_AndNeedNoBackendRouteList()
+    {
+        // The case an allowlist could never serve: help topics are open-ended, so any
+        // server-side route list would have refused them and docs presence would simply
+        // be dead. A site path names a screen, not a resource — nothing to authorize,
+        // nothing to leak — so any well-formed path from a signed-in caller joins, and
+        // two topics are two rooms.
+        await using var onClassification = await ConnectAsync($"docs-a-{Guid.NewGuid()}");
+        await using var onOrganising = await ConnectAsync($"docs-b-{Guid.NewGuid()}");
+
+        await onClassification.InvokeAsync("JoinRoom", "site:/-/docs/classification");
+        await onOrganising.InvokeAsync("JoinRoom", "site:/-/docs/organising");
+
+        var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
+        Assert.Single(registry.GetViewers("site:/-/docs/classification"));
+        Assert.Single(registry.GetViewers("site:/-/docs/organising"));
     }
 }
