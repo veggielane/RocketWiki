@@ -1,4 +1,4 @@
-using RocketWiki.Core.Services;
+﻿using RocketWiki.Core.Services;
 using RocketWiki.Importer.Conversion;
 using RocketWiki.Importer.Export;
 using RocketWiki.Importer.Pipeline.Internal;
@@ -59,7 +59,44 @@ public sealed class ConfluenceSpaceImporter
         _labelService = labelService;
     }
 
+    /// <summary>
+    /// Imports one space. <b>Never throws for a content problem</b> — every per-page,
+    /// per-comment, per-attachment and per-label failure is reported instead, because an
+    /// exception out of here is unrecoverable in a way none of them are: each service
+    /// commits with its own SaveChanges, so there is no transaction to roll back, and
+    /// the report is written by the CALLER after this returns. A throw at page 700 of
+    /// 900 therefore left 699 pages and every attachment committed, no report at all,
+    /// and a re-run blocked by the space key already existing.
+    ///
+    /// <para>The outer catch below is the backstop for the failures nobody predicted —
+    /// a dropped connection, a service contract that changed underneath this code. It
+    /// does not hide them: the exception type and message become the
+    /// <see cref="ImportResult.BlockedReason"/>, the caller writes the partial report,
+    /// and the CLI exits non-zero. Losing the record of what WAS written is strictly
+    /// worse than an ugly stack trace, and until now that is what happened.</para>
+    /// </summary>
     public async Task<ImportResult> ImportAsync(ConfluenceExportSpace export, ImportOptions options, CancellationToken cancellationToken = default)
+    {
+        var report = new ImportReport();
+        try
+        {
+            return await ImportCoreAsync(export, options, report, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new ImportResult(
+                false, null, report, ImportReportSummarizer.Summarize(report, export.Pages.Count),
+                $"the import stopped part-way through with an unexpected {ex.GetType().Name}: {ex.Message}. " +
+                "Everything reported below was already written and is still in the database.");
+        }
+    }
+
+    private async Task<ImportResult> ImportCoreAsync(
+        ConfluenceExportSpace export, ImportOptions options, ImportReport report, CancellationToken cancellationToken)
     {
         // design.md §15: one span per pipeline stage, carrying counts and the space key
         // only. Titles, bodies, converted Markdown and author names all flow through the
@@ -68,7 +105,10 @@ public sealed class ConfluenceSpaceImporter
         importActivity?.SetTag(ImporterTelemetry.SpaceKeyTag, export.Key);
         importActivity?.SetTag(ImporterTelemetry.PageCountTag, export.Pages.Count);
 
-        var report = new ImportReport();
+        // Recorded BEFORE the space is created, so a run blocked at space creation
+        // still reports what the source restricted. design.md §13: reported, never
+        // translated — nothing below reads this back to build a rule.
+        report.AddSourceSpacePermissions(export.Permissions);
 
         var spaceResult = await _spaceService.CreateAsync(
             new CreateSpaceRequest(export.Key, export.Name, export.Description),
@@ -104,7 +144,7 @@ public sealed class ConfluenceSpaceImporter
                 skippedConfluenceIds.Add(page.ConfluencePageId);
                 report.AddPage(new PageImportOutcome(
                     page.ConfluencePageId, page.Title, null, null, [], ImportAuthorFormatting.Format(page.Author),
-                    "skipped because an ancestor page failed to create"));
+                    "skipped because an ancestor page failed to create", SourceRestrictions: page.Restrictions));
                 continue;
             }
 
@@ -118,7 +158,7 @@ public sealed class ConfluenceSpaceImporter
                 skippedConfluenceIds.Add(page.ConfluencePageId);
                 report.AddPage(new PageImportOutcome(
                     page.ConfluencePageId, page.Title, null, null, [], ImportAuthorFormatting.Format(page.Author),
-                    $"page creation failed: {DescribeError(createResult.Error)}"));
+                    $"page creation failed: {DescribeError(createResult.Error)}", SourceRestrictions: page.Restrictions));
                 continue;
             }
 
@@ -186,24 +226,53 @@ public sealed class ConfluenceSpaceImporter
             }
 
             var pageContext = new ConfluencePageContext(export.Key, page.Title, page.ConfluencePageId);
-            var conversion = converter.Convert(page.StorageBodyXhtml, pageContext);
             var attachmentFailures = (IReadOnlyList<string>?)attachmentFailuresByPage.GetValueOrDefault(page.ConfluencePageId) ?? [];
 
+            // A body that will not parse degrades to the raw body in a code block — it
+            // does not abort the run and it does not skip the page. Aborting left every
+            // earlier page committed with no report and no way to re-run (each service
+            // commits with its own SaveChanges; there is no transaction here). Skipping
+            // would import a page that looks migrated and is silently empty, and would
+            // orphan its children. Keeping the original text loses nothing.
+            ConversionResult? conversion = null;
+            string? conversionFailure = null;
+            string markdown;
+            try
+            {
+                conversion = converter.Convert(page.StorageBodyXhtml, pageContext);
+                markdown = conversion.Markdown;
+            }
+            catch (ConfluenceConversionException ex)
+            {
+                conversionFailure = ex.Message;
+                markdown = UnconvertedBodyFallback.Build(page.StorageBodyXhtml, ex.Message);
+            }
+
             var updateResult = await _pageService.UpdatePageContentAsync(
-                new UpdatePageContentRequest(realPageId, ExpectedRevisionNumber: 1, page.Title, conversion.Markdown, EditSummary: "Imported from Confluence"),
+                new UpdatePageContentRequest(realPageId, ExpectedRevisionNumber: 1, page.Title, markdown,
+                    EditSummary: conversionFailure is null
+                        ? "Imported from Confluence"
+                        : "Imported from Confluence (body could not be converted — original preserved)"),
                 options.ImporterPrincipal, options.ActingUserId, options.AuditContext, cancellationToken: cancellationToken);
 
-            var skippedReason = updateResult.IsSuccess
-                ? null
-                : $"page was created but its converted content could not be saved: {DescribeError(updateResult.Error)} - it still holds placeholder content.";
+            var skippedReason = (updateResult.IsSuccess, conversionFailure) switch
+            {
+                (false, _) => $"page was created but its content could not be saved: {DescribeError(updateResult.Error)} - it still holds placeholder content.",
+                (true, not null) => $"page body could not be converted: {conversionFailure} - the page was imported with its original Confluence body preserved verbatim in a code block, and needs converting by hand.",
+                _ => null,
+            };
 
             var commentOutcomes = await ImportCommentsAsync(export.Key, page, realPageId, converter, options, cancellationToken);
             var (labelsApplied, labelFailures) = await ImportLabelsAsync(page, realPageId, space.Id, labelIdCache, options, cancellationToken);
 
             report.AddPage(new PageImportOutcome(
-                page.ConfluencePageId, page.Title, realPageId, conversion.Report, attachmentFailures, ImportAuthorFormatting.Format(page.Author),
-                skippedReason, ProducedEmptyContent: updateResult.IsSuccess && string.IsNullOrWhiteSpace(conversion.Markdown),
-                ConvertedMarkdown: conversion.Markdown, Comments: commentOutcomes, LabelsApplied: labelsApplied, LabelFailures: labelFailures));
+                page.ConfluencePageId, page.Title, realPageId, conversion?.Report, attachmentFailures, ImportAuthorFormatting.Format(page.Author),
+                skippedReason,
+                // A preserved body is never "empty content": that flag means the converter
+                // ran and produced nothing, which is a different thing to investigate.
+                ProducedEmptyContent: updateResult.IsSuccess && conversionFailure is null && string.IsNullOrWhiteSpace(markdown),
+                ConvertedMarkdown: markdown, Comments: commentOutcomes, LabelsApplied: labelsApplied, LabelFailures: labelFailures,
+                SourceRestrictions: page.Restrictions));
             convertedPageCount++;
         }
 
@@ -214,7 +283,8 @@ public sealed class ConfluenceSpaceImporter
         {
             report.AddPage(new PageImportOutcome(
                 orphan.ConfluencePageId, orphan.Title, null, null, [], ImportAuthorFormatting.Format(orphan.Author),
-                "page was never reached while walking the tree from a root page - likely a cycle or a broken parent reference. Not imported."));
+                "page was never reached while walking the tree from a root page - likely a cycle or a broken parent reference. Not imported.",
+                SourceRestrictions: orphan.Restrictions));
         }
 
         var summary = ImportReportSummarizer.Summarize(report, export.Pages.Count);
@@ -254,7 +324,22 @@ public sealed class ConfluenceSpaceImporter
 
             var parentRealId = comment.ParentConfluenceCommentId is { } pid ? realCommentIds.GetValueOrDefault(pid) : (Guid?)null;
             var commentContext = new ConfluencePageContext(spaceKey, page.Title, page.ConfluencePageId);
-            var conversion = converter.Convert(comment.BodyXhtml, commentContext);
+
+            ConversionResult conversion;
+            try
+            {
+                conversion = converter.Convert(comment.BodyXhtml, commentContext);
+            }
+            catch (ConfluenceConversionException ex)
+            {
+                // Skipped exactly like a comment whose creation failed, replies and all:
+                // a thread hanging off a comment that does not exist is not a thread.
+                skippedCommentIds.Add(comment.ConfluenceCommentId);
+                outcomes.Add(new CommentImportOutcome(
+                    comment.ConfluenceCommentId, null, null, ImportAuthorFormatting.Format(comment.Author),
+                    $"comment body could not be converted: {ex.Message}"));
+                continue;
+            }
 
             var addResult = await _commentService.AddCommentAsync(
                 new AddCommentRequest(realPageId, parentRealId, conversion.Markdown),

@@ -342,6 +342,37 @@ public class DataTelemetryTests : SqliteTestBase
         Assert.Equal("none", admitted.Tags[CoreTelemetry.DenialReasonTag]);
     }
 
+    [Fact]
+    public void EmbeddingRun_PublishesTheQuarantinedPageCountAsAGauge()
+    {
+        // A quarantined page is invisible by construction: semantic search simply
+        // returns fewer results, forever, and nothing fails. The gauge is the only thing
+        // that says so on a dashboard, so "the gauge reports what the run recorded" is
+        // the claim worth a test — a gauge whose callback was never wired reads as a
+        // permanent, reassuring zero.
+        using var collector = new MetricCollector<long>(DataTelemetry.Meter, "rocketwiki.embeddings.pages_quarantined");
+
+        // A value no real run would produce, asserted by CONTAINS rather than by the
+        // latest reading: other classes in this assembly drive real index runs in
+        // parallel, and each one overwrites the gauge's backing field. Retried because
+        // such a run can land between the record and the observation.
+        const long Sentinel = 424_242;
+        var observed = false;
+
+        for (var attempt = 0; attempt < 10 && !observed; attempt++)
+        {
+            DataTelemetry.RecordEmbeddingRun(
+                chunksEmbedded: 0, pagesSucceeded: 0, pagesFailed: 0, pagesPending: 0,
+                pagesQuarantined: (int)Sentinel, elapsedSeconds: 0.1);
+            collector.RecordObservableInstruments();
+            observed = collector.GetMeasurementSnapshot().Any(m => m.Value == Sentinel);
+        }
+
+        Assert.True(observed,
+            "rocketwiki.embeddings.pages_quarantined never reported the count the run recorded; " +
+            "an operator would see a permanent zero while pages sat un-embedded.");
+    }
+
     /// <summary>No attachments in these fixtures, so blob storage is never reached.</summary>
     private sealed class NullFileStorage : Storage.IFileStorage
     {

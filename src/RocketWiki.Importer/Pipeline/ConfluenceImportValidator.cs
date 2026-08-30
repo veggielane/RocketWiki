@@ -1,4 +1,4 @@
-using RocketWiki.Importer.Conversion;
+﻿using RocketWiki.Importer.Conversion;
 using RocketWiki.Importer.Export;
 using RocketWiki.Importer.Pipeline.Internal;
 
@@ -31,6 +31,7 @@ public sealed class ConfluenceImportValidator
     public ImportValidationResult Validate(ConfluenceExportSpace export)
     {
         var report = new ImportReport();
+        report.AddSourceSpacePermissions(export.Permissions);
         var plan = ImportTreePlanner.Plan(export);
         var resolver = new TwoPassPageIdResolver();
         var localPageIds = new Dictionary<string, Guid>(StringComparer.Ordinal);
@@ -58,28 +59,50 @@ public sealed class ConfluenceImportValidator
         {
             var page = planned.Page;
             var pageContext = new ConfluencePageContext(export.Key, page.Title, page.ConfluencePageId);
-            var conversion = converter.Convert(page.StorageBodyXhtml, pageContext);
+
+            // A dry run predicts what a real run will do (design.md §16), degrade
+            // included: an unparseable body is imported with the original preserved in a
+            // code block, not skipped. Finding these BEFORE the real run — and seeing
+            // exactly what the page will look like — is most of the point of a dry run.
+            ConversionResult? conversion = null;
+            string? conversionFailure = null;
+            string markdown;
+            try
+            {
+                conversion = converter.Convert(page.StorageBodyXhtml, pageContext);
+                markdown = conversion.Markdown;
+            }
+            catch (ConfluenceConversionException ex)
+            {
+                conversionFailure = ex.Message;
+                markdown = UnconvertedBodyFallback.Build(page.StorageBodyXhtml, ex.Message);
+            }
+
             var commentOutcomes = PreviewComments(export.Key, page, converter);
 
             report.AddPage(new PageImportOutcome(
                 page.ConfluencePageId,
                 page.Title,
                 localPageIds[page.ConfluencePageId],
-                conversion.Report,
+                conversion?.Report,
                 AttachmentFailures: [],
                 ImportAuthorFormatting.Format(page.Author),
-                SkippedReason: null,
-                ProducedEmptyContent: string.IsNullOrWhiteSpace(conversion.Markdown),
-                ConvertedMarkdown: conversion.Markdown,
+                SkippedReason: conversionFailure is null
+                    ? null
+                    : $"page body could not be converted: {conversionFailure} - the page would be imported with its original Confluence body preserved verbatim in a code block, and would need converting by hand.",
+                ProducedEmptyContent: conversionFailure is null && string.IsNullOrWhiteSpace(markdown),
+                ConvertedMarkdown: markdown,
                 Comments: commentOutcomes,
-                LabelsApplied: page.Labels));
+                LabelsApplied: page.Labels,
+                SourceRestrictions: page.Restrictions));
         }
 
         foreach (var orphan in plan.OrphanedPages)
         {
             report.AddPage(new PageImportOutcome(
                 orphan.ConfluencePageId, orphan.Title, null, null, [], ImportAuthorFormatting.Format(orphan.Author),
-                "page was never reached while walking the tree from a root page - likely a cycle or a broken parent reference. Would not be imported."));
+                "page was never reached while walking the tree from a root page - likely a cycle or a broken parent reference. Would not be imported.",
+                SourceRestrictions: orphan.Restrictions));
         }
 
         var summary = ImportReportSummarizer.Summarize(report, export.Pages.Count);
@@ -96,7 +119,20 @@ public sealed class ConfluenceImportValidator
         foreach (var comment in orderedComments)
         {
             var commentContext = new ConfluencePageContext(spaceKey, page.Title, page.ConfluencePageId);
-            var conversion = converter.Convert(comment.BodyXhtml, commentContext);
+
+            ConversionResult conversion;
+            try
+            {
+                conversion = converter.Convert(comment.BodyXhtml, commentContext);
+            }
+            catch (ConfluenceConversionException ex)
+            {
+                outcomes.Add(new CommentImportOutcome(
+                    comment.ConfluenceCommentId, null, null, ImportAuthorFormatting.Format(comment.Author),
+                    $"comment body could not be converted: {ex.Message}"));
+                continue;
+            }
+
             outcomes.Add(new CommentImportOutcome(
                 comment.ConfluenceCommentId, Guid.CreateVersion7(), conversion.Report, ImportAuthorFormatting.Format(comment.Author), null, conversion.Markdown));
         }

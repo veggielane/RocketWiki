@@ -22,14 +22,31 @@ namespace RocketWiki.Core.Search;
 /// run's work; the next run picks up where this one stopped.</param>
 /// <param name="FailureBackoff">How long a page with a failed attempt waits before
 /// being retried (§9.2: failures retry; saves are never blocked).</param>
+/// <param name="MaxAttempts">Consecutive failures against one revision after which that
+/// revision is quarantined — the scan skips it and moves on. Without a ceiling a page the
+/// endpoint can never embed (oversized chunk, content that trips a provider filter) is
+/// retried forever, and because the scan is oldest-first it wins every batch and starves
+/// every page behind it. Quarantine is per-revision, so editing the page re-arms it.</param>
+/// <param name="AbortAfterConsecutiveFailures">Failures in a row within one run after
+/// which the run gives up on the rest of the batch. One endpoint serves every page, so a
+/// run of failures means the endpoint is down and the remaining pages would only add
+/// failure counts to innocent revisions; a single failure between successes means the
+/// endpoint is up and the page is the problem.</param>
 public sealed record EmbeddingOptions(
     string Model,
     int Dimensions = 1536,
     TimeSpan? PollInterval = null,
     int BatchSize = 16,
-    TimeSpan? FailureBackoff = null)
+    TimeSpan? FailureBackoff = null,
+    int MaxAttempts = 5,
+    int AbortAfterConsecutiveFailures = 3)
 {
     public TimeSpan PollIntervalOrDefault => PollInterval ?? TimeSpan.FromSeconds(30);
 
     public TimeSpan FailureBackoffOrDefault => FailureBackoff ?? TimeSpan.FromMinutes(5);
+
+    /// <summary>Guards against a configured 0 turning the ceiling into "quarantine everything".</summary>
+    public int MaxAttemptsOrDefault => MaxAttempts > 0 ? MaxAttempts : 5;
+
+    public int AbortAfterConsecutiveFailuresOrDefault => AbortAfterConsecutiveFailures > 0 ? AbortAfterConsecutiveFailures : 3;
 }

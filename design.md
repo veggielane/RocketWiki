@@ -1074,6 +1074,22 @@ embedding model, called through `Microsoft.Extensions.AI`'s
   (page saved → re-embed), never blocking saves. Chunks are content-hashed so
   only changed chunks re-embed. Failures retry; while the endpoint is down,
   search degrades gracefully to FTS-only.
+- **A page that can never be embedded must not starve the queue.** The scan
+  is oldest-first and a page stays due until it succeeds, so one page the
+  endpoint rejects for its own reasons — an oversized chunk, a provider
+  content filter — sits at the head of every batch forever. Three rules keep
+  that local to the page. A failure moves the run on to the *next* page
+  rather than abandoning the batch; only a run of consecutive failures (the
+  endpoint really being down) stops a run early. After `MaxAttempts`
+  consecutive failures the page's **current revision** is quarantined and
+  skipped by the scan, so the queue drains past it. And quarantine is keyed
+  on the revision, not the page: editing the page is the only cure available
+  to an author, so a new revision gets a fresh attempt budget and lifts the
+  quarantine by itself. A quarantined page is silent by construction —
+  search simply returns less — so it is reported through
+  `rocketwiki.embeddings.pages_quarantined` and a per-page warning log
+  carrying the page id and revision (§15: the id goes in the log, never in a
+  metric dimension).
 - Embedding jobs are system actions, not user actions — they don't emit user
   audit events. User-facing search stays audited as `search.query` (§7).
 
@@ -1581,6 +1597,19 @@ the conversion report; multi-row headers, captions, and block content
 inside cells are likewise flattened with a report note rather than
 silently reshaped.
 
+**A page that will not convert at all is one page's problem, not the run's.**
+There is no transaction spanning an import — each service commits as it goes
+— so an exception escaping the conversion loop at page 700 of 900 left 699
+pages and every attachment already written, no report (it is produced after
+the loop), and a re-run blocked by the space key existing. The trigger is
+ordinary: any named HTML entity outside the converter's table, which is most
+accented characters. Unconvertible pages and comments are therefore reported
+like every other per-entity failure and the run continues, a dry run predicts
+exactly the same outcome, and the one remaining backstop — an unexpected
+infrastructure failure — returns the partial report rather than throwing, so
+what was written is always on record. There is still no resume: recovery from
+a part-way stop is to read the report, delete the partial space, and re-run.
+
 Migration fidelity is a known risk — budget real time for it, and run trial
 imports early (see §16).
 
@@ -1593,7 +1622,16 @@ imports early (see §16).
   or over-restricted, which looks like data loss. Both are worse than an
   explicit decision. The importer therefore takes a **required** initial
   grant — never a default, never `everyone` — and reports the Confluence
-  permissions it found so an admin can re-apply them deliberately.
+  permissions it found so an admin can re-apply them deliberately. The
+  report carries every space permission and page restriction the export
+  contained, **verbatim**: Confluence's own type and subject strings,
+  including types this importer has never seen, because a permission
+  filtered out for being unrecognised is the one most worth a human's
+  attention. Finding any sets the report's "needs review" flag even when
+  every page converted perfectly — an import is not done while the
+  destination is more open than the source was, and a clean-looking report
+  is how that gets missed. An export carrying none says so explicitly, so
+  that "there were none" and "nobody looked" never read the same.
 - **Authorship needs shadow users.** Every FK requiring an author needs a
   real `User` row, so imported content is currently attributed to the
   importing actor while each page's original Confluence author (email and

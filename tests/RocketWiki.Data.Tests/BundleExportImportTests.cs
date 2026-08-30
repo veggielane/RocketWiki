@@ -1043,6 +1043,91 @@ public class BundleExportImportTests : SqliteTestBase
 
     // --- Gap-refusing, idempotent, chain-verified -------------------------------------
 
+    /// <summary>
+    /// A REFUSED bundle must leave no trace in storage either, not just in the database.
+    ///
+    /// <para>The class doc claims "every check that can fail happens BEFORE any entity in
+    /// the bundle is applied, so a rejected bundle never partially lands" — true of rows,
+    /// false of blobs. The per-space sequence check used to run inside the apply loop, so
+    /// a gap in the SECOND space returned only after the first space's Attachment events
+    /// had already called <c>SaveAsync</c>. <c>SaveChangesAsync</c> is never reached on a
+    /// refusal, so the rows evaporate and the bytes do not — and re-importing the
+    /// corrected bundle mints a fresh storage key, making the orphan permanent with no
+    /// janitor to collect it.</para>
+    ///
+    /// <para>Two spaces, deliberately: with one space the gap is found on its first record
+    /// and nothing has been written yet, which is why this went unnoticed.</para>
+    /// </summary>
+    [Fact]
+    public async Task Import_RefusedForAGapInOneSpace_LeavesNoBlobsFromTheOther()
+    {
+        var actor = TestData.NewUser();
+        var goodSpace = NewExportedSpace("GOOD");
+        var gappedSpace = NewExportedSpace("GAPPED");
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.AddRange(goodSpace, gappedSpace);
+        lowContext.AccessRules.Add(EditorGrant(goodSpace.Id));
+        lowContext.SaveChanges();
+
+        var lowStorage = CreateFileStorage(out var lowStorageDir);
+        var highStorage = CreateFileStorage(out var highStorageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            // An attachment in the FIRST space: its bytes are what must not survive.
+            var page = (await new PageService(lowContext, LowInstanceId).CreatePageAsync(
+                new CreatePageRequest(goodSpace.Id, null, "with-attachment", "With Attachment", "# A"),
+                EditorPrincipal(), actor.Id, AuditCtx)).Value;
+            Assert.True((await new AttachmentService(lowContext, lowStorage, LowInstanceId).UploadAsync(
+                new UploadAttachmentRequest(page.Id, "spec.bin", "application/octet-stream",
+                    new MemoryStream("orphan-bytes"u8.ToArray())),
+                EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
+
+            // A second space whose outbox sequence starts at 5 rather than 1 — the gap.
+            gappedSpace.LastOutboxSequence = 4;
+            lowContext.SyncOutboxEvents.Add(new SyncOutboxEvent
+            {
+                SpaceId = gappedSpace.Id,
+                SequenceNumber = 5,
+                EventType = SyncEventType.PageDelete,
+                PayloadJson = """{"rootPageId":"00000000-0000-0000-0000-000000000001","pageIds":[]}""",
+                CreatedAtUtc = DateTime.UtcNow,
+            });
+            lowContext.SaveChanges();
+
+            var bundleInfo = await new BundleExportService(lowContext, lowStorage)
+                .ExportIncrementalAsync(outputDir, LowInstanceId);
+            Assert.NotNull(bundleInfo);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var result = await new BundleImportService(highContext, highStorage, "high-instance")
+                    .ImportAsync(bundleInfo!.BundleFilePath, LowInstanceId, AuditCtx);
+
+                Assert.False(result.IsSuccess);
+                Assert.IsType<SpaceSequenceGapError>(result.Error);
+
+                // Rows: none, as always.
+                Assert.Empty(highContext.Attachments.IgnoreQueryFilters().ToList());
+
+                // Bytes: none either, which is the half that used to leak.
+                Assert.False(
+                    Directory.Exists(highStorageDir) && Directory.EnumerateFiles(highStorageDir, "*", SearchOption.AllDirectories).Any(),
+                    "a refused bundle wrote blobs to the high side's storage; they are unreferenced and permanent.");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(lowStorageDir)) Directory.Delete(lowStorageDir, recursive: true);
+            if (Directory.Exists(highStorageDir)) Directory.Delete(highStorageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Import_BundleAheadOfExpected_ReturnsBundleGapError()
     {

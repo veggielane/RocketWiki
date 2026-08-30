@@ -114,14 +114,20 @@ public static class ImporterCli
                 blockedReason = result.BlockedReason;
             }
 
+            // Written BEFORE the blocked check, not after. A blocked run is the run whose
+            // report matters most: it says which pages were already committed before the
+            // import stopped, and — even when the space itself could not be created — what
+            // the Confluence export restricted (design.md §13). Returning early left an
+            // operator with one line of console output and no artefact at all.
+            var formatted = ImportReportTextFormatter.Format(export.Space.Key, options.DryRun, report, summary);
+            await File.WriteAllTextAsync(options.ReportPath, formatted, cancellationToken);
+
             if (blockedReason is not null)
             {
                 output.WriteLine($"Import blocked: {blockedReason}");
+                output.WriteLine($"Report written to {options.ReportPath}");
                 return 2;
             }
-
-            var formatted = ImportReportTextFormatter.Format(export.Space.Key, options.DryRun, report, summary);
-            await File.WriteAllTextAsync(options.ReportPath, formatted, cancellationToken);
 
             output.WriteLine($"Report written to {options.ReportPath}");
             output.WriteLine(options.DryRun

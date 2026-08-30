@@ -60,8 +60,13 @@ public class AttachmentService : IAttachmentService
         // implementations a caller would pass here aren't seekable twice over.
         using var buffer = new MemoryStream();
         await request.Content.CopyToAsync(buffer, cancellationToken);
-        buffer.Position = 0;
-        var contentHash = SHA256.HashData(buffer.ToArray());
+        // GetBuffer, not ToArray: ToArray allocates a SECOND full copy of the payload
+        // purely to hash it, so a 100 MiB upload (the Attachments:MaxSizeBytes default)
+        // cost the doubling MemoryStream plus another 100 MiB on the large-object heap,
+        // per concurrent upload. GetBuffer hands back the stream's own array and the span
+        // bounds it to the bytes actually written, so the hash reads exactly the same
+        // bytes with no second allocation.
+        var contentHash = SHA256.HashData(buffer.GetBuffer().AsSpan(0, (int)buffer.Length));
         buffer.Position = 0;
 
         var attachment = new Attachment

@@ -1,4 +1,4 @@
-namespace RocketWiki.Importer.Pipeline;
+﻿namespace RocketWiki.Importer.Pipeline;
 
 /// <summary>
 /// Whole-space rollup over an <see cref="ImportReport"/> — the "read this first" numbers
@@ -17,8 +17,18 @@ public sealed record ImportValidationSummary(
     IReadOnlyDictionary<string, int> UnsupportedMacroCounts,
     int TotalCommentsInExport = 0,
     int SkippedCommentCount = 0,
-    int LabelFailureCount = 0)
+    int LabelFailureCount = 0,
+    int SourceSpacePermissionCount = 0,
+    int SourcePageRestrictionCount = 0)
 {
+    /// <summary>
+    /// Confluence permissions the export carried and the importer did NOT apply
+    /// (design.md §13). A non-zero total means the imported space is currently more
+    /// open than the source was, and an admin has work to do before users are let in
+    /// — which is why it is a headline number and not buried per page.
+    /// </summary>
+    public int SourcePermissionCount => SourceSpacePermissionCount + SourcePageRestrictionCount;
+
     public int PagesActuallyImported => TotalPagesInExport - SkippedPageCount;
 
     public int CommentsActuallyImported => TotalCommentsInExport - SkippedCommentCount;

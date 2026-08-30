@@ -32,9 +32,20 @@ public class PageEmbeddingState
     /// <summary>
     /// Consecutive failed embedding attempts since the last success. Non-zero defers the
     /// next retry by the job's failure backoff so an unreachable endpoint degrades to
-    /// FTS-only search (§9.2) instead of hammering every poll.
+    /// FTS-only search (§9.2) instead of hammering every poll. Once it reaches the job's
+    /// MaxAttempts the page is quarantined — skipped by the scan entirely — so one page
+    /// the endpoint can never embed stops starving every page behind it.
     /// </summary>
     public int FailedAttempts { get; set; }
+
+    /// <summary>
+    /// The <c>Page.CurrentRevisionNumber</c> those consecutive failures were counted
+    /// against; 0 when there are none. Quarantine is per-revision, not per-page: the
+    /// usual cure for a page the endpoint keeps rejecting is to edit it, and a counter
+    /// that outlived the content it was counting would keep the fixed page excluded
+    /// forever. A failure against a different revision resets the count to 1.
+    /// </summary>
+    public int FailedRevisionNumber { get; set; }
 
     /// <summary>Set on every attempt, success or failure — the backoff clock.</summary>
     public DateTime? LastAttemptAtUtc { get; set; }

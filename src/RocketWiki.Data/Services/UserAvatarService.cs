@@ -140,13 +140,20 @@ public sealed class UserAvatarService(
 
     private async Task<UserAvatarReadResult> OpenStoredAsync(UserAvatar avatar, CancellationToken cancellationToken)
     {
-        if (!await fileStorage.ExistsAsync(avatar.StorageKey, cancellationToken))
+        // Open and CATCH, not Exists-then-Open: between the two calls the object can
+        // vanish and OpenReadAsync throws FileNotFoundException, which nothing catches —
+        // a raw 500 rather than the flagged BlobMissing this branch exists to produce.
+        // Every provider converges on FileNotFoundException as the uniform missing
+        // signal, so this is race-free AND one round trip cheaper on the hot path.
+        try
+        {
+            var stream = await fileStorage.OpenReadAsync(avatar.StorageKey, cancellationToken);
+            return new UserAvatarReadResult.Found(stream, avatar.SizeBytes, avatar.ContentHash);
+        }
+        catch (FileNotFoundException)
         {
             return new UserAvatarReadResult.BlobMissing(avatar.UserId);
         }
-
-        var stream = await fileStorage.OpenReadAsync(avatar.StorageKey, cancellationToken);
-        return new UserAvatarReadResult.Found(stream, avatar.SizeBytes, avatar.ContentHash);
     }
 
     private static bool IsLowerHex(string value)

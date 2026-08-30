@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -55,8 +55,8 @@ public static class DataTelemetry
     /// <summary>
     /// design.md §9.2/§15 (milestone 7): the embedding background job, counted — never
     /// its inputs. Chunks embedded and pages indexed by outcome, run duration, and the
-    /// scan's pending-page count as a gauge (observed from the last run's scan, so
-    /// reading the gauge costs nothing). Chunk text, heading text, and query text are
+    /// scan's pending-page and quarantined-page counts as gauges (observed from the last
+    /// run's scan, so reading them costs nothing). Chunk text, heading text, and query text are
     /// exactly the "page content / search text" §15 bans from telemetry; nothing here
     /// accepts a string that could carry them.
     /// </summary>
@@ -79,14 +79,29 @@ public static class DataTelemetry
             () => Interlocked.Read(ref _embeddingPagesPending), "{page}",
             "Pages whose current revision awaits (re-)embedding, as of the job's last scan.");
 
+    private static long _embeddingPagesQuarantined;
+
+    /// <summary>
+    /// Pages whose current revision has exhausted its embedding attempts and is skipped
+    /// by the scan. A page id would answer "which one?" in one step, but §15 keeps ids
+    /// out of metric dimensions (unbounded cardinality, and a metric is not the audit
+    /// table); the count is the alert, and the job's warning log carries the id.
+    /// </summary>
+    public static readonly ObservableGauge<long> EmbeddingPagesQuarantined =
+        Meter.CreateObservableGauge("rocketwiki.embeddings.pages_quarantined",
+            () => Interlocked.Read(ref _embeddingPagesQuarantined), "{page}",
+            "Pages excluded from embedding after repeated failures against their current revision, as of the job's last run.");
+
     public const string EmbeddingIndexRunSpan = "rocketwiki.embeddings.index_run";
     public const string EmbeddingPagesPendingTag = "rocketwiki.embeddings.pages_pending";
     public const string EmbeddingPagesIndexedTag = "rocketwiki.embeddings.pages_indexed";
     public const string EmbeddingChunksEmbeddedTag = "rocketwiki.embeddings.chunks_embedded";
 
-    public static void RecordEmbeddingRun(int chunksEmbedded, int pagesSucceeded, int pagesFailed, int pagesPending, double elapsedSeconds)
+    public static void RecordEmbeddingRun(
+        int chunksEmbedded, int pagesSucceeded, int pagesFailed, int pagesPending, int pagesQuarantined, double elapsedSeconds)
     {
         Interlocked.Exchange(ref _embeddingPagesPending, pagesPending);
+        Interlocked.Exchange(ref _embeddingPagesQuarantined, pagesQuarantined);
 
         if (chunksEmbedded > 0)
         {

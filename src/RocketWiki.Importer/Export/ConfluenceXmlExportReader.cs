@@ -106,6 +106,7 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
         var spaceDescription = graph.GetScalar(spaceObject, "description");
 
         var commentsByPageId = ResolveAllComments(graph);
+        var restrictionsByPageId = ResolveAllContentRestrictions(graph);
 
         var pages = new List<ConfluenceExportPage>();
         foreach (var pageObject in graph.ObjectsOfClass("Page"))
@@ -134,11 +135,14 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
 
             var comments = commentsByPageId.GetValueOrDefault(pageObject.Id, []);
             var labels = ResolveLabels(graph, pageObject);
+            var restrictions = restrictionsByPageId.GetValueOrDefault(pageObject.Id, []);
 
-            pages.Add(new ConfluenceExportPage(pageObject.Id, parentId, title, storageBody, author, createdAt, attachments, comments, labels));
+            pages.Add(new ConfluenceExportPage(
+                pageObject.Id, parentId, title, storageBody, author, createdAt, attachments, comments, labels, restrictions));
         }
 
-        var space = new ConfluenceExportSpace(spaceKey, spaceName, spaceDescription, pages);
+        var spacePermissions = ResolveSpacePermissions(graph, spaceObject.Id);
+        var space = new ConfluenceExportSpace(spaceKey, spaceName, spaceDescription, pages, spacePermissions);
         return new ConfluenceSpaceExport(archive, space);
     }
 
@@ -210,6 +214,135 @@ public sealed class ConfluenceXmlExportReader : IConfluenceSpaceExportReader
     /// A namespaced label name ("global:my-tag") is reduced to its plain tag text, since
     /// data-model.md's Label has no namespace concept.
     /// </summary>
+    /// <summary>
+    /// Space-level permissions (design.md §13: reported, never translated). Every
+    /// <c>SpacePermission</c> is read, including types this reader has never heard of —
+    /// the whole point is to show an admin what the source actually allowed, and a
+    /// permission dropped for being unrecognised is exactly the one worth seeing.
+    /// </summary>
+    /// <remarks>
+    /// Assumed shape, same caveat as the rest of this reader: <c>SpacePermission</c>
+    /// objects carry <c>type</c> plus either a <c>group</c>/<c>groupName</c> scalar or a
+    /// user reference (<c>userSubject</c>, or the older <c>userName</c> scalar), and a
+    /// <c>space</c> reference back to the space they govern. Objects with no space
+    /// reference at all are kept — a single-space export has only one space, and
+    /// dropping a permission because a property name drifted is the failure mode this
+    /// finding is about. Objects belonging to a DIFFERENT space are excluded.
+    /// </remarks>
+    private static IReadOnlyList<ConfluenceExportPermission> ResolveSpacePermissions(EntityGraph graph, string spaceObjectId)
+    {
+        var permissions = new List<ConfluenceExportPermission>();
+
+        foreach (var permissionObject in graph.ObjectsOfClass("SpacePermission"))
+        {
+            var owningSpaceId = graph.GetReferenceId(permissionObject, "space");
+            if (owningSpaceId is not null && !string.Equals(owningSpaceId, spaceObjectId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            permissions.Add(ReadPermission(graph, permissionObject));
+        }
+
+        return permissions;
+    }
+
+    /// <summary>
+    /// Page restrictions, grouped by the page they restrict. Confluence models these as a
+    /// <c>ContentPermissionSet</c> (one per content per action, carrying the action in its
+    /// own <c>type</c>) owning a collection of <c>ContentPermission</c> entries (one per
+    /// subject). Both levels are read: the set supplies the action when an individual
+    /// entry omits it, which is the common shape.
+    /// </summary>
+    /// <remarks>
+    /// A restriction whose owning page cannot be determined is <b>not</b> dropped the way
+    /// an unplaceable comment is. A lost comment is lost content; a lost restriction is a
+    /// silent report that a page was open when it was not, which is the over-open
+    /// direction design.md §13 calls the worse of the two. Those entries are attached to
+    /// the empty page id and surface as space-level "unattributed" lines in the report.
+    /// </remarks>
+    private static Dictionary<string, List<ConfluenceExportPermission>> ResolveAllContentRestrictions(EntityGraph graph)
+    {
+        var byPageId = new Dictionary<string, List<ConfluenceExportPermission>>(StringComparer.Ordinal);
+
+        foreach (var setObject in graph.ObjectsOfClass("ContentPermissionSet"))
+        {
+            var setType = graph.GetScalar(setObject, "type");
+            var owningContentId = graph.GetReferenceId(setObject, "owningContent")
+                ?? graph.GetReferenceId(setObject, "content")
+                ?? graph.GetReferenceId(setObject, "page")
+                ?? string.Empty;
+
+            var entryIds = graph.GetCollectionIds(setObject, "contentPermissions");
+            if (entryIds.Count == 0)
+            {
+                // A set with no entries still says something: Confluence writes one when
+                // a page is restricted. Record it so the page shows as restricted rather
+                // than silently clean.
+                Add(owningContentId, new ConfluenceExportPermission(setType ?? "restricted", null, null));
+                continue;
+            }
+
+            foreach (var entryId in entryIds)
+            {
+                if (graph.ById(entryId) is not { } entryObject)
+                {
+                    continue;
+                }
+
+                var entry = ReadPermission(graph, entryObject);
+                Add(owningContentId, entry.Type.Length == 0 ? entry with { Type = setType ?? "restricted" } : entry);
+            }
+        }
+
+        return byPageId;
+
+        void Add(string pageId, ConfluenceExportPermission permission)
+        {
+            (byPageId.TryGetValue(pageId, out var list) ? list : byPageId[pageId] = []).Add(permission);
+        }
+    }
+
+    /// <summary>
+    /// Reads one permission object's type and subject. The subject is resolved to a
+    /// human-readable name where the export gives one (a user reference is looked up for
+    /// an email or full name), because an admin re-applying these needs to recognise the
+    /// people; where it does not, the raw key is reported as-is rather than as "unknown".
+    /// </summary>
+    private static ConfluenceExportPermission ReadPermission(EntityGraph graph, EntityObject permissionObject)
+    {
+        var type = graph.GetScalar(permissionObject, "type") ?? string.Empty;
+
+        var group = graph.GetScalar(permissionObject, "group") ?? graph.GetScalar(permissionObject, "groupName");
+        if (!string.IsNullOrWhiteSpace(group))
+        {
+            return new ConfluenceExportPermission(type, "group", group);
+        }
+
+        var userRef = graph.GetReferenceId(permissionObject, "userSubject")
+            ?? graph.GetReferenceId(permissionObject, "user");
+        if (userRef is not null)
+        {
+            var user = graph.ById(userRef);
+            var name = user is null
+                ? null
+                : graph.GetScalar(user, "email") ?? graph.GetScalar(user, "fullName") ?? graph.GetScalar(user, "name")
+                    ?? graph.GetScalar(user, "lowerName");
+            return new ConfluenceExportPermission(type, "user", name ?? userRef);
+        }
+
+        var userName = graph.GetScalar(permissionObject, "userName") ?? graph.GetScalar(permissionObject, "userKey");
+        if (!string.IsNullOrWhiteSpace(userName))
+        {
+            return new ConfluenceExportPermission(type, "user", userName);
+        }
+
+        // Confluence writes a space permission with no subject to mean "anonymous access".
+        // Reported as such: it is the single most consequential line a migration report
+        // can carry, since RocketWiki has no anonymous access at all (design.md non-goals).
+        return new ConfluenceExportPermission(type, "anonymous", null);
+    }
+
     private static IReadOnlyList<string> ResolveLabels(EntityGraph graph, EntityObject pageObject)
     {
         var names = new List<string>();

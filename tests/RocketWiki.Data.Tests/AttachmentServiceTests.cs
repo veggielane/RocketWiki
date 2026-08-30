@@ -331,6 +331,71 @@ public class AttachmentServiceTests : SqliteTestBase
         }
     }
 
+    /// <summary>
+    /// The RACE, which the steady-state test below cannot reach: the object is present
+    /// when the read starts and gone by the time the bytes are opened.
+    ///
+    /// <para>The download path used to ask <c>ExistsAsync</c> and then call
+    /// <c>OpenReadAsync</c>, so anything vanishing in that window threw
+    /// <c>FileNotFoundException</c> — and nothing in the codebase catches it, so it
+    /// surfaced as a raw, unstructured 500, exactly what design.md §10 and the
+    /// <c>BlobMissing</c> branch exist to prevent. Modelled with a storage fake that
+    /// answers "exists" and then throws, because that IS the observable shape of the
+    /// window; reproducing it by real timing would be a flaky way to say the same thing.
+    /// The fix removes the window rather than narrowing it: open, and catch.</para>
+    /// </summary>
+    [Fact]
+    public async Task Download_WhenTheBlobVanishesMidRead_IsBlobMissing_NotAnUnhandledException()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+        var storage = CreateFileStorage(out var tempDir);
+        try
+        {
+            using var context = CreateContext();
+            context.Users.Add(actor);
+            context.Spaces.Add(space);
+            context.Pages.Add(page);
+            context.AccessRules.Add(EditorGrant(space.Id));
+            context.SaveChanges();
+
+            var uploaded = await new AttachmentService(context, storage, LocalInstanceId).UploadAsync(
+                new UploadAttachmentRequest(page.Id, "file.txt", "text/plain", Content("data")),
+                EditorPrincipal(), actor.Id, AuditCtx);
+            Assert.True(uploaded.IsSuccess);
+
+            var racing = new VanishingFileStorage(storage);
+            var download = await new AttachmentReadService(context, racing)
+                .DownloadAsync(uploaded.Value.Id, EditorPrincipal());
+
+            var blobMissing = Assert.IsType<AttachmentDownloadResult.BlobMissing>(download);
+            Assert.Equal(uploaded.Value.Id, blobMissing.Metadata.Id);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>Present to <c>ExistsAsync</c>, gone to <c>OpenReadAsync</c> — the window
+    /// between a check and a read, made deterministic.</summary>
+    private sealed class VanishingFileStorage(IFileStorage inner) : IFileStorage
+    {
+        public Task SaveAsync(string key, Stream content, string contentType, CancellationToken ct) =>
+            inner.SaveAsync(key, content, contentType, ct);
+
+        public Task<Stream> OpenReadAsync(string key, CancellationToken ct) =>
+            throw new FileNotFoundException("The object was deleted between the check and the read.", key);
+
+        public Task DeleteAsync(string key, CancellationToken ct) => inner.DeleteAsync(key, ct);
+
+        public Task<bool> ExistsAsync(string key, CancellationToken ct) => Task.FromResult(true);
+    }
+
     [Fact]
     public async Task Download_BlobMissingFromStorage_ReturnsBlobMissing_NotA500()
     {

@@ -36,11 +36,16 @@ that matters.
 |---|---|---|
 | 0 | Clean — nothing in the report needs a human | Proceed |
 | 1 | Usage or input error (bad arguments, export file missing/unreadable, wrong `--space-key`) | Fix the command line or the export path; nothing was attempted |
-| 2 | Blocked before anything was written (space creation itself failed) | Read the "Import blocked" message on stdout — this is not a partial-import state, nothing exists |
+| 2 | Blocked (space creation failed, or the run stopped part-way on something unexpected) | Read the "Import blocked" message on stdout **and the report, which is still written** — it tells you which of the two happened and, if the run got part-way, exactly what is already in the database |
 | 3 | Completed, but the report has something worth reading | **Read the report.** This is the common, expected outcome for a real Confluence space — see §3 |
 
 Exit code 3 is not a failure. A real migration will produce it almost every time; that's
 the whole point of the report existing.
+
+**A report is now written for every outcome except a usage error**, exit code 2
+included. There is no transaction spanning an import — each service commits as it
+goes — so if a run does stop part-way, the report is the only record of what was
+already written, and it used to be the one thing you didn't get.
 
 ## 3. What to check in the report, in order of how likely it is to matter
 
@@ -91,6 +96,17 @@ this tool (an automatic mapping is guaranteed wrong in one direction or the othe
 open, which leaks content that was export-controlled under Confluence's model, or too
 restricted, which reads as data loss). Decide this deliberately for each space; don't
 default it to "everyone" out of convenience.
+
+The other half of that bargain is that the report tells you what Confluence had.
+Every space permission and page restriction in the export is read and printed
+verbatim under **`== Confluence permissions found in the export ==`**, including
+permission types this tool has never heard of, and a non-zero count there forces the
+report's overall "needs review" flag even when every page converted perfectly.
+**Work through that section before you tell anyone the space is ready** — until you
+do, a page that five people could read in Confluence is readable by everyone your
+`--grant-expression` matches. An empty section is printed explicitly ("the export
+carried no space permissions and no page restrictions") so that "there were none"
+and "nobody looked" never read the same.
 
 **The real-run database wiring has not been executed end-to-end.** It's built to the same
 `RocketWikiDbContext`/service-construction pattern as `RocketWiki.Api/Program.cs`, but no
@@ -147,6 +163,23 @@ approach is wrong.
   (Space Tools → Content Tools → Export → XML) actually produces exactly one, not a
   full-site backup shape.
 
+## 5a. Pages that will not convert at all
+
+Distinct from a *lossy* page, which still produces Markdown plus report entries. A
+body that is not well-formed XML, or that uses a named HTML entity outside the
+converter's table (`&Aacute;`, `&oacute;`, `&frac12;`, `&dagger;` — most accented
+characters), cannot be converted at all.
+
+These are **isolated to the page or comment they occur on**. The page is still
+created, keeps its placeholder content, and appears under "Pages needing review" with
+`could not be converted` and the reason; the rest of the import continues. A comment
+that will not convert is skipped along with its replies, like any comment that fails
+to create.
+
+A dry run finds every one of them without touching the database, which is the cheapest
+way to deal with them: fix the source pages in Confluence, re-export, and re-run.
+Otherwise, fix the placeholder pages by hand afterwards — the report lists them.
+
 ## 6. Known gaps that are not bugs to "fix" in this tool
 
 - **Author attribution.** Every imported revision/comment/attachment is attributed to
@@ -160,7 +193,15 @@ approach is wrong.
   failure, where some labels from the first attempt already exist, will report those as
   failures rather than attaching to the pre-existing label. If you must re-run, expect to
   reconcile labels manually, or clear the partially-created space first.
-- **Confluence permissions are reported, never translated.** See §4 above.
+- **There is no resume.** Nothing checkpoints an import: each service commits with its
+  own SaveChanges, so a run that stops part-way leaves everything before that point in
+  the database, and re-running the same export fails at space creation with "Space key
+  already in use". Content problems no longer cause this — a page that will not convert
+  is isolated and reported (§5a) — so what is left is infrastructure failure, where the
+  recovery is to read the report (still written, exit code 2), delete the partial space,
+  and start again. Cleaning up first also avoids the label gap below.
+- **Confluence permissions are reported, never translated.** See §4 above. They are
+  read and reported in full; nothing in this tool ever applies one.
 - **Comments and page bodies share one `ConfluenceStorageConverter` instance and one
   `TwoPassPageIdResolver` per import** — a link from a comment to a page resolves exactly
   like a link from a page body would, including to pages created later in the same run.

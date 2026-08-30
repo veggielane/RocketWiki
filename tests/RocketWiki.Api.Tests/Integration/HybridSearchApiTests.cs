@@ -232,7 +232,13 @@ public sealed class HybridSearchApiTests(EmbeddingApiFixture fixture) : IClassFi
             //    nothing thrown out of the run.
             var run = await fixture.RunIndexerAsync();
             Assert.True(run.PagesFailed > 0);
-            Assert.True(run.Aborted);
+            Assert.Equal(0, run.PagesEmbedded);
+            // Not asserting Aborted: that flag now means "due pages were deliberately
+            // skipped because the endpoint looked down", which needs a run of consecutive
+            // failures to establish, and how many pages are due here depends on what the
+            // shared fixture happened to leave behind. The degrade contract this test is
+            // about is points 1 and 3 — the save succeeded and search still answers. The
+            // abort heuristic itself is covered in EmbeddingIndexerTests.
 
             // 3. Search still answers - keyword-only (§9.2's degraded mode), same
             //    contract shape, no error surfaced to the caller.

@@ -1,4 +1,4 @@
-using RocketWiki.Importer.Conversion;
+﻿using RocketWiki.Importer.Conversion;
 
 namespace RocketWiki.Importer.Pipeline.Internal;
 
@@ -32,6 +32,8 @@ internal static class ImportReportSummarizer
             UnsupportedMacroCounts: unsupportedMacroCounts,
             TotalCommentsInExport: allComments.Count,
             SkippedCommentCount: allComments.Count(c => c.SkippedReason is not null),
-            LabelFailureCount: report.Pages.Sum(p => p.LabelFailures.Count));
+            LabelFailureCount: report.Pages.Sum(p => p.LabelFailures.Count),
+            SourceSpacePermissionCount: report.SourceSpacePermissions.Count,
+            SourcePageRestrictionCount: report.Pages.Sum(p => p.SourceRestrictions.Count));
     }
 }

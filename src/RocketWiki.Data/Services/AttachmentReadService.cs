@@ -62,16 +62,25 @@ public class AttachmentReadService : IAttachmentReadService
                 attachment.Id, permission.ViewDenialReason ?? "no-space-role");
         }
 
-        var blobExists = await _fileStorage.ExistsAsync(attachment.StorageKey, cancellationToken);
-        if (!blobExists)
+        // Open and CATCH, rather than Exists-then-Open. The pre-check was both a race and
+        // a wasted round trip: between the two calls the object can vanish, and
+        // OpenReadAsync then throws FileNotFoundException with nothing anywhere in the
+        // codebase catching it — a raw, unstructured 500, which is exactly what
+        // design.md §10 and this BlobMissing branch exist to prevent. All three providers
+        // already converge on FileNotFoundException as the uniform missing signal,
+        // deliberately and by test, so catching it is cheaper, race-free, and lands on the
+        // same answer the pre-check was reaching for.
+        try
+        {
+            var stream = await _fileStorage.OpenReadAsync(attachment.StorageKey, cancellationToken);
+            return new AttachmentDownloadResult.Found(attachment, stream);
+        }
+        catch (FileNotFoundException)
         {
             // design.md §10: a flagged error, not a 500 - the caller legitimately can
             // view this attachment, so there's nothing to hide about its metadata.
             return new AttachmentDownloadResult.BlobMissing(attachment);
         }
-
-        var stream = await _fileStorage.OpenReadAsync(attachment.StorageKey, cancellationToken);
-        return new AttachmentDownloadResult.Found(attachment, stream);
     }
 
     /// <summary>

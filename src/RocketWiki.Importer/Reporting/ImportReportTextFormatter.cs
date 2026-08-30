@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using RocketWiki.Importer.Conversion;
 using RocketWiki.Importer.Pipeline;
 
@@ -25,6 +25,7 @@ public static class ImportReportTextFormatter
         sb.AppendLine();
 
         AppendSummary(sb, summary);
+        AppendSourcePermissions(sb, report);
 
         if (report.PipelineNotes.Count > 0)
         {
@@ -72,9 +73,116 @@ public static class ImportReportTextFormatter
         page.SkippedReason is not null
         || page.AttachmentFailures.Count > 0
         || page.LabelFailures.Count > 0
+        || page.SourceRestrictions.Count > 0
         || page.ProducedEmptyContent
         || page.ConversionReport?.HasLossyIssues == true
         || page.Comments.Any(c => c.SkippedReason is not null || c.ConversionReport?.HasLossyIssues == true);
+
+    /// <summary>
+    /// design.md §13's other half. The importer takes a required initial grant and applies
+    /// nothing from the source, which is only safe if the operator is told what the source
+    /// had — otherwise a page five people could read lands in a space the whole grant can
+    /// read, and no artefact anywhere records that a restriction ever existed.
+    ///
+    /// <para>Placed immediately after the summary, above conversion issues, because it is
+    /// the only section describing something that is <b>wrong right now in production</b>
+    /// rather than something that converted imperfectly. Printed even when empty: "the
+    /// export carried no permissions" and "nobody looked for any" have to be
+    /// distinguishable, and before this section existed every report read like the
+    /// first.</para>
+    /// </summary>
+    private static void AppendSourcePermissions(StringBuilder sb, ImportReport report)
+    {
+        var restrictions = report.SourcePageRestrictions.ToList();
+
+        sb.AppendLine();
+        sb.AppendLine("== Confluence permissions found in the export ==");
+        sb.AppendLine("NONE OF THESE WERE APPLIED. RocketWiki does not translate Confluence");
+        sb.AppendLine("permissions (design.md §13): the imported space is governed solely by the");
+        sb.AppendLine("grant expression given on the command line. Re-apply anything below");
+        sb.AppendLine("deliberately, as space grants (§6.3) or page restrictions (§6.4), BEFORE");
+        sb.AppendLine("telling users the space is ready.");
+        sb.AppendLine();
+        sb.AppendLine("Every name below is a CONFLUENCE group or account, reproduced verbatim from");
+        sb.AppendLine("the export. None of them was looked up here and none implies a RocketWiki");
+        sb.AppendLine("group of the same name. Permission types are Confluence's own, including any");
+        sb.AppendLine("with no RocketWiki equivalent — they are listed under their Confluence names");
+        sb.AppendLine("rather than mapped to something that looks close.");
+        sb.AppendLine();
+
+        if (report.SourceSpacePermissions.Count == 0 && restrictions.Count == 0)
+        {
+            sb.AppendLine("The export carried no space permissions and no page restrictions.");
+            return;
+        }
+
+        sb.AppendLine($"Space permissions ({report.SourceSpacePermissions.Count}):");
+        if (report.SourceSpacePermissions.Count == 0)
+        {
+            sb.AppendLine("  (none in the export)");
+        }
+        else
+        {
+            // Grouped by Confluence permission type, because that is the unit an admin
+            // re-applies: "who could view this space" is one decision about one list of
+            // subjects, not N unrelated lines to reassemble by eye.
+            foreach (var group in report.SourceSpacePermissions
+                .GroupBy(p => string.IsNullOrWhiteSpace(p.Type) ? "(no type recorded)" : p.Type, StringComparer.Ordinal)
+                .OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                sb.AppendLine($"  {group.Key} ({group.Count()}):");
+                foreach (var permission in group)
+                {
+                    sb.AppendLine($"    - {DescribeSubject(permission)}");
+                }
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"Page restrictions ({restrictions.Count} across {restrictions.Select(r => r.PageTitle).Distinct(StringComparer.Ordinal).Count()} page(s)):");
+        if (restrictions.Count == 0)
+        {
+            sb.AppendLine("  (none in the export)");
+        }
+        else
+        {
+            foreach (var group in restrictions.GroupBy(r => r.PageTitle, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal))
+            {
+                sb.AppendLine($"  {group.Key}:");
+                foreach (var (_, restriction) in group)
+                {
+                    sb.AppendLine($"    - {Describe(restriction)}");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Verbatim, including a type this importer has never heard of — the reader does not
+    /// filter by a known-types list precisely so that an unfamiliar permission reaches
+    /// the person deciding what to do about it.
+    /// </summary>
+    private static string Describe(Export.ConfluenceExportPermission permission)
+    {
+        var type = string.IsNullOrWhiteSpace(permission.Type) ? "(no type recorded)" : permission.Type;
+        return $"{type} → {DescribeSubject(permission)}";
+    }
+
+    /// <summary>
+    /// Every subject is labelled <b>Confluence</b>. These strings name groups and accounts
+    /// in the source system and mean nothing on this instance — no RocketWiki group is
+    /// implied, and none is looked up. Saying so on each line is what stops
+    /// "propulsion-engineers" being read as a group that exists here.
+    /// </summary>
+    private static string DescribeSubject(Export.ConfluenceExportPermission permission) =>
+        permission.SubjectKind switch
+        {
+            "anonymous" => "ANONYMOUS (Confluence recorded no group and no user) — RocketWiki has no anonymous access at all, so this one has no equivalent to re-apply",
+            "group" => $"Confluence group '{permission.Subject ?? "(unnamed)"}'",
+            "user" => $"Confluence user '{permission.Subject ?? "(unnamed)"}'",
+            null => permission.Subject is null ? "(no subject recorded)" : $"Confluence subject '{permission.Subject}'",
+            _ => $"Confluence {permission.SubjectKind} '{permission.Subject ?? "(unnamed)"}'",
+        };
 
     private static void AppendSummary(StringBuilder sb, ImportValidationSummary summary)
     {
@@ -90,6 +198,7 @@ public static class ImportReportTextFormatter
         sb.AppendLine($"Lossy conversion issues:         {summary.LossyIssueCount}");
         sb.AppendLine($"Informational issues:            {summary.InfoIssueCount}");
         sb.AppendLine($"Unresolvable links:              {summary.UnresolvableLinkCount}");
+        sb.AppendLine($"Confluence permissions found:    {summary.SourcePermissionCount} (space: {summary.SourceSpacePermissionCount}, page: {summary.SourcePageRestrictionCount}) - NONE APPLIED");
 
         if (summary.UnsupportedMacroCounts.Count > 0)
         {
@@ -118,6 +227,18 @@ public static class ImportReportTextFormatter
         if (page.SkippedReason is not null)
         {
             sb.AppendLine($"SKIPPED: {page.SkippedReason}");
+        }
+
+        if (page.SourceRestrictions.Count > 0)
+        {
+            // Repeated here as well as in the report-level section: whoever is working
+            // through one page's issues needs to see that this page was restricted at
+            // source without having to hold a list from three screens earlier.
+            sb.AppendLine($"RESTRICTED IN CONFLUENCE — not applied here ({page.SourceRestrictions.Count}):");
+            foreach (var restriction in page.SourceRestrictions)
+            {
+                sb.AppendLine($"  - {Describe(restriction)}");
+            }
         }
 
         if (page.ProducedEmptyContent)

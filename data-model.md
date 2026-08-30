@@ -657,13 +657,26 @@ subject.
 ### PageEmbeddingState — job bookkeeping, instance-local
 
 One row per page: `PageId` (PK = FK), `EmbeddedRevisionNumber int`,
-`FailedAttempts int`, `LastAttemptAtUtc`, `UpdatedAtUtc`. The embedding
+`FailedAttempts int`, `FailedRevisionNumber int`, `LastAttemptAtUtc`,
+`UpdatedAtUtc`. The embedding
 job's trigger is a scan — a page is due when this row is missing or its
 `EmbeddedRevisionNumber` differs from `Page.CurrentRevisionNumber` — chosen
 over event wiring because it also catches the sync CLI's out-of-process
 imports (design.md §9.4) and survives restarts. Purged with the chunk rows
 when a page is trashed; the absence re-embeds on restore. Like
 `PageEmbedding`: derived, never synced, no audit rows (system action).
+
+`FailedAttempts` / `FailedRevisionNumber` are a *pair*: consecutive failures
+and the revision they were counted against. The scan is oldest-first and a
+page stays due until it succeeds, so a page the endpoint can never embed
+(oversized chunk, provider content filter) would otherwise head every batch
+forever. Once `FailedAttempts` reaches the job's `MaxAttempts` **and**
+`FailedRevisionNumber` still equals `Page.CurrentRevisionNumber`, the scan
+skips the page — quarantined. Both conditions matter: the quarantine is on
+the *revision*, so editing the page is the cure, and a failure against a
+different revision resets the count to 1 rather than spending the old
+budget on new content. Success clears both to 0. Operator-visible through
+`rocketwiki.embeddings.pages_quarantined` (§15) and a per-page warning log.
 
 ---
 

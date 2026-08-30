@@ -55,7 +55,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260829134601_AddPageEntries", applied);
         Assert.Contains("20260829192825_BinaryCollationOnStringKeys", applied);
         Assert.Contains("20260830055858_CanonicalizeSpaceKeysAndPageSlugs", applied);
-        Assert.Equal(15, applied.Count);
+        Assert.Contains("20260830073044_AddEmbeddingFailedRevisionNumber", applied);
+        Assert.Equal(16, applied.Count);
         Assert.Empty(pending);
     }
 

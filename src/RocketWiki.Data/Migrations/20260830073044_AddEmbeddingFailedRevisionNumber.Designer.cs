@@ -4,6 +4,7 @@ using Microsoft.Data.SqlTypes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RocketWiki.Data;
 
@@ -12,9 +13,11 @@ using RocketWiki.Data;
 namespace RocketWiki.Data.Migrations
 {
     [DbContext(typeof(RocketWikiDbContext))]
-    partial class RocketWikiDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260830073044_AddEmbeddingFailedRevisionNumber")]
+    partial class AddEmbeddingFailedRevisionNumber
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

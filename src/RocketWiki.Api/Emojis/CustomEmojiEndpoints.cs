@@ -225,7 +225,16 @@ public static class CustomEmojiEndpoints
             return Results.StatusCode(StatusCodes.Status304NotModified);
         }
 
-        if (!await fileStorage.ExistsAsync(emoji.StorageKey, cancellationToken))
+        // Open and CATCH, not Exists-then-Open: the object can vanish between the two
+        // calls, and the resulting FileNotFoundException is caught nowhere — a raw 500
+        // instead of the structured one below, which is precisely what design.md §10
+        // forbids. Race-free, and one fewer round trip on every emoji read.
+        Stream content;
+        try
+        {
+            content = await fileStorage.OpenReadAsync(emoji.StorageKey, cancellationToken);
+        }
+        catch (FileNotFoundException)
         {
             // Same flagged-error stance as the attachment BlobMissing case (design.md
             // §10): a row whose object is gone is an operational fault worth a log
@@ -239,7 +248,6 @@ public static class CustomEmojiEndpoints
                 statusCode: StatusCodes.Status500InternalServerError);
         }
 
-        var content = await fileStorage.OpenReadAsync(emoji.StorageKey, cancellationToken);
         return Results.Stream(content, emoji.ContentType);
     }
 

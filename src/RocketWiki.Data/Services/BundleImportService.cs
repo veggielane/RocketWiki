@@ -140,6 +140,28 @@ public class BundleImportService : IBundleImportService
 
         var records = ParseEvents(eventsBytes);
 
+        // EVERY per-space sequence is checked before ANY event is applied. This used to
+        // happen inside the apply loop, which made this class's own opening claim — "every
+        // check that can fail happens BEFORE any entity in the bundle is applied, so a
+        // rejected bundle never partially lands" — true of the database and false of
+        // storage: attachment events call _fileStorage.SaveAsync as they are applied, so a
+        // gap in space B left every blob from space A written. SaveChangesAsync is never
+        // reached on a refusal, so the ROWS evaporate and the blobs do not, and a
+        // corrected re-import mints a fresh storage key — making the orphan permanent,
+        // with no janitor to collect it (README).
+        //
+        // Nothing here touches the database or storage; it reads the same SyncSpaceState
+        // high-water marks the apply loop would, so the verdict is identical, only earlier.
+        foreach (var spaceGroup in records.GroupBy(r => r.SpaceId))
+        {
+            var gap = await FindSequenceGapAsync(
+                spaceGroup.Key, originInstanceId, spaceGroup.OrderBy(r => r.SequenceNumber).ToList(), cancellationToken);
+            if (gap is not null)
+            {
+                return PageMutationResult<ImportedBundleSummary>.Failure(gap);
+            }
+        }
+
         // pageId -> spaceId for every page an applied event touched, plus every space
         // touched at all - the fan-out set for the watcher notification rows below.
         var affectedPages = new Dictionary<Guid, Guid>();
@@ -216,9 +238,41 @@ public class BundleImportService : IBundleImportService
     }
 
     /// <summary>
+    /// The per-space sequence check, run as a PRE-PASS over every space in the bundle
+    /// before anything is applied — see the call site for why the position matters more
+    /// than the logic. Pure: no database writes, no storage, no change-tracker entries.
+    /// Baseline lines (SequenceNumber == 0) are always applied and never gap-checked, so
+    /// they are skipped here exactly as they are during apply.
+    /// </summary>
+    private async Task<SpaceSequenceGapError?> FindSequenceGapAsync(
+        Guid spaceId, string originInstanceId, List<NdjsonEventRecord> records, CancellationToken cancellationToken)
+    {
+        var spaceState = await _db.SyncSpaceStates.AsNoTracking().FirstOrDefaultAsync(
+            s => s.OriginInstanceId == originInstanceId && s.SpaceId == spaceId, cancellationToken);
+
+        var appliedSequence = spaceState?.AppliedSequence ?? 0;
+        foreach (var record in records.Where(r => r.SequenceNumber > 0))
+        {
+            if (record.SequenceNumber != appliedSequence + 1)
+            {
+                return new SpaceSequenceGapError(spaceId, appliedSequence + 1, record.SequenceNumber);
+            }
+
+            appliedSequence = record.SequenceNumber;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// data-model.md: SyncSpaceState.AppliedSequence is the finer-grained, per-space
     /// high-water mark inside the coarser per-bundle check above. Baseline lines
     /// (SequenceNumber == 0) are always applied and never advance or gap-check this.
+    ///
+    /// <para>The gap check here is now a backstop: <see cref="FindSequenceGapAsync"/> has
+    /// already run over every space, so reaching a gap at this point would mean the two
+    /// disagreed. It is kept rather than deleted because the alternative is a method that
+    /// silently applies whatever it is handed.</para>
     /// </summary>
     private async Task<SpaceSequenceGapError?> ApplySpaceEventsAsync(
         Guid spaceId, string originInstanceId, List<NdjsonEventRecord> records, ZipArchive archive,

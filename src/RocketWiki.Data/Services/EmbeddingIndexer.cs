@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
@@ -11,9 +11,10 @@ namespace RocketWiki.Data.Services;
 
 /// <summary>Result of one index run — what the background job records and tests assert on.</summary>
 /// <param name="PagesPending">Pages whose current revision awaited (re-)embedding when the scan ran (before this run's work).</param>
-/// <param name="Aborted">True when the run stopped early because the embedding endpoint failed — the remaining due pages were deliberately not attempted this run.</param>
+/// <param name="Aborted">True when the run stopped early because the embedding endpoint looked down — enough failures in a row that the remaining due pages were deliberately not attempted this run.</param>
+/// <param name="PagesQuarantined">Pages whose current revision has exhausted its attempts and is now skipped by the scan, as of the end of this run. A non-zero value is the operator's signal that some page is permanently absent from semantic search until it is edited.</param>
 public sealed record EmbeddingIndexRun(
-    int PagesPending, int PagesEmbedded, int PagesFailed, int ChunksEmbedded, bool Aborted);
+    int PagesPending, int PagesEmbedded, int PagesFailed, int ChunksEmbedded, bool Aborted, int PagesQuarantined = 0);
 
 /// <summary>
 /// design.md §9.2 (milestone 7): (re-)embeds pages whose content changed. Driven by the
@@ -26,11 +27,17 @@ public sealed record EmbeddingIndexRun(
 /// <see cref="MarkdownChunker"/>, i.e. the same heading/anchor primitives keyword search
 /// hits use.
 ///
-/// <b>Failure isolation:</b> this class never runs inside a user request. An unreachable
-/// endpoint marks the page's state row failed (retried after backoff) and aborts the rest
-/// of the run — it cannot break a page save, and search meanwhile degrades to
-/// keyword-only. System action throughout: no user audit events (§9.2), and its
-/// SaveChanges raise no domain events, so the audit/outbox pipeline is untouched.
+/// <b>Failure isolation:</b> this class never runs inside a user request. A failed page
+/// marks its state row (retried after backoff) and the run moves on to the next page —
+/// it cannot break a page save, and search meanwhile degrades to keyword-only. Only a
+/// run of consecutive failures, which means the endpoint itself is down, abandons the
+/// rest of the batch. A page that fails <c>MaxAttempts</c> times against the same
+/// revision is quarantined and skipped by the scan until it is edited, because the scan
+/// is oldest-first and one permanently-failing page would otherwise win every batch and
+/// starve every page behind it; <c>rocketwiki.embeddings.pages_quarantined</c> and a
+/// per-page warning are how an operator sees that. System action throughout: no user
+/// audit events (§9.2), and its SaveChanges raise no domain events, so the audit/outbox
+/// pipeline is untouched.
 /// </summary>
 public class EmbeddingIndexer
 {
@@ -65,9 +72,22 @@ public class EmbeddingIndexer
         var pagesPending = await duePages.CountAsync(cancellationToken);
 
         var backoffCutoff = DateTime.UtcNow - _options.FailureBackoffOrDefault;
+        var maxAttempts = _options.MaxAttemptsOrDefault;
+
+        // Quarantined: this exact revision has already failed MaxAttempts times in a row.
+        // The scan is oldest-first, so without this clause a page the endpoint can never
+        // embed reappears at the head of every batch forever and no page behind it is
+        // ever reached. Keyed on the revision, so an edit that fixes the content lifts
+        // the quarantine by itself.
+        var quarantined = _db.PageEmbeddingStates.Where(s =>
+            s.FailedAttempts >= maxAttempts && s.FailedRevisionNumber == s.Page!.CurrentRevisionNumber);
+
+        var pagesQuarantined = await quarantined.CountAsync(cancellationToken);
+
         var batch = await duePages
             .Where(p => !_db.PageEmbeddingStates.Any(s =>
                 s.PageId == p.Id && s.FailedAttempts > 0 && s.LastAttemptAtUtc > backoffCutoff))
+            .Where(p => !quarantined.Any(s => s.PageId == p.Id))
             .OrderBy(p => p.UpdatedAtUtc).ThenBy(p => p.Id)
             .Take(_options.BatchSize)
             .Select(p => new { p.Id, p.CurrentRevisionNumber, p.CurrentContent })
@@ -77,6 +97,8 @@ public class EmbeddingIndexer
         var failed = 0;
         var chunksEmbedded = 0;
         var aborted = false;
+        var consecutiveFailures = 0;
+        var abortThreshold = _options.AbortAfterConsecutiveFailuresOrDefault;
 
         foreach (var page in batch)
         {
@@ -84,6 +106,7 @@ public class EmbeddingIndexer
             {
                 chunksEmbedded += await IndexPageAsync(page.Id, page.CurrentRevisionNumber, page.CurrentContent, cancellationToken);
                 embedded++;
+                consecutiveFailures = 0;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -91,27 +114,47 @@ public class EmbeddingIndexer
             }
             catch (Exception ex)
             {
-                // §15: exception type + page id only — never chunk text, never the
-                // endpoint's echo of the request.
-                _logger.LogWarning(ex,
-                    "Embedding failed for page {PageId}; marked for retry after backoff and aborting this run ({ExceptionType})",
-                    page.Id, ex.GetType().Name);
-
-                await RecordFailureAsync(page.Id, cancellationToken);
+                var attempts = await RecordFailureAsync(page.Id, page.CurrentRevisionNumber, cancellationToken);
                 failed++;
+                consecutiveFailures++;
 
-                // One endpoint serves every page: after a failure the rest of this batch
-                // would almost certainly fail too. Stop, let the next poll retry.
-                aborted = true;
-                break;
+                // §15: exception type + page id + the attempt count only — never chunk
+                // text, never the endpoint's echo of the request.
+                if (attempts >= maxAttempts)
+                {
+                    // The one line an operator needs to find a poisoned page: everything
+                    // else about this state is a count. Warning, not Error: search still
+                    // works, this page is simply absent from the semantic half.
+                    _logger.LogWarning(ex,
+                        "Embedding failed for page {PageId} revision {RevisionNumber} on attempt {Attempts} of {MaxAttempts} ({ExceptionType}); quarantining this revision — it will be retried when the page is next edited",
+                        page.Id, page.CurrentRevisionNumber, attempts, maxAttempts, ex.GetType().Name);
+                    pagesQuarantined++;
+                }
+                else
+                {
+                    _logger.LogWarning(ex,
+                        "Embedding failed for page {PageId} revision {RevisionNumber} on attempt {Attempts} of {MaxAttempts} ({ExceptionType}); marked for retry after backoff",
+                        page.Id, page.CurrentRevisionNumber, attempts, maxAttempts, ex.GetType().Name);
+                }
+
+                // Continue to the next page. One endpoint serves every page, so a run of
+                // consecutive failures does mean the endpoint is down and the rest of the
+                // batch is pointless — but a single failure between successes means the
+                // endpoint is up and this page is the problem, and abandoning the batch
+                // there hands one page the power to block every page behind it.
+                if (consecutiveFailures >= abortThreshold)
+                {
+                    aborted = true;
+                    break;
+                }
             }
         }
 
-        var run = new EmbeddingIndexRun(pagesPending, embedded, failed, chunksEmbedded, aborted);
+        var run = new EmbeddingIndexRun(pagesPending, embedded, failed, chunksEmbedded, aborted, pagesQuarantined);
 
         // Counters after the per-page commits above — a rolled-back page never counted.
         DataTelemetry.RecordEmbeddingRun(
-            chunksEmbedded, embedded, failed, Math.Max(0, pagesPending - embedded),
+            chunksEmbedded, embedded, failed, Math.Max(0, pagesPending - embedded), pagesQuarantined,
             System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalSeconds);
         span?.SetTag(DataTelemetry.EmbeddingPagesPendingTag, pagesPending);
         span?.SetTag(DataTelemetry.EmbeddingPagesIndexedTag, embedded);
@@ -220,6 +263,7 @@ public class EmbeddingIndexer
             ?? _db.PageEmbeddingStates.Add(new PageEmbeddingState { PageId = pageId }).Entity;
         state.EmbeddedRevisionNumber = revisionNumber;
         state.FailedAttempts = 0;
+        state.FailedRevisionNumber = 0;
         state.LastAttemptAtUtc = now;
         state.UpdatedAtUtc = now;
 
@@ -231,7 +275,8 @@ public class EmbeddingIndexer
         return toEmbed.Count;
     }
 
-    private async Task RecordFailureAsync(Guid pageId, CancellationToken cancellationToken)
+    /// <returns>Consecutive failures now recorded against this revision.</returns>
+    private async Task<int> RecordFailureAsync(Guid pageId, int revisionNumber, CancellationToken cancellationToken)
     {
         // Discard whatever the failed attempt had staged — only the failure marker
         // may reach the database.
@@ -245,10 +290,14 @@ public class EmbeddingIndexer
             _db.PageEmbeddingStates.Add(state);
         }
 
-        state.FailedAttempts++;
+        // A failure against a different revision starts the count over: the attempts
+        // that came before were counted against content this page no longer has.
+        state.FailedAttempts = state.FailedRevisionNumber == revisionNumber ? state.FailedAttempts + 1 : 1;
+        state.FailedRevisionNumber = revisionNumber;
         state.LastAttemptAtUtc = now;
         state.UpdatedAtUtc = now;
         await _db.SaveChangesAsync(cancellationToken);
+        return state.FailedAttempts;
     }
 
     private static string JoinHeadingPath(IReadOnlyList<string> headingPath)

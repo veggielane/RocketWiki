@@ -1,6 +1,7 @@
 using System.Text.Json;
 using RocketWiki.Api.Assistant;
 using RocketWiki.Api.Audit;
+using RocketWiki.Api.Telemetry;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Markings;
 using RocketWiki.Core.Enums;
@@ -132,11 +133,8 @@ public partial class Query
                     // the audit log is the only history there is. The audit table is also
                     // where a full country set is allowed to appear (§21.7) — and this is
                     // a label built from them.
-                    aggregateMarking = outcome.AggregateMarking?.Label,
+                    aggregateMarking = outcome?.AggregateMarking?.Label ?? attempt.AggregateMarkingLabel,
                 })),
-            cancellationToken);
-
-        return new AskWikiPayload(
-            outcome.Answer, outcome.Citations, outcome.Unavailable, outcome.AggregateMarking);
+            CancellationToken.None);
     }
 }

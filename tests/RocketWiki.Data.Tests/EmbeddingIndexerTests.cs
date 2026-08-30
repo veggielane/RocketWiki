@@ -21,6 +21,8 @@ public class EmbeddingIndexerTests : SqliteTestBase
 {
     private const int Dimensions = 8;
 
+    private int _spaceKeySequence;
+
     /// <summary>Two sections, each large enough (about 2200 chars) that the default chunker options keep them as separate chunks.</summary>
     private static string TwoSectionContent(string sectionOneWord, string sectionTwoWord) =>
         $"# Alpha\n\n{Filler(sectionOneWord)}\n\n# Beta\n\n{Filler(sectionTwoWord)}\n";
@@ -31,8 +33,10 @@ public class EmbeddingIndexerTests : SqliteTestBase
     private static FakeEmbeddingGenerator NewGenerator() =>
         new(text => Enumerable.Range(0, Dimensions).Select(i => (float)((text.Length % (i + 2)) + 1)).ToArray());
 
-    private static EmbeddingOptions Options(TimeSpan? failureBackoff = null) =>
-        new("fake-model", Dimensions, BatchSize: 16, FailureBackoff: failureBackoff ?? TimeSpan.Zero);
+    private static EmbeddingOptions Options(
+        TimeSpan? failureBackoff = null, int maxAttempts = 5, int abortAfterConsecutiveFailures = 3) =>
+        new("fake-model", Dimensions, BatchSize: 16, FailureBackoff: failureBackoff ?? TimeSpan.Zero,
+            MaxAttempts: maxAttempts, AbortAfterConsecutiveFailures: abortAfterConsecutiveFailures);
 
     private async Task<EmbeddingIndexRun> RunIndexerAsync(FakeEmbeddingGenerator generator, EmbeddingOptions? options = null)
     {
@@ -41,13 +45,23 @@ public class EmbeddingIndexerTests : SqliteTestBase
         return await indexer.RunOnceAsync();
     }
 
-    private Guid SeedPage(string content, int revisionNumber = 1)
+    private Guid SeedPage(string content, int revisionNumber = 1, DateTime? updatedAt = null)
     {
         using var db = CreateContext();
-        var space = TestData.NewSpace();
+        // A space per page, with a distinct key: Space.Key is unique and TestData's
+        // default is a constant, so a test that seeds more than one page needs its own.
+        var space = TestData.NewSpace($"ENG{Interlocked.Increment(ref _spaceKeySequence)}");
         var page = TestData.NewPage(space, "engines");
         page.CurrentContent = content;
         page.CurrentRevisionNumber = revisionNumber;
+        if (updatedAt is not null)
+        {
+            // The scan orders oldest-first, so which page a batch reaches FIRST is the
+            // whole point of the starvation tests below — it cannot be left to how fast
+            // two seeds run.
+            page.UpdatedAtUtc = updatedAt.Value;
+        }
+
         db.Spaces.Add(space);
         db.Pages.Add(page);
         db.SaveChanges();
@@ -163,13 +177,20 @@ public class EmbeddingIndexerTests : SqliteTestBase
 
         Assert.Equal(1, failedRun.PagesFailed);
         Assert.Equal(0, failedRun.PagesEmbedded);
-        Assert.True(failedRun.Aborted);
+        // NOT aborted: one due page, so nothing was left to abandon. Aborted now means
+        // "due pages were deliberately skipped because the endpoint looked down", which
+        // takes a run of consecutive failures to establish — see
+        // RunOnce_WhenEveryPageFailsInARow_StopsInsteadOfWalkingTheWholeBatch. A single
+        // failure can equally mean the endpoint is up and this one page is unembeddable,
+        // and treating those alike is what let one page starve the queue.
+        Assert.False(failedRun.Aborted);
 
         using (var db = CreateContext())
         {
             Assert.Empty(db.PageEmbeddings.Where(e => e.PageId == pageId).ToList());
             var state = db.PageEmbeddingStates.Single(s => s.PageId == pageId);
             Assert.Equal(1, state.FailedAttempts);
+            Assert.Equal(1, state.FailedRevisionNumber);
             Assert.Equal(0, state.EmbeddedRevisionNumber);
 
             // The page row itself was never touched - saves don't depend on embeddings.
@@ -249,5 +270,167 @@ public class EmbeddingIndexerTests : SqliteTestBase
         {
             Assert.Equal(2, db.PageEmbeddings.Count(e => e.PageId == pageId));
         }
+    }
+
+    // ---- Poison-page starvation (design.md §9.2) -----------------------------------
+    //
+    // The scan is oldest-first and a page stays due until it succeeds, so a page the
+    // endpoint can never embed is at the head of every batch forever. Combined with a
+    // batch that gave up at its first failure, one such page meant NO page was ever
+    // embedded again — semantic search silently frozen at the moment that page was
+    // written, with nothing in the run record saying so. The three mechanisms below are
+    // tested separately because each one alone leaves the starvation intact.
+
+    private static readonly DateTime Epoch = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    /// <summary>Content the fake endpoint rejects, in both chunks, however it is chunked.</summary>
+    private static string PoisonContent() => TwoSectionContent("cyanide", "cyanide");
+
+    [Fact]
+    public async Task RunOnce_WhenTheOldestPageAlwaysFails_StillEmbedsThePagesBehindIt()
+    {
+        var poisonId = SeedPage(PoisonContent(), updatedAt: Epoch);
+        var goodId = SeedPage(TwoSectionContent("turbine", "nozzle"), updatedAt: Epoch.AddMinutes(1));
+
+        var generator = NewGenerator();
+        generator.PoisonMarker = "cyanide";
+        var run = await RunIndexerAsync(generator);
+
+        Assert.Equal(1, run.PagesFailed);
+        // The page behind the poison one is the assertion: a failure is a page's problem,
+        // not the batch's.
+        Assert.Equal(1, run.PagesEmbedded);
+        // One failure with successes around it is not evidence the endpoint is down.
+        Assert.False(run.Aborted);
+
+        using var db = CreateContext();
+        Assert.Equal(1, db.PageEmbeddingStates.Single(s => s.PageId == goodId).EmbeddedRevisionNumber);
+        Assert.Equal(0, db.PageEmbeddingStates.Single(s => s.PageId == poisonId).EmbeddedRevisionNumber);
+    }
+
+    [Fact]
+    public async Task RunOnce_AfterMaxAttempts_QuarantinesTheRevisionAndStopsAttemptingIt()
+    {
+        var poisonId = SeedPage(PoisonContent(), updatedAt: Epoch);
+        var options = Options(maxAttempts: 2);
+
+        var generator = NewGenerator();
+        generator.PoisonMarker = "cyanide";
+
+        var first = await RunIndexerAsync(generator, options);
+        Assert.Equal(1, first.PagesFailed);
+        Assert.Equal(0, first.PagesQuarantined);
+
+        var second = await RunIndexerAsync(generator, options);
+        Assert.Equal(1, second.PagesFailed);
+        // The attempt that exhausts the ceiling reports the quarantine in the same run.
+        Assert.Equal(1, second.PagesQuarantined);
+
+        var attemptsBefore = generator.Attempts;
+        var third = await RunIndexerAsync(generator, options);
+
+        // Not attempted at all — not merely failing more cheaply. Retrying forever is
+        // what starves the queue; the count is what tells an operator the page is gone
+        // from semantic search.
+        Assert.Equal(attemptsBefore, generator.Attempts);
+        Assert.Equal(0, third.PagesFailed);
+        Assert.Equal(1, third.PagesQuarantined);
+        // Still counted as pending: quarantine hides a page from the batch, it does not
+        // pretend the page is embedded.
+        Assert.Equal(1, third.PagesPending);
+
+        using var db = CreateContext();
+        var state = db.PageEmbeddingStates.Single(s => s.PageId == poisonId);
+        Assert.Equal(2, state.FailedAttempts);
+        Assert.Equal(1, state.FailedRevisionNumber);
+    }
+
+    [Fact]
+    public async Task RunOnce_WhenAQuarantinedPageIsEdited_AttemptsItAgain()
+    {
+        var pageId = SeedPage(PoisonContent(), updatedAt: Epoch);
+        var options = Options(maxAttempts: 2);
+
+        var generator = NewGenerator();
+        generator.PoisonMarker = "cyanide";
+        await RunIndexerAsync(generator, options);
+        await RunIndexerAsync(generator, options);
+        Assert.Equal(1, (await RunIndexerAsync(generator, options)).PagesQuarantined);
+
+        // Editing the page is the only cure available to a wiki user, so the quarantine
+        // predicate is matched against the CURRENT revision: a quarantine that outlived
+        // the content it was imposed on would keep the fixed page out of search forever.
+        UpdatePage(pageId, p =>
+        {
+            p.CurrentContent = TwoSectionContent("turbine", "nozzle");
+            p.CurrentRevisionNumber = 2;
+        });
+
+        var run = await RunIndexerAsync(generator, options);
+
+        Assert.Equal(1, run.PagesEmbedded);
+        Assert.Equal(0, run.PagesQuarantined);
+
+        using var db = CreateContext();
+        var state = db.PageEmbeddingStates.Single(s => s.PageId == pageId);
+        Assert.Equal(2, state.EmbeddedRevisionNumber);
+        Assert.Equal(0, state.FailedAttempts);
+        Assert.Equal(0, state.FailedRevisionNumber);
+    }
+
+    [Fact]
+    public async Task RunOnce_WhenAnEditedPageStillFails_GivesTheNewRevisionAFullAttemptBudget()
+    {
+        var pageId = SeedPage(PoisonContent(), updatedAt: Epoch);
+        var options = Options(maxAttempts: 2);
+
+        var generator = NewGenerator();
+        generator.PoisonMarker = "cyanide";
+        await RunIndexerAsync(generator, options);
+        await RunIndexerAsync(generator, options);
+
+        // Edited, but the author did not fix the thing the endpoint objects to. The
+        // failures already recorded were counted against content this page no longer
+        // has, so they must not be spent against the new revision — otherwise every
+        // edit after the first quarantine gets exactly one attempt, and an author
+        // fixing the page by trial and error is told nothing and gets nowhere.
+        UpdatePage(pageId, p => p.CurrentRevisionNumber = 2);
+
+        var afterEdit = await RunIndexerAsync(generator, options);
+        Assert.Equal(1, afterEdit.PagesFailed);
+        Assert.Equal(0, afterEdit.PagesQuarantined);
+
+        using (var db = CreateContext())
+        {
+            var state = db.PageEmbeddingStates.Single(s => s.PageId == pageId);
+            Assert.Equal(1, state.FailedAttempts);
+            Assert.Equal(2, state.FailedRevisionNumber);
+        }
+
+        // And the budget is a budget, not an amnesty: the new revision quarantines on
+        // its own second failure.
+        Assert.Equal(1, (await RunIndexerAsync(generator, options)).PagesQuarantined);
+    }
+
+    [Fact]
+    public async Task RunOnce_WhenEveryPageFailsInARow_StopsInsteadOfWalkingTheWholeBatch()
+    {
+        for (var i = 0; i < 5; i++)
+        {
+            SeedPage(TwoSectionContent("turbine", "nozzle"), updatedAt: Epoch.AddMinutes(i));
+        }
+
+        var generator = NewGenerator();
+        generator.ThrowOnGenerate = new HttpRequestException("endpoint unreachable");
+
+        var run = await RunIndexerAsync(generator, Options(abortAfterConsecutiveFailures: 3));
+
+        // The original protection, kept: one endpoint serves every page, so failures with
+        // no success between them mean the endpoint is down and the rest of the batch
+        // would only stack failure counts onto innocent revisions.
+        Assert.True(run.Aborted);
+        Assert.Equal(3, run.PagesFailed);
+        Assert.Equal(3, generator.Attempts);
+        Assert.Equal(0, run.PagesQuarantined);
     }
 }

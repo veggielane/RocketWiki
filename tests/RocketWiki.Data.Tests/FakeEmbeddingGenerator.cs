@@ -20,15 +20,41 @@ internal sealed class FakeEmbeddingGenerator(Func<string, float[]> embed) : IEmb
     /// <summary>Set to make the endpoint "unreachable" — §9.2's degrade path.</summary>
     public Exception? ThrowOnGenerate { get; set; }
 
+    /// <summary>
+    /// Set to make the endpoint reject only the requests whose text contains this marker,
+    /// the way a real provider rejects one page for an oversized chunk or a content
+    /// filter while serving every other page normally. Distinct from
+    /// <see cref="ThrowOnGenerate"/>: that one is "the endpoint is down", this one is
+    /// "the endpoint is up and this page is the problem", and the indexer is required to
+    /// tell them apart.
+    /// </summary>
+    public string? PoisonMarker { get; set; }
+
+    /// <summary>
+    /// Calls that reached the endpoint, including the ones it rejected — the only way to
+    /// assert that a quarantined page is no longer being ATTEMPTED, as opposed to merely
+    /// no longer succeeding. <see cref="Inputs"/> deliberately still records only what a
+    /// call actually accepted.
+    /// </summary>
+    public int Attempts { get; private set; }
+
     public Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
         IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
     {
+        Attempts++;
+
         if (ThrowOnGenerate is not null)
         {
             throw ThrowOnGenerate;
         }
 
         var list = values.ToList();
+
+        if (PoisonMarker is not null && list.Any(v => v.Contains(PoisonMarker, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException("The endpoint rejected this request.");
+        }
+
         _inputs.AddRange(list);
         return Task.FromResult(new GeneratedEmbeddings<Embedding<float>>(list.Select(v => new Embedding<float>(embed(v)))));
     }

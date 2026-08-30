@@ -244,10 +244,18 @@ public sealed class VectorSearchTests : SqlServerTestBase
         var run = await indexer.RunOnceAsync();
 
         Assert.Equal(1, run.PagesFailed);
-        Assert.True(run.Aborted);
+        // Not Aborted: one due page, so no page was skipped. Aborted now means "the
+        // endpoint looked down, so the rest of the batch was deliberately not attempted",
+        // which takes consecutive failures to establish — see EmbeddingIndexerTests. What
+        // matters here is unchanged: nothing was stored, and the failure is on record.
+        Assert.False(run.Aborted);
         Assert.Equal(0, await context.PageEmbeddings.CountAsync());
         var state = await context.PageEmbeddingStates.SingleAsync(s => s.PageId == page.Id);
         Assert.True(state.FailedAttempts > 0);
+        // A column that rejects this page's vectors rejects them at every revision, so
+        // this is exactly the page the attempt ceiling exists for: it stops being retried
+        // after MaxAttempts instead of heading every batch forever.
+        Assert.Equal(page.CurrentRevisionNumber, state.FailedRevisionNumber);
     }
 
     [SqlServerFact]
