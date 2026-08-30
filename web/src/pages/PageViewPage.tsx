@@ -46,7 +46,7 @@ import {
   useDetachLabelMutation,
 } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, blockedPageCount, describeMutationError } from '../graphql/mutationError'
-import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, describeWriteFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
@@ -229,18 +229,40 @@ export function PageViewPage({
     setActionError(null)
     const next = !watching
     setWatchOverride(next) // optimistic — reverted below if refused
+
+    /**
+     * Reverts the optimistic flip AND says why. It used to revert on
+     * `result.error` without calling `surfaceError`, so a transport failure
+     * flipped the button back with no explanation at all — a control that
+     * appears to undo itself, which reads as the app deciding against you
+     * rather than as a network that did not answer.
+     */
+    const revertWithReason = (result: { error?: unknown }, typedError: Parameters<typeof surfaceError>[0]) => {
+      if (result.error !== undefined) {
+        setActionError(describeWriteFailure('WATCH').summary)
+        setWatchOverride(!next)
+        return
+      }
+      if (surfaceError(typedError)) setWatchOverride(!next)
+    }
+
     if (next) {
       const result = await watchPage({ input: { pageId } })
-      if (result.error !== undefined || surfaceError(result.data?.watchPage.error)) setWatchOverride(!next)
+      revertWithReason(result, result.data?.watchPage.error)
       return
     }
     // design.md §8: unwatching is deliberately ungated — treat any
     // response as unwatched unless a typed error says otherwise.
     const result = await unwatchPage({ input: { pageId } })
-    if (result.error !== undefined || surfaceError(result.data?.unwatchPage.error)) setWatchOverride(!next)
+    revertWithReason(result, result.data?.unwatchPage.error)
   }
 
-  if (fetching) {
+    // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
+  // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
+  // away on every post-write refetch: content, scroll position and keyboard
+  // focus all went with it. `&& !data` keeps the rendered screen up while the
+  // re-read happens underneath it.
+  if (fetching && !data) {
     return (
       <Stack spacing={1}>
         <Skeleton variant="text" width="40%" height={48} />

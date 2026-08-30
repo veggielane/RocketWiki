@@ -32,7 +32,12 @@ export function SpaceHomeRoute() {
     pause: !spaceKey,
   })
 
-  if (fetching) {
+    // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
+  // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
+  // away on every post-write refetch: content, scroll position and keyboard
+  // focus all went with it. `&& !data` keeps the rendered screen up while the
+  // re-read happens underneath it.
+  if (fetching && !data) {
     return <Skeleton variant="rectangular" height={300} />
   }
 

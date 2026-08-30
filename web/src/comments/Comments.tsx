@@ -4,6 +4,7 @@ import { RichTextEditor, type RichTextEditorHandle } from '../editor/RichTextEdi
 import { buildCommentTree, type CommentNode, type FlatComment } from './buildCommentTree'
 import { UserAvatar } from '../avatars/UserAvatar'
 import { formatTimestamp } from '../format/dateTime'
+import { ConfirmDialog } from '../feedback/ConfirmDialog'
 
 export interface CommentsProps {
   pageId: string
@@ -36,6 +37,14 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
   const [replyingToId, setReplyingToId] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const newCommentRef = useRef<RichTextEditorHandle>(null)
+  // Every other destructive action in the app is confirmed (page delete, emoji,
+  // property key, space archive, GitLab token) — four of them through this same
+  // shared dialog. Comment deletion was the one that fired on a single click,
+  // beside Reply, at the same size, with no undo. Aggravated by the refetch
+  // teardown, which meant there was no moment at which you saw what you had
+  // just destroyed.
+  const [pendingDelete, setPendingDelete] = useState<CommentNode | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const handleAdd = async (parentCommentId: string | null, ref: React.RefObject<RichTextEditorHandle | null>) => {
     // `submitting` guards the keyboard path the same way it disables the
@@ -46,6 +55,14 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
     setSubmitting(true)
     try {
       await onAdd(body, parentCommentId)
+      // Explicitly, not as a side effect. This used to happen only because
+      // posting refetched the page and the whole subtree remounted underneath
+      // the composer; the screens keep their data across a refetch now, so
+      // without this the text would sit in the box after a successful post.
+      //
+      // Inside the `try`, after the await: a refused post keeps the text, which
+      // is the whole reason the refusal is worth reading.
+      ref.current?.clear()
       setReplyingToId(null)
     } finally {
       setSubmitting(false)
@@ -77,7 +94,7 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
             onStartReply={setReplyingToId}
             onCancelReply={() => setReplyingToId(null)}
             onSubmitReply={handleAdd}
-            onDelete={onDelete}
+            onConfirmDelete={setPendingDelete}
           />
         ))}
       </Stack>
@@ -108,6 +125,31 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
           </Stack>
         </Box>
       )}
+
+      {/* The shared confirm, so "are you sure?" has one shape here too. Names
+          the author and the time rather than quoting the body: a comment can be
+          long, and the dialog has to stay a question rather than become a
+          second rendering of the thing it is about. */}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete this comment?"
+        confirmLabel="Delete"
+        busy={deleting}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          const target = pendingDelete
+          if (!target) return
+          setDeleting(true)
+          void onDelete(target.id).finally(() => {
+            setDeleting(false)
+            setPendingDelete(null)
+          })
+        }}
+      >
+        {pendingDelete
+          ? `${pendingDelete.authorDisplayName}'s comment from ${formatTimestamp(pendingDelete.createdAtUtc)} will be removed. Replies to it stay, marked as replies to a deleted comment.`
+          : ''}
+      </ConfirmDialog>
     </Stack>
   )
 }
@@ -122,7 +164,7 @@ interface CommentItemProps {
   onStartReply: (id: string) => void
   onCancelReply: () => void
   onSubmitReply: (parentCommentId: string, ref: React.RefObject<RichTextEditorHandle | null>) => void
-  onDelete: (commentId: string) => Promise<void>
+  onConfirmDelete: (node: CommentNode) => void
 }
 
 function CommentItem({
@@ -135,7 +177,7 @@ function CommentItem({
   onStartReply,
   onCancelReply,
   onSubmitReply,
-  onDelete,
+  onConfirmDelete,
 }: CommentItemProps) {
   const replyRef = useRef<RichTextEditorHandle>(null)
   const isReplying = replyingToId === node.id
@@ -187,7 +229,7 @@ function CommentItem({
               </Button>
             )}
             {canComment && canDeleteThis && (
-              <Button size="small" color="error" onClick={() => void onDelete(node.id)}>
+              <Button size="small" color="error" onClick={() => onConfirmDelete(node)}>
                 Delete
               </Button>
             )}
@@ -233,7 +275,7 @@ function CommentItem({
               onStartReply={onStartReply}
               onCancelReply={onCancelReply}
               onSubmitReply={onSubmitReply}
-              onDelete={onDelete}
+              onConfirmDelete={onConfirmDelete}
             />
           ))}
         </Stack>

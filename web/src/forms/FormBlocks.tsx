@@ -55,14 +55,38 @@ function fieldInputType(type: FormFieldType): string {
 
 function useDefinition(collection: string) {
   const pageId = useCurrentPageId()
-  const [{ data, fetching }] = usePageFormsQuery({ variables: { pageId: pageId ?? '' }, pause: !pageId })
+  // `queryFailed` is the transport-level failure, and it was discarded. Without
+  // it, a failed `PageForms` read left `data` undefined, `definition` null, and
+  // the block announced "No form named X is defined on this page" — a FALSE
+  // STATEMENT PRESENTED AS FACT, in a feature whose own filter module argues
+  // that silence must never be mistaken for absence. Distinct from `error`
+  // below, which is the server's parse error for a fence that IS there.
+  const [{ data, fetching, error: queryFailed }] = usePageFormsQuery({
+    variables: { pageId: pageId ?? '' },
+    pause: !pageId,
+  })
   const wanted = collection.trim().toLowerCase()
   return {
     pageId,
     fetching,
+    queryFailed: queryFailed !== undefined,
     definition: data?.pageForms?.definitions.find((d) => d.collection.trim().toLowerCase() === wanted) ?? null,
     error: data?.pageForms?.errors.find((e) => e.collection.trim().toLowerCase() === wanted) ?? null,
   }
+}
+
+/**
+ * The widget-scale "this could not load" notice, matching `PageListBlock`'s
+ * treatment three directories away: `role="note"`, not an `Alert`'s implicit
+ * `role="alert"`. A page carrying several broken widgets would otherwise fire
+ * one assertive announcement per widget on load.
+ */
+function FormBlockUnavailable({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="rw-page-list-placeholder" role="note">
+      <div className="rw-diagram-hint">{children}</div>
+    </div>
+  )
 }
 
 /**
@@ -71,7 +95,7 @@ function useDefinition(collection: string) {
  * macro: a definition nobody can submit against is a schema, not a form.
  */
 export function FormDefinitionBlock({ collection }: { collection: string }) {
-  const { pageId, fetching, definition, error } = useDefinition(collection)
+  const { pageId, fetching, queryFailed, definition, error } = useDefinition(collection)
   const [values, setValues] = useState<Record<string, string>>({})
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -79,9 +103,14 @@ export function FormDefinitionBlock({ collection }: { collection: string }) {
 
   if (!pageId) return <Alert severity="info">This form only works on a saved page.</Alert>
   if (fetching) return <Skeleton variant="rectangular" height={140} />
+  // Before the not-found check below: a read that failed knows nothing about
+  // whether this form exists, and must not answer as though it does.
+  if (queryFailed) return <FormBlockUnavailable>Couldn't load this form.</FormBlockUnavailable>
   // The server's own parse error, shown verbatim: it names the collection and the line,
   // which is what the author needs. A form that silently vanished would be worse.
-  if (error) return <Alert severity="warning">{error.message}</Alert>
+  // `role="note"`, not an Alert's assertive `role="alert"` — two broken
+  // fences on one page would otherwise announce twice on load.
+  if (error) return <FormBlockUnavailable>{error.message}</FormBlockUnavailable>
   if (!definition) {
     return <Alert severity="info">No form named "{collection}" is defined on this page.</Alert>
   }
@@ -170,15 +199,22 @@ export function FormListBlock({
   columns: string[]
   where?: string
 }) {
-  const { pageId, fetching, definition, error } = useDefinition(collection)
-  const [{ data, fetching: loadingEntries }] = usePageEntriesQuery({
+  const { pageId, fetching, queryFailed, definition, error } = useDefinition(collection)
+  // Same omission as the definition read: a failed entries query rendered
+  // "No records yet." — a claim about the data made without having read it.
+  const [{ data, fetching: loadingEntries, error: entriesFailed }] = usePageEntriesQuery({
     variables: { pageId: pageId ?? '', collection },
     pause: !pageId,
   })
 
   if (!pageId) return <Alert severity="info">This list only works on a saved page.</Alert>
+  if (queryFailed || entriesFailed !== undefined) {
+    // Neither read answered, so this block knows nothing about the collection
+    // or its records — and must not say "No records yet", which is a claim.
+    return <FormBlockUnavailable>Couldn't load these records.</FormBlockUnavailable>
+  }
   if (fetching || loadingEntries) return <Skeleton variant="rectangular" height={120} />
-  if (error) return <Alert severity="warning">{error.message}</Alert>
+  if (error) return <FormBlockUnavailable>{error.message}</FormBlockUnavailable>
   if (!definition) {
     // Distinct from "no records yet" on purpose: those are different facts and a reader
     // acts on them differently.
@@ -224,9 +260,18 @@ export function FormListBlock({
   })
 
   if (entries.length === 0) {
+    // "Nothing here" and "your filter matched nothing" are different facts, and
+    // conflating them made a typo'd `where` value read as a statement about the
+    // data. The page-list widget already distinguishes them; these two widgets
+    // disagreed. The collection is named either way — two `form-list` fences on
+    // one page previously showed two identical floating sentences with no way
+    // to tell which was which.
+    const hasFilter = filter.conditions.length > 0
     return (
-      <Typography variant="body2" color="text.secondary">
-        No records yet.
+      <Typography variant="body2" color="text.secondary" aria-label={`${definition.collection} records`}>
+        {hasFilter
+          ? `No ${definition.collection} records match this filter.`
+          : `No ${definition.collection} records yet.`}
       </Typography>
     )
   }

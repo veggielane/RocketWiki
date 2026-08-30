@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Badge,
+  Box,
   IconButton,
   List,
   ListItem,
@@ -18,6 +19,7 @@ import { getDefaultNotificationsTransport } from '../realtime/transports'
 import { useMarkNotificationReadMutation, usePersistedNotificationsQuery } from '../graphql/generated/graphql'
 import type { NotificationPayload, NotificationsTransport } from '../realtime/types'
 import { formatTimestamp } from '../format/dateTime'
+import { describeLoadFailure } from '../feedback/unavailableCopy'
 
 export interface NotificationBellProps {
   /**
@@ -32,7 +34,7 @@ export interface NotificationBellProps {
 
 export function NotificationBell({ transport }: NotificationBellProps = {}) {
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
-  const [{ data }] = usePersistedNotificationsQuery()
+  const [{ data, fetching, error: notificationsFailed }] = usePersistedNotificationsQuery()
   const [, markNotificationRead] = useMarkNotificationReadMutation()
 
   // Lazily resolved so merely importing/rendering with an injected
@@ -76,12 +78,28 @@ export function NotificationBell({ transport }: NotificationBellProps = {}) {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
         transformOrigin={{ vertical: 'top', horizontal: 'right' }}
       >
-        {notifications.length === 0 ? (
-          <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1.5 }}>
-            No notifications — watch a page or space to hear when it changes.
-          </Typography>
-        ) : (
-          <List dense aria-label="Notifications" sx={{ minWidth: 320, maxWidth: 400 }}>
+        {/* Three states, not two. `fetching` and `error` were both discarded,
+            so during the initial read — and permanently if it failed — the
+            popover asserted "No notifications", which is a claim about the
+            inbox made without having read it. Same class as the form fences.
+            The wrapper carries the accessible name in every state: the empty
+            and failed states render no `List`, so the popover otherwise had no
+            name at all when it was not populated. */}
+        <Box sx={{ minWidth: 320, maxWidth: 400 }} role="group" aria-label="Notifications">
+          {fetching && notifications.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1.5 }}>
+              Loading notifications…
+            </Typography>
+          ) : notificationsFailed && notifications.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1.5 }}>
+              {describeLoadFailure('NOTIFICATIONS').summary}
+            </Typography>
+          ) : notifications.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ px: 2, py: 1.5 }}>
+              No notifications — watch a page or space to hear when it changes.
+            </Typography>
+          ) : (
+          <List dense>
             {notifications.map((n, i) => {
               const { headline, linkable } = describeNotification(n)
               const isUnread = !n.readAtUtc
@@ -118,8 +136,9 @@ export function NotificationBell({ transport }: NotificationBellProps = {}) {
                 </ListItem>
               )
             })}
-          </List>
-        )}
+            </List>
+          )}
+        </Box>
       </Popover>
     </>
   )

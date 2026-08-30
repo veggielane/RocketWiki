@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Alert, Button, MenuItem, Paper, Select, Stack, TextField, Typography } from '@mui/material'
 import { useCreateSpaceMutation, useRuleVocabularyQuery, type SpaceRole } from '../graphql/generated/graphql'
 import { describeMutationError } from '../graphql/mutationError'
+import { describeWriteFailure } from '../feedback/unavailableCopy'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { RuleBuilder } from '../access/RuleBuilder'
@@ -67,6 +68,14 @@ export function CreateSpacePage() {
       initialGrant: { role, expressionJson: serializeRuleNode(grantValidation.node) },
     })
     setCreating(false)
+    // A transport failure has no `data` at all, so `describeMutationError`
+    // returns null and nothing was said: the button un-busied, no navigation
+    // happened, and pressing Create visibly did nothing. Checked before the
+    // typed refusals, which are a different (and successful) round trip.
+    if (result.error !== undefined) {
+      setKeyError(describeWriteFailure('SPACE').summary)
+      return
+    }
     const payload = result.data?.createSpace
     const errorText = describeMutationError(payload?.error)
     if (errorText) {

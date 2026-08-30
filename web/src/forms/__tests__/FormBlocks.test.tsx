@@ -220,8 +220,19 @@ describe('FormListBlock', () => {
   it('distinguishes "no records yet" from "no such collection"', async () => {
     // Different facts, and a reader acts on them differently: one means fill the
     // form in, the other means the fence names something that is not defined.
+    // The collection is named either way — two `form-list` fences on one page
+    // otherwise show two identical floating sentences.
     renderBlock(<FormListBlock collection="incident-report" columns={[]} />, { rows: [] })
-    expect(await screen.findByText('No records yet.')).toBeInTheDocument()
+    expect(await screen.findByText('No incident-report records yet.')).toBeInTheDocument()
+  })
+
+  it('says a filter matched nothing rather than claiming there is nothing', async () => {
+    // With a `where` clause, "No records yet." is a statement about the DATA
+    // made on the strength of a predicate — so a typo'd value read as fact.
+    renderBlock(<FormListBlock collection="incident-report" columns={[]} where="severity = nope" />, {
+      rows: [],
+    })
+    expect(await screen.findByText('No incident-report records match this filter.')).toBeInTheDocument()
   })
 
   it('says so when the page declares no such form', async () => {

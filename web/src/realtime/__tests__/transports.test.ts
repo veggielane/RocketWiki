@@ -42,6 +42,10 @@ vi.mock('@microsoft/signalr', () => {
         on: vi.fn(),
         off: vi.fn(),
         onreconnected: vi.fn(),
+        // The loss half of the reconnect story — registered since the app
+        // began reporting a dropped connection instead of asserting liveness.
+        onreconnecting: vi.fn(),
+        onclose: vi.fn(),
         invoke: vi.fn().mockResolvedValue(undefined),
         state: 'Disconnected',
       }

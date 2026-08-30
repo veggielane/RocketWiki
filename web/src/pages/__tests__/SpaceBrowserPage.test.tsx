@@ -76,7 +76,12 @@ describe('SpaceBrowserPage', () => {
   it('marks restricted tree nodes with a lock badge (PageTreeNode.hasRestrictions, design.md §6.6)', async () => {
     renderPage()
     expect(await screen.findByText('Restricted Page')).toBeInTheDocument()
-    expect(screen.getAllByLabelText('Has access restrictions')).toHaveLength(1)
+    // By ROLE and accessible name, not `getByLabelText`. The badge used to
+    // carry an `aria-label` on an icon MUI had already marked `aria-hidden`
+    // (SvgIcon sets it unless `titleAccess` is given), so the label reached
+    // nobody — and this assertion passed anyway, because `getByLabelText`
+    // matches the attribute without asking whether anything can read it.
+    expect(screen.getAllByRole('img', { name: 'This page has access restrictions' })).toHaveLength(1)
   })
 
   it('badges each tree node with its classification (design.md §21)', async () => {

@@ -290,10 +290,19 @@ function PageTree({
                     this caller may see. */}
                 {node.hasRestrictions && (
                   <Tooltip title="This page has access restrictions">
+                    {/* `titleAccess`, NOT `aria-label`. MUI's SvgIcon sets
+                        `aria-hidden` unless `titleAccess` is given
+                        (SvgIcon.js: `"aria-hidden": titleAccess ? undefined : true`),
+                        so an aria-label on it is inert — the badge was delivered
+                        to sighted users only, and a restricted page sounded
+                        identical to an open one. `titleAccess` emits
+                        `role="img"` plus a `<title>`, which is the name a screen
+                        reader actually reads. axe cannot catch this: a label on
+                        an aria-hidden node is not a violation. */}
                     <LockOutlinedIcon
                       sx={{ fontSize: 14, flexShrink: 0 }}
                       color="action"
-                      aria-label="Has access restrictions"
+                      titleAccess="This page has access restrictions"
                     />
                   </Tooltip>
                 )}

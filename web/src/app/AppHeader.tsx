@@ -19,7 +19,7 @@ import Brightness7Icon from '@mui/icons-material/Brightness7'
 import MenuIcon from '@mui/icons-material/Menu'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
 import SearchIcon from '@mui/icons-material/Search'
-import { Link as RouterLink, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AskWikiEntryButton } from '../ask/AskWikiEntryButton'
 import { NotificationBell } from '../notifications/NotificationBell'
 import { useIsInstanceAdmin } from '../auth/useIsInstanceAdmin'
@@ -68,6 +68,7 @@ export interface AppHeaderProps {
  */
 export function AppHeader({ navOpen, onToggleNav }: AppHeaderProps) {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
   const theme = useTheme()
   const isCompact = useMediaQuery(theme.breakpoints.down('sm'))
   const { mode, toggle } = useColorMode()
@@ -79,6 +80,10 @@ export function AppHeader({ navOpen, onToggleNav }: AppHeaderProps) {
   // configured. A user's own role is not a secret from them, so this is not the
   // §6.7 read-path question.
   const { isInstanceAdmin } = useIsInstanceAdmin()
+
+  // What the search page is currently showing, when that is where we are.
+  const [searchParams] = useSearchParams()
+  const currentQuery = pathname === '/search' ? (searchParams.get('q') ?? '') : ''
 
   const handleSearchSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -122,6 +127,15 @@ export function AppHeader({ navOpen, onToggleNav }: AppHeaderProps) {
               name="q"
               size="small"
               placeholder="Search…"
+              // Seeded from the URL, and re-seeded when it changes: on
+              // `/search?q=igniter` this box sat empty directly above the
+              // page's own Query field showing "igniter", so the two boxes
+              // disagreed about what had been searched for. Uncontrolled with a
+              // `key`, not controlled — the header must not re-render on every
+              // keystroke, and `defaultValue` alone would never pick up a
+              // Back/Forward.
+              key={currentQuery}
+              defaultValue={currentQuery}
               sx={{ width: '25ch' }}
               slotProps={{
                 input: {

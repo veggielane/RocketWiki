@@ -114,7 +114,9 @@ function PageTreeList({
               <MarkingLevelBadge level={node.marking.level} levelName={node.marking.levelName} />
               {node.hasRestrictions && (
                 <Tooltip title="This page has access restrictions">
-                  <LockOutlinedIcon fontSize="small" color="action" aria-label="Has access restrictions" />
+                  {/* `titleAccess`, not `aria-label` — see SpaceTreeNav's copy of
+                      this badge for why an aria-label here reaches nobody. */}
+                  <LockOutlinedIcon fontSize="small" color="action" titleAccess="This page has access restrictions" />
                 </Tooltip>
               )}
             </ListItemButton>
@@ -190,7 +192,12 @@ export function SpaceBrowserPage() {
   const availableLabels = useMemo(() => distinctLabels(tree), [tree])
   const labelMatches = useMemo(() => (labelFilter ? filterTreeByLabel(tree, labelFilter) : []), [tree, labelFilter])
 
-  if (fetching) {
+    // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
+  // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
+  // away on every post-write refetch: content, scroll position and keyboard
+  // focus all went with it. `&& !data` keeps the rendered screen up while the
+  // re-read happens underneath it.
+  if (fetching && !data) {
     // Title skeleton as well as body: this screen has an h1, so a bare
     // rectangle under-describes the layout and the heading pops in late.
     return (

@@ -18,6 +18,16 @@ import './editor-content.css'
 export interface RichTextEditorHandle {
   /** Current document, serialized back to Markdown for saving. */
   getMarkdown: () => string
+  /**
+   * Empties the document — for a composer that has just submitted.
+   *
+   * The comment composer used to appear to clear itself, but only because
+   * posting refetched the page and the `fetching` guard remounted the whole
+   * subtree underneath it. Once that teardown stopped (the screens now keep
+   * their data across a refetch), the text stayed in the box. Clearing has to
+   * be something the composer asks for.
+   */
+  clear: () => void
 }
 
 /**
@@ -244,6 +254,9 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     ref,
     () => ({
       getMarkdown: () => (editor ? jsonToMarkdown(editor.getJSON()) : initialMarkdown),
+      // `false` for emitUpdate: clearing after a successful post is not an edit
+      // the author made, so it must not mark a composer dirty or fire onChange.
+      clear: () => editor?.commands.clearContent(false),
     }),
     [editor, initialMarkdown],
   )

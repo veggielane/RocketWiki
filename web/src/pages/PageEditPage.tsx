@@ -16,6 +16,7 @@ import {
   Typography,
 } from '@mui/material'
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined'
+import CloudOffOutlinedIcon from '@mui/icons-material/CloudOffOutlined'
 import {
   useCurrentUserQuery,
   usePageByIdQuery,
@@ -34,6 +35,7 @@ import { PresenceAvatars } from '../presence/PresenceAvatars'
 import { PresencePointers } from '../presence/PresencePointers'
 import { colourForUser } from '../presence/colourForUser'
 import { getDefaultCoEditTransport, getDefaultPresenceTransport } from '../realtime/transports'
+import { useRealtimeConnection } from '../realtime/useRealtimeConnection'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
 import { PageHeader } from '../app/PageHeader'
@@ -43,6 +45,7 @@ import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
 import { describeSave, type SaveOutcome } from '../editor/describeSave'
 import { PageIconPicker } from './PageIconPicker'
 import { pageHref } from './pageSlug'
+import { PageIdContext } from './pageContext'
 
 /**
  * Page edit. Two of the brief's non-negotiables live here, both driven by
@@ -128,6 +131,9 @@ export function PageEditPage() {
   // Same presence join + pointer overlay as the view page; keyed on pageId
   // (route reuse — see usePresence.ts).
   const { viewers, pointers, recordPointer } = usePresence(pageId ?? '', getDefaultPresenceTransport())
+  // Whether the hub is actually up — the chip and banner below report it
+  // rather than asserting liveness the app cannot verify.
+  const connection = useRealtimeConnection(getDefaultPresenceTransport())
 
   // Solo edits only. In a live session the text is in the shared CRDT the
   // moment it is typed — the other participants have it, and the log-cap flow
@@ -322,6 +328,13 @@ export function PageEditPage() {
   }
 
   return (
+    // The fences rendered inside the editor need the page they sit on, exactly
+    // as they do on the view route — the `form-definition` and `form-list`
+    // widgets read it through `useCurrentPageId()`. Without this the editor's
+    // live preview showed "This form only works on a saved page" on a page that
+    // was, in fact, saved: the forms feature had no working authoring preview
+    // at all, while CodeBlockView promised a side-by-side one.
+    <PageIdContext value={page.id}>
     <Box>
       <Box sx={{ mb: 2 }}>
         <PageHeader
@@ -337,13 +350,24 @@ export function PageEditPage() {
                 size="small"
                 disabled={saving || session.status === 'evicted'}
               />
+              {/* The chip reports the CONNECTION, not just the session. It used
+                  to say "Live co-editing" in green throughout a disconnect,
+                  because nothing had ever registered `onreconnecting`/`onclose`
+                  — a success chip asserting liveness the app could not verify,
+                  next to presence avatars frozen at their last-known set. */}
               {collabActive && (
                 <Chip
                   size="small"
-                  color="success"
+                  color={connection === 'connected' ? 'success' : 'warning'}
                   variant="outlined"
-                  icon={<GroupsOutlinedIcon />}
-                  label="Live co-editing"
+                  icon={connection === 'connected' ? <GroupsOutlinedIcon /> : <CloudOffOutlinedIcon />}
+                  label={
+                    connection === 'connected'
+                      ? 'Live co-editing'
+                      : connection === 'reconnecting'
+                        ? 'Reconnecting…'
+                        : 'Not connected'
+                  }
                 />
               )}
               <PresenceAvatars viewers={viewers} />
@@ -351,6 +375,18 @@ export function PageEditPage() {
           }
         />
       </Box>
+
+      {/* Says what a dropped connection MEANS here, which the chip alone
+          cannot: the text is safe, it is simply no longer being shared. The
+          disconnected case names the reload because SignalR has by then
+          exhausted its retry policy and nothing will arrive on its own. */}
+      {collabActive && connection !== 'connected' && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          {connection === 'reconnecting'
+            ? 'Lost contact with the live session — reconnecting. Your text is safe in this editor; other people are not seeing it right now, and Save still works.'
+            : 'The live session has disconnected and will not resume on its own. Your text is safe in this editor — save it, then reload to rejoin.'}
+        </Alert>
+      )}
 
       {session.status === 'evicted' && (
         <Alert severity="warning" sx={{ mb: 2 }}>
@@ -525,5 +561,6 @@ export function PageEditPage() {
         onKeepEditing={() => setConflict(null)}
       />
     </Box>
+    </PageIdContext>
   )
 }

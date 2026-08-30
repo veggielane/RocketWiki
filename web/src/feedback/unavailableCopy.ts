@@ -129,6 +129,8 @@ export type LoadFailureReason =
    */
   | 'NATIONALITY_VOCABULARY'
   | 'SYNC_STATUS'
+  /** The notification inbox — a failed read must not read as an empty one. */
+  | 'NOTIFICATIONS'
   | 'SEARCH'
   /** The what-if inspector: `forPrincipal` distinguishes "your own view" from a staged subject. */
   | { kind: 'PERMISSION_INSPECTION'; forPrincipal: boolean }
@@ -162,6 +164,8 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
         summary: "Couldn't load the countries an eyes-only caveat can name. A classification on its own still works.",
         pointsToSettings: false,
       }
+    case 'NOTIFICATIONS':
+      return { summary: "Couldn't load notifications.", pointsToSettings: false }
     case 'SYNC_STATUS':
       return { summary: "Couldn't load sync status.", pointsToSettings: false }
     case 'SEARCH':
@@ -177,10 +181,28 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
  * server's considered refusals with their own designed UX. All of these say
  * what didn't happen, since "try again" is the only useful next step.
  */
-export type WriteFailureReason = 'PAGE_PROPERTY' | 'PROPERTY_KEY' | 'PAGE_MARKING'
+export type WriteFailureReason =
+  | 'PAGE_PROPERTY'
+  | 'PROPERTY_KEY'
+  | 'PAGE_MARKING'
+  /** Creating a space, and restoring a trashed batch — each its screen's primary action. */
+  | 'SPACE'
+  | 'RESTORE_PAGE'
+  /** Watching/unwatching a page or space. */
+  | 'WATCH'
+  /** Submitting a record through a `form-definition` fence. */
+  | 'FORM_ENTRY'
 
 export function describeWriteFailure(reason: WriteFailureReason): UnavailableCopy {
   switch (reason) {
+    case 'SPACE':
+      return { summary: "Couldn't reach the API — the space wasn't created.", pointsToSettings: false }
+    case 'RESTORE_PAGE':
+      return { summary: "Couldn't reach the API — nothing was restored.", pointsToSettings: false }
+    case 'WATCH':
+      return { summary: "Couldn't reach the API — your watch setting is unchanged.", pointsToSettings: false }
+    case 'FORM_ENTRY':
+      return { summary: "Couldn't reach the API — that record wasn't saved.", pointsToSettings: false }
     case 'PAGE_PROPERTY':
       return { summary: "Couldn't reach the API — that property change wasn't saved.", pointsToSettings: false }
     case 'PROPERTY_KEY':

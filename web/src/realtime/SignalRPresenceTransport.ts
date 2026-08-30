@@ -7,6 +7,7 @@ import type {
   PointerPosition,
   PresenceTransport,
   PresenceViewer,
+  RealtimeConnectionState,
   ReseedReason,
 } from './types'
 
@@ -45,7 +46,24 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
     // so subscribers (one provider per edit session) can unsubscribe.
     this.connection.onreconnected(() => {
       for (const handler of this.reconnectedHandlers) handler()
+      this.emitConnectionState('connected')
     })
+    // The two halves that were never registered. Without them the app could
+    // observe recovery but never loss, so every realtime surface went on
+    // asserting it was live throughout a disconnect.
+    this.connection.onreconnecting(() => this.emitConnectionState('reconnecting'))
+    this.connection.onclose(() => this.emitConnectionState('disconnected'))
+  }
+
+  private readonly connectionStateHandlers = new Set<(state: RealtimeConnectionState) => void>()
+
+  private emitConnectionState(state: RealtimeConnectionState): void {
+    for (const handler of this.connectionStateHandlers) handler(state)
+  }
+
+  onConnectionStateChanged(handler: (state: RealtimeConnectionState) => void): () => void {
+    this.connectionStateHandlers.add(handler)
+    return () => this.connectionStateHandlers.delete(handler)
   }
 
   private async ensureStarted(): Promise<void> {
@@ -53,17 +71,51 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
     await this.started
   }
 
+  /**
+   * Serialises group membership so a join and its matching leave cannot
+   * overtake each other. Ported from SignalRNotificationsTransport, which
+   * solved this class of problem first.
+   *
+   * The bug this closes: `leavePage` used to return early whenever the
+   * connection was not yet `Connected`. On a fast navigation the join suspends
+   * inside `ensureStarted()`, the cleanup's leave sees `Connecting` and sends
+   * NOTHING, and then negotiation completes and the pending join runs — leaving
+   * the client in the hub group for a page it has navigated away from, with no
+   * leave to follow. Local handlers are gone so it is invisible here, while the
+   * server still lists them as a viewer of a page they are not on. That is the
+   * "live data leak, not just a resource leak" this module's own types warn
+   * about.
+   *
+   * Queuing rather than state-checking is what makes it correct: the leave now
+   * waits for the join to finish and then actually sends.
+   */
+  private membership: Promise<void> = Promise.resolve()
+
+  /** Runs `work` after whatever is already queued, whether that settled or threw. */
+  private enqueue(work: () => Promise<void>): Promise<void> {
+    const next = this.membership.then(work, work)
+    // The chain must never stay rejected, or one failure poisons every later
+    // join/leave. Callers still see their own operation's result.
+    this.membership = next.catch(() => {})
+    return next
+  }
+
   async joinPage(pageId: string): Promise<void> {
-    await this.ensureStarted()
-    await this.connection.invoke('JoinPage', pageId)
+    return this.enqueue(async () => {
+      await this.ensureStarted()
+      await this.connection.invoke('JoinPage', pageId)
+    })
   }
 
   async leavePage(pageId: string): Promise<void> {
-    // No ensureStarted here: leaving must never throw because the
-    // connection never finished starting — the caller's teardown path is
-    // the last place we want an unhandled rejection.
-    if (this.connection.state !== signalR.HubConnectionState.Connected) return
-    await this.connection.invoke('LeavePage', pageId)
+    return this.enqueue(async () => {
+      // Still no `ensureStarted`: if nothing ever started there is no group to
+      // leave, and a teardown path is the last place to raise. But this now
+      // runs AFTER any queued join, so the state check reflects the join's
+      // outcome rather than racing it.
+      if (this.connection.state !== signalR.HubConnectionState.Connected) return
+      await this.connection.invoke('LeavePage', pageId)
+    })
   }
 
   onViewersChanged(handler: (viewers: PresenceViewer[]) => void): () => void {
@@ -88,6 +140,9 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
   // ---- CoEditTransport (same connection, design.md §8 co-editing) ----
 
   async joinEditSession(pageId: string): Promise<EditSessionJoin | null> {
+    // Deliberately NOT queued: this one returns a value the caller needs, and
+    // the queue's purpose is ordering membership against its own teardown —
+    // which `leaveEditSession` achieves by waiting for whatever is in flight.
     await this.ensureStarted()
     const result = await this.connection.invoke<Record<string, unknown> | null>('JoinEditSession', pageId)
     if (result == null) return null
@@ -107,10 +162,12 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
   }
 
   async leaveEditSession(pageId: string): Promise<void> {
-    // Same shape as leavePage: leaving must never throw because the
-    // connection never finished starting — this runs from teardown paths.
-    if (this.connection.state !== signalR.HubConnectionState.Connected) return
-    await this.connection.invoke('LeaveEditSession', pageId)
+    // Same queue as the page group, and for the same reason: an edit session
+    // left behind is a membership the server still believes in.
+    return this.enqueue(async () => {
+      if (this.connection.state !== signalR.HubConnectionState.Connected) return
+      await this.connection.invoke('LeaveEditSession', pageId)
+    })
   }
 
   pushUpdate(pageId: string, update: Uint8Array): Promise<void> {

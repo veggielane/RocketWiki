@@ -61,7 +61,12 @@ export function PageHistoryPage() {
 
   useDocumentTitle(data?.page ? `History — ${data.page.title}` : 'History')
 
-  if (fetching) {
+    // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
+  // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
+  // away on every post-write refetch: content, scroll position and keyboard
+  // focus all went with it. `&& !data` keeps the rendered screen up while the
+  // re-read happens underneath it.
+  if (fetching && !data) {
     return (
       <Stack spacing={1}>
         <Skeleton variant="text" width="40%" height={48} />

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useSearchParams } from 'react-router-dom'
 import {
   Alert,
@@ -41,38 +41,112 @@ export function SearchPage() {
   const query = params.get('q') ?? ''
   useDocumentTitle(query ? `Search — ${query}` : 'Search')
 
-  // What is typed, versus what has been committed to the URL. The field is
-  // uncontrolled by the URL so typing stays instant; the debounced value is
-  // what becomes a history entry and a request.
+  // THE WHOLE SEARCH LIVES IN THE URL. Query, space and labels were split
+  // between the URL and component state, so refreshing, bookmarking, sharing or
+  // pressing Back after opening a result all silently dropped the filters and
+  // returned a different result set than the one that was clicked from.
+  const spaceKey = params.get('space')
+  const labels = useMemo(() => params.getAll('label'), [params])
+
+  // What is typed, versus what has been committed to the URL. The field is not
+  // driven by the URL, so typing stays instant; the debounced value is what
+  // becomes a request.
   const [draft, setDraft] = useState(query)
   const debouncedDraft = useDebouncedValue(draft, SEARCH_DEBOUNCE_MS)
-  const [spaceKey, setSpaceKey] = useState<string | null>(null)
-  const [labels, setLabels] = useState<string[]>([])
   const [after, setAfter] = useState<string | undefined>(undefined)
   const [edges, setEdges] = useState<SearchEdge[]>([])
 
-  // The settled draft becomes the URL. `replace` so a search is ONE history
-  // entry rather than one per keystroke, and only when it actually differs —
-  // otherwise arriving with `?q=` from the header would immediately rewrite it.
-  useEffect(() => {
-    if (debouncedDraft === query) return
-    setParams(debouncedDraft ? { q: debouncedDraft } : {}, { replace: true })
-  }, [debouncedDraft, query, setParams])
+  /**
+   * The last `q` THIS component wrote. It is what tells "the debounce settled,
+   * push it to the URL" apart from "someone else changed the URL, adopt it" —
+   * a distinction no comparison of the two values can make, and whose absence
+   * broke the header's search box.
+   *
+   * The old pair of effects compared `debouncedDraft` against `query` in both
+   * directions. Submitting `b` from the header while the page sat on `?q=a`
+   * therefore ran, in order: effect A saw a stale `debouncedDraft` of `'a'`,
+   * decided the URL was wrong, and rewrote it BACK to `?q=a` over the
+   * navigation that had just happened; effect B then pulled `draft` back to
+   * `'a'` too, cancelling the pending timer. The typed query was silently
+   * discarded — as was every Back/Forward between two searches.
+   */
+  const lastWrittenQuery = useRef(query)
 
-  // Someone else changed the query — the header's search box, or a back/forward
-  // that landed on a different one. The field follows the URL in that direction
-  // too, or it would keep showing what was typed here.
+  /** The current params with one search field replaced — everything else survives. */
+  const withParam = useCallback(
+    (mutate: (next: URLSearchParams) => void) => {
+      const next = new URLSearchParams(params)
+      mutate(next)
+      return next
+    },
+    [params],
+  )
+
+  // Settled draft → URL.
   useEffect(() => {
-    setDraft((current) => (current === query ? current : query))
+    // Still settling: the user is mid-word.
+    if (debouncedDraft !== draft) return
+    // The URL moved under us (header submit, Back/Forward). Stand down and let
+    // the adopt-effect below take it; writing here is what clobbered it.
+    if (query !== lastWrittenQuery.current) return
+    if (debouncedDraft === query) return
+    lastWrittenQuery.current = debouncedDraft
+    // `replace` so a search is ONE history entry rather than one per keystroke.
+    setParams(
+      withParam((next) => {
+        if (debouncedDraft) next.set('q', debouncedDraft)
+        else next.delete('q')
+      }),
+      { replace: true },
+    )
+  }, [debouncedDraft, draft, query, setParams, withParam])
+
+  // URL → field, when the change came from anywhere but us.
+  useEffect(() => {
+    if (query === lastWrittenQuery.current) return
+    lastWrittenQuery.current = query
+    setDraft(query)
   }, [query])
+
+  const setSpaceKey = (value: string | null) =>
+    setParams(
+      withParam((next) => {
+        if (value) next.set('space', value)
+        else next.delete('space')
+      }),
+      { replace: true },
+    )
+
+  const setLabels = (values: string[]) =>
+    setParams(
+      withParam((next) => {
+        next.delete('label')
+        for (const label of values) next.append('label', label)
+      }),
+      { replace: true },
+    )
+
+  const clearFilters = () =>
+    setParams(
+      withParam((next) => {
+        next.delete('space')
+        next.delete('label')
+      }),
+      { replace: true },
+    )
+
+  const hasFilters = spaceKey !== null || labels.length > 0
 
   // A genuinely new search (query/space/labels changed) starts pagination
   // over — otherwise "Load more" would keep paging through stale results
-  // for the previous query.
+  // for the previous query. Keyed on the joined labels rather than the array,
+  // which `getAll` rebuilds on every render. JSON rather than a join, so a
+  // label containing the separator cannot collide with two labels.
+  const labelKey = JSON.stringify(labels)
   useEffect(() => {
     setAfter(undefined)
     setEdges([])
-  }, [query, spaceKey, labels])
+  }, [query, spaceKey, labelKey])
 
   const [{ data: facetData }] = useSearchFacetsQuery({ variables: { spaceKey: spaceKey ?? undefined } })
   const [{ data, fetching, error }] = useSearchPagesQuery({
@@ -120,6 +194,14 @@ export function SearchPage() {
           renderInput={(params) => <TextField {...params} label="Labels" />}
           sx={{ minWidth: 240 }}
         />
+        {/* Only when there is something to clear. A filter that eliminated
+            every result is otherwise a dead end: the empty state below says so,
+            and this is the way out of it. */}
+        {hasFilters && (
+          <Button size="small" onClick={clearFilters} sx={{ alignSelf: 'center', flexShrink: 0 }}>
+            Clear filters
+          </Button>
+        )}
       </Stack>
 
       {query.trim().length === 0 && <Typography color="text.secondary">Type a query to search.</Typography>}
@@ -197,7 +279,13 @@ export function SearchPage() {
           </List>
           {edges.length === 0 && (
             <Typography color="text.secondary">
-              No results for "{query}" — check the spelling or try different words.
+              {/* Names the filters when there are some. "Check the spelling" is
+                  the wrong advice when a space or label is what eliminated
+                  everything, and it left the reader with no idea a filter was
+                  even applied. */}
+              {hasFilters
+                ? `No results for "${query}" with the current filters — clear them, or try different words.`
+                : `No results for "${query}" — check the spelling or try different words.`}
             </Typography>
           )}
           {/* Prefills /ask with this query; hides itself for the session

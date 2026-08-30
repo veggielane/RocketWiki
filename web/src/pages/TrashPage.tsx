@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { Alert, Button, List, ListItem, ListItemText, Skeleton, Stack, Typography } from '@mui/material'
 import { useRestorePageMutation, useSpaceTrashQuery } from '../graphql/generated/graphql'
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
-import { describeLoadFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
+import { describeLoadFailure, describeWriteFailure, REPLICA_EXPLANATION, replicaBadgeLabel } from '../feedback/unavailableCopy'
 import { groupTrashBatches } from '../trash/groupTrashBatches'
 import { describeExpiry } from '../trash/trashCountdown'
 import { UserAvatar } from '../avatars/UserAvatar'
@@ -51,6 +51,12 @@ export function TrashPage() {
     setMessage(null)
     const result = await restorePage({ input: { pageId: rootPageId } })
     setRestoringId(null)
+    // Same silent-failure hole as the create-space button: with no `data`,
+    // `describeMutationError` returns null and Restore appeared to do nothing.
+    if (result.error !== undefined) {
+      setMessage({ severity: 'warning', text: describeWriteFailure('RESTORE_PAGE').summary })
+      return
+    }
     const payload = result.data?.restorePage
     const replica = asReadOnlyReplica(payload?.error)
     if (replica) {
@@ -72,7 +78,12 @@ export function TrashPage() {
     }
   }
 
-  if (fetching) {
+    // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
+  // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
+  // away on every post-write refetch: content, scroll position and keyboard
+  // focus all went with it. `&& !data` keeps the rendered screen up while the
+  // re-read happens underneath it.
+  if (fetching && !data) {
     return (
       <Stack spacing={1}>
         <Skeleton variant="text" width="40%" height={48} />

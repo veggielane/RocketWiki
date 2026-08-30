@@ -156,4 +156,25 @@ export interface PresenceTransport {
    * several pages over its lifetime).
    */
   sendPointerPosition(pageId: string, x: number, y: number): void
+  /**
+   * Whether the hub is actually up. Both SignalR transports call
+   * `.withAutomaticReconnect()`, and only `onreconnected` was ever registered —
+   * so the app could observe RECOVERY but never LOSS. Nothing told the user the
+   * connection had dropped, was retrying, or had given up, while the edit
+   * screen went on rendering a green "Live co-editing" chip throughout and the
+   * presence avatars froze at their last-known set with no staleness cue.
+   *
+   * Optional so a fake or a future transport need not implement it; a caller
+   * with no signal treats the connection as up, which is the pre-existing
+   * behaviour rather than a new pessimism.
+   */
+  onConnectionStateChanged?(handler: (state: RealtimeConnectionState) => void): () => void
 }
+
+/**
+ * `reconnecting` is recoverable and usually brief; `disconnected` is SignalR
+ * having exhausted its retry policy, after which nothing arrives until the page
+ * is reloaded. Worth distinguishing: one is "hold on", the other is "this is
+ * not coming back on its own".
+ */
+export type RealtimeConnectionState = 'connected' | 'reconnecting' | 'disconnected'
