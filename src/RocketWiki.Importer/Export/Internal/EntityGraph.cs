@@ -40,6 +40,15 @@ internal sealed class EntityGraph
         _byId = byId;
     }
 
+    /// <summary>
+    /// Loads the whole <c>entities.xml</c> into an XDocument. <b>A real full-space
+    /// export is hundreds of MB</b>, so this is a memory ceiling on how large a space
+    /// this tool can import — known, and accepted for now: the graph is queried by id
+    /// from every direction (a page’s body, its attachments, a comment’s owner), so a
+    /// streaming reader would have to build most of the same index anyway. If an
+    /// import dies on memory, this is the line to look at first, and the fix is a
+    /// two-pass XmlReader that indexes offsets rather than elements.
+    /// </summary>
     public static EntityGraph Parse(Stream entitiesXml)
     {
         XDocument doc;

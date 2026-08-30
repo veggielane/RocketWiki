@@ -168,6 +168,15 @@ one out gives you a silently feature-less install rather than an error:
   --from-literal=GitLab__BaseUrl='https://gitlab.internal'
 ```
 
+**If you configure the assistant, configure embeddings too.** Without an embedding
+endpoint, retrieval falls back to keyword-only (design.md §9.2, structurally) — and
+both keyword legs are built for keywords, not sentences: SQL Server ANDs every term,
+so every word of the question must appear on one page. A question phrased as a
+sentence therefore returns `NO_RESULTS` most of the time. `askWiki` still works and
+still refuses to answer ungrounded, so this is a quality limit rather than a
+correctness one, but an assistant configured without embeddings will look broken to
+its users. This is a known limitation with a deferred fix, not a misconfiguration.
+
 The two `FileStorage__S3__*` keys are only needed with `provider=S3`; drop
 them for `FileSystem`. With `provider=SqlServer` you add nothing — blobs
 share `ConnectionStrings__rocketwiki` — unless you want them in a separate

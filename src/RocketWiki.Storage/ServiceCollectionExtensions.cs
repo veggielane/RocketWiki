@@ -37,6 +37,14 @@ public static class ServiceCollectionExtensions
                 break;
 
             case "S3":
+                // Constructed directly rather than through IHttpClientFactory, so
+                // ServiceDefaults' standard resilience handler does NOT apply to
+                // object-store traffic. That is deliberate and worth knowing: the AWS
+                // SDK brings its own retry and timeout policy, and layering a second
+                // one over it multiplies both — the same reasoning that gives the
+                // embedding client maxRetries: 0. Attachment uploads are also large
+                // and non-seekable, which is the worst possible shape for a generic
+                // retry handler to replay.
                 services.AddSingleton<IAmazonS3>(sp =>
                 {
                     var options = sp.GetRequiredService<IOptions<FileStorageOptions>>().Value.S3

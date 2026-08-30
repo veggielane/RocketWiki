@@ -156,6 +156,14 @@ public sealed class SqlServerFileStorage : IFileStorage
     private static readonly string DeleteSql =
         $"DELETE FROM {TableName} WHERE [Key] = @key;";
 
+    /// <summary>
+    /// Guards the one-time table creation. Never disposed, and the class is not
+    /// IDisposable: this is registered as a singleton, so its lifetime is the
+    /// process’s and there is no point at which disposing would free anything the
+    /// process was not about to release anyway. Written down because "a SemaphoreSlim
+    /// nobody disposes" reads like an oversight otherwise — making the class
+    /// IDisposable would add a contract every consumer has to honour, to no effect.
+    /// </summary>
     private readonly SemaphoreSlim _tableGate = new(1, 1);
     private volatile bool _tableReady;
 

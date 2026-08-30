@@ -101,10 +101,21 @@ public sealed partial class NotificationsHub
             return null;
         }
 
+        // FirstOrDefault + silent null, not First. The contract above says EVERY
+        // refusal is the same silent null, indistinguishable to the caller — and a
+        // page deleted between the permission check and this read would instead have
+        // thrown InvalidOperationException out of the hub method, which is both a
+        // different observable outcome and the one shape §6.7 says a caller must not
+        // be able to tell apart from the others.
         var pageInfo = await db.Pages.AsNoTracking()
             .Where(p => p.Id == pageId)
             .Select(p => new { p.CurrentRevisionNumber, SpaceKey = p.Space!.Key })
-            .FirstAsync(Context.ConnectionAborted);
+            .FirstOrDefaultAsync(Context.ConnectionAborted);
+        if (pageInfo is null)
+        {
+            ApiTelemetry.RecordCoEditJoin(ApiTelemetry.CoEditJoinNotFound);
+            return null;
+        }
         var clientIp = Context.GetHttpContext()?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
         if (!fact.Permission.CanEdit)

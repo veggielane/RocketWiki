@@ -91,6 +91,21 @@ public sealed class RealtimeConnectionRegistry : IRealtimeConnectionRegistry
         if (_viewersByPage.TryGetValue(pageId, out var viewers))
         {
             viewers.TryRemove(connectionId, out _);
+
+            // The now-empty bucket is deliberately LEFT IN PLACE, and this is a known
+            // leak: _viewersByPage grows by one entry per page ever viewed and never
+            // shrinks. Removing it here is not safe with this structure — JoinPage
+            // reaches the bucket through GetOrAdd, so between "is it empty" and the
+            // removal a joiner can populate the very instance being removed, and the
+            // atomic key/value TryRemove does not help because the instance is
+            // unchanged; only its contents are. A test written for this
+            // (AJoinRacingTheLastLeave_IsNotDropped) does reproduce the drop.
+            //
+            // Doing it properly means what EditSessionRegistry does for sessions: a
+            // Removed flag on the bucket plus a retry in the join path, or a periodic
+            // sweep of buckets empty for some interval. That is a design change, not a
+            // tidy-up, and dropping a live viewer is a worse outcome than an entry per
+            // page in a dictionary — so it is recorded here rather than half-done.
         }
 
         if (_pagesByConnection.TryGetValue(connectionId, out var pages))

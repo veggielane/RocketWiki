@@ -176,7 +176,15 @@ public sealed class AskWikiService(
         - Be concise.
         """;
 
-    private static readonly Regex MarkerRegex = new(@"\[S(\d{1,4})\]", RegexOptions.Compiled);
+    /// <summary>
+    /// Width 1–3, matching the SPA’s own marker regex in <c>answerSegments.ts</c>. The
+    /// two must agree on what counts as a marker: the server validates and strips
+    /// out-of-range ones, and the SPA decides what to render as a citation link, so a
+    /// four-digit marker the server accepted and the SPA did not would display as
+    /// literal text. Unreachable at any sane MaxRetrievedPages — which is exactly why
+    /// the mismatch would have gone unnoticed if it ever became reachable.
+    /// </summary>
+    private static readonly Regex MarkerRegex = new(@"\[S(\d{1,3})\]", RegexOptions.Compiled);
 
     public async Task<AskWikiOutcome> AskAsync(
         string question, Principal principal, AskWikiAttempt attempt, CancellationToken cancellationToken)
@@ -215,6 +223,13 @@ public sealed class AskWikiService(
         // Retrieval under the caller's own principal: hybrid (keyword + vector when
         // embeddings are configured), over-fetched then canView-filtered inside the
         // service (§9.3). A restricted page is absent from these hits, not filtered here.
+        // Retrieval over-fetches 4x MaxRetrievedPages internally and canView-filters
+        // afterwards, so if every one of those candidates is restricted the ask
+        // answers NO_RESULTS even though a viewable page ranked just outside the
+        // window would have answered it. Never a leak — an availability cliff, and it
+        // is steepest for exactly the low-clearance caller in a heavily-restricted
+        // space. Raising the multiplier trades latency for the tail; it is a tuning
+        // decision, recorded here rather than silently accepted.
         var hits = await searchService.SearchAsync(
             new SearchRequest(question, SpaceKey: null, Labels: null), principal, options.MaxRetrievedPages, cancellationToken);
 

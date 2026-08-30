@@ -1167,6 +1167,22 @@ marker is a viewable section by construction, and fabricated markers are
 stripped. Zero retrieved content means the model is never called
 (`NO_RESULTS`); the LLM is plumbing, access control is the feature.
 
+**Known limitation, and it is structural: without embeddings configured, a
+sentence-shaped question mostly returns `NO_RESULTS`.** Retrieval passes the
+question verbatim to `ISearchService`, and both keyword legs are built for
+keywords — the SQL Server leg ANDs every term, so every word of the question
+would have to appear on one page, and the SQLite leg wraps the whole question in a
+single `LIKE '%…%'`. When an embedding endpoint is configured the vector leg
+handles natural language and hybrid fusion covers this; when it is not, §9.2's
+"unconfigured means keyword-only, structurally" applies to the assistant too, and
+the honest description of `askWiki` in that mode is *keyword lookup with a
+generated summary*, not question answering. **Local development runs in exactly
+this mode**, so this is what a developer sees first. Fixing it properly means
+either a retrieval-oriented mode on `ISearchService` (extract terms, rank by any
+rather than all) or requiring embeddings for `askWiki` — a design decision
+deliberately deferred rather than patched at the call site, because changing what
+`search()` means for everyone to suit one caller is the wrong trade.
+
 **The answer carries an aggregate protective marking** (§21.13): the highest
 classification among *everything that entered the model context*, cited or
 not, with each distinct eyes-only caveat listed rather than merged. An answer

@@ -74,6 +74,11 @@ var minio = builder.AddContainer("minio", "minio/minio")
 // instance instead (design.md §15: the editor URL must never leave the
 // boundary). Tag pinned deliberately; the standing caveat (§16) applies — no
 // container runtime has ever run this, so it is config-reviewed, not verified.
+// NOTE: nothing consumes this endpoint automatically. The SPA reads
+// VITE_DRAWIO_URL, which is not wired from here, and Aspire assigns this container a
+// DYNAMIC host port — so the fixed localhost:8080 suggested in web/.env.example is
+// wrong for any given run. Read the assigned port off the Aspire dashboard and set
+// VITE_DRAWIO_URL to it, or the diagram editor silently fails to load.
 builder.AddContainer("drawio", "jgraph/drawio", "31.3.2")
     .WithHttpEndpoint(targetPort: 8080, name: "http");
 
@@ -107,6 +112,10 @@ var assistant = builder.AddOptionalConnectionString("assistant");
 
 var api = builder.AddProject<Projects.RocketWiki_Api>("api")
     .WithReference(sql)
+    // Injects service-discovery variables (services__minio__http__0). Nothing
+    // resolves a services__* name today — the API reads its S3 endpoint from
+    // FileStorage:S3 configuration — so this is inert, kept only because it is how
+    // the dependency SHOULD be expressed once service discovery has a consumer.
     .WithReference(minio.GetEndpoint("http"))
     .WithReference(keycloak)
     // WithReference on a container resource injects SERVICE DISCOVERY variables

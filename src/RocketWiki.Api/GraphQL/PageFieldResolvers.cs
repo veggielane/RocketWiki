@@ -106,7 +106,16 @@ public sealed class PageFieldResolvers
         // Materializing each child's full Page goes through PageByIdDataLoader, which
         // dedupes/parallelizes across one request - see its own doc for what it does and
         // doesn't optimize away.
-        return await pageByIdLoader.LoadRequiredAsync(childIds.ToArray(), cancellationToken);
+        //
+        // LoadAsync + drop the nulls, NOT LoadRequiredAsync. The two loads are
+        // separate: the child-id loader answers with what was visible when IT ran, and
+        // the page loader deliberately omits keys that fail canView when it runs. A
+        // restriction landing between them therefore leaves an id with no page — and
+        // LoadRequiredAsync turns that into a GraphQL error, which is both a worse
+        // answer than the silent absence every other read path gives (§6.7) and, being
+        // observably different from "no such child", a way to learn the page exists.
+        var children = await pageByIdLoader.LoadAsync(childIds.ToArray(), cancellationToken);
+        return [.. children.Where(child => child is not null).Select(child => child!)];
     }
 
     [AuditAction("page.view")]

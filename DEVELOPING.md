@@ -128,7 +128,10 @@ docker run --rm --user root \
 ### Backend standalone (no Docker)
 
 ```bash
-dotnet run --project src/RocketWiki.Api    # http://localhost:5079
+# launchSettings.json is gitignored, so a fresh clone has no launch profile and
+# Kestrel binds its own default port. Ask for 5079 explicitly — that is the port
+# the SPA dev proxy (VITE_API_TARGET) is configured against.
+ASPNETCORE_URLS=http://localhost:5079 dotnet run --project src/RocketWiki.Api
 ```
 
 Health endpoints (`/health`, `/alive`) and `/graphql` respond. Without a

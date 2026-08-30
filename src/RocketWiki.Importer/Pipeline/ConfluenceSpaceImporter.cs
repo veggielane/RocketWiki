@@ -1,4 +1,4 @@
-﻿using RocketWiki.Core.Access;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
 using RocketWiki.Importer.Conversion;
@@ -362,6 +362,22 @@ public sealed class ConfluenceSpaceImporter
         }
 
         var summary = ImportReportSummarizer.Summarize(report, export.Pages.Count);
+
+        // "The space was created" is not the same claim as "the import worked", and
+        // an export with pages that imported NONE of them is a failure however the
+        // space row turned out. Success used to be unconditional here, so that run
+        // printed "Import complete" and left exit code 3 as the only hint — and 3 is
+        // the ordinary outcome for a real migration, so it hints at nothing. The
+        // grant pre-flight now catches the common cause before the space is created;
+        // this catches whatever else produces the same shape.
+        if (export.Pages.Count > 0 && summary.PagesActuallyImported == 0)
+        {
+            return new ImportResult(false, space.Id, report, summary,
+                $"the space was created but none of its {export.Pages.Count} page(s) imported. "
+                + "The space exists and its key is taken; read the report for the per-page reasons, "
+                + "then delete the space before re-running.");
+        }
+
         return new ImportResult(true, space.Id, report, summary, BlockedReason: null);
     }
 

@@ -105,7 +105,7 @@ public static class Extensions
     /// </list>
     /// SQL is absent on purpose: Aspire's <c>AddSqlServerDbContext</c> already calls
     /// <c>AddSqlClientInstrumentation()</c> itself (confirmed by decompiling
-    /// Aspire.Microsoft.EntityFrameworkCore.SqlServer 13.5.1), and registering it twice
+    /// Aspire.Microsoft.EntityFrameworkCore.SqlServer 13.5.3, the pinned version), and registering it twice
     /// would double every database span.
     /// </summary>
     private static readonly string[] ThirdPartySources =

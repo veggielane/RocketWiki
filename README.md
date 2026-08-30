@@ -225,7 +225,8 @@ the frontend's own tooling (codegen, lint).
 ### Running without Docker
 
 ```
-dotnet run --project src/RocketWiki.Api    # http://localhost:5079
+# launchSettings.json is gitignored, so ask for the port the dev proxy expects
+ASPNETCORE_URLS=http://localhost:5079 dotnet run --project src/RocketWiki.Api
 ```
 
 Health endpoints and `/graphql` respond, but data queries need a real database

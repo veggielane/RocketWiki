@@ -185,4 +185,4 @@ named.
 | `VITE_OTEL_EXPORTER_OTLP_HEADERS` | *(none)* | No collector auth headers (`key=value,key2=value2` form). **Never a real secret** — every `VITE_*` value is inlined into the public bundle; terminate collector auth server-side | `src/telemetry/config.ts` |
 | `VITE_OTEL_SERVICE_NAME` | `rocketwiki-web` | n/a (has a default). Worth overriding per instance so replica traces are distinguishable | `src/telemetry/config.ts` |
 | `VITE_APP_VERSION` | *(none)* | `service.version` omitted entirely | `src/telemetry/config.ts` |
-| `VITE_API_TARGET` (dev server only) | `http://localhost:5079` | Dev proxy targets the API's standalone launch profile; under Aspire read the dynamic port off the dashboard and set this | `vite.config.ts` |
+| `VITE_API_TARGET` (dev server only) | `http://localhost:5079` | Dev proxy target. `launchSettings.json` is gitignored, so a fresh clone gets no launch profile and `dotnet run` binds Kestrel's default instead — start the API with `ASPNETCORE_URLS=http://localhost:5079` to match. Under Aspire, read the dynamic port off the dashboard and set this | `vite.config.ts` |

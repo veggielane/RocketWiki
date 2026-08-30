@@ -41,7 +41,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 Image reference: prefix with global.imageRegistry when set (registry-mirror
 offline path), otherwise use the name verbatim (which is what a
 `k3s ctr images import`-preloaded image is found by).
-Usage: {{ include "rocketwiki.image" .Values.api.image }}
+Usage: {{ include "rocketwiki.image" (dict "global" .Values.global "image" .Values.api.image) }}
+The dict is required, not stylistic: this template reads .global and .image, so
+passing .Values.api.image directly (as this line used to show) renders a bare ":".
 */}}
 {{- define "rocketwiki.image" -}}
 {{- $registry := .global.imageRegistry | default "" -}}

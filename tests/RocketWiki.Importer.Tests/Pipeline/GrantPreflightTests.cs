@@ -119,4 +119,26 @@ public class GrantPreflightTests
         Assert.True(result.Success);
         Assert.Single(_pageService.CreatedPages);
     }
+    [Fact]
+    public async Task AnImportThatLandsNoPagesAtAll_IsNotReportedAsSuccess()
+    {
+        // "The space was created" is not "the import worked". This used to report
+        // Success unconditionally, printing "Import complete" over a run that imported
+        // nothing — with exit code 3 as the only hint, and 3 is the ordinary outcome for
+        // a real migration, so it hints at nothing.
+        _pageService.FailCreateWhen = _ => new ValidationError("nope");
+
+        var options = OptionsWith(Principal.Create("importer-sub", ["engineering"]),
+            SpaceRole.Editor, """{ "group": "engineering" }""");
+
+        var result = await CreateImporter().ImportAsync(Export(), options);
+
+        Assert.False(result.Success);
+        Assert.Contains("none of its 1 page(s) imported", result.BlockedReason, StringComparison.Ordinal);
+
+        // The space DID get created, and the message says so — the operator has to delete
+        // it before re-running, and that is the actionable part.
+        Assert.NotNull(result.SpaceId);
+        Assert.Single(_spaceService.InitialGrants);
+    }
 }
