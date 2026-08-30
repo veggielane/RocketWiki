@@ -358,6 +358,15 @@ public static class ApiTelemetry
     public const string AssistantDispositionNotConfigured = "not_configured";
     public const string AssistantDispositionUnreachable = "unreachable";
 
+    /// <summary>
+    /// The ask threw rather than returning a disposition — the caller disconnected
+    /// mid-generation, or retrieval faulted (a vector-dimension mismatch propagates
+    /// deliberately). Used only in the §7 audit row, never as a telemetry tag: the ask
+    /// never reached the point where it records one, and inventing a metric measurement
+    /// for a request that did not complete would be a different kind of dishonest.
+    /// </summary>
+    public const string AssistantDispositionAbandoned = "abandoned";
+
     public static void RecordAssistantAsk(string disposition, int retrievedPageCount, TimeSpan duration)
     {
         var tags = new KeyValuePair<string, object?>[]

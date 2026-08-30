@@ -4,6 +4,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Configurations;
 using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
@@ -48,13 +49,27 @@ public class LabelService : ILabelService
             return PageMutationResult<Label>.Failure(new ForbiddenError("editor role required"));
         }
 
-        var nameTaken = await _db.Labels.AnyAsync(l => l.SpaceId == space.Id && l.Name == request.Name, cancellationToken);
-        if (nameTaken)
+        // Checked here rather than left to the column, for the same tier-parity reason
+        // PageMarkingService checks its prefix length: SQLite does not enforce declared
+        // string lengths, so an over-long name stores silently in the test tier and comes
+        // back as a raw DbUpdateException in production. Confluence allows 255 against this
+        // column's 100, so a Confluence import is exactly where it is met — and down the
+        // importer's path an unhandled exception aborts the whole run rather than being
+        // reported as the label failure it is.
+        var name = (request.Name ?? string.Empty).Trim();
+        if (name.Length == 0 || name.Length > LabelConfiguration.MaxNameLength)
         {
-            return PageMutationResult<Label>.Failure(new ValidationError($"Label '{request.Name}' already exists in this space."));
+            return PageMutationResult<Label>.Failure(new ValidationError(
+                $"A label name must be 1-{LabelConfiguration.MaxNameLength} characters."));
         }
 
-        var label = new Label { SpaceId = space.Id, Name = request.Name };
+        var nameTaken = await _db.Labels.AnyAsync(l => l.SpaceId == space.Id && l.Name == name, cancellationToken);
+        if (nameTaken)
+        {
+            return PageMutationResult<Label>.Failure(new ValidationError($"Label '{name}' already exists in this space."));
+        }
+
+        var label = new Label { SpaceId = space.Id, Name = name };
         _db.Labels.Add(label);
 
         _db.AuditContext = auditContext;

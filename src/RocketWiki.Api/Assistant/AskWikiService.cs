@@ -74,6 +74,35 @@ public sealed record AskWikiOutcome(
     AggregateMarkingLabel? AggregateMarking);
 
 /// <summary>
+/// What an ask has done <i>so far</i>, filled in by the service as it goes so the resolver
+/// can audit an ask that never returns an <see cref="AskWikiOutcome"/> at all.
+///
+/// <para>It exists for one reason (design.md §7 + §9.4): the question and the retrieved
+/// page content leave this process at the model call, and that is the single path in the
+/// system where content crosses the §9.4 boundary. If the caller disconnects
+/// mid-generation — an ordinary browser navigation — <c>AskAsync</c> rethrows
+/// <see cref="OperationCanceledException"/>, which used to unwind straight past the audit
+/// write and leave <b>no record at all</b> of who asked what or which pages travelled. The
+/// same hole swallowed any other throw from retrieval, such as the deliberately-propagating
+/// vector-dimension mismatch.</para>
+///
+/// <para>Populated at exactly the moment each fact becomes true, so the row reflects what
+/// actually happened rather than what was intended: the page ids the instant the context
+/// is assembled (i.e. before the request body is sent), the marking the instant it is
+/// computed.</para>
+/// </summary>
+public sealed class AskWikiAttempt
+{
+    /// <summary>The pages whose content entered the model context — set before the model
+    /// call, so it is populated even if that call is what threw.</summary>
+    public IReadOnlyList<Guid> RetrievedPageIds { get; internal set; } = [];
+
+    /// <summary>§21.13's aggregate label over <see cref="RetrievedPageIds"/>, as it stood
+    /// when the content left. Null until the context exists.</summary>
+    public string? AggregateMarkingLabel { get; internal set; }
+}
+
+/// <summary>
 /// "Ask the wiki" (design.md §9, resolving §17's assistant bullet). The load-bearing
 /// rule — <b>answers only from pages the asker can view</b> — is enforced by
 /// construction, not by prompt: retrieval runs UNDER THE CALLER'S PRINCIPAL through
@@ -136,7 +165,8 @@ public sealed class AskWikiService(
 
     private static readonly Regex MarkerRegex = new(@"\[S(\d{1,4})\]", RegexOptions.Compiled);
 
-    public async Task<AskWikiOutcome> AskAsync(string question, Principal principal, CancellationToken cancellationToken)
+    public async Task<AskWikiOutcome> AskAsync(
+        string question, Principal principal, AskWikiAttempt attempt, CancellationToken cancellationToken)
     {
         // Constant span name, disposition tag only (§15): the question and every
         // retrieved title/content stay off telemetry entirely.
@@ -194,6 +224,12 @@ public sealed class AskWikiService(
 
         var retrievedPageIds = entries.Select(e => e.PageId).Distinct().ToArray();
 
+        // Recorded on the attempt BEFORE the request body is built, let alone sent:
+        // from here on the content has either travelled or is about to, and the §7 row
+        // has to be able to say which pages those were even if this method throws
+        // (a caller disconnecting mid-generation is the ordinary case).
+        attempt.RetrievedPageIds = retrievedPageIds;
+
         // Markings for display only (§21.13): the answer's aggregate and each citation's
         // badge. Keyed on retrievedPageIds — NOT on `pages` — because that is exactly the
         // set whose content reached the prompt: a page whose chunks did not fit the char
@@ -209,6 +245,7 @@ public sealed class AskWikiService(
         // listed. Retrieved, not merely cited — see the class doc.
         var aggregateMarking = AggregateMarkingLabel.Of(
             retrievedPageIds.Select(id => MarkingFor(markings, id)));
+        attempt.AggregateMarkingLabel = aggregateMarking?.Label;
 
         List<ChatMessage> messages =
         [

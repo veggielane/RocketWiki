@@ -4,6 +4,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Configurations;
 
 namespace RocketWiki.Data.Services;
 
@@ -44,6 +45,26 @@ public class SpaceService : ISpaceService
         // ValidationError into a 500.
         var key = SpaceKeys.Canonical(request.Key);
 
+        // Checked in the service, not left to the column, for the same tier-parity reason
+        // PageMarkingService checks its prefix length: SQLite does not enforce declared
+        // string lengths, so an over-long key stores silently in the test tier and comes
+        // back as a raw DbUpdateException out of SaveChanges in production. The Confluence
+        // importer meets this on ordinary data — personal-space keys are `~accountId` and
+        // routinely exceed 32 — and down that path the exception is unhandled, aborting a
+        // half-written import rather than refusing cleanly before anything is created.
+        if (key.Length == 0 || key.Length > SpaceConfiguration.MaxKeyLength)
+        {
+            return PageMutationResult<Space>.Failure(new ValidationError(
+                $"A space key must be 1-{SpaceConfiguration.MaxKeyLength} characters; '{key}' is {key.Length}."));
+        }
+
+        var name = (request.Name ?? string.Empty).Trim();
+        if (name.Length == 0 || name.Length > SpaceConfiguration.MaxNameLength)
+        {
+            return PageMutationResult<Space>.Failure(new ValidationError(
+                $"A space name must be 1-{SpaceConfiguration.MaxNameLength} characters."));
+        }
+
         var keyTaken = await _db.Spaces.AnyAsync(s => s.Key == key, cancellationToken);
         if (keyTaken)
         {
@@ -54,7 +75,7 @@ public class SpaceService : ISpaceService
         var space = new Space
         {
             Key = key,
-            Name = request.Name,
+            Name = name,
             Description = request.Description,
             OriginInstanceId = _localInstanceId, // native space - created here, not a replica
             IsExported = false,

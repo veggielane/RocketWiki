@@ -29,8 +29,11 @@ public sealed record SearchPageInfo(bool HasNextPage, string? EndCursor);
 
 public partial class Query
 {
-    /// <summary>One "load more" page in the SPA. Server-fixed: the shipped operation deliberately has no client-controlled page size.</summary>
-    private const int SearchPageSize = 20;
+    /// <summary>
+    /// One "load more" page when the caller does not ask for a size — the shipped SPA
+    /// operation's behaviour, unchanged, so adding <c>first</c> is backwards compatible.
+    /// </summary>
+    private const int DefaultSearchPageSize = 20;
 
     /// <summary>
     /// Cap on visible hits materialized per search (so totalCount saturates here).
@@ -49,6 +52,20 @@ public partial class Query
     /// alike (§6.7 "absent, never forbidden"; over-fetch before filtering per §9.3).
     /// Anonymous callers get an empty connection, same convention as every other
     /// read root. Audited as `search.query` (§7) - see RecordSearchAuditAsync.
+    ///
+    /// <para><paramref name="first"/> is the page size. It exists because the SPA cannot
+    /// otherwise put pagination in the URL: <c>after</c> alone restores a POSITION but not
+    /// how many rows preceded it, so a restored page could not be refetched. With both,
+    /// a URL carrying (after, first) is refetchable from cold.</para>
+    ///
+    /// <para>Omitted means <see cref="DefaultSearchPageSize"/>, so every already-shipped
+    /// operation keeps its current behaviour. Clamped to
+    /// [1, <see cref="MaxSearchResults"/>] rather than validated: the ceiling is not a
+    /// policy choice, it is the number of hits this resolver ever materializes, so a
+    /// larger <c>first</c> could not be honoured even in principle and refusing it would
+    /// only turn a harmless over-ask into an error. Zero or negative is a client bug that
+    /// would silently return nothing, so it clamps up to 1 rather than producing an empty
+    /// page that looks like "no results".</para>
     /// </summary>
     [AuditAction("search.query")]
     [UseAuditDispatch]
@@ -57,6 +74,7 @@ public partial class Query
         string? spaceKey,
         string[]? labels,
         string? after,
+        int? first,
         [Service] ISearchService searchService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
         [Service] IAuditSink auditSink,
@@ -68,6 +86,8 @@ public partial class Query
             return SearchConnection.Empty;
         }
 
+        var pageSize = Math.Clamp(first ?? DefaultSearchPageSize, 1, MaxSearchResults);
+
         var hits = await searchService.SearchAsync(
             new SearchRequest(query, spaceKey, labels), principal, MaxSearchResults, cancellationToken);
 
@@ -76,7 +96,7 @@ public partial class Query
         var start = DecodeAfter(after);
         var edges = hits
             .Skip(start)
-            .Take(SearchPageSize)
+            .Take(pageSize)
             .Select((hit, i) => new SearchEdge(EncodeCursor(start + i), hit))
             .ToList();
 

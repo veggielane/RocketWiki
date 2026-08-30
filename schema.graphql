@@ -56,8 +56,13 @@ type Query {
   classificationScheme: [ClassificationLevelInfo!]!
   groups: [String!]! @cost(weight: "10")
   attributeRegistry: [AttributeDefinition!]! @cost(weight: "10")
-  search(query: String!, spaceKey: String, labels: [String!], after: String): SearchConnection!
-    @cost(weight: "10")
+  search(
+    query: String!
+    spaceKey: String
+    labels: [String!]
+    after: String
+    first: Int
+  ): SearchConnection! @cost(weight: "10")
   spaces: [Space!]! @cost(weight: "10")
   space(key: String!): Space @cost(weight: "10")
   syncStatus: SyncStatusView! @cost(weight: "10")

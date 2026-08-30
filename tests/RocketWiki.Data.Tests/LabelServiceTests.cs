@@ -71,6 +71,35 @@ public class LabelServiceTests : SqliteTestBase
         Assert.Equal("how-to", result.Value.Name);
     }
 
+    /// <summary>
+    /// Confluence allows 255-character label names against this column's 100, so a
+    /// Confluence import is exactly where an over-long one arrives. SQLite does not
+    /// enforce declared string lengths, so without this check it stored silently in the
+    /// test tier and came back as a raw DbUpdateException in production — and down the
+    /// importer's path nothing catches that, so one long label aborted the whole run
+    /// instead of being reported as the label failure it is.
+    /// </summary>
+    [Fact]
+    public async Task CreateLabel_WithANameLongerThanTheColumn_IsAValidationError_NotADbFailure()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(EditorGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new LabelService(context, LocalInstanceId);
+        var result = await service.CreateLabelAsync(
+            new CreateLabelRequest(space.Id, new string('x', 255)), EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ValidationError>(result.Error);
+        Assert.Empty(context.Labels.ToList());
+    }
+
     [Fact]
     public async Task CreateLabel_ByViewerOnly_ReturnsForbidden()
     {

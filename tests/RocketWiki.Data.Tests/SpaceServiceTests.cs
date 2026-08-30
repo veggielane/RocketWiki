@@ -458,6 +458,53 @@ public class SpaceServiceTests : SqliteTestBase
         Assert.Equal(page.Id, result.Value.HomepageId);
     }
 
+    /// <summary>
+    /// A key longer than the column must be refused cleanly, not left to blow up in
+    /// SaveChanges. SQLite does not enforce declared string lengths, so an unchecked one
+    /// stores silently in the test tier and comes back as a raw DbUpdateException in
+    /// production — the tier-parity trap PageMarkingService already guards its prefix
+    /// against.
+    ///
+    /// <para>It is met on ordinary data, not adversarial input: Confluence personal-space
+    /// keys are <c>~accountId</c> and routinely exceed 32, and the importer passes the
+    /// export's key straight through. Down that path nothing catches the exception, so a
+    /// half-written import aborts with no report instead of refusing before anything is
+    /// created.</para>
+    /// </summary>
+    [Fact]
+    public async Task Create_WithAKeyLongerThanTheColumn_IsAValidationError_NotADbFailure()
+    {
+        var actor = TestData.NewUser();
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.SaveChanges();
+
+        var tooLong = "~" + new string('a', 64); // a Confluence personal-space key
+        var result = await new SpaceService(context, LocalInstanceId).CreateAsync(
+            new CreateSpaceRequest(tooLong, "Personal", null), DefaultInitialGrant(),
+            isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ValidationError>(result.Error);
+        Assert.Empty(context.Spaces.IgnoreQueryFilters().ToList());
+    }
+
+    [Fact]
+    public async Task Create_WithANameLongerThanTheColumn_IsAValidationError()
+    {
+        var actor = TestData.NewUser();
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.SaveChanges();
+
+        var result = await new SpaceService(context, LocalInstanceId).CreateAsync(
+            new CreateSpaceRequest("ENG", new string('n', 500), null), DefaultInitialGrant(),
+            isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ValidationError>(result.Error);
+    }
+
     // --- Export flag (design.md §12) --------------------------------------------------
 
     /// <summary>

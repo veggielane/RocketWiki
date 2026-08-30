@@ -66,8 +66,36 @@ public partial class Query
                 .Build());
         }
 
-        var outcome = await askWikiService.AskAsync(question, principal, cancellationToken);
+        // The audit row is written in a `finally`, not on the success path. AskAsync
+        // deliberately rethrows OperationCanceledException when the caller's token trips,
+        // and that used to unwind straight past the write below — so a browser navigating
+        // away mid-generation meant the question and the retrieved page content had
+        // already left the process with ZERO record of who asked what or which pages
+        // travelled, on the one path where content crosses the §9.4 boundary. Any other
+        // throw from retrieval (the deliberately-propagating vector-dimension mismatch)
+        // had the same hole.
+        //
+        // `attempt` is what makes the row honest rather than merely present: the service
+        // fills it in as each fact becomes true, so an abandoned ask still names the pages
+        // whose content went to the endpoint.
+        var attempt = new AskWikiAttempt();
+        AskWikiOutcome? outcome = null;
+        try
+        {
+            outcome = await askWikiService.AskAsync(question, principal, attempt, cancellationToken);
+        }
+        finally
+        {
+            await RecordAskAsync(auditSink, question, outcome, attempt);
+        }
 
+        return new AskWikiPayload(
+            outcome.Answer, outcome.Citations, outcome.Unavailable, outcome.AggregateMarking);
+    }
+
+    private static Task RecordAskAsync(
+        IAuditSink auditSink, string question, AskWikiOutcome? outcome, AskWikiAttempt attempt)
+    {
         // §7, the search.query precedent verbatim: the question text belongs in the
         // audit row's Details — the grant-protected, append-only record of
         // who-asked-what — and never in telemetry (§15). retrievedPageIds is exactly
@@ -79,16 +107,23 @@ public partial class Query
         // race-only mid-retrieval path). Explicit rather than left to
         // AuditFieldMiddleware, which cannot know the question belongs in Details;
         // the middleware's own row dedupes against this one inside DbAuditSink.
-        await auditSink.RecordAsync(
+        // CancellationToken.None, deliberately: the caller's token is very often the
+        // reason there is anything unusual to record, so honouring it here would drop
+        // exactly the rows that matter most. §7 already requires a failed audit insert to
+        // fail the request; it must not be able to skip one instead.
+        return auditSink.RecordAsync(
             new AuditRecord(
                 "assistant.ask",
                 AuditOutcome.Success,
                 DetailsJson: JsonSerializer.Serialize(new
                 {
                     question,
-                    disposition = outcome.Disposition,
-                    retrievedPageIds = outcome.RetrievedPageIds,
-                    citedPageIds = outcome.CitedPageIds,
+                    // An ask that threw has no disposition of its own — it never reached
+                    // the point that records one — so it is named for what it is rather
+                    // than borrowed from a completed outcome.
+                    disposition = outcome?.Disposition ?? ApiTelemetry.AssistantDispositionAbandoned,
+                    retrievedPageIds = outcome?.RetrievedPageIds ?? attempt.RetrievedPageIds,
+                    citedPageIds = outcome?.CitedPageIds ?? [],
                     // §21.13/§21.7: what the answer was marked as when it left. Not
                     // recoverable from retrievedPageIds later — markings are a single
                     // mutable row, so re-deriving it after a re-marking would report

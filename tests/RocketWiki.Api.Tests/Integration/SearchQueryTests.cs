@@ -228,6 +228,88 @@ public sealed class SearchQueryTests(RocketWikiApiFactory factory) : IClassFixtu
         Assert.Equal(25, firstIds.Union(secondIds).Count()); // no gaps: every seeded page shows exactly once
     }
 
+    /// <summary>
+    /// <c>first</c> exists so the SPA can put pagination in the URL. <c>after</c> alone
+    /// restores a POSITION but not how many rows preceded it, so a restored page could not
+    /// be refetched from cold; with both, a URL carrying (after, first) is self-sufficient.
+    ///
+    /// <para>Asserted as the round trip that actually matters — page 2 fetched with an
+    /// explicit size lands on the same rows as walking there — because a size that is
+    /// honoured for the slice but not for the cursor arithmetic would look right on page 1
+    /// and silently skip or repeat rows on page 2.</para>
+    /// </summary>
+    [Fact]
+    public async Task Search_WithAnExplicitFirst_PagesByThatSize_AndTheCursorsStayConsistent()
+    {
+        var (space, _) = await SeedSpaceAsync();
+        var baseTime = DateTime.UtcNow;
+        for (var i = 0; i < 12; i++)
+        {
+            await SeedPageAsync(space, $"sized-{i}", $"Sized page {i}",
+                $"turbopump-seal notes {i}", baseTime.AddMinutes(-i));
+        }
+
+        var client = CreateUserClient();
+
+        using var page1 = await client.PostGraphQLAsync("""
+            query { search(query: "turbopump-seal", first: 5) { totalCount pageInfo { hasNextPage endCursor } edges { node { page { id } } } } }
+            """);
+        var first = page1.RootElement.GetProperty("data").GetProperty("search");
+        Assert.Equal(12, first.GetProperty("totalCount").GetInt32());
+        Assert.Equal(5, first.GetProperty("edges").GetArrayLength());
+        Assert.True(first.GetProperty("pageInfo").GetProperty("hasNextPage").GetBoolean());
+
+        var cursor = first.GetProperty("pageInfo").GetProperty("endCursor").GetString();
+        using var page2 = await client.PostGraphQLAsync($$"""
+            query { search(query: "turbopump-seal", after: "{{cursor}}", first: 5) { pageInfo { hasNextPage } edges { node { page { id } } } } }
+            """);
+        var second = page2.RootElement.GetProperty("data").GetProperty("search");
+        Assert.Equal(5, second.GetProperty("edges").GetArrayLength());
+        Assert.True(second.GetProperty("pageInfo").GetProperty("hasNextPage").GetBoolean());
+
+        static IEnumerable<string> PageIds(JsonElement search) =>
+            search.GetProperty("edges").EnumerateArray()
+                .Select(e => e.GetProperty("node").GetProperty("page").GetProperty("id").GetString()!);
+
+        Assert.Empty(PageIds(first).Intersect(PageIds(second)));
+        Assert.Equal(10, PageIds(first).Union(PageIds(second)).Count());
+    }
+
+    /// <summary>
+    /// Omitting <c>first</c> keeps the shipped default, and out-of-range values clamp
+    /// rather than erroring — the ceiling is the number of hits the resolver materializes
+    /// at all, so a larger ask could not be honoured even in principle, and 0 would return
+    /// an empty page indistinguishable from "no results".
+    /// </summary>
+    [Theory]
+    [InlineData(null, 20)]   // shipped default, unchanged
+    [InlineData(0, 1)]       // clamps up rather than answering an empty page
+    [InlineData(-5, 1)]
+    [InlineData(500, 22)]    // clamps to the materialization ceiling; only 22 hits exist
+    public async Task Search_FirstIsClampedRatherThanRefused(int? first, int expectedEdges)
+    {
+        // The factory is a class fixture, so every theory row shares one database — a
+        // shared term would accumulate the previous rows' pages and the counts would
+        // drift upward row by row.
+        var term = $"zzclamp{Guid.NewGuid():N}"[..16];
+        var (space, _) = await SeedSpaceAsync();
+        var baseTime = DateTime.UtcNow;
+        for (var i = 0; i < 22; i++)
+        {
+            await SeedPageAsync(space, $"clamped-{term}-{i}", $"Clamped page {i}",
+                $"{term} notes {i}", baseTime.AddMinutes(-i));
+        }
+
+        var argument = first is null ? string.Empty : $", first: {first}";
+        using var result = await CreateUserClient().PostGraphQLAsync($$"""
+            query { search(query: "{{term}}"{{argument}}) { totalCount edges { node { page { id } } } } }
+            """);
+
+        var search = result.RootElement.GetProperty("data").GetProperty("search");
+        Assert.Equal(22, search.GetProperty("totalCount").GetInt32());
+        Assert.Equal(expectedEdges, search.GetProperty("edges").GetArrayLength());
+    }
+
     [Fact]
     public async Task Search_WritesExactlyOneAuditRow_WithTheQueryTextInDetails()
     {
