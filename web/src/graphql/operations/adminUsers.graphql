@@ -1,0 +1,32 @@
+# The account roster for the site-admin users screen (instance-admin only,
+# and reading it is itself audited as `admin.users.view`).
+#
+# **Identity and activity, and nothing else.** There is no clearance,
+# nationality or group field to select: those are ephemeral token claims,
+# never stored per user, so the roster cannot become a second, stale copy of
+# who is allowed what. A screen that listed them would be answering a question
+# the wiki is deliberately not the authority on.
+#
+# `first` only — no cursor. How much of the roster is on screen is a number in
+# the URL, and one `first: N` request rebuilds that view from cold, exactly as
+# the search screen does; a cursor names a boundary rather than a run and
+# cannot be replayed from a shared link. `totalCount` is EXACT here, unlike
+# search's saturating count: nothing in this list is permission-filtered per
+# row, so counting it reveals nothing a row would not.
+query AdminUsers($first: Int) {
+  users(first: $first) {
+    totalCount
+    pageInfo {
+      hasNextPage
+    }
+    nodes {
+      id
+      displayName
+      email
+      isExternal
+      hasAvatar
+      createdAtUtc
+      lastSeenAtUtc
+    }
+  }
+}

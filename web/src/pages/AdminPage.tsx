@@ -27,6 +27,11 @@ const LIVE_SECTIONS = [
     to: '/admin/sync',
   },
   {
+    title: 'Users',
+    description: 'Every account this instance has seen — names, email and activity. No permissions data.',
+    to: '/admin/users',
+  },
+  {
     title: 'Groups',
     description:
       'The group names this instance has seen in a sign-in token — the vocabulary access rules can name.',

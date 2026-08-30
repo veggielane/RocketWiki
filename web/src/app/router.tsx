@@ -289,6 +289,15 @@ export const router = createBrowserRouter([
           },
           // Group names the instance has observed at sign-in — vocabulary for
           // access rules, never a membership directory.
+          // The account roster — instance-admin only, and the server audits the
+          // read. Identity and activity only; there is no permissions data here.
+          {
+            path: 'users',
+            lazy: async () => {
+              const { AdminUsersPage } = await import('../pages/AdminUsersPage')
+              return { Component: AdminUsersPage }
+            },
+          },
           {
             path: 'groups',
             lazy: async () => {

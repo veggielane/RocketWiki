@@ -165,6 +165,12 @@ export type LoadFailureReason =
    * registries, it has nothing to conceal and can say what failed.
    */
   | 'GROUP_LIST'
+  /**
+   * The account roster (instance admins only). Identity and activity, with no
+   * per-row permission filter — so, like the audit log, it can name what
+   * failed rather than staying blurry.
+   */
+  | 'USER_ROSTER'
   | 'SYNC_STATUS'
   /**
    * The usage report (design.md §7). Distinct from the null the server returns
@@ -212,6 +218,8 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       return { summary: "Couldn't load notifications.", pointsToSettings: false }
     case 'GROUP_LIST':
       return { summary: "Couldn't load the group list.", pointsToSettings: false }
+    case 'USER_ROSTER':
+      return { summary: "Couldn't load the user list. It is available to instance admins.", pointsToSettings: false }
     case 'SYNC_STATUS':
       return { summary: "Couldn't load sync status.", pointsToSettings: false }
     case 'ANALYTICS':

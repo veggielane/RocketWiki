@@ -48,6 +48,7 @@ export const ADMIN_PAGES: Record<string, string> = {
   audit: 'Audit log',
   sync: 'Sync status',
   groups: 'Groups',
+  users: 'Users',
   emojis: 'Emoji',
   'property-keys': 'Property keys',
 }
