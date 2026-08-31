@@ -43,6 +43,13 @@ public sealed class HomeFeedQueryTests(RocketWikiApiFactory factory) : IClassFix
         """;
 
     /// <summary>
+    /// The body of the SPA's <c>PageMarking</c> fragment (web/src/graphql/operations/
+    /// markings.graphql), spelled out because the paging test below must exercise the
+    /// selection the frontend actually sends, not a lighter stand-in.
+    /// </summary>
+    private const string MarkingFragment = "level levelName eyesOnly prefix label";
+
+    /// <summary>
     /// Seeds a space plus one page, optionally restricted to a nationality the caller
     /// will not hold. The revision is authored by <paramref name="authorId"/> so the
     /// page can be made to look like the caller's own work.
@@ -415,15 +422,29 @@ public sealed class HomeFeedQueryTests(RocketWikiApiFactory factory) : IClassFix
     /// <c>EnsureSuccessStatusCode</c>, reports a transport failure rather than the defect.
     /// Hence the raw status assertion here.
     ///
-    /// <para>The selections below are the richest each feed is expected to serve — page,
-    /// marking, and author — because cost is <c>first × row selection</c>, so a page size
-    /// is only safe with respect to a particular selection. Trimming these to make the test
-    /// pass would be defeating it.</para>
+    /// <para><b>The selections below are the exact ones the homepage sends</b>, agreed with
+    /// the frontend rather than invented here — cost is <c>first × row selection</c>, so a
+    /// page size is only ever safe with respect to a particular selection, and a lighter
+    /// stand-in would prove nothing about what users actually run. Trimming these to make
+    /// the test pass defeats it.</para>
+    ///
+    /// <para>The budget is tight on purpose (task #38 covers making it deliberate). Only
+    /// <c>page</c>, <c>spaceKey</c>, <c>marking</c> and <c>author</c> are weighted — 10
+    /// each; <c>id</c>, <c>title</c>, <c>slug</c>, <c>updatedAtUtc</c> and <c>icon</c> (an
+    /// enum) are free. That is 40 per activity row and 30 per row elsewhere, so 20 rows
+    /// costs 800/600 against a 1000 budget. <b>One more weighted field on a feed row breaks
+    /// it</b> — measured, not assumed: adding <c>page { labels }</c> (weight 10) to the
+    /// activity row takes it to 1041 and this test fails, which is the point. It fails here
+    /// rather than 400ing somebody's homepage.</para>
     /// </summary>
     [Theory]
-    [InlineData("activityFeed", "totalCount", "revisionNumber isCreate occurredAtUtc author { displayName } page { id title spaceKey marking { label } }")]
-    [InlineData("myStaleContent", "totalCount", "page { id title spaceKey updatedAtUtc marking { label } }")]
-    [InlineData("myRecentlyViewed", "", "lastViewedAtUtc page { id title spaceKey marking { label } }")]
+    [InlineData("activityFeed", "totalCount",
+        "revisionNumber isCreate occurredAtUtc author { id displayName hasAvatar } "
+        + "page { id title spaceKey slug icon marking { " + MarkingFragment + " } }")]
+    [InlineData("myStaleContent", "totalCount",
+        "page { id title spaceKey slug icon updatedAtUtc marking { " + MarkingFragment + " } }")]
+    [InlineData("myRecentlyViewed", "",
+        "lastViewedAtUtc page { id title spaceKey slug icon marking { " + MarkingFragment + " } }")]
     public async Task EveryFeed_AcceptsItsOwnAdvertisedPageSize(
         string field, string connectionSelection, string rowSelection)
     {
