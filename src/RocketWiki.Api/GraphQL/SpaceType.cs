@@ -57,6 +57,13 @@ public sealed class SpaceType : ObjectType<Space>
             .Type<PageType>()
             .ResolveWith<SpaceFieldResolvers>(r => r.GetHomepageAsync(default!, default!, default!, default!, default));
 
+        // §6.6: can the caller administer this space's access — the field an
+        // owner-reassign control gates on. Same gate as SetSpaceOwner, via
+        // RuleManagementGate, so the control shown and the mutation allowed agree.
+        descriptor.Field("canManageAccess")
+            .Type<NonNullType<BooleanType>>()
+            .ResolveWith<SpaceFieldResolvers>(r => r.GetCanManageAccessAsync(default!, default!, default!, default));
+
         // The designated owner, resolved to a display-safe UserRef through the batched
         // loader so a space list costs one Users query rather than one per row.
         //

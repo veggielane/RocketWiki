@@ -127,6 +127,175 @@ public sealed class SpaceOwnerTests(RocketWikiApiFactory factory) : IClassFixtur
     }
 
     /// <summary>
+    /// §6.6: <c>canManageAccess</c> is what an owner-reassign control gates on, so it
+    /// must agree with <c>setSpaceOwner</c>'s own gate — instance admin OR this space's
+    /// space-admin, via the shared <c>RuleManagementGate</c>.
+    ///
+    /// <para>The space-admin case is the one that matters. Collapsing this to
+    /// instance-admin-only would still pass a naive "a viewer sees false" test while
+    /// hiding the control from every legitimate space admin — a field that is wrong in the
+    /// restrictive direction fails silently, because nobody reports a button they never
+    /// knew existed.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(SpaceRole.SpaceAdmin, true)]
+    [InlineData(SpaceRole.Editor, false)]
+    [InlineData(SpaceRole.Viewer, false)]
+    public async Task CanManageAccess_IsTrueOnlyForSpaceAdmins(SpaceRole role, bool expected)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var seeder = new User
+        {
+            Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder",
+            CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow,
+        };
+        db.Users.Add(seeder);
+        await db.SaveChangesAsync();
+
+        var space = new Space
+        {
+            Key = $"MA{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
+            Name = "Manage Access Space",
+            OriginInstanceId = "standalone",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = seeder.Id,
+            OwnerUserId = seeder.Id,
+        };
+        db.Spaces.Add(space);
+        db.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = role,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
+            CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id,
+            UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
+        });
+        await db.SaveChangesAsync();
+
+        var client = factory.CreateClient();
+        client.SetTestUser(sub: $"member-{Guid.NewGuid()}");
+
+        using var result = await client.PostGraphQLAsync(
+            $$"""{ space(key: "{{space.Key}}") { canManageAccess } }""");
+
+        Assert.Equal(
+            expected,
+            result.RootElement.GetProperty("data").GetProperty("space")
+                .GetProperty("canManageAccess").GetBoolean());
+    }
+
+    /// <summary>
+    /// The field is rendered per row in a space list, which is the N+1 shape — so it
+    /// resolves through <c>SpaceRoleBySpaceIdDataLoader</c> rather than querying per
+    /// space. This exercises it across the <c>spaces</c> list, where a per-space resolver
+    /// would still be correct but would scale with the caller's space count, and where a
+    /// batched loader that mixed up its keys would return the wrong row's answer.
+    /// </summary>
+    [Fact]
+    public async Task CanManageAccess_IsAnsweredPerSpace_AcrossAList()
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var seeder = new User
+        {
+            Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder",
+            CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow,
+        };
+        db.Users.Add(seeder);
+        await db.SaveChangesAsync();
+
+        // Two spaces the same caller sees at once, with DIFFERENT roles — so a loader
+        // that returned one answer for the whole batch, or keyed them wrongly, is caught.
+        var adminSpace = NewSpace(seeder.Id, "AD");
+        var viewerSpace = NewSpace(seeder.Id, "VW");
+        db.Spaces.AddRange(adminSpace, viewerSpace);
+        db.AccessRules.AddRange(
+            Grant(adminSpace.Id, SpaceRole.SpaceAdmin, seeder.Id),
+            Grant(viewerSpace.Id, SpaceRole.Viewer, seeder.Id));
+        await db.SaveChangesAsync();
+
+        var client = factory.CreateClient();
+        client.SetTestUser(sub: $"member-{Guid.NewGuid()}");
+
+        using var result = await client.PostGraphQLAsync("{ spaces { key canManageAccess } }");
+
+        var byKey = result.RootElement.GetProperty("data").GetProperty("spaces")
+            .EnumerateArray()
+            .ToDictionary(
+                s => s.GetProperty("key").GetString()!,
+                s => s.GetProperty("canManageAccess").GetBoolean());
+
+        Assert.True(byKey[adminSpace.Key]);
+        Assert.False(byKey[viewerSpace.Key]);
+    }
+
+    private static Space NewSpace(Guid seederId, string prefix) => new()
+    {
+        Key = $"{prefix}{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
+        Name = "List Space",
+        OriginInstanceId = "standalone",
+        CreatedAtUtc = DateTime.UtcNow,
+        CreatedByUserId = seederId,
+        OwnerUserId = seederId,
+    };
+
+    private static AccessRule Grant(Guid spaceId, SpaceRole role, Guid seederId) => new()
+    {
+        Kind = AccessRuleKind.SpaceGrant, SpaceId = spaceId, Role = role,
+        ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
+        CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seederId,
+        UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seederId,
+    };
+
+    /// <summary>
+    /// Ownership grants nothing here either. If this said true for an owner, the client
+    /// would render a reassign control that <c>setSpaceOwner</c> then refuses — the read
+    /// gate and the write gate must give the same answer.
+    /// </summary>
+    [Fact]
+    public async Task CanManageAccess_IsFalseForTheOwnerWithoutASpaceAdminGrant()
+    {
+        var sub = $"owner-{Guid.NewGuid()}";
+        var client = factory.CreateClient();
+        client.SetTestUser(sub: sub);
+        using (await client.PostGraphQLAsync("{ me { id } }")) { }
+        var ownerUserId = await LocalUserIdOf(sub);
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var space = new Space
+        {
+            Key = $"OO{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
+            Name = "Owned But Not Administered",
+            OriginInstanceId = "standalone",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = ownerUserId,
+            OwnerUserId = ownerUserId,
+        };
+        db.Spaces.Add(space);
+
+        // Viewer, so the space resolves at all — but not space-admin.
+        db.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Viewer,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
+            CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = ownerUserId,
+            UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = ownerUserId,
+        });
+        await db.SaveChangesAsync();
+
+        using var result = await client.PostGraphQLAsync(
+            $$"""{ space(key: "{{space.Key}}") { canManageAccess } }""");
+
+        Assert.False(
+            result.RootElement.GetProperty("data").GetProperty("space")
+                .GetProperty("canManageAccess").GetBoolean());
+    }
+
+    /// <summary>
     /// A replica materialised by sync carries <c>OwnerUserId = Guid.Empty</c> — users do
     /// not cross the boundary (§12), so there is no local user to inherit. The schema must
     /// say so honestly rather than inventing a name, which is why <c>Space.owner</c> is

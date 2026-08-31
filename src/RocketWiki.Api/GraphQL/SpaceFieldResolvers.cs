@@ -38,6 +38,41 @@ public sealed class SpaceFieldResolvers
         await userLoader.LoadAsync(space.OwnerUserId, cancellationToken);
 
     /// <summary>
+    /// design.md §6.6's "permissions shape the UI": can the caller administer this
+    /// space's access — instance admin OR this space's own space-admin — so the client
+    /// can render or omit management controls (the owner-reassign control above all)
+    /// instead of offering one that fails.
+    ///
+    /// <para>Routed through <see cref="RuleManagementGate"/>, the single definition
+    /// <c>Page.canManageAccess</c> and <c>IAccessRuleService</c>'s mutations already
+    /// share, so this read gate cannot drift from the write gate it advertises. The
+    /// admin arm comes from the token's realm roles via
+    /// <see cref="IInstanceRoleAccessor"/>, never from inside the rule engine (§6.5:
+    /// no admin flag in the calculator).</para>
+    ///
+    /// <para><b>No owner bypass.</b> Being the space's owner grants nothing here, for
+    /// the same reason it grants nothing anywhere: ownership is accountability, and
+    /// access is the grants. If this field said true for an owner, the UI would show a
+    /// reassign control that <c>SetOwnerAsync</c> then refuses — the read gate and the
+    /// write gate must give the same answer, which is the whole point of sharing one
+    /// definition.</para>
+    ///
+    /// <para>Batched (<see cref="SpaceRoleBySpaceIdDataLoader"/>) because this is
+    /// rendered per row in a space list. No audit: a viewer-relative "what can I do
+    /// here" about a space the caller has already resolved discloses no new subject,
+    /// matching the stance stated for Page's three boolean fields (§7).</para>
+    /// </summary>
+    public async Task<bool> GetCanManageAccessAsync(
+        [Parent] Space space,
+        [Service] IInstanceRoleAccessor instanceRoleAccessor,
+        SpaceRoleBySpaceIdDataLoader roleLoader,
+        CancellationToken cancellationToken)
+    {
+        var role = await roleLoader.LoadAsync(space.Id, cancellationToken);
+        return RuleManagementGate.CanManageRules(role, instanceRoleAccessor.IsInstanceAdmin);
+    }
+
+    /// <summary>
     /// design.md §12: replica-ness is "origin instance != this instance", computed
     /// against the configured <see cref="InstanceIdentity"/> — the same comparison the
     /// rule engine's read-only invariant uses, now readable by the client so the
