@@ -19,7 +19,9 @@ export function NotFoundPage() {
         404
       </Typography>
       <Typography color="text.secondary">This page doesn't exist, or you don't have access to it.</Typography>
-      <Button component={RouterLink} to="/" variant="outlined">
+      {/* Straight to the space list, not through the home route: the label
+          promises spaces, and `/` is on its way to being something else. */}
+      <Button component={RouterLink} to="/spaces" variant="outlined">
         Back to spaces
       </Button>
     </Stack>

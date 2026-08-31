@@ -6,7 +6,7 @@ export interface Crumb {
   to?: string
 }
 
-const SPACES: Crumb = { label: 'Spaces', to: '/' }
+const SPACES: Crumb = { label: 'Spaces', to: '/spaces' }
 const ADMIN: Crumb = { label: 'Admin', to: '/admin' }
 
 /**

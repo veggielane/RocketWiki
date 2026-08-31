@@ -69,6 +69,8 @@ describe('every other screen gets a room of its own', () => {
     expect(presenceRoomFor('/admin')).toBe('site:/admin')
     expect(presenceRoomFor('/admin/users')).toBe('site:/admin/users')
     expect(presenceRoomFor('/-/docs')).toBe('site:/-/docs')
+    // The space list is a screen in its own right now, not the home route.
+    expect(presenceRoomFor('/spaces')).toBe('site:/spaces')
   })
 
   it('keeps two admin screens apart', () => {

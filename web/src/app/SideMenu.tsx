@@ -135,7 +135,7 @@ export function SideMenu({
 
       <Box sx={{ overflow: 'auto', flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
         <List component="nav" aria-label="Spaces">
-          <ListItemButton component={RouterLink} to="/" selected={location.pathname === '/'}>
+          <ListItemButton component={RouterLink} to="/spaces" selected={location.pathname === '/spaces'}>
             <ListItemIcon>
               <SpaceDashboardOutlinedIcon />
             </ListItemIcon>
