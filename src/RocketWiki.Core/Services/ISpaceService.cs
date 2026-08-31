@@ -43,6 +43,32 @@ public interface ISpaceService
         SetSpaceHomepageRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reassigns the space's designated owner — <b>accountability metadata, never access</b>
+    /// (design.md §6.5). Nothing in the rule engine reads <c>OwnerUserId</c>; an owner who
+    /// should also administer the space gets a space-admin grant, separately and explicitly.
+    ///
+    /// <para><b>Gated on canManageAccess</b> (instance admin OR this space's space admin,
+    /// §6.5.2) rather than on being the current owner. Ownership is not a right its holder
+    /// controls — that would make it self-perpetuating and let a departing owner lock the
+    /// space's accountability to themselves. It is an administrative designation, so the
+    /// people who administer the space assign it.</para>
+    ///
+    /// <para><b>No <c>ReadOnlyReplicaError</c> arm</b>, matching Rename/Archive/Restore and
+    /// SetHomepage rather than SetExported. §12's table puts space lifecycle and identity in
+    /// the "stays local" column, and ownership is squarely that. It also has to be settable
+    /// on a replica to be settable at all: the importer materialises replica spaces with
+    /// <c>CreatedByUserId = Guid.Empty</c>, users never cross the boundary (each side runs
+    /// its own Keycloak), so a replica that refused this would be permanently ownerless —
+    /// on the side where accountability for imported content matters most.</para>
+    ///
+    /// <para>The new owner must be a real, non-deleted local user; anything else is a
+    /// <c>ValidationError</c>. Assigning ownership to nobody is precisely the state this
+    /// feature exists to eliminate.</para>
+    /// </summary>
+    Task<PageMutationResult<Space>> SetOwnerAsync(
+        SetSpaceOwnerRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// design.md §12's low-side switch: flags this space for one-way export, which is
     /// what makes the outbox writer start journaling its mutations and what
     /// <c>RocketWiki.Sync export --baseline</c> requires before it will produce a

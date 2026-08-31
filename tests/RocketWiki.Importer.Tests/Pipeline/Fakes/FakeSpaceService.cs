@@ -44,6 +44,9 @@ public sealed class FakeSpaceService : ISpaceService
     public Task<PageMutationResult<Space>> SetHomepageAsync(SetSpaceHomepageRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("ConfluenceSpaceImporter is not expected to call SetHomepageAsync.");
 
+    public Task<PageMutationResult<Space>> SetOwnerAsync(SetSpaceOwnerRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("ConfluenceSpaceImporter is not expected to call SetOwnerAsync.");
+
     public Task<PageMutationResult<Space>> ArchiveAsync(ArchiveSpaceRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("ConfluenceSpaceImporter is not expected to call ArchiveAsync.");
 

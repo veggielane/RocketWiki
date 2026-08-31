@@ -57,6 +57,19 @@ public sealed class SpaceType : ObjectType<Space>
             .Type<PageType>()
             .ResolveWith<SpaceFieldResolvers>(r => r.GetHomepageAsync(default!, default!, default!, default!, default));
 
+        // The designated owner, resolved to a display-safe UserRef through the batched
+        // loader so a space list costs one Users query rather than one per row.
+        //
+        // NULLABLE, matching Page.deletedBy rather than the non-null author fields: those
+        // are non-null because an FK guarantees the row exists, and Space.OwnerUserId has
+        // no FK (see Space.OwnerUserId for why the sync importer makes that impossible).
+        // A replica materialised before this field existed carries Guid.Empty, so a
+        // non-null `owner` would throw for every replica and take the space listing with
+        // it. The raw `ownerUserId` stays exposed by inference alongside `createdByUserId`.
+        descriptor.Field("owner")
+            .Type<ObjectType<UserRef>>()
+            .ResolveWith<SpaceFieldResolvers>(r => r.GetOwnerAsync(default!, default!, default));
+
         descriptor.Field("grants")
             .Type<NonNullType<ListType<NonNullType<AccessRuleType>>>>()
             .ResolveWith<SpaceFieldResolvers>(r => r.GetGrantsAsync(default!, default!, default!, default!, default));

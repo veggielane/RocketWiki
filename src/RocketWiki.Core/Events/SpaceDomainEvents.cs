@@ -37,6 +37,24 @@ public sealed record SpaceHomepageSetEvent(
 public sealed record SpaceExportChangedEvent(
     Guid SpaceId, string Key, Guid? ActorUserId, bool Exported) : IDomainEvent;
 
+/// <summary>
+/// The space's designated owner changed — accountability metadata (design.md §6.5), never
+/// access. Both ids travel for the same reason <see cref="SpaceHomepageSetEvent"/> carries
+/// both: owner is a single mutable column, so the audit row is the only record of who was
+/// responsible before the reassignment.
+///
+/// <para>User <b>ids</b> only, never display names: a name is mirrored, mutable, and
+/// re-derivable from the id, and §7's record should pin the identity rather than a label
+/// that may since have changed.</para>
+///
+/// <para>Like every other space event this is deliberately NOT a sync event
+/// (SyncOutboxWriter.Classify has no arm for it): §12's table puts space lifecycle and
+/// identity in the "stays local" column, and a user id is doubly meaningless across the
+/// boundary since each side runs its own Keycloak.</para>
+/// </summary>
+public sealed record SpaceOwnerChangedEvent(
+    Guid SpaceId, string Key, Guid? ActorUserId, Guid OldOwnerUserId, Guid NewOwnerUserId) : IDomainEvent;
+
 /// <summary>Soft delete - Space uses the same IsDeleted/DeletedAtUtc/DeletedByUserId pattern as Page (data-model.md).</summary>
 public sealed record SpaceArchivedEvent(Guid SpaceId, string Key, Guid? ActorUserId) : IDomainEvent;
 

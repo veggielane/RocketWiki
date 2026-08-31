@@ -20,6 +20,24 @@ namespace RocketWiki.Api.GraphQL;
 public sealed class SpaceFieldResolvers
 {
     /// <summary>
+    /// The space's designated owner as a display-safe <see cref="UserRef"/>, batched
+    /// through <see cref="UserRefByIdDataLoader"/> (design.md §8's DataLoader rule).
+    ///
+    /// <para><b>Null when the id resolves to nobody</b>, rather than throwing the way the
+    /// FK-backed author fields do — see <c>SpaceType</c>'s <c>owner</c> field. The honest
+    /// case is a replica materialised by the sync importer, which has no local user to
+    /// point at because users do not cross the boundary (§12).</para>
+    ///
+    /// <para>§6.1 boundary, same as every other UserRef field: this READS the local user
+    /// mirror for display and feeds no authorization decision. Ownership grants nothing —
+    /// no rule engine path consumes it — so surfacing it alongside the space is
+    /// attribution, not a permission signal.</para>
+    /// </summary>
+    public async Task<UserRef?> GetOwnerAsync(
+        [Parent] Space space, UserRefByIdDataLoader userLoader, CancellationToken cancellationToken) =>
+        await userLoader.LoadAsync(space.OwnerUserId, cancellationToken);
+
+    /// <summary>
     /// design.md §12: replica-ness is "origin instance != this instance", computed
     /// against the configured <see cref="InstanceIdentity"/> — the same comparison the
     /// rule engine's read-only invariant uses, now readable by the client so the

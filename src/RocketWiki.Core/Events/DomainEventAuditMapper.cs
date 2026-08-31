@@ -240,6 +240,12 @@ public static class DomainEventAuditMapper
         SpaceHomepageSetEvent e => ("space.homepage.set", AuditSubjectType.Space, e.SpaceId, e.Key,
             JsonSerializer.Serialize(new { oldPageId = e.OldPageId, newPageId = e.NewPageId })),
 
+        // Both owners, for the same reason the homepage carries both: a single mutable
+        // column has no history but this row. Ids only — a display name is a mirrored,
+        // mutable label, and §7 should pin who was accountable, not what they were called.
+        SpaceOwnerChangedEvent e => ("space.owner.set", AuditSubjectType.Space, e.SpaceId, e.Key,
+            JsonSerializer.Serialize(new { oldOwnerUserId = e.OldOwnerUserId, newOwnerUserId = e.NewOwnerUserId })),
+
         // design.md §12: two action names for one event, deriving which from the event
         // rather than minting two event types with identical payloads — exactly how
         // PageMarkingSetEvent splits set from downgrade. Enabling export is the direction

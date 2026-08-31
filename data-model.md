@@ -52,6 +52,7 @@ Design altitude stays in `design.md`; this file is the table-level truth.
 | LastOutboxSequence | bigint | per-space outbox counter (see SyncOutboxEvent) |
 | IsDeleted / DeletedAtUtc / DeletedByUserId | | soft delete |
 | CreatedAtUtc / CreatedByUserId | | |
+| OwnerUserId | uniqueidentifier | designated **accountable person** (design.md §6.5) — governance metadata that **confers no access**: the rule engine never reads it, and an owner who should administer the space needs a space-admin grant like anyone else. Distinct from `CreatedByUserId`, which is immutable history. **No FK**, like `CreatedByUserId`: sync materializes replica spaces with `Guid.Empty` (users don't cross the boundary, §12), so an FK would make import impossible — hence `Space.owner` is nullable in GraphQL. Reassigned via `setSpaceOwner` (canManageAccess, §6.5.2), which is allowed on a replica because ownership is local curation |
 
 Indexes: unique `Key` (filtered `IsDeleted = 0`).
 

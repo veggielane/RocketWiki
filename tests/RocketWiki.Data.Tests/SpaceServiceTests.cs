@@ -773,4 +773,176 @@ public class SpaceServiceTests : SqliteTestBase
         Assert.False(result.IsSuccess);
         Assert.IsType<NotFoundError>(result.Error);
     }
+
+    // --- Owner (design.md §6.5: accountability metadata, never access) ----------------
+
+    [Fact]
+    public async Task Create_MakesTheCreatorTheInitialOwner()
+    {
+        var actor = TestData.NewUser();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.CreateAsync(
+            new CreateSpaceRequest("ENG", "Engineering", null), DefaultInitialGrant(),
+            isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+
+        // The premise of the feature: a space is never ownerless, not even for the
+        // moment between creation and somebody visiting settings.
+        Assert.Equal(actor.Id, result.Value.OwnerUserId);
+    }
+
+    [Fact]
+    public async Task SetOwner_ByInstanceAdmin_ReassignsAndAuditsBothOwners()
+    {
+        var actor = TestData.NewUser();
+        var newOwner = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        var originalOwner = Guid.NewGuid();
+        space.OwnerUserId = originalOwner;
+
+        using var context = CreateContext();
+        context.Users.AddRange(actor, newOwner);
+        context.Spaces.Add(space);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetOwnerAsync(
+            new SetSpaceOwnerRequest(space.Id, newOwner.Id), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(newOwner.Id, result.Value.OwnerUserId);
+
+        // §7: both ids, because a single mutable column has no history but this row —
+        // "who used to be accountable" is unanswerable afterwards without it.
+        var auditEvent = context.AuditEvents.Single(e => e.Action == "space.owner.set");
+        Assert.Contains(originalOwner.ToString(), auditEvent.DetailsJson);
+        Assert.Contains(newOwner.Id.ToString(), auditEvent.DetailsJson);
+    }
+
+    [Fact]
+    public async Task SetOwner_BySpaceAdmin_WithoutInstanceAdmin_Succeeds()
+    {
+        var actor = TestData.NewUser();
+        var newOwner = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+
+        using var context = CreateContext();
+        context.Users.AddRange(actor, newOwner);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetOwnerAsync(
+            new SetSpaceOwnerRequest(space.Id, newOwner.Id), SpaceAdminPrincipal(), isInstanceAdmin: false, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(newOwner.Id, result.Value.OwnerUserId);
+    }
+
+    /// <summary>
+    /// The gate is canManageAccess, NOT "the current owner may hand it on". Ownership that
+    /// its holder controlled would be self-perpetuating — a departing owner could pin the
+    /// space's accountability to themselves — so this caller is the current owner and is
+    /// still refused, which is the distinction a plain non-admin test would not draw.
+    /// </summary>
+    [Fact]
+    public async Task SetOwner_ByTheCurrentOwnerWithoutAdmin_ReturnsForbidden()
+    {
+        var actor = TestData.NewUser();
+        var newOwner = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        space.OwnerUserId = actor.Id;
+
+        using var context = CreateContext();
+        context.Users.AddRange(actor, newOwner);
+        context.Spaces.Add(space);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetOwnerAsync(
+            new SetSpaceOwnerRequest(space.Id, newOwner.Id), AnyPrincipal(), isInstanceAdmin: false, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ForbiddenError>(result.Error);
+        Assert.Equal(actor.Id, context.Spaces.Single(s => s.Id == space.Id).OwnerUserId);
+    }
+
+    [Fact]
+    public async Task SetOwner_ToANonexistentUser_ReturnsValidationError()
+    {
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetOwnerAsync(
+            new SetSpaceOwnerRequest(space.Id, Guid.NewGuid()), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ValidationError>(result.Error);
+    }
+
+    /// <summary>
+    /// §12: space identity is local curation, so a replica names its own owner — the same
+    /// answer Rename/Archive/SetHomepage give, and unlike SetExported. It is also the only
+    /// answer that works: sync materialises replica spaces with no local user, and owner is
+    /// not a sync event, so a refusal here would leave every replica permanently ownerless
+    /// on the side where accountability for imported content matters most.
+    /// </summary>
+    [Fact]
+    public async Task SetOwner_OnAReplica_Succeeds_BecauseOwnershipIsLocalCuration()
+    {
+        var actor = TestData.NewUser();
+        var newOwner = TestData.NewUser();
+        var replica = TestData.NewSpace("ENG");
+        replica.OriginInstanceId = "some-other-instance";
+        replica.OwnerUserId = Guid.Empty; // exactly what the backfill leaves on an imported space
+
+        using var context = CreateContext();
+        context.Users.AddRange(actor, newOwner);
+        context.Spaces.Add(replica);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetOwnerAsync(
+            new SetSpaceOwnerRequest(replica.Id, newOwner.Id), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(newOwner.Id, result.Value.OwnerUserId);
+    }
+
+    [Fact]
+    public async Task SetOwner_ToTheSameOwner_IsIdempotentAndWritesNoAuditRow()
+    {
+        var actor = TestData.NewUser();
+        var owner = TestData.NewUser();
+        var space = TestData.NewSpace("ENG");
+        space.OwnerUserId = owner.Id;
+
+        using var context = CreateContext();
+        context.Users.AddRange(actor, owner);
+        context.Spaces.Add(space);
+        context.SaveChanges();
+
+        var service = new SpaceService(context, LocalInstanceId);
+        var result = await service.SetOwnerAsync(
+            new SetSpaceOwnerRequest(space.Id, owner.Id), AnyPrincipal(), isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess);
+
+        // §7: a row claiming ownership "changed" to what it already was would put a
+        // reassignment that never happened in front of a reviewer.
+        Assert.Empty(context.AuditEvents.Where(e => e.Action == "space.owner.set"));
+    }
 }

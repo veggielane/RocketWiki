@@ -118,6 +118,40 @@ public partial class Mutation
     }
 
     /// <summary>
+    /// Reassigns the space's designated owner — accountability metadata, never access. See
+    /// <c>ISpaceService.SetOwnerAsync</c> for the gate (canManageAccess, not "the current
+    /// owner") and for why a replica is allowed to set its own.
+    /// </summary>
+    [AuditAction("space.owner.set")]
+    public async Task<SetSpaceOwnerPayload> SetSpaceOwner(
+        SetSpaceOwnerRequest input,
+        [Service] ISpaceService spaceService,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IActingUserAccessor actingUserAccessor,
+        [Service] ICurrentAuditContextAccessor auditContextAccessor,
+        [Service] IInstanceRoleAccessor instanceRoleAccessor,
+        [Service] IAuditSink auditSink,
+        CancellationToken cancellationToken)
+    {
+        var (principal, actingUserId, auditContext, unauthenticated) =
+            MutationAuthHelper.Authenticate(principalAccessor, actingUserAccessor, auditContextAccessor);
+        if (unauthenticated is not null)
+        {
+            return new SetSpaceOwnerPayload(null, unauthenticated);
+        }
+
+        var result = await spaceService.SetOwnerAsync(
+            input, principal!, instanceRoleAccessor.IsInstanceAdmin, actingUserId!.Value, auditContext!, cancellationToken);
+        if (!result.IsSuccess)
+        {
+            await MutationAuthHelper.AuditDenialIfApplicableAsync(auditSink, "space.owner.set", result.Error, AuditSubjectType.Space, input.SpaceId, cancellationToken);
+            return new SetSpaceOwnerPayload(null, PageMutationErrorView.From(result.Error));
+        }
+
+        return new SetSpaceOwnerPayload(result.Value, null);
+    }
+
+    /// <summary>
     /// design.md §12's low-side export switch — see <c>ISpaceService.SetExportedAsync</c>
     /// for the gate and why it is instance-admin-only rather than sharing
     /// archive/rename's "or space admin" arm.
@@ -228,6 +262,7 @@ public partial class Mutation
 public sealed record CreateSpacePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record RenameSpacePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record SetSpaceHomepagePayload(Space? Space, PageMutationErrorView? Error);
+public sealed record SetSpaceOwnerPayload(Space? Space, PageMutationErrorView? Error);
 public sealed record SetSpaceExportedPayload(Space? Space, PageMutationErrorView? Error);
 public sealed record ArchiveSpacePayload(Space? Space, PageMutationErrorView? Error);
 public sealed record RestoreSpacePayload(Space? Space, PageMutationErrorView? Error);

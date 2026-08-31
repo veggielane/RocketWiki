@@ -82,6 +82,11 @@ public class SpaceService : ISpaceService
             LastOutboxSequence = 0,
             CreatedAtUtc = now,
             CreatedByUserId = actingUserId,
+            // The creator is the initial owner, so "every space has an owner" holds from
+            // the instant the row exists rather than from some later settings visit.
+            // Accountability metadata only — it grants nothing; the initial grant below is
+            // what decides who can actually administer this space.
+            OwnerUserId = actingUserId,
         };
         _db.Spaces.Add(space);
 
@@ -134,6 +139,57 @@ public class SpaceService : ISpaceService
 
         _db.AuditContext = auditContext;
         _db.RaiseDomainEvent(new SpaceRenamedEvent(space.Id, space.Key, actingUserId, oldName, request.Name));
+
+        await _db.SaveChangesAsync(cancellationToken);
+        return PageMutationResult<Space>.Success(space);
+    }
+
+    public async Task<PageMutationResult<Space>> SetOwnerAsync(
+        SetSpaceOwnerRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+    {
+        var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == request.SpaceId, cancellationToken);
+        if (space is null)
+        {
+            return PageMutationResult<Space>.Failure(new NotFoundError(request.SpaceId));
+        }
+
+        // §6.5.2's canManageAccess, the same gate Rename uses — and deliberately NOT "the
+        // current owner may reassign". Ownership is an administrative designation, not a
+        // right its holder controls; see ISpaceService.SetOwnerAsync.
+        if (!isInstanceAdmin && !await IsSpaceAdminAsync(space.Id, principal, cancellationToken))
+        {
+            return PageMutationResult<Space>.Failure(new ForbiddenError("instance admin or space admin required"));
+        }
+
+        // No ReadOnlyReplicaError arm — see ISpaceService.SetOwnerAsync for why a replica
+        // must be able to name its own owner.
+
+        // The target must be a real, live user. Note this reads the local User mirror,
+        // which is legitimate here precisely because it is NOT an authorization decision
+        // (§6.1 reserves the mirror for display and for exactly this kind of referential
+        // check); the ownership assignment grants nothing, so no rule engine input is
+        // being taken from mirrored data.
+        var ownerExists = await _db.Users.AnyAsync(u => u.Id == request.OwnerUserId, cancellationToken);
+        if (!ownerExists)
+        {
+            return PageMutationResult<Space>.Failure(new ValidationError(
+                $"User {request.OwnerUserId} does not exist, so cannot be the owner of a space."));
+        }
+
+        var oldOwnerUserId = space.OwnerUserId;
+        if (oldOwnerUserId == request.OwnerUserId)
+        {
+            // Idempotent success with no event, matching SetExportedAsync's no-op arm: an
+            // audit row claiming ownership "changed" to what it already was would put a
+            // reassignment that never happened in front of the reviewer §7 writes for.
+            return PageMutationResult<Space>.Success(space);
+        }
+
+        space.OwnerUserId = request.OwnerUserId;
+
+        _db.AuditContext = auditContext;
+        _db.RaiseDomainEvent(new SpaceOwnerChangedEvent(
+            space.Id, space.Key, actingUserId, oldOwnerUserId, request.OwnerUserId));
 
         await _db.SaveChangesAsync(cancellationToken);
         return PageMutationResult<Space>.Success(space);

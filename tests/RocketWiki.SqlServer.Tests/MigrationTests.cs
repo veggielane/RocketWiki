@@ -1,5 +1,8 @@
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using RocketWiki.Data;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
@@ -27,9 +30,68 @@ public sealed class MigrationTests : SqlServerTestBase
 {
     private static readonly AuditContext AuditCtx = new(AuditChannel.GraphQl, "req-migration", "127.0.0.1");
 
+    private readonly SqlServerContainerFixture _fixture;
+
     public MigrationTests(SqlServerContainerFixture fixture)
         : base(fixture)
     {
+        _fixture = fixture;
+    }
+
+    /// <summary>
+    /// <b>The backfill actually copies.</b> Every other test in this class starts from a
+    /// fully-migrated empty database, where <c>AddSpaceOwner</c>'s UPDATE runs over zero
+    /// rows — that proves the SQL parses against a real engine but says nothing about
+    /// whether existing spaces come out owned. So this one migrates to the migration
+    /// BEFORE it, writes a space the old way, and then migrates up.
+    ///
+    /// <para>The insert is raw SQL on purpose: at that point the <c>OwnerUserId</c> column
+    /// does not exist yet, and the live EF model would try to write it.</para>
+    ///
+    /// <para>Both rows matter. The native space proves the creator becomes the owner; the
+    /// replica — <c>CreatedByUserId = Guid.Empty</c>, exactly what
+    /// <c>BundleImportService</c> writes because users never cross the sync boundary
+    /// (§12) — proves the migration does not choke on the rows a high-side instance holds
+    /// most of, and lands them honestly ownerless rather than failing or inventing an owner.</para>
+    /// </summary>
+    [SqlServerFact]
+    public async Task AddSpaceOwner_BackfillsOwnerFromCreator_OnSpacesThatAlreadyExisted()
+    {
+        var connectionString = _fixture.CreateConnectionString(SqlServerContainerFixture.NewDatabaseName());
+        var options = new DbContextOptionsBuilder<RocketWikiDbContext>()
+            .UseSqlServer(connectionString)
+            .UseLocalInstanceId("local-instance")
+            .Options;
+
+        var creatorId = Guid.NewGuid();
+        var nativeSpaceId = Guid.NewGuid();
+        var replicaSpaceId = Guid.NewGuid();
+
+        using (var context = new RocketWikiDbContext(options))
+        {
+            var migrator = context.GetService<IMigrator>();
+            migrator.Migrate("20260830073044_AddEmbeddingFailedRevisionNumber");
+
+            await context.Database.ExecuteSqlRawAsync($"""
+                INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, LastOutboxSequence, IsDeleted, CreatedAtUtc, CreatedByUserId)
+                VALUES
+                    ('{nativeSpaceId}', 'NATIVE', 'A native space', 'local-instance', 0, 0, 0, SYSUTCDATETIME(), '{creatorId}'),
+                    ('{replicaSpaceId}', 'REPLICA', 'An imported space', 'some-low-instance', 0, 0, 0, SYSUTCDATETIME(), '{Guid.Empty}');
+                """);
+
+            migrator.Migrate();
+        }
+
+        using (var context = new RocketWikiDbContext(options))
+        {
+            var native = await context.Spaces.SingleAsync(s => s.Id == nativeSpaceId);
+            Assert.Equal(creatorId, native.OwnerUserId);
+
+            // Honestly ownerless rather than fabricated — Space.owner resolves to null,
+            // and a high-side admin assigns a real one through setSpaceOwner.
+            var replica = await context.Spaces.SingleAsync(s => s.Id == replicaSpaceId);
+            Assert.Equal(Guid.Empty, replica.OwnerUserId);
+        }
     }
 
     [SqlServerFact]
@@ -56,7 +118,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260829192825_BinaryCollationOnStringKeys", applied);
         Assert.Contains("20260830055858_CanonicalizeSpaceKeysAndPageSlugs", applied);
         Assert.Contains("20260830073044_AddEmbeddingFailedRevisionNumber", applied);
-        Assert.Equal(16, applied.Count);
+        Assert.Contains("20260831072347_AddSpaceOwner", applied);
+        Assert.Equal(17, applied.Count);
         Assert.Empty(pending);
     }
 

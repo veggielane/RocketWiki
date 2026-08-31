@@ -183,6 +183,8 @@ internal static class SyncOutboxWriter
                 "Same as SpaceArchivedEvent: local curation of the replica (§12).",
             [typeof(SpaceHomepageSetEvent)] =
                 "The default page is a page REFERENCE and each side holds a different subset of pages (§12), so a low-side homepage could name a page the high side has no row for.",
+            [typeof(SpaceOwnerChangedEvent)] =
+                "The owner is a USER reference, and §12's table keeps users on their own side — each instance has its own Keycloak, so a low-side user id names nobody on high. Accountability for a replica belongs to whoever runs the high side, which is why it is set there rather than inherited.",
             [typeof(SpaceExportChangedEvent)] =
                 "Whether a space is exported is the LOW side's own decision about what to send; the high side has no use for it and must never be able to change it.",
 

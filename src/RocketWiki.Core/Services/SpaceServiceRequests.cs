@@ -29,6 +29,13 @@ public sealed record RenameSpaceRequest(Guid SpaceId, string Name, string? Descr
 public sealed record SetSpaceHomepageRequest(Guid SpaceId, Guid? PageId);
 
 /// <summary>
+/// Reassigns who is accountable for the space (design.md §6.5). <paramref name="OwnerUserId"/>
+/// is the owner AFTER the call and is <b>not nullable</b> — the feature's premise is that
+/// every space has one, so there is no "clear it" here, only "hand it to someone else".
+/// </summary>
+public sealed record SetSpaceOwnerRequest(Guid SpaceId, Guid OwnerUserId);
+
+/// <summary>
 /// design.md §12: flag (or unflag) this space for one-way export to a higher instance.
 /// <paramref name="Exported"/> is the state AFTER the call, never a toggle — a toggle
 /// makes the outcome depend on a value the caller read some time ago, which is the wrong
