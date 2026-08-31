@@ -79,7 +79,7 @@ export interface CanonicalSpace {
 export function crumbsFor(pathname: string, canonicalSpace?: CanonicalSpace): Crumb[] {
   const [first, ...rest] = pathname.split('/').filter(Boolean)
 
-  if (first === undefined) return [{ label: 'Spaces' }]
+  if (first === undefined) return [{ label: 'Home' }]
 
   if (first === 'spaces') {
     const [key, second, third] = rest

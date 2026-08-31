@@ -138,6 +138,7 @@ describe('routeTitleFor', () => {
   it('is the last crumb — the thing you are looking at', () => {
     expect(routeTitleFor('/admin/audit')).toBe('Audit log')
     expect(routeTitleFor('/spaces/PROP/-/trash')).toBe('Trash')
-    expect(routeTitleFor('/')).toBe('Spaces')
+    // The home route is the feed homepage now, not the space list.
+    expect(routeTitleFor('/')).toBe('Home')
   })
 })

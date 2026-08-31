@@ -164,6 +164,14 @@ export type LoadFailureReason =
    * observed in tokens, never a membership list — so, like the other
    * registries, it has nothing to conceal and can say what failed.
    */
+  /**
+   * The three homepage feeds, each named separately so a section can say what
+   * IT could not load while the other two carry on. One shared 'feed' reason
+   * would make a reader wonder which of the three the message was about.
+   */
+  | 'ACTIVITY_FEED'
+  | 'STALE_CONTENT'
+  | 'RECENTLY_VIEWED'
   | 'GROUP_LIST'
   /**
    * The account roster (instance admins only). Identity and activity, with no
@@ -216,6 +224,12 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       }
     case 'NOTIFICATIONS':
       return { summary: "Couldn't load notifications.", pointsToSettings: false }
+    case 'ACTIVITY_FEED':
+      return { summary: "Couldn't load recent activity.", pointsToSettings: false }
+    case 'STALE_CONTENT':
+      return { summary: "Couldn't load your stale pages.", pointsToSettings: false }
+    case 'RECENTLY_VIEWED':
+      return { summary: "Couldn't load what you viewed recently.", pointsToSettings: false }
     case 'GROUP_LIST':
       return { summary: "Couldn't load the group list.", pointsToSettings: false }
     case 'USER_ROSTER':

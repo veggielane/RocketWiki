@@ -19,12 +19,15 @@ import MoreVertIcon from '@mui/icons-material/MoreVert'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import SpaceDashboardOutlinedIcon from '@mui/icons-material/SpaceDashboardOutlined'
+import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from 'react-oidc-context'
 import { UserAvatar } from '../avatars/UserAvatar'
 import { useCurrentUserQuery } from '../graphql/generated/graphql'
 import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
 import { SpaceTreeNav } from './SpaceTreeNav'
+import { RecentSpaces } from './RecentSpaces'
+import { clearRecentSpaces } from '../spaces/recentSpaces'
 
 export const SIDE_MENU_WIDTH = 240
 
@@ -134,7 +137,13 @@ export function SideMenu({
       <Divider />
 
       <Box sx={{ overflow: 'auto', flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
-        <List component="nav" aria-label="Spaces">
+        <List component="nav" aria-label="Main">
+          <ListItemButton component={RouterLink} to="/" selected={location.pathname === '/'}>
+            <ListItemIcon>
+              <HomeOutlinedIcon />
+            </ListItemIcon>
+            <ListItemText primary="Home" />
+          </ListItemButton>
           <ListItemButton component={RouterLink} to="/spaces" selected={location.pathname === '/spaces'}>
             <ListItemIcon>
               <SpaceDashboardOutlinedIcon />
@@ -142,6 +151,9 @@ export function SideMenu({
             <ListItemText primary="All spaces" />
           </ListItemButton>
         </List>
+        {/* all → recent → current: every space, the few you keep coming
+            back to, then the one you are in (the picker and tree below). */}
+        <RecentSpaces />
         <SpaceTreeNav />
       </Box>
 
@@ -193,6 +205,12 @@ export function SideMenu({
           <MenuItem
             onClick={() => {
               setAccountMenuAnchor(null)
+              // The recent-spaces list is not a token, but it is a record of
+              // where somebody has been, and on a shared workstation it would
+              // outlive them — a key like OPBLACKSTAR tells the next person at
+              // that browser such a programme exists. Signing out is the
+              // explicit "I am done here", so it is the honest moment to drop it.
+              clearRecentSpaces()
               void auth.signoutRedirect()
             }}
           >

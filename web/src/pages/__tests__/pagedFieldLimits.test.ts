@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { MAX_PAGE_SIZE } from '../adminUsersPaging'
+import { FEED_MAX_PAGE_SIZE } from '../../home/feedPaging'
 
 /**
  * No screen may ask a paged field for more than that field allows.
@@ -40,8 +41,9 @@ function declaredPageSize(relativePath: string): number {
 
 describe('the schema is the authority on how big a page may be', () => {
   it('finds the fields it is checking, so a green run is not a vacuous one', () => {
-    expect(assumedSizeOf('users')).toBeGreaterThan(0)
-    expect(assumedSizeOf('auditEvents')).toBeGreaterThan(0)
+    for (const field of ['users', 'auditEvents', 'activityFeed', 'myStaleContent', 'myRecentlyViewed']) {
+      expect(assumedSizeOf(field)).toBeGreaterThan(0)
+    }
   })
 
   it('never lets the user roster ask for more than the field allows', () => {
@@ -51,5 +53,14 @@ describe('the schema is the authority on how big a page may be', () => {
   it('never lets the audit log ask for more than the field allows', () => {
     // The original casualty: this is the assertion that was missing.
     expect(declaredPageSize('AuditLogPage.tsx')).toBeLessThanOrEqual(assumedSizeOf('auditEvents'))
+  })
+
+  it('never lets a homepage feed ask for more than its connection allows', () => {
+    // All three share one ceiling, and it is a COST ceiling as much as a row
+    // one: each row costs page-size × object-fields, so 20 is what the pinned
+    // feed selection affords.
+    for (const field of ['activityFeed', 'myStaleContent', 'myRecentlyViewed']) {
+      expect(FEED_MAX_PAGE_SIZE).toBeLessThanOrEqual(assumedSizeOf(field))
+    }
   })
 })

@@ -1,0 +1,92 @@
+# The homepage's three feeds (design.md §7), as three SEPARATE queries.
+#
+# Separate on purpose: one query for all three would mean a single slow or
+# failing feed blanks the whole homepage, and these have genuinely different
+# failure modes. Three hooks give each section its own skeleton, its own error
+# and its own empty state, and a homepage that is still useful when one of them
+# is not.
+#
+# **The selection is pinned by a cost budget.** Each row costs page-size ×
+# object-fields, so `page { … }` plus its `marking` (and `author` on activity
+# alone) is what fits at the connection's page size of 20. Selecting
+# `page { space { name } }` or `page { labels }` per row blows it, which is why
+# the space is shown by KEY — a scalar, and the same way search results and the
+# page-list widget name a space. The backend has a test sized to exactly this
+# selection, so adding an object-field here fails that rather than surprising a
+# user with a 400.
+#
+# Page fields come through the nested `page`, never a projected copy: that is
+# what keeps them flowing through the Page resolver's own canView (§6.7/§8).
+# The connections are pre-filtered, so `page` is non-null and there is no
+# "denied" item to render around.
+
+query ActivityFeed($first: Int) {
+  activityFeed(first: $first) {
+    totalCount
+    pageInfo {
+      hasNextPage
+    }
+    nodes {
+      occurredAtUtc
+      isCreate
+      revisionNumber
+      author {
+        id
+        displayName
+        hasAvatar
+      }
+      page {
+        ...FeedPage
+      }
+    }
+  }
+}
+
+query MyStaleContent($first: Int) {
+  myStaleContent(first: $first) {
+    totalCount
+    pageInfo {
+      hasNextPage
+    }
+    nodes {
+      # Page-only: the server sorts by `page.updatedAtUtc`, and showing that
+      # same value is what makes the order legible from the list. There is
+      # deliberately no separate item timestamp that could drift from the sort.
+      page {
+        ...FeedPage
+        updatedAtUtc
+      }
+    }
+  }
+}
+
+# No `totalCount` here — the connection does not expose one, and a count of
+# your own recent views would say nothing anyway.
+query MyRecentlyViewed($first: Int) {
+  myRecentlyViewed(first: $first) {
+    pageInfo {
+      hasNextPage
+    }
+    nodes {
+      lastViewedAtUtc
+      page {
+        ...FeedPage
+      }
+    }
+  }
+}
+
+# One definition of "a page in a feed row", so three sections cannot drift into
+# showing different things. `marking` is one object-field however many scalars
+# sit inside it, so the shared PageMarking fragment costs no more than a
+# hand-rolled subset — and the badge stays identical to search's.
+fragment FeedPage on Page {
+  id
+  title
+  spaceKey
+  slug
+  icon
+  marking {
+    ...PageMarking
+  }
+}

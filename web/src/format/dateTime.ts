@@ -11,8 +11,13 @@
  *
  * NOT for the audit log: that grid shows raw UTC on purpose (design.md §14 —
  * an export-control audit trail is read across timezones and must not shift
- * under the reader). Relative phrasing likewise stays out — the one surface
- * that wants it, the 30-day trash window, has its own domain rules in
+ * under the reader).
+ *
+ * Relative phrasing lives next door in relativeTime.ts, which answers a
+ * different question: this one says WHEN something happened, that one says how
+ * long ago. The homepage feeds want the second — a stale list is sorted by it,
+ * so the phrasing is what makes the order legible — the audit log must have
+ * the first, and the 30-day trash window keeps its own domain voice in
  * trash/trashCountdown.ts.
  */
 export function formatTimestamp(utcIso: string): string {

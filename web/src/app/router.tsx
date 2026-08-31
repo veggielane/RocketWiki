@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, Outlet, type RouteObject } from 'react-router-dom'
+import { createBrowserRouter, Outlet, type RouteObject } from 'react-router-dom'
 import { AppShell } from './AppShell'
 import { RequireAuth } from '../auth/RequireAuth'
 import { RequireInstanceAdmin } from '../auth/RequireInstanceAdmin'
@@ -32,12 +32,13 @@ export const routes: RouteObject[] = [
       </RequireAuth>
     ),
     children: [
-      // `/` is on its way to becoming the activity homepage. Until it is, it
-      // sends you to the space list rather than rendering a placeholder: a
-      // redirect keeps every existing bookmark and the rail's brand mark
-      // landing somewhere real, and leaves exactly one screen that lists
-      // spaces instead of two routes rendering the same one.
-      { index: true, element: <Navigate to="/spaces" replace /> },
+      {
+        index: true,
+        lazy: async () => {
+          const { HomePage } = await import('../pages/HomePage')
+          return { Component: HomePage }
+        },
+      },
       // The space list, now addressable in its own right. It was the home
       // route, which made "all the spaces" and "where the app starts" the
       // same idea — fine while that was the only screen, wrong as soon as the

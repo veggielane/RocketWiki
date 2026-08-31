@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { RouterProvider, createMemoryRouter } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { routes } from '../router'
@@ -13,8 +13,9 @@ import { crumbsFor, routeTitleFor } from '../routeCrumbs'
  * It used to BE the home route, which made "all the spaces" and "where the app
  * starts" the same idea — fine while that was the only screen there could be,
  * wrong the moment the homepage has a job of its own. Moving it is the whole
- * change; `/` redirects here until the homepage exists, so no bookmark and no
- * brand-mark click lands on nothing in the meantime.
+ * change. `/` redirected here while the homepage was being built; now that the
+ * homepage exists it keeps `/`, and this file pins that the two screens stayed
+ * separate.
  */
 vi.mock('react-oidc-context', () => ({
   useAuth: () => ({ isAuthenticated: true, isLoading: false, user: { profile: { name: 'Viewer' } }, signoutRedirect: vi.fn() }),
@@ -51,6 +52,9 @@ const SPACES = [
 function renderAt(path: string) {
   const mock = createMockUrqlClient((name) => {
     if (name === 'SpaceList') return { spaces: SPACES }
+    if (name === 'ActivityFeed') return { activityFeed: { totalCount: 0, pageInfo: { hasNextPage: false }, nodes: [] } }
+    if (name === 'MyStaleContent') return { myStaleContent: { totalCount: 0, pageInfo: { hasNextPage: false }, nodes: [] } }
+    if (name === 'MyRecentlyViewed') return { myRecentlyViewed: { pageInfo: { hasNextPage: false }, nodes: [] } }
     if (name === 'CurrentUser')
       return {
         me: { id: 'sub-1', email: null, name: 'Viewer', groups: [], isAuthenticated: true, isInstanceAdmin: false, localUserId: 'user-1' },
@@ -76,19 +80,14 @@ describe('the space list lives at /spaces', () => {
     expect(await screen.findByText('Engineering')).toBeInTheDocument()
   })
 
-  it('sends the home route there rather than dead-ending', async () => {
-    // Every existing bookmark of `/`, and the rail's brand mark, still land on
-    // a real screen while the homepage is being built.
-    const router = renderAt('/')
-    await waitFor(() => expect(router.state.location.pathname).toBe('/spaces'))
-  })
-
-  it('replaces the history entry, so Back does not bounce off the redirect', async () => {
-    const router = renderAt('/')
-    await waitFor(() => expect(router.state.location.pathname).toBe('/spaces'))
-    // A pushed redirect would put `/` behind `/spaces` in history, and Back
-    // would redirect forward again — a trap with no way out.
-    expect(router.state.historyAction).toBe('REPLACE')
+  it('leaves the home route to the homepage, which is what freed it', async () => {
+    // `/` redirected here while the homepage was being built. Now that it has
+    // one, the space list must NOT be what the home route shows — the whole
+    // point of the move was that 'every space' and 'where the app starts' are
+    // different screens.
+    renderAt('/')
+    expect(await screen.findByRole('heading', { level: 1, name: 'Home' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 1, name: 'Spaces' })).not.toBeInTheDocument()
   })
 })
 
@@ -104,7 +103,7 @@ describe('the rail offers one way to the spaces, not two', () => {
     // that both list spaces. There is one destination and one affordance.
     renderAt('/spaces')
     await screen.findByRole('link', { name: 'All spaces' })
-    const navigation = screen.getByRole('navigation', { name: 'Spaces' })
+    const navigation = screen.getByRole('navigation', { name: 'Main' })
     const toSpaces = Array.from(navigation.querySelectorAll('a')).filter((a) => a.getAttribute('href') === '/spaces')
     expect(toSpaces).toHaveLength(1)
   })
