@@ -26,6 +26,12 @@ public static class GraphQLConfiguration
             .AddType<AccessRuleType>()
             .AddType<AuditEventType>()
             .AddType<SearchHitType>()
+            // The three homepage feed rows. Registered explicitly for the same reason
+            // SearchHitType is: each one Ignores the raw ids it carries internally, and
+            // convention-based inference would expose them.
+            .AddType<ActivityFeedItemType>()
+            .AddType<StaleContentItemType>()
+            .AddType<RecentlyViewedItemType>()
             .AddType<SearchConnectionType>()
             .AddType<PageQueryRowType>()
             .AddType<PageQueryConnectionType>()

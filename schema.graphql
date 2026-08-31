@@ -45,6 +45,60 @@ type Query {
   gitlabFile(projectId: String!, path: String!, ref: String): GitLabFilePayload!
     @cost(weight: "10")
   gitlabStatus: GitLabStatus! @cost(weight: "10")
+  activityFeed(
+    "Returns the first _n_ elements from the list."
+    first: Int
+    "Returns the elements in the list that come after the specified cursor."
+    after: String
+    "Returns the last _n_ elements from the list."
+    last: Int
+    "Returns the elements in the list that come before the specified cursor."
+    before: String
+  ): ActivityFeedConnection
+    @listSize(
+      assumedSize: 20
+      slicingArguments: ["first", "last"]
+      slicingArgumentDefaultValue: 10
+      sizedFields: ["edges", "nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  myStaleContent(
+    "Returns the first _n_ elements from the list."
+    first: Int
+    "Returns the elements in the list that come after the specified cursor."
+    after: String
+    "Returns the last _n_ elements from the list."
+    last: Int
+    "Returns the elements in the list that come before the specified cursor."
+    before: String
+  ): MyStaleContentConnection
+    @listSize(
+      assumedSize: 20
+      slicingArguments: ["first", "last"]
+      slicingArgumentDefaultValue: 10
+      sizedFields: ["edges", "nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
+  myRecentlyViewed(
+    "Returns the first _n_ elements from the list."
+    first: Int
+    "Returns the elements in the list that come after the specified cursor."
+    after: String
+    "Returns the last _n_ elements from the list."
+    last: Int
+    "Returns the elements in the list that come before the specified cursor."
+    before: String
+  ): MyRecentlyViewedConnection
+    @listSize(
+      assumedSize: 20
+      slicingArguments: ["first", "last"]
+      slicingArgumentDefaultValue: 10
+      sizedFields: ["edges", "nodes"]
+      requireOneSlicingArgument: false
+    )
+    @cost(weight: "10")
   labels(spaceKey: String): [String!]! @cost(weight: "10")
   labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
@@ -176,6 +230,34 @@ type AccessRule {
   createdByUserId: UUID!
   updatedAtUtc: DateTime!
   updatedByUserId: UUID!
+}
+
+"A connection to a list of items."
+type ActivityFeedConnection {
+  "Information to aid in pagination."
+  pageInfo: PageInfo!
+  "A list of edges."
+  edges: [ActivityFeedEdge!]
+  "A flattened list of the nodes."
+  nodes: [ActivityFeedItem!]
+  "Identifies the total count of items in the connection."
+  totalCount: Int! @cost(weight: "10")
+}
+
+"An edge in a connection."
+type ActivityFeedEdge {
+  "A cursor for use in pagination."
+  cursor: String!
+  "The item at the end of the edge."
+  node: ActivityFeedItem!
+}
+
+type ActivityFeedItem {
+  page: Page! @cost(weight: "10")
+  author: UserRef! @cost(weight: "10")
+  revisionNumber: Int!
+  isCreate: Boolean!
+  occurredAtUtc: DateTime!
 }
 
 type ActivityPoint {
@@ -561,6 +643,44 @@ type MovePagePayload {
   error: PageMutationErrorView
 }
 
+"A connection to a list of items."
+type MyRecentlyViewedConnection {
+  "Information to aid in pagination."
+  pageInfo: PageInfo!
+  "A list of edges."
+  edges: [MyRecentlyViewedEdge!]
+  "A flattened list of the nodes."
+  nodes: [RecentlyViewedItem!]
+}
+
+"An edge in a connection."
+type MyRecentlyViewedEdge {
+  "A cursor for use in pagination."
+  cursor: String!
+  "The item at the end of the edge."
+  node: RecentlyViewedItem!
+}
+
+"A connection to a list of items."
+type MyStaleContentConnection {
+  "Information to aid in pagination."
+  pageInfo: PageInfo!
+  "A list of edges."
+  edges: [MyStaleContentEdge!]
+  "A flattened list of the nodes."
+  nodes: [StaleContentItem!]
+  "Identifies the total count of items in the connection."
+  totalCount: Int! @cost(weight: "10")
+}
+
+"An edge in a connection."
+type MyStaleContentEdge {
+  "A cursor for use in pagination."
+  cursor: String!
+  "The item at the end of the edge."
+  node: StaleContentItem!
+}
+
 type Notification {
   id: String!
   type: String!
@@ -778,6 +898,11 @@ type ProtectiveMarking {
   hasEyesOnly: Boolean!
 }
 
+type RecentlyViewedItem {
+  page: Page! @cost(weight: "10")
+  lastViewedAtUtc: DateTime!
+}
+
 type RemovePagePropertyPayload {
   removedPropertyKeyId: UUID
   error: PageMutationErrorView
@@ -922,6 +1047,10 @@ type Space {
   deletedByUserId: UUID
   createdAtUtc: DateTime!
   createdByUserId: UUID!
+}
+
+type StaleContentItem {
+  page: Page! @cost(weight: "10")
 }
 
 type SyncOriginSpaceStatusView {
