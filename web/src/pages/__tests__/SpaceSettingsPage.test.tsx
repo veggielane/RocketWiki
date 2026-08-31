@@ -16,6 +16,12 @@ const space = {
   originInstanceId: 'HIGH',
   viewerIsWatching: false,
   grants: [{ id: 'g1' }] as { id: string }[],
+  // The server's own permission answer. `grants` no longer decides anything
+  // on this screen — see the zero-grant test below for why that mattered.
+  canManageAccess: true,
+  owner: { id: "u1", displayName: "Ada Lovelace", hasAvatar: false } as
+    | { id: string; displayName: string; hasAvatar: boolean }
+    | null,
 }
 
 const node = (id: string, title: string, children: unknown[] = []) => ({
@@ -111,13 +117,47 @@ describe('SpaceSettingsPage default page', () => {
     // MUI marks a disabled Select with aria-disabled on the combobox rather than
     // the `disabled` attribute (the real <input> is hidden), so this is the
     // assertion that reflects what a user is actually told.
-    renderSettings({ overrides: { grants: [] } })
+    renderSettings({ overrides: { canManageAccess: false } })
     expect(await screen.findByLabelText('Default page')).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('lets a permitted manager manage a space that has NO grants', async () => {
+    // The bug the proxy had. `canManage` was `grants.length > 0`, which
+    // conflated "you may SEE the grants" with "there ARE grants to see" — the
+    // resolver hands a permitted manager the real, empty list, and the screen
+    // read that as "not permitted". An instance admin on a grantless space was
+    // shown the read-only notice with every control disabled, while the server
+    // would have accepted all of them. An imported replica is exactly the space
+    // that can be both grantless and ownerless, so this also unblocked the one
+    // person who could assign its owner.
+    renderSettings({ overrides: { grants: [], canManageAccess: true } })
+    expect(await screen.findByLabelText('Default page')).not.toHaveAttribute('aria-disabled', 'true')
+    expect(screen.queryByText(/managing it needs instance admin/)).not.toBeInTheDocument()
   })
 
   it('has no axe violations with the picker present', async () => {
     renderSettings()
     await screen.findByLabelText('Default page')
     await expectNoAxeViolations()
+  })
+})
+
+describe('SpaceSettingsPage owner section', () => {
+  it('carries the owner section, beside the other space-level controls', async () => {
+    // Every other owner test renders the section directly, so without this one
+    // the section could be deleted from the page and the suite would stay green.
+    renderSettings()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Owner' })).toBeInTheDocument()
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+  })
+
+  it('shows the ownerless state a replica arrives in', async () => {
+    // The case that motivated the feature: ownership does not sync, so an
+    // imported space starts without one and somebody has to take it on.
+    renderSettings({ overrides: { owner: null, isReplica: true } })
+    expect(await screen.findByText(/No owner assigned/)).toBeInTheDocument()
+    // NOT disabled the way rename and archive are on a replica — this is the one
+    // space write exempt from the read-only rule.
+    expect(screen.getByRole('button', { name: 'Assign an owner' })).toBeEnabled()
   })
 })

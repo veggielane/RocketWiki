@@ -34,6 +34,7 @@ import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { ConfirmDialog } from '../feedback/ConfirmDialog'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { PageHeader } from '../app/PageHeader'
+import { SpaceOwnerSection } from '../spaces/SpaceOwnerSection'
 import { useDocumentTitle } from '../app/documentTitle'
 import { flattenParentOptions } from './parentOptions'
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
@@ -110,7 +111,15 @@ export function SpaceSettingsPage() {
   }
 
   const space = data.space
-  const canManage = space.grants.length > 0
+  // The server's own answer, not an inference from `grants` coming back
+  // non-empty. The proxy conflated "you may see the grants" with "there are
+  // grants to see": on a space with NO grants the resolver hands a permitted
+  // manager an empty list, which read as "not permitted" and disabled every
+  // control the server would have accepted. An imported replica is exactly
+  // the space that can arrive both grantless and ownerless, so the old proxy
+  // showed an instance admin "no owner" and then refused them the control to
+  // fix it.
+  const canManage = space.canManageAccess
   // Server values until edited, so the fields track a refetch rather than
   // pinning whatever was loaded when the component first mounted.
   const nameValue = name ?? space.name
@@ -303,6 +312,18 @@ export function SpaceSettingsPage() {
           </Stack>
         </Stack>
       </Paper>
+
+      {/* Space-level governance, beside rename/homepage/archive — and
+          deliberately NOT gated on `isReplica` the way those are: owner
+          assignment is the one space write exempt from the replica read-only
+          rule, because ownership never syncs and refusing it would leave every
+          imported space permanently ownerless on the high side. */}
+      <SpaceOwnerSection
+        spaceId={space.id}
+        owner={space.owner ?? null}
+        canManageAccess={canManage}
+        onChanged={() => refetch({ requestPolicy: 'network-only' })}
+      />
 
       <Paper variant="outlined">
         <Stack spacing={0} sx={{ p: 2, pb: 1 }}>

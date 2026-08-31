@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { MAX_PAGE_SIZE } from '../adminUsersPaging'
 import { FEED_MAX_PAGE_SIZE } from '../../home/feedPaging'
+import { DIRECTORY_PAGE_SIZE } from '../../spaces/UserDirectoryPicker'
 
 /**
  * No screen may ask a paged field for more than that field allows.
@@ -41,7 +42,14 @@ function declaredPageSize(relativePath: string): number {
 
 describe('the schema is the authority on how big a page may be', () => {
   it('finds the fields it is checking, so a green run is not a vacuous one', () => {
-    for (const field of ['users', 'auditEvents', 'activityFeed', 'myStaleContent', 'myRecentlyViewed']) {
+    for (const field of [
+      'users',
+      'auditEvents',
+      'activityFeed',
+      'myStaleContent',
+      'myRecentlyViewed',
+      'userDirectory',
+    ]) {
       expect(assumedSizeOf(field)).toBeGreaterThan(0)
     }
   })
@@ -53,6 +61,11 @@ describe('the schema is the authority on how big a page may be', () => {
   it('never lets the audit log ask for more than the field allows', () => {
     // The original casualty: this is the assertion that was missing.
     expect(declaredPageSize('AuditLogPage.tsx')).toBeLessThanOrEqual(assumedSizeOf('auditEvents'))
+  })
+
+  it('never lets the user-directory picker ask for more than its connection allows', () => {
+    // The picker asks for a page of names; the cap is the connection's.
+    expect(DIRECTORY_PAGE_SIZE).toBeLessThanOrEqual(assumedSizeOf('userDirectory'))
   })
 
   it('never lets a homepage feed ask for more than its connection allows', () => {

@@ -29,6 +29,20 @@ query SpaceTree($key: String!) {
     isReplica
     originInstanceId
     viewerIsWatching
+    # The server's own answer to "may this caller manage the space", replacing a
+    # proxy that inferred it from `grants` coming back non-empty. The proxy read
+    # an EMPTY grant list as "not permitted" — which is what a permitted manager
+    # sees on a space that simply has no grants, so it locked them out of
+    # controls the server would have accepted.
+    canManageAccess
+    # Accountability metadata (design.md §6.5), NOT access. Nullable, and null is
+    # a real state: an imported replica starts ownerless until somebody on the
+    # high side takes responsibility for it.
+    owner {
+      id
+      displayName
+      hasAvatar
+    }
     grants {
       id
     }

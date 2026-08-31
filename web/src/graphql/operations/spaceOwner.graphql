@@ -1,0 +1,47 @@
+# Space ownership (design.md §6.5): who is accountable for a space, which is
+# deliberately NOT who may see it. Reading is open to every viewer; only
+# `canManageAccess` decides who may reassign.
+
+# The people a space can be handed to.
+#
+# Identity only — id, display name and whether they have an avatar. No email,
+# groups, clearance or activity: this is a picker, and a directory that
+# answered more than "which person do you mean" would become a second place to
+# learn things about colleagues.
+#
+# `search` is a Contains match on display name, so a blank search returns the
+# whole roster a page at a time. That is what lets the picker open with names
+# already in it rather than an empty box demanding input.
+query UserDirectory($search: String, $first: Int) {
+  userDirectory(search: $search, first: $first) {
+    nodes {
+      id
+      displayName
+      hasAvatar
+    }
+  }
+}
+
+# Reassigns accountability. Takes the local user id the directory hands back.
+#
+# There is no ReadOnlyReplica arm in the payload, and that is deliberate rather
+# than an omission: owner never syncs and an imported replica starts at the
+# empty GUID, so refusing this on replicas would leave every imported space
+# permanently ownerless on the high side — where accountability for imported
+# content matters most. It is gated like grant management, not like a content
+# write.
+mutation SetSpaceOwner($input: SetSpaceOwnerRequestInput!) {
+  setSpaceOwner(input: $input) {
+    space {
+      id
+      owner {
+        id
+        displayName
+        hasAvatar
+      }
+    }
+    error {
+      ...MutationError
+    }
+  }
+}
