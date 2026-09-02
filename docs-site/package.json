@@ -7,7 +7,7 @@
   "scripts": {
     "generate": "node scripts/generate.mjs",
     "check": "node scripts/generate.mjs --check",
-    "test": "node --test scripts/lib.test.mjs",
+    "test": "node --test scripts/lib.test.mjs scripts/generate.test.mjs",
     "predev": "node scripts/generate.mjs",
     "dev": "astro dev",
     "start": "astro dev",

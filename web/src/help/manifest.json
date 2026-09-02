@@ -1,0 +1,21 @@
+{
+  "$comment": "Single source of truth for the help/user-guide STRUCTURE, shared by two front-ends: the in-app help at /-/docs (web/src/help/topics.ts) and the public docs site's 'User guide' pages (docs-site/scripts/generate.mjs). Prose lives in ./content/<slug>.md; each topic's TITLE is that file's H1 and is never repeated here. Only what lives outside the prose is here: the section grouping, the order, and the one-line summary the topic list shows. Add a topic by adding its slug+summary here and a ./content/<slug>.md file — both front-ends pick it up, and the generator fails the build if the two ever disagree.",
+  "sections": [
+    {
+      "title": "Using RocketWiki",
+      "topics": [
+        { "slug": "getting-started", "summary": "Spaces, pages, writing and finding things." },
+        { "slug": "classification", "summary": "What the banner means, and why you may see less than a colleague." },
+        { "slug": "organising", "summary": "The tree, labels, icons, properties, forms and trash." },
+        { "slug": "watching-and-notifications", "summary": "Following pages and being told when they change." }
+      ]
+    },
+    {
+      "title": "Administering RocketWiki",
+      "topics": [
+        { "slug": "admin-spaces", "summary": "Settings, grants, restrictions, trash and analytics." },
+        { "slug": "admin-instance", "summary": "Analytics, audit, vocabularies, sync — and what admin does not grant." }
+      ]
+    }
+  ]
+}

@@ -25,6 +25,7 @@ pnpm-debug.log*
 # committed, so the site can never fork the documents it renders.
 src/content/docs/design/
 src/content/docs/operations/
+src/content/docs/guide/
 src/content/docs/status.md
 src/content/docs/developing.md
 src/content/docs/data-model.md

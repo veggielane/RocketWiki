@@ -26,6 +26,18 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'User Guide',
+					// The in-app help (web/src/help), the same content the app serves
+					// at /-/docs, generated into guide/** at build time. The two
+					// sub-groups mirror the two sections in web/src/help/manifest.json;
+					// add a section there and add its group here. Topic order within a
+					// group comes from each page's sidebar.order (set from the manifest).
+					items: [
+						{ label: 'Using RocketWiki', items: [{ autogenerate: { directory: 'guide/using-rocketwiki' } }] },
+						{ label: 'Administering RocketWiki', items: [{ autogenerate: { directory: 'guide/administering-rocketwiki' } }] },
+					],
+				},
+				{
 					label: 'Design',
 					collapsed: true,
 					// Generated pages: design/00-overview + one page per design.md

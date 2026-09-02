@@ -87,4 +87,20 @@ describe('help content', () => {
       expect(section.topics.length, section.title).toBeGreaterThan(0)
     }
   })
+
+  it('lists every content file in the manifest', () => {
+    // The docs site generates one User guide page per manifest topic; a
+    // content/*.md the manifest forgets is silently missing from both the app
+    // and the site. This is the SPA-side half of the generator's orphan check.
+    const files = import.meta.glob('../../help/content/*.md', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    }) as Record<string, string>
+    const slugs = new Set(HELP_TOPICS.map((t) => t.slug))
+    for (const filePath of Object.keys(files)) {
+      const slug = filePath.replace(/^.*\//, '').replace(/\.md$/, '')
+      expect(slugs.has(slug), `${filePath} is not listed in manifest.json`).toBe(true)
+    }
+  })
 })

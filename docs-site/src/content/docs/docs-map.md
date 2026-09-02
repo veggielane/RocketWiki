@@ -18,6 +18,7 @@ copy anyone maintains.
 | [`DEVELOPING.md`](https://github.com/veggielane/RocketWiki/blob/main/DEVELOPING.md) | Operational: the local dev loop, test tiers, running the stack. | [Developing locally](/RocketWiki/developing/) |
 | [`deploy/README.md`](https://github.com/veggielane/RocketWiki/blob/main/deploy/README.md) | Operational: Helm chart, air-gapped image paths, the restore drill — and its own "what has never been verified" list. | [Deploying on k3s](/RocketWiki/operations/deploy/) |
 | [`src/RocketWiki.AppHost/keycloak/README.md`](https://github.com/veggielane/RocketWiki/blob/main/src/RocketWiki.AppHost/keycloak/README.md) | Operational: the dev Keycloak realm and the mapper spec production must reproduce. | [Dev Keycloak realm](/RocketWiki/operations/keycloak/) |
+| [`web/src/help/`](https://github.com/veggielane/RocketWiki/blob/main/web/src/help/) | **The user guide.** The in-app help the app itself serves at `/-/docs` — how to use and administer RocketWiki. Authored once; the app and this site both render it. | The [User Guide](/RocketWiki/guide/using-rocketwiki/getting-started/) pages |
 
 ## Why design.md is the source of truth
 

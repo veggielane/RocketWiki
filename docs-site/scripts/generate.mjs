@@ -20,6 +20,7 @@ import {
   buildSectionIndex,
   collectAnchors,
   extractSection,
+  fileSlug,
   githubHeadingAnchor,
   linkifySectionRefs,
   newReport,
@@ -46,6 +47,14 @@ const SOURCES = {
   keycloak: 'src/RocketWiki.AppHost/keycloak/README.md',
 };
 
+// The in-app help (web/src/help) is the SAME content as the SPA's /-/docs help;
+// the site serves it as a "User guide" so it isn't forked. `manifest.json` carries
+// the section grouping, order, and per-topic summary; each topic's prose is one
+// `content/<slug>.md`, and its title is that file's H1 — the same rule every other
+// imported doc follows. Repo-relative to the root, like SOURCES above.
+const HELP_DIR = 'web/src/help/content';
+const HELP_MANIFEST = 'web/src/help/manifest.json';
+
 function fail(msg) {
   console.error(`docs-site generate: ERROR: ${msg}`);
   process.exit(1);
@@ -58,6 +67,23 @@ function readSource(rel) {
       'The site generates from the repo docs — it cannot build without them.');
   }
   return fs.readFileSync(abs, 'utf8').replace(/\r\n/g, '\n');
+}
+
+/**
+ * The in-app help manifest: `{ sections: [{ title, topics: [{ slug, summary }] }] }`.
+ * The one description both the SPA and this site build their help navigation from.
+ */
+function readHelpManifest() {
+  const abs = path.join(repoRoot, HELP_MANIFEST);
+  if (!fs.existsSync(abs)) {
+    fail(`help manifest missing: ${HELP_MANIFEST} (looked at ${abs}). ` +
+      'The user guide is generated from the in-app help — it cannot build without it.');
+  }
+  try {
+    return JSON.parse(fs.readFileSync(abs, 'utf8'));
+  } catch (e) {
+    fail(`help manifest ${HELP_MANIFEST} is not valid JSON: ${e.message}`);
+  }
 }
 
 /** Splits an imported doc into H1 title + remainder. */
@@ -171,6 +197,43 @@ export function buildAll() {
     })
   );
 
+  // --- in-app help (web/src/help) -> "User guide" pages --------------------
+  // The same Markdown the SPA renders at /-/docs, served here so the guide is
+  // authored once. Each section becomes a sidebar directory; each topic a page
+  // ordered by its manifest position. Title from the file's H1, summary from the
+  // manifest, source cited at the top like every other generated page.
+  const helpManifest = readHelpManifest();
+  const helpReferenced = new Set();
+  for (const section of helpManifest.sections) {
+    const sectionSlug = fileSlug(section.title);
+    section.topics.forEach((topic, order) => {
+      helpReferenced.add(topic.slug);
+      const rel = `${HELP_DIR}/${topic.slug}.md`;
+      const abs = path.join(repoRoot, rel);
+      if (!fs.existsSync(abs)) {
+        fail(`help manifest lists "${topic.slug}" but ${rel} does not exist — the guide would have a dead entry.`);
+      }
+      const { title, body } = titleAndBody(fs.readFileSync(abs, 'utf8').replace(/\r\n/g, '\n'), rel);
+      files.set(
+        `guide/${sectionSlug}/${topic.slug}`,
+        buildPage({
+          title,
+          description: topic.summary,
+          notice: noticeLine(rel),
+          body: pipeline(body, HELP_DIR),
+          sidebarOrder: order,
+        })
+      );
+    });
+  }
+  // A help file the manifest never lists would silently vanish from both the app
+  // and the site — the exact fork this whole scheme exists to prevent. Fail loud.
+  for (const f of fs.readdirSync(path.join(repoRoot, HELP_DIR))) {
+    if (f.endsWith('.md') && !helpReferenced.has(f.slice(0, -3))) {
+      fail(`${HELP_DIR}/${f} exists but is not listed in ${HELP_MANIFEST} — add it there or delete the file.`);
+    }
+  }
+
   return { files, report, sectionCount: sections.length };
 }
 
@@ -217,7 +280,7 @@ function validate(files) {
 
 function write(files) {
   // Idempotent: clear exactly what this script owns, then re-emit.
-  for (const owned of ['design', 'operations', 'status.md', 'developing.md', 'data-model.md']) {
+  for (const owned of ['design', 'operations', 'guide', 'status.md', 'developing.md', 'data-model.md']) {
     fs.rmSync(path.join(outRoot, owned), { recursive: true, force: true });
   }
   for (const [route, content] of files) {
@@ -229,7 +292,8 @@ function write(files) {
 
 function printReport(report, files, sectionCount) {
   const uniq = (a) => [...new Set(a)];
-  console.log(`docs-site generate: ${files.size} pages (${sectionCount} design sections + overview + 5 imports).`);
+  const guidePages = [...files.keys()].filter((r) => r.startsWith('guide/')).length;
+  console.log(`docs-site generate: ${files.size} pages (${sectionCount} design sections + overview + 5 imports + ${guidePages} user-guide pages).`);
   console.log(`  §-references linked: ${report.linkedRefs}`);
   if (report.sectionTopFallbacks.length > 0) {
     console.log(`  §N.M linked to section top (no matching numbered heading): ${uniq(report.sectionTopFallbacks).join(', ')}`);
