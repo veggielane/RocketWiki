@@ -31,7 +31,9 @@ test('every manifest topic becomes a User guide page under its section', () => {
       assert.ok(files.has(route), `expected a generated page at ${route}`);
       const page = files.get(route);
       assert.match(page, /^---\n/, `${route} should open with frontmatter`);
-      assert.match(page, new RegExp(`description: ${JSON.stringify(topic.summary)}`), `${route} description = manifest summary`);
+      // A literal check, not a RegExp: a summary is prose and may carry regex
+      // metacharacters ("(protected).") that would otherwise silently never match.
+      assert.ok(page.includes(`description: ${JSON.stringify(topic.summary)}`), `${route} description = manifest summary`);
       assert.match(page, new RegExp(`\\n  order: ${order}\\n`), `${route} sidebar.order = manifest position`);
     });
   }

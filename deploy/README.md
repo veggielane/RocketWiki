@@ -199,7 +199,9 @@ Deliberately (design.md §15/§17 — external services stay external):
    values knob to make it.
 2. **Keycloak** with a production-configured `rocketwiki` realm (the dev
    realm's mappers documented in `src/RocketWiki.AppHost/keycloak/README.md`
-   are the spec to reproduce). Inside the network boundary, behind TLS.
+   are the spec to reproduce — including one `yes`-valued mapper per selector
+   category listed under `api.protectiveMarking.selectorCategories`, below).
+   Inside the network boundary, behind TLS.
 3. **Somewhere for attachment bytes**, which is a real choice, not a default:
    an **S3-compatible object store** (MinIO/Ceph/…) with a bucket; or, for
    `api.fileStorage.provider=FileSystem`, a deliberately-created PVC the
@@ -271,6 +273,33 @@ docs/CONFIGURATION.md and grant only DML.
 
 Without it, the migration Job fails config validation and the install stops
 before anything rolls — that's fail-closed, not a bug.
+
+### Protective-marking selector categories (design.md §21.15)
+
+Not in the Secret: they are policy, not credentials, and belong in the values
+file where a diff shows them. `api.protectiveMarking.selectorCategories` lists
+the categories this instance recognises (`values.yaml` documents the shape and
+the reasoning); each renders into the api container's environment as
+`ProtectiveMarking__SelectorCategories__<n>__*`. Empty — the default — means
+no categories: no pickers in the marking control, no selector values on access
+grants, and a page whose marking carries a selector for an unlisted category is
+visible to **nobody**. A low/high pair must list every category that travels
+between them, spelled identically, and each `claimName` needs a matching
+single-valued mapper in Keycloak emitting `yes` for eligible users
+(`src/RocketWiki.AppHost/keycloak/README.md`). The API validates the list at
+startup and refuses to start on an invalid one, naming the offending index.
+
+```yaml
+api:
+  protectiveMarking:
+    selectorCategories:
+      - name: FRUIT
+        description: Fruit programme compartments
+        claimName: fruit
+        values: [APPLE, BANANA]
+      - name: REGION           # no claimName: everyone is eligible,
+        values: [NORTH, SOUTH] # the space grant alone decides
+```
 
 ## Install / upgrade / rollback
 

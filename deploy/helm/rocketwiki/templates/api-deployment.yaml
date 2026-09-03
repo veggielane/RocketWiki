@@ -139,6 +139,33 @@ spec:
               templated here. This branch is explicit rather than an `else`
               so a fourth provider can't silently inherit FileSystem's env.
             */}}
+            {{- /*
+              design.md §21.15. Each configured selector category becomes the
+              API's indexed env form (ProtectiveMarking__SelectorCategories__<n>__*,
+              docs/CONFIGURATION.md "Protective markings"), values nested under
+              their category. Nothing renders for the empty default, and that
+              absence IS the configuration: no categories, no pickers, and a page
+              carrying any selector is visible to nobody. ClaimName is emitted even
+              when empty — the same reasoning as Instance__Id above: an empty claim
+              name means EVERY user is eligible for the category, which is the kind
+              of widening that should be stated in the rendered manifest rather
+              than inferred from a variable that is not there. Description is the
+              one optional field with no access consequence, so it may be absent.
+            */}}
+            {{- range $i, $category := .Values.api.protectiveMarking.selectorCategories }}
+            - name: {{ printf "ProtectiveMarking__SelectorCategories__%d__Name" $i }}
+              value: {{ $category.name | quote }}
+            {{- with $category.description }}
+            - name: {{ printf "ProtectiveMarking__SelectorCategories__%d__Description" $i }}
+              value: {{ . | quote }}
+            {{- end }}
+            - name: {{ printf "ProtectiveMarking__SelectorCategories__%d__ClaimName" $i }}
+              value: {{ $category.claimName | default "" | quote }}
+            {{- range $j, $value := $category.values }}
+            - name: {{ printf "ProtectiveMarking__SelectorCategories__%d__Values__%d" $i $j }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.api.otel.enabled }}
             # design.md §15 "Telemetry is not audit": presence of this
             # variable is the ONLY thing that enables an exporter

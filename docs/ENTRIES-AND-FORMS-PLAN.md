@@ -425,3 +425,17 @@ Each phase should be independently shippable and independently abandonable.
   be edited out from under its records. Decide whether old records are shown
   as-stored (recommended) or coerced to the current definition (a silent rewrite
   of history).
+- **Follow-up from the protective-marking overhaul (September 2026): page
+  entries share the marking gate but have no selector storage yet.** An entry's
+  marking goes through the same `MarkingGate` as a page's (level, selector
+  eligibility and grant, caveat — design.md §21.15), but `PageEntries` carries
+  only level, prefix and countries: an entry cannot carry an additional selector
+  of its own — `PageEntryService` refuses an entry marking that names one with
+  a `ValidationError` rather than silently dropping it — and the bundle
+  importer applies only the level, prefix and countries of an entry payload's
+  marking. Nothing widens today, because an entry is reachable only through its
+  page, whose selectors already gate it. Phase 2 above must add a
+  `PageEntrySelectors` child table mirroring `PageMarkingSelectors` (PK
+  `(PageEntryId, Category)`), put it on `ToMarking()`, and make the importer
+  apply it — before an entry can be marked above its page in any dimension
+  other than level.

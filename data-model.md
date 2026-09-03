@@ -298,7 +298,7 @@ to `Pages` rather than assume every row belongs to a live page.
 |---|---|---|
 | PageId | uniqueidentifier PK, FK → Page | **the PK is the page id** — 1:1 by construction |
 | Level | tinyint | `ClassificationLevel`: 1 OFFICIAL, 2 OFFICIAL_SENSITIVE, 3 SECRET, 4 TOP_SECRET |
-| Prefix | nvarchar(16) null | national qualifier, canonical (trimmed, upper-cased) — `UK` by default, giving `UK SECRET`. **NULL is legal** and means no prefix (design.md §21.12) |
+| Prefix | nvarchar(16) null | national qualifier — **only `UK` or NULL is writable** (the mutation takes `ukPrefix: Boolean!`; the API exposes `ukPrefix`, not the string). `UK` by default, giving `UK SECRET`; **NULL is legal** and means no prefix (design.md §21.12). The column stays a string rather than a bit so a sync-imported legacy value renders verbatim; `AddMarkingSelectorsAndFixedCaveat` nulled every stored value other than `UK` — on `PageMarkings` and on `PageEntries` alike |
 | SetAtUtc | datetime2(3) | |
 | SetByUserId | uniqueidentifier null FK → User | **null** for a row applied by sync import, or by the every-page-is-marked backstop — no local actor |
 
@@ -368,9 +368,40 @@ case-insensitive and SQLite's is case-sensitive for ASCII, so a provider-side
 comparison would enforce two different rules across the two test tiers.
 Canonicalizing on write makes the answer byte-identical everywhere.
 
-Values are drawn from the registered `nationality` attribute's allowed values
-(`AttributeDefinition.AllowedValuesJson`), **not** from an ISO 3166 list — see
-§21.4 for why substituting one silently denies everybody while looking correct.
+Values are the **fixed national-caveat vocabulary** `AUS`, `CAN`, `NZ`, `UK`,
+`US` (`NationalCaveatVocabulary`, design.md §21.4) — no longer the registered
+`nationality` attribute's `AllowedValuesJson`, and never an ISO 3166 list. The
+column is deliberately **not** check-constrained to the five: a legacy token
+(a pre-fixed-set `GB` was remapped to `UK` by `AddMarkingSelectorsAndFixedCaveat`,
+the same nation; anything else is left in place, with a review query in the
+migration's comment) stays on the row and matches nobody, which is the
+fail-closed reading, while the mutation refuses to write a new one.
+
+### PageMarkingSelector — the additional selectors (design.md §21.15)
+
+| Column | Type | Notes |
+|---|---|---|
+| PageId | uniqueidentifier FK → PageMarking | part of PK |
+| Category | nvarchar(32) | canonical: trimmed, `ToUpperInvariant()`; part of PK |
+| Value | nvarchar(32) | canonical: trimmed, `ToUpperInvariant()` |
+
+Composite PK **`(PageId, Category)`** — one value per category per page is a
+fact about the table, not application discipline: a second value for a
+category is a primary-key violation, which is the same construction
+`PageMarking`'s PK uses for "one marking per page". `ProtectiveMarking.Create`
+refuses the same thing at the value object. Indexes: the PK, plus
+`(Category, Value, PageId)` — the "which pages carry APPLE" access path, shaped
+now for the reason `PageMarkingCountry`'s is. FK `NO ACTION` like everything
+else; no global query filter, like the country table, so a soft-deleted page
+keeps its selectors through restore.
+
+Values are validated against the configured selector catalog on every write
+path (mutation, grant editor, and length-checked on import), because SQLite does
+not enforce `HasMaxLength` and a hostile bundle must land as an unparseable
+marking rather than a `DbUpdateException`. An imported category or value the
+instance has not configured is stored verbatim and matches nobody (design.md
+§21.10). Added by `AddMarkingSelectorsAndFixedCaveat`, together with the prefix
+nulling and the `GB` → `UK` remap above.
 
 ---
 
@@ -395,23 +426,64 @@ Indexes: unique `Subject` filtered `Subject IS NOT NULL`; `(Email)`.
 
 ### AccessRule
 
-One table, two kinds (design.md §6.4), with real FKs instead of a generic
+One table, three kinds (design.md §6.4), with real FKs instead of a generic
 subject id so referential integrity holds:
 
 | Column | Type | Notes |
 |---|---|---|
 | Id | uniqueidentifier PK | v7 |
-| Kind | tinyint | 1 = SpaceGrant, 2 = PageRestriction |
-| SpaceId | uniqueidentifier null FK → Space | set iff Kind = SpaceGrant |
+| Kind | tinyint | 1 = RoleGrant, 2 = PageRestriction, 3 = AccessGrant |
+| SpaceId | uniqueidentifier null FK → Space | set iff Kind ∈ {1, 3} |
 | PageId | uniqueidentifier null FK → Page | set iff Kind = PageRestriction |
-| Role | tinyint null | grants: 1 viewer, 2 editor, 3 space-admin |
+| Role | tinyint null | role grants only: 2 editor, 3 space-admin. **1 (viewer) is retired** — a viewer is an access grant now, and the check constraint forbids the value |
 | Action | tinyint null | restrictions: 1 view, 2 edit |
 | ExpressionJson | nvarchar(max) | validated AND/OR expression tree (§6.3) |
 | CreatedAtUtc / CreatedByUserId / UpdatedAtUtc / UpdatedByUserId | | changes also emit `permission.change` audit events |
 
-Check constraints enforce the kind ↔ column pairing. Indexes: `(SpaceId)`,
-`(PageId)`. The full rule set is small and cached in memory; these tables
-are read on startup and cache invalidation, not per request.
+`CK_AccessRules_KindColumnPairing` enforces the kind ↔ column pairing:
+
+```
+([Kind] = 1 AND [SpaceId] IS NOT NULL AND [PageId] IS NULL AND [Role] IS NOT NULL AND [Role] IN (2,3) AND [Action] IS NULL)
+OR ([Kind] = 2 AND [PageId] IS NOT NULL AND [SpaceId] IS NULL AND [Action] IS NOT NULL AND [Role] IS NULL)
+OR ([Kind] = 3 AND [SpaceId] IS NOT NULL AND [PageId] IS NULL AND [Role] IS NULL AND [Action] IS NULL)
+```
+
+The explicit `[Role] IS NOT NULL` is load-bearing, not redundant: `NULL IN (2,3)`
+evaluates to UNKNOWN, and a CHECK constraint accepts UNKNOWN, so without it a
+kind-1 row with no role at all would pass the constraint. The SQLite tier caught
+exactly that when the constraint was first written with `IN (2,3)` alone.
+
+SQLite enforces CHECK constraints, so the pairing is covered by the SQLite tier.
+Indexes: `(SpaceId)`, `(PageId)`. The full rule set is small and cached in
+memory; these tables are read on startup and cache invalidation, not per request.
+
+**Access and role grants are two kinds in one table**, not two tables: one grants
+query loads both for a space, one check constraint pairs their columns, and one
+`permission.change` snapshot shape audits both. The `SplitSpaceGrantsIntoAccessAndRole`
+migration made the split behaviour-preserving: the old check constraint is
+dropped, every kind-1 `Role = 1` (viewer) row becomes `Kind = 3, Role = NULL` in
+place, a **mirror** kind-3 row with the same expression and audit columns is
+inserted beside every kind-1 editor and space-admin row (so every editor keeps
+exactly the visibility they had), and the new constraint is added last. The
+mirror rows carry no `permission.change` audit row — design.md §7 records the
+discontinuity and why a migration does not write audit rows.
+
+### AccessRuleSelector — selector values an access grant confers (design.md §21.15)
+
+| Column | Type | Notes |
+|---|---|---|
+| AccessRuleId | uniqueidentifier FK → AccessRule | part of PK |
+| Category | nvarchar(32) | canonical; part of PK |
+| Value | nvarchar(32) | canonical; part of PK |
+
+Composite PK **`(AccessRuleId, Category, Value)`** — unlike `PageMarkingSelector`,
+a grant may confer **several values of one category** (the readers it matches
+hold all of them), so the value is part of the key. Index
+`(Category, Value, AccessRuleId)` — "which grants confer APPLE". FK `NO ACTION`;
+selector rows are removed explicitly when a rule is deleted. Only kind-3 rows
+carry them, enforced by the service (a role grant or restriction submitted with
+selector values is a `ValidationError`), and every value is validated against
+the configured catalog on write. Added by `SplitSpaceGrantsIntoAccessAndRole`.
 
 ### AttributeDefinition — the attribute registry (design.md §6.2)
 
@@ -419,14 +491,24 @@ Id (PK v7), Key nvarchar(64) unique, ClaimName nvarchar(128), DisplayName
 nvarchar(128), Type tinyint (1 string, 2 string[]), AllowedValuesJson
 nvarchar(max) null.
 
-Two keys are **well known** to code as well as to admins: `nationality`, whose
-`AllowedValuesJson` is also the vocabulary an eyes-only caveat's countries must
-come from (`PageMarkingCountry`, design.md §21.4), and `clearance`, whose values
-are the four `ClassificationLevel` wire names and which gates every page read
-against its protective marking (§21.3). Both are still ordinary registered
-attributes — read from the token per request like any other — and both are absent
-rather than empty when the claim is missing, which is what makes their
-fail-closed defaults land on the intended answer.
+Two keys are **well known** to code as well as to admins: `nationality`, which
+gates the eyes-only caveat (`PageMarkingCountry`, design.md §21.4) — but whose
+`AllowedValuesJson` is **no longer read by anything in markings**: the caveat's
+vocabulary is the fixed five-token set, and a `nationality` row, where one
+exists, is ordinary rule-builder vocabulary for `attr` conditions — and
+`clearance`, whose values are the four `ClassificationLevel` wire names and
+which gates every page read against its protective marking (§21.3). Both are
+still ordinary registered attributes — read from the token per request like any
+other — and both are absent rather than empty when the claim is missing, which
+is what makes their fail-closed defaults land on the intended answer.
+
+The **selector categories** (design.md §21.15) are deliberately *not* registry
+rows. They come from configuration (`ProtectiveMarking:SelectorCategories`), the
+claims they name are mapped into the `Principal` from that catalog rather than
+from this table, and JIT provisioning never mirrors those claims into
+`User.AttributesJson` — eligibility is an access input, not display data, and a
+vocabulary that gates access lives in a reviewed diff, not in an editable row
+(design.md §6.2).
 
 ### KnownGroup — rule-builder picker source
 
@@ -739,6 +821,10 @@ we have given up.
 7. **Notifications are materialized per recipient after a permission check**,
    rather than stored once and filtered on read — the permission decision
    happens in exactly one place, and re-checked again at render.
+8. **Access grants and role grants are two `AccessRule` kinds (3 and 1) with a
+   child `AccessRuleSelectors` table**, rather than a separate grants table or a
+   packed selector column — one grants query, one check constraint, one audit
+   snapshot, and selector values queryable as data (design.md §6.4, §21.15).
 
 ## Open items
 

@@ -91,6 +91,22 @@
           }
         },
         {
+          "name": "fruit",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "fruit",
+            "claim.name": "fruit",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "multivalued": "false",
+            "aggregate.attrs": "false"
+          }
+        },
+        {
           "name": "roles",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-realm-role-mapper",
@@ -144,7 +160,8 @@
       "realmRoles": ["user"],
       "attributes": {
         "nationality": ["NZ"],
-        "clearance": ["OFFICIAL"]
+        "clearance": ["OFFICIAL"],
+        "fruit": ["yes"]
       }
     },
     {
@@ -158,7 +175,7 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["US"],
+        "nationality": ["US", "CAN"],
         "clearance": ["SECRET"]
       }
     },
@@ -184,8 +201,9 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["NZ", "GB"],
-        "clearance": ["OFFICIAL_SENSITIVE"]
+        "nationality": ["NZ", "UK"],
+        "clearance": ["OFFICIAL_SENSITIVE"],
+        "fruit": ["yes"]
       }
     },
     {
@@ -200,7 +218,24 @@
       "realmRoles": ["user"],
       "attributes": {
         "nationality": ["US"],
-        "clearance": ["TOP_SECRET"]
+        "clearance": ["TOP_SECRET"],
+        "fruit": ["no"]
+      }
+    },
+    {
+      "username": "grace.aus",
+      "email": "grace.aus@example.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Grace",
+      "lastName": "Australian",
+      "credentials": [{ "type": "password", "value": "RocketWiki!Dev1", "temporary": false }],
+      "groups": ["/engineering"],
+      "realmRoles": ["user"],
+      "attributes": {
+        "nationality": ["AUS"],
+        "clearance": ["SECRET"],
+        "fruit": ["yes"]
       }
     },
     {

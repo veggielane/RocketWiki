@@ -4,9 +4,10 @@ Every configuration key the system reads, with its default, what **unset**
 means, and the owning `design.md` section. Enumerated from source (the "Read
 at" column names the file that actually reads each key), not from memory —
 if this table and the code ever disagree, the code wins and this file has a
-bug. Last verified against source: 2026-08-30 (the API/frontend tables against
-2026-08-24; the two new tables at the bottom — the web container's nginx
-runtime env and the operator CLIs' connection string — against 2026-08-30).
+bug. Last verified against source: 2026-09-02 (the API/frontend tables against
+2026-08-24; the web container's nginx runtime env and the operator CLIs'
+connection string against 2026-08-30; the "Protective markings" section
+against 2026-09-02).
 
 Two conventions to know before reading:
 
@@ -40,6 +41,48 @@ configuration binding.
 | `Keycloak:Realm` | `rocketwiki` (code and appsettings.json) | n/a (has a default) | same two files | §11 |
 | `Keycloak:Authority` | *(none)* | Authority is derived from the `keycloak` connection string + realm. Set this only when running standalone outside Aspire | same two files | §11 |
 | `Keycloak:Audience` | code fallback `rocketwiki`; **shipped appsettings.json sets `rocketwiki-api`** (must match the realm's audience mapper — see `src/RocketWiki.AppHost/keycloak/rocketwiki-realm.json`) | The code fallback applies only if appsettings is stripped | `Program.cs` | §11 |
+
+## Protective markings
+
+design.md §21.15 "Additional selectors": the compartment-style categories a
+marking may carry beside its classification (`UK SECRET APPLE NORTH …`),
+read from the `ProtectiveMarking:SelectorCategories` array, bound to
+`ProtectiveMarkingOptions` and **validated at startup** (`ValidateOnStart`).
+The catalog itself is built once, at first resolution, from the bound
+options — not eagerly off the builder — and stamped into the `DbContext`
+options through EF's provider-aware `ConfigureDbContext` hook, so a test
+host's in-memory configuration is honoured too; production reads the same
+values either way. Reading a page then
+needs, per selector on it, eligibility for the category (site-wide, from the
+token) *and* a grant of that value in the space (§6.4) — two gates, both
+fail closed. Environment-variable form, one variable per leaf, array indexes
+as path segments:
+
+```
+ProtectiveMarking__SelectorCategories__0__Name=FRUIT
+ProtectiveMarking__SelectorCategories__0__Description=Fruit programme compartments
+ProtectiveMarking__SelectorCategories__0__ClaimName=fruit
+ProtectiveMarking__SelectorCategories__0__Values__0=APPLE
+ProtectiveMarking__SelectorCategories__0__Values__1=BANANA
+ProtectiveMarking__SelectorCategories__1__Name=REGION
+ProtectiveMarking__SelectorCategories__1__ClaimName=
+ProtectiveMarking__SelectorCategories__1__Values__0=NORTH
+ProtectiveMarking__SelectorCategories__1__Values__1=SOUTH
+```
+
+That exact pair is the dev vocabulary `aspire run` wires from
+`src/RocketWiki.AppHost/AppHost.cs`, matching the dev realm's `fruit`
+attribute. It is deliberately **not** in `appsettings.Development.json`,
+which `WebApplicationFactory` test runs would inherit. The Helm chart renders
+the same variables from `api.protectiveMarking.selectorCategories`.
+
+| Key | Default | Unset means | Read at | design.md |
+|---|---|---|---|---|
+| ⛔ `ProtectiveMarking:SelectorCategories` | *(none — deliberately)* | **No selector categories.** The marking control offers no selector pickers, and access grants carry no selector values. A page whose marking carries a selector for a category not configured here — it arrived by sync, or the category was removed — is visible to **nobody**: fail closed, and the denial names the unknown category rather than passing silently. **Invalid ⇒ the API fails to start**, naming the failing category (`Selector category 'FRUIT' …`) | `Markings/ProtectiveMarkingConfiguration.cs` — validated at startup, built at first resolution, stamped into the DbContext options via `ConfigureDbContext` | §21.15, §6.4 |
+| `ProtectiveMarking:SelectorCategories:[n]:Name` | *(required per entry)* | Startup failure. A canonical upper-case token — `[A-Z0-9_-]`, at most 32 characters, unique across the list — that appears verbatim in marking labels | same | §21.15 |
+| `ProtectiveMarking:SelectorCategories:[n]:Description` | *(none)* | No description beside the picker; nothing about access changes | same | §21.15 |
+| `ProtectiveMarking:SelectorCategories:[n]:ClaimName` | *(none)* | **Every user is eligible** for the category; the space grant alone decides. When set, the token attribute of that name must equal `yes` (trimmed, case-insensitive) for the user to be eligible — any other value, or its absence, is not eligible (fail closed). Needs a matching single-valued mapper in Keycloak (§11.5; `src/RocketWiki.AppHost/keycloak/README.md`). `groups`, `sub`, `clearance` and `nationality` are refused as claim names | same | §21.15, §11.5 |
+| `ProtectiveMarking:SelectorCategories:[n]:Values` | *(required per entry)* | Startup failure. Each value a canonical upper-case token like `Name`, unique within its category. A marking carries at most one value per category; an access grant may carry several | same | §21.15, §6.4 |
 
 ## File storage
 

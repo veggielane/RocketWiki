@@ -199,6 +199,52 @@ api:
       existingClaim: ""
       mountPath: /var/rocketwiki/attachments
 
+  # design.md §21.15 "Additional selectors": the protective-marking selector
+  # categories this instance recognises — compartments such as a programme
+  # codeword that a marking carries beside its classification
+  # (`UK SECRET APPLE …`). Reading such a page needs, per selector, eligibility
+  # for the category (from the token) AND a grant of that value in the space
+  # (§6.4); both gates fail closed.
+  #
+  # EMPTY by default, and that absence is a configuration, not a gap: with no
+  # categories the marking control offers no selector pickers, access grants
+  # carry no selector values, and a page whose marking carries a selector for a
+  # category not listed here — arrived by sync, or the category was removed —
+  # is visible to NOBODY. Both instances of a low/high pair must therefore list
+  # every category that travels between them, spelled identically.
+  #
+  # Each entry renders into the API's indexed env form on the api container
+  # (ProtectiveMarking__SelectorCategories__<n>__Name and friends —
+  # docs/CONFIGURATION.md "Protective markings"). The API validates the whole
+  # list at startup and REFUSES TO START on an invalid one, naming the offending
+  # index: names and values must be non-empty upper-case tokens ([A-Z0-9_-], at
+  # most 32 characters) and unique. Nothing here is a credential, which is why
+  # it is a values block and not a key in api.existingSecret; it is a values
+  # block rather than an api.extraEnv recipe for the reason given on
+  # existingSecret above — reachable-only-via-extraEnv is the same thing as not
+  # shipping it.
+  #
+  #   name         REQUIRED. The category, as it appears in marking labels.
+  #   description  Optional. Shown to users beside the picker.
+  #   claimName    Optional. The token claim that gates eligibility: a user is
+  #                eligible only when that claim is exactly "yes" — one
+  #                single-valued mapper per claim in Keycloak, see
+  #                src/RocketWiki.AppHost/keycloak/README.md. Empty or omitted
+  #                means EVERY user is eligible and the space grant alone
+  #                decides; the schema rejects unknown keys so a misspelt
+  #                claimName cannot silently become that.
+  #   values       REQUIRED. The value list; a marking carries at most one per
+  #                category.
+  protectiveMarking:
+    selectorCategories: []
+    #  - name: FRUIT
+    #    description: Fruit programme compartments
+    #    claimName: fruit
+    #    values: [APPLE, BANANA]
+    #  - name: REGION
+    #    description: Regional releasability
+    #    values: [NORTH, SOUTH]
+
   # design.md §15 "Telemetry is not audit": OFF by default, fail-closed —
   # when disabled the OTEL_EXPORTER_OTLP_ENDPOINT env var is simply absent,
   # and ServiceDefaults registers NO exporter at all (Extensions.cs gates the

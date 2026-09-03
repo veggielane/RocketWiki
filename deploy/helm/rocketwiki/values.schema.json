@@ -41,6 +41,39 @@
             }
           }
         },
+        "protectiveMarking": {
+          "type": "object",
+          "properties": {
+            "selectorCategories": {
+              "type": "array",
+              "description": "design.md §21.15: the selector categories this instance recognises, rendered into ProtectiveMarking__SelectorCategories__<n>__* on the api container. Empty (the default) is fail-closed configuration, not an omission: no pickers, no selector values on grants, and a page carrying a selector for an unlisted category is visible to nobody. The API re-validates the list at startup and refuses to start on an invalid one; this shape catches only the structural half (a missing name or value list, an unknown key) at helm lint, where it is cheaper.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The category name as it appears in marking labels. The API requires an upper-case [A-Z0-9_-] token of at most 32 characters, unique across the list, and fails startup otherwise."
+                  },
+                  "description": { "type": "string" },
+                  "claimName": {
+                    "type": "string",
+                    "description": "Token claim that gates eligibility (must be exactly \"yes\"). Empty or omitted means every user is eligible. Spelling matters — see additionalProperties."
+                  },
+                  "values": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 },
+                    "description": "The category's value list; same token rules as name, unique within the category."
+                  }
+                },
+                "required": ["name", "values"],
+                "additionalProperties": false,
+                "description": "additionalProperties is false because the one key an operator is likely to misspell, claimName, fails OPEN when it is not recognised: a category with no claim name is one every user is eligible for, and nothing in the rendered manifest would say the claim was dropped. Refusing unknown keys turns that into a lint error."
+              }
+            }
+          }
+        },
         "otel": {
           "type": "object",
           "properties": {

@@ -125,7 +125,7 @@ Take `VITE_OIDC_AUTHORITY` from `.env.example` as-is
 is Aspire's stable proxy in front of it. Using the container's own port looks
 right, and breaks sign-in only after the redirect back from Keycloak.
 
-**4. Sign in.** The realm seeds six users, all with password
+**4. Sign in.** The realm seeds seven users, all with password
 `RocketWiki!Dev1`, chosen to cover the rule engine's edge cases rather than to
 be a plausible org chart — `alice.engineer` is the ordinary one to start with,
 `frank.admin` is the instance admin, and `carol.noattr` deliberately carries no
@@ -289,12 +289,54 @@ object-level-authorization reasons design.md §6.7/§8 calls for.
 Being explicit about what has and hasn't been checked, rather than letting
 "it builds" stand in for "it works":
 
-**Proposals, written but not built.** Three documents describe work nobody has
+**Proposals, written but not built.** Two documents describe work nobody has
 committed to. They are listed here because an unlinked plan is indistinguishable
 from a plan nobody wrote, and each records choices that get expensive later:
-[issue tracking and service desk](docs/PLATFORM-PLAN.md),
-[restricted-page placeholders](docs/RESTRICTED-PLACEHOLDERS-PLAN.md), and
-[page entries and forms on top of them](docs/ENTRIES-AND-FORMS-PLAN.md).
+[issue tracking and service desk](docs/PLATFORM-PLAN.md) and
+[page entries and forms on top of them](docs/ENTRIES-AND-FORMS-PLAN.md). (A
+third, restricted-page placeholders, was retired rather than built: the
+overhaul below makes disclosure always-on, and design.md §6.7 records why the
+opt-in toggle it proposed was rejected.)
+
+**In progress — not yet verified end-to-end:**
+- **The protective-marking and access-model overhaul** (design.md §6.4, §6.7,
+  §21, and the new §21.15). Four changes land together: **additional
+  selectors** (instance-configured categories such as `FRUIT` with values
+  `APPLE`/`BANANA`, gated by a per-category Keycloak attribute *and* a
+  per-space grant — `UK SECRET APPLE NORTH AUS/NZ EYES ONLY`); **access and
+  role are separate grant kinds** (an access grant says who may see a space's
+  pages and carries selector values; a role grant says who may edit or
+  administer and confers no visibility — "viewer" is gone, and a space admin
+  without an access grant manages a space whose every page shows as
+  protected); **denial is disclosed on the page view, the tree and in-page
+  links** as a `(protected)` placeholder carrying the marking label and every
+  failing reason, while search, Ask, RQL, listings and MCP keep omitting, and
+  a space you hold no access grant in withholds even the marking; and three
+  spec changes — the absent-clearance floor moves to OFFICIAL-SENSITIVE, the
+  caveat vocabulary becomes the fixed `AUS CAN NZ UK US` set rendered without
+  brackets, and the prefix becomes a UK on/off toggle. **This supersedes three
+  claims in the "Protective markings" bullet below** as written when it was
+  verified: absent-not-forbidden now holds only on the omitting surfaces, the
+  floor is OFFICIAL-SENSITIVE rather than OFFICIAL, and the caveat vocabulary
+  is fixed rather than the registry's. Two migrations
+  (`AddMarkingSelectorsAndFixedCaveat`, `SplitSpaceGrantsIntoAccessAndRole`)
+  convert existing rows behaviour-preservingly. **Done**: the overhaul is
+  implemented and green on every test tier — the unit and SQLite integration
+  tiers (Core, Data, API, Importer, Sync, Storage) and, on 2026-09-03, the
+  real-SQL-Server tier run locally against SQL Server 2025 with Full-Text
+  Search (46/46), whose two new migration tests seed the previous schema with
+  viewer grants, `GB` caveats and a non-UK prefix and assert the conversion —
+  the migration rehearsal in miniature. The suites include the 64-row
+  S/C/E/G/N/R truth table in Core, the persona × page truth table through the
+  real API mutations, the placeholder introspection allowlist, the
+  omitting-surface sweep, the telemetry-hygiene sweeps over the disclosing
+  surfaces and the SPA's 1,798 tests; the mutation drills behind each gate went
+  red and were restored, four of them repeated by hand. **Not yet done**: the
+  live `aspire run` walk-through of the truth table against the dev realm, and
+  a low→high bundle round-trip of a selector-bearing page between two running
+  instances (the bundle path itself is pinned by the sync tests). Until those
+  run, treat the live-stack behaviour as design intent; the test-tier claims
+  above are what the suites actually pin.
 
 **Verified:**
 - `dotnet build RocketWiki.sln` / `dotnet test RocketWiki.sln`, run solution-wide,
