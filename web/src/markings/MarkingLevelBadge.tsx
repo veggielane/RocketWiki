@@ -24,7 +24,7 @@ export interface MarkingLevelBadgeProps {
  *
  * **This shows a level, not a marking, and the distinction is load-bearing.**
  * A list row has no space for a caveat, so a page marked
- * `SECRET [GB EYES ONLY]` badges here as `SECRET` — informational, and short
+ * `SECRET NZ EYES ONLY` badges here as `SECRET` — informational, and short
  * of the truth by exactly the caveat. That is tolerable only because the
  * badge is not the control (the caveat is still enforced server-side on every
  * read, §21.2) and because the page's own banners render the whole `label`.

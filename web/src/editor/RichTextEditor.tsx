@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Extension, type AnyExtension } from '@tiptap/core'
 import { EditorContent, useEditor } from '@tiptap/react'
 import type { EditorView } from '@tiptap/pm/view'
@@ -7,6 +7,7 @@ import type { Awareness } from 'y-protocols/awareness'
 import { Alert, Box, Paper } from '@mui/material'
 import { richTextExtensions } from './richTextExtensions'
 import { EmojiSuggestionPopup } from './emoji/EmojiSuggestionPopup'
+import { PageLinkTargetsContext, buildPageLinkTargetMap, type PageLinkTargetLike } from './marks/pageLinkTargets'
 import { markdownToJson } from './markdown/fromMarkdown'
 import { jsonToMarkdown } from './markdown/toMarkdown'
 import { EditorToolbar } from './EditorToolbar'
@@ -106,6 +107,17 @@ export interface RichTextEditorProps {
    * character on a long page.
    */
   onDocChanged?: () => void
+  /**
+   * The page's own `linkTargets` (design.md §6.7 / §21.8): what every
+   * `page://` link in `initialMarkdown` resolved to, from the same read that
+   * fetched the content. Read-only rendering only — the link mark view
+   * renders a readable target as a router link, a withheld one as inert
+   * text with a `(protected)` marker, a vanished one with a missing marker
+   * (editor/marks/PageLinkView.tsx). Absent (a comment, a help topic, edit
+   * mode) means nothing resolved anything and links fall back to the id
+   * address.
+   */
+  linkTargets?: readonly PageLinkTargetLike[]
   /** Accessible name for the editable region. Defaults to 'Page content'. */
   ariaLabel?: string
   /**
@@ -133,12 +145,16 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     onSubmitShortcut,
     onSaveShortcut,
     onDocChanged,
+    linkTargets,
     ariaLabel,
     ariaDescribedBy,
   },
   ref,
 ) {
   const [uploadError, setUploadError] = useState<string | null>(null)
+  // Built once per page read, not per link: the mark views look their id up
+  // in this map, so a page with a hundred links costs one pass here.
+  const linkTargetMap = useMemo(() => (linkTargets ? buildPageLinkTargetMap(linkTargets) : null), [linkTargets])
 
   // The shortcut extensions are created once (useEditor's extension list is
   // fixed at mount) — the refs keep the latest callbacks reachable without
@@ -317,7 +333,11 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   // the contenteditable surface for the same reason.) Same renderer either way,
   // per this component's own "one renderer" rule — only its chrome differs.
   if (!editable) {
-    return <EditorContent editor={editor} />
+    return (
+      <PageLinkTargetsContext value={linkTargetMap}>
+        <EditorContent editor={editor} />
+      </PageLinkTargetsContext>
+    )
   }
 
   return (

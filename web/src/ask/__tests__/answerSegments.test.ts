@@ -16,7 +16,7 @@ const c = (n: number): AskCitation => ({
   // §21.13: each citation carries its source page's own marking. Nothing in
   // the marker transform touches it — it is here because a citation is not a
   // citation without it.
-  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
 })
 
 const CITATIONS = [c(1), c(2), c(3)]

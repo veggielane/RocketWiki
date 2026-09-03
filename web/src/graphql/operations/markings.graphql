@@ -1,28 +1,37 @@
 # design.md §21: every page carries a protective marking — a UK Government
-# classification, an optional eyes-only country set, and an optional national
-# prefix — and the first two GATE READ ACCESS. This is an access control the
-# SPA renders, not a decoration it draws.
+# classification, optional selectors (§21.15), an optional eyes-only national
+# caveat, and a presentational UK prefix — and all but the prefix GATE READ
+# ACCESS. This is an access control the SPA renders, not a decoration it draws.
 #
 # `label` is the whole reason this fragment asks for the display strings
 # instead of composing them: §21.4/§21.12 put the ONE formatter server-side
-# (`ProtectiveMarking.Format`) so the SPA, an MCP client and an audit reviewer
-# read identical text — "two renderings of one marking that disagree is a
-# compliance problem, not a cosmetic one".
+# (`ProtectiveMarking.FormatLabel`) so the SPA, an MCP client and an audit
+# reviewer read identical text — "two renderings of one marking that disagree
+# is a compliance problem, not a cosmetic one".
 #
 # `label` and `levelName` are NOT interchangeable and the difference is not
 # cosmetic: `label` is the WHOLE marking, `levelName` is only its level
 # (§21.1's display spelling — `OFFICIAL-SENSITIVE`, not the `OFFICIAL_SENSITIVE`
 # wire name). Rendering `levelName` where a marking is claimed silently drops
-# the caveat, so a page released only to GB nationals would read as plain
-# SECRET. The rule this fragment exists to keep: **anything presenting "this
-# page's marking" renders `label`; `levelName` is only for surfaces with no
-# room for one** — a one-word list badge. `level`/`eyesOnly`/`prefix` are the
-# machine values `setPageMarking` replaces, never display.
+# the selectors and the caveat, so a page released only to NZ nationals would
+# read as plain SECRET. The rule this fragment exists to keep: **anything
+# presenting "this page's marking" renders `label`; `levelName` is only for
+# surfaces with no room for one** — a one-word list badge.
+#
+# `level`/`eyesOnly`/`selectors`/`ukPrefix` are the machine values
+# `setPageMarking` replaces, never display. `eyesOnly` is a list of strings on
+# OUTPUT (a legacy token stored before the vocabulary was fixed must never
+# break serialisation) but an enum on INPUT — the control pins its picker to
+# that enum (markings/caveatCountries.ts) and cannot send anything else.
 fragment PageMarking on PageMarkingView {
   level
   levelName
   eyesOnly
-  prefix
+  selectors {
+    category
+    value
+  }
+  ukPrefix
   label
 }
 
@@ -34,9 +43,9 @@ fragment PageMarking on PageMarkingView {
 # which would assert a judgement about content that does not exist, and not
 # TOP SECRET, which would invent a fact.
 #
-# `label` and `level`, and the omissions are the point. `eyesOnlySets` and
-# `prefix` are the PARTS, and an aggregate's caveat is a truthful CONJUNCTION
-# the per-page model cannot express — `UK SECRET [GB EYES ONLY] [US EYES ONLY]`,
+# `label` and `level`, and the omissions are the point. The caveat sets and
+# selectors are the PARTS, and an aggregate's caveat is a truthful CONJUNCTION
+# the per-page model cannot express — `UK SECRET UK EYES ONLY, US EYES ONLY`,
 # meaning a reader needs both, because a union would widen and an intersection
 # can reach empty (which in this model reads as "no caveat at all"). Composing
 # that client-side would be a second formatter reimplementing the harder half
@@ -60,19 +69,20 @@ query ClassificationScheme {
   }
 }
 
-# §21.6: one mutation replaces the whole marking — level and country set
-# together — because a marking is one value and a partial update would let a
-# caller change the level without ever stating what caveat they meant. The
-# prefix is sent explicitly on every call rather than omitted: omitting it
-# takes the schema's `UK` default, which would silently re-assert a national
-# qualifier on a page whose author cleared it (§21.12 — null/empty is legal
-# and must stay clearable).
+# §21.6: one mutation replaces the whole marking — level, selectors, caveat
+# and prefix together — because a marking is one value and a partial update
+# would let a caller change the level without ever stating what caveat they
+# meant. Every part is sent explicitly on every call; the input has no
+# defaults, so there is nothing an omission could silently re-assert.
 #
-# Two refusals reach here that the control tries to make unreachable
-# (markings/clearance.ts): a level above the caller's own clearance and a
-# resulting marking the caller could not then read, both ForbiddenError
-# (§21.6). They are still surfaced rather than swallowed — a clearance can
-# change mid-session, and the server is the authority either way.
+# Refusals that reach here despite the control trying to make them unreachable
+# (markings/clearance.ts): a level above the caller's own clearance, a
+# selector they are not eligible for or not granted in this space, and a
+# resulting marking they could not then read — all Forbidden (§21.6). They are
+# still surfaced rather than swallowed: a clearance or a grant can change
+# mid-session, and the server is the authority either way. Two values in one
+# category, or a value the instance does not configure, is a Validation error
+# the control cannot produce.
 mutation SetPageMarking($input: SetPageMarkingRequestInput!) {
   setPageMarking(input: $input) {
     marking {

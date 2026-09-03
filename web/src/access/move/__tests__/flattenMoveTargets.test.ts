@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ancestorRestrictionsOf, flattenMoveTargets, type MoveTreeNode } from '../flattenMoveTargets'
 import { serializeRuleNode } from '../../ruleSerializer'
 import { group } from '../../ruleTypes'
+import { readableTree } from '../../../pages/treeEntries'
 import type { SpaceTreeForMoveQuery } from '../../../graphql/generated/graphql'
 
 describe('flattenMoveTargets', () => {
@@ -126,17 +127,25 @@ describe('flattenMoveTargets', () => {
     expect(restrictions[0]!.expression).toBeNull()
   })
 
-  it('accepts the generated SpaceTreeForMove node shape without adaptation', () => {
+  it('accepts the generated SpaceTreeForMove shape through readableTree', () => {
     // Compile-time round-trip against the REAL generated type: if the
-    // operation's shape drifts from MoveTreeNode, this stops compiling.
-    const apiNode: SpaceTreeForMoveQuery['pageTree'][number] = {
-      id: 'api-a',
-      title: 'From API',
-      sortOrder: 0,
-      ownViewRestrictions: [{ ruleId: 'r1', expressionJson: serializeRuleNode(group('engineering')) }],
-      children: [],
-    }
-    const options = flattenMoveTargets([apiNode], 'excluded')
+    // operation's shape drifts from what readableTree hands MoveTreeNode,
+    // this stops compiling. The tree is a union now — a page the caller
+    // cannot read is a placeholder with no id, and nothing can be moved under
+    // it — so the readable projection is the one adaptation.
+    const apiTree: SpaceTreeForMoveQuery['pageTree'] = [
+      {
+        __typename: 'PageTreeNode',
+        id: 'api-a',
+        title: 'From API',
+        sortOrder: 0,
+        ownViewRestrictions: [{ ruleId: 'r1', expressionJson: serializeRuleNode(group('engineering')) }],
+        children: [{ __typename: 'ProtectedTreeNode' }],
+      },
+      { __typename: 'ProtectedTreeNode' },
+    ]
+    const options = flattenMoveTargets(readableTree(apiTree), 'excluded')
+    expect(options.map((o) => o.id)).toEqual([null, 'api-a'])
     expect(options.find((o) => o.id === 'api-a')!.ancestorRestrictions.map((r) => r.ruleId)).toEqual(['r1'])
   })
 })

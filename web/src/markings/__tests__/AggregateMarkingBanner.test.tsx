@@ -20,13 +20,13 @@ describe("AggregateMarkingBanner — the label is the server's, byte for byte", 
   it('renders a conjunctive multi-caveat label exactly as given', () => {
     render(
       <AggregateMarkingBanner
-        marking={{ level: 'SECRET', label: 'UK SECRET [GB EYES ONLY] [US EYES ONLY]' }}
+        marking={{ level: 'SECRET', label: 'UK SECRET NZ EYES ONLY, US EYES ONLY' }}
         placement="answer-head"
       />,
     )
     // Not a substring probe and not a regex: this exact string, because it is
     // the one an SPA-side formatter would get wrong.
-    expect(screen.getByText('UK SECRET [GB EYES ONLY] [US EYES ONLY]')).toBeInTheDocument()
+    expect(screen.getByText('UK SECRET NZ EYES ONLY, US EYES ONLY')).toBeInTheDocument()
   })
 
   it('renders a prefix-less label without inventing one (unanimity-only prefix, §21.13)', () => {

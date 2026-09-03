@@ -24,19 +24,28 @@ const treeNode = (id: string, title: string, children: unknown[] = []) => ({
   sortOrder: 0,
   hasRestrictions: false,
   labels: [],
-  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
   children,
 })
+
+/** A page the author cannot read, at its sibling position (design.md §6.7 / §21.8): no id, so nothing to link to. */
+const protectedLeaf = {
+  __typename: 'ProtectedTreeNode',
+  title: '(protected)',
+  sortOrder: 1,
+  denial: { placeholderTitle: '(protected)', noSpaceAccess: false, marking: null, reasons: [] },
+}
 
 function renderDialog({
   existing = null as LinkTarget | null,
   initialText = '',
   onSubmit = vi.fn(),
   onRemove = undefined as (() => void) | undefined,
+  pageTree = [treeNode('page-2', 'Ignition Report'), protectedLeaf] as unknown[],
 } = {}) {
   const mock = createMockUrqlClient((name) => {
     if (name === 'PageSpaceRef') return { page: { id: 'page-1', spaceId: 'space-1', spaceKey: 'PROP' } }
-    if (name === 'SpacePageTree') return { pageTree: [treeNode('page-2', 'Ignition Report')] }
+    if (name === 'SpacePageTree') return { pageTree }
     return undefined
   })
   render(
@@ -84,6 +93,15 @@ describe('InsertLinkDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Insert' }))
 
     expect(onSubmit).toHaveBeenCalledWith({ kind: 'page', pageId: 'page-2' }, 'the anomaly')
+  })
+
+  it('offers no placeholder for a page the author cannot read — there is no id to link to', async () => {
+    renderDialog({ initialText: 'x' })
+    fireEvent.click(screen.getByRole('button', { name: 'Wiki page' }))
+    const picker = await screen.findByLabelText('Page')
+    fireEvent.mouseDown(picker)
+    expect(await screen.findByRole('option', { name: 'Ignition Report' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: '(protected)' })).toBeNull()
   })
 
   it('opens on an existing link as an edit, prefilled', () => {

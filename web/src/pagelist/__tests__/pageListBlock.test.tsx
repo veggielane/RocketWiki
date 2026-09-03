@@ -19,7 +19,7 @@ const MARKING = (level: string, levelName: string) => ({
   level,
   levelName,
   eyesOnly: [],
-  prefix: 'UK',
+  ukPrefix: true, selectors: [],
   label: `UK ${levelName}`,
 })
 
@@ -110,8 +110,8 @@ describe('page-list widget — rows', () => {
   })
 
   it('renders the aggregate marking with a scope note covering the whole match set (§21.13)', async () => {
-    renderBlock({ payload: ok({ aggregateMarking: { level: 'SECRET', label: 'UK SECRET [UK EYES ONLY]' } }) })
-    expect(await screen.findByText('UK SECRET [UK EYES ONLY]')).toBeInTheDocument()
+    renderBlock({ payload: ok({ aggregateMarking: { level: 'SECRET', label: 'UK SECRET UK EYES ONLY' } }) })
+    expect(await screen.findByText('UK SECRET UK EYES ONLY')).toBeInTheDocument()
     expect(
       screen.getByText('Covers every page matching this query, including any beyond the number listed.'),
     ).toBeInTheDocument()

@@ -1,7 +1,8 @@
 import { useParams } from 'react-router-dom'
 import { Alert, Skeleton } from '@mui/material'
-import { usePageBySlugQuery } from '../graphql/generated/graphql'
+import { usePageAccessBySlugQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
+import { ProtectedPageOrNotFound } from '../access/denial/ProtectedPageOrNotFound'
 import { PageViewPage } from './PageViewPage'
 
 /**
@@ -18,19 +19,22 @@ import { PageViewPage } from './PageViewPage'
  * resolution is one tiny query; the page itself is read exactly as the id route
  * reads it.
  *
- * A missing page and one this caller may not view are the same "not found" here,
- * because the server made them the same (design.md §6.7 — invisible must be
- * indistinguishable from absent, or the URL becomes a way to ask whether a page
- * exists).
+ * Three answers, not two (design.md §6.7 / §21.8). A page this caller may not
+ * read comes back as a DENIAL — its marking and every failing gate, never its
+ * title — and renders as the protected screen right here, before any id
+ * exists to hand on. A slug nobody has comes back null and is the not-found
+ * notice. The two are told apart on purpose: a reader inside a space is owed
+ * an honest answer about what sits at an address, and the audit row is the
+ * same either way.
  */
 export function SlugPageRoute() {
   const { spaceKey, slug } = useParams<{ spaceKey: string; slug: string }>()
-  const [{ data, fetching, error }] = usePageBySlugQuery({
+  const [{ data, fetching, error }] = usePageAccessBySlugQuery({
     variables: { spaceKey: spaceKey ?? '', slug: slug ?? '' },
     pause: !spaceKey || !slug,
   })
 
-    // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
+  // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
   // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
   // away on every post-write refetch: content, scroll position and keyboard
   // focus all went with it. `&& !data` keeps the rendered screen up while the
@@ -39,9 +43,14 @@ export function SlugPageRoute() {
     return <Skeleton variant="rectangular" height={300} />
   }
 
-  const pageId = data?.pageBySlug?.id
-  if (error || !pageId) {
-    return <Alert severity="info">{describeLoadFailure('PAGE').summary}</Alert>
+  if (error) {
+    return <Alert severity="info">{describeLoadFailure('PAGE_ACCESS').summary}</Alert>
+  }
+
+  const access = data?.pageAccessBySlug
+  const pageId = access?.page?.id
+  if (!pageId) {
+    return <ProtectedPageOrNotFound denial={access?.denial} />
   }
 
   return <PageViewPage pageId={pageId} />

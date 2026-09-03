@@ -6,16 +6,32 @@ import type { EffectivePermissionQuery } from '../../../graphql/generated/graphq
 
 type Wire = NonNullable<EffectivePermissionQuery['effectivePermission']>
 
+const passedGate = (gate: Wire['viewGates'][number]['gate']): Wire['viewGates'][number] => ({
+  gate,
+  passed: true,
+  requiredLevel: null,
+  requiredLevelName: null,
+  category: null,
+  value: null,
+  countries: null,
+  ruleId: null,
+  inherited: null,
+  requiredRole: null,
+})
+
 function wire(overrides: Partial<Wire> = {}): Wire {
   return {
     userId: 'sub-1',
     userDisplayName: 'Ada Lovelace',
+    hasSpaceAccess: true,
     spaceRole: 'EDITOR',
     isReplicaSpace: false,
     canView: true,
     canEdit: true,
     viewDenialReason: null,
     editDenialReason: null,
+    viewGates: [],
+    editGates: [],
     viewRestrictions: [],
     editRestrictions: [],
     ...overrides,
@@ -24,14 +40,13 @@ function wire(overrides: Partial<Wire> = {}): Wire {
 
 describe('mapSpaceRole — the GraphQL enum casing to the web casing', () => {
   it.each([
-    ['VIEWER', 'viewer'],
     ['EDITOR', 'editor'],
     ['SPACE_ADMIN', 'spaceAdmin'],
   ] as const)('maps %s to %s', (api, web) => {
     expect(mapSpaceRole(api)).toBe(web)
   })
 
-  it('keeps null (no grant matched) as null', () => {
+  it('keeps null (no role grant matched) as null', () => {
     expect(mapSpaceRole(null)).toBeNull()
   })
 })
@@ -54,7 +69,24 @@ describe('toEffectivePermissionDetail', () => {
     expect(detail.editDenialReason).toBe('insufficient-space-role')
   })
 
-  it('parses each restriction check\'s expressionJson into a RuleNode', () => {
+  it('carries space access and the two gate ladders through as the wire sent them', () => {
+    // No re-casing: the gate enum is the one describeAccessGate reads.
+    const detail = toEffectivePermissionDetail(
+      wire({
+        hasSpaceAccess: false,
+        viewGates: [{ ...passedGate('SPACE_ACCESS'), passed: false }, passedGate('CLASSIFICATION')],
+        editGates: [{ ...passedGate('ROLE'), passed: false, requiredRole: 'EDITOR' }],
+      }),
+    )
+    expect(detail.hasSpaceAccess).toBe(false)
+    expect(detail.viewGates.map((g) => [g.gate, g.passed])).toEqual([
+      ['SPACE_ACCESS', false],
+      ['CLASSIFICATION', true],
+    ])
+    expect(detail.editGates[0]).toMatchObject({ gate: 'ROLE', passed: false, requiredRole: 'EDITOR' })
+  })
+
+  it("parses each restriction check's expressionJson into a RuleNode", () => {
     const expression = attr('nationality', ['NZ', 'US'])
     const detail = toEffectivePermissionDetail(
       wire({

@@ -1,20 +1,37 @@
 # Space grants against the real access-rule API: individual
-# create/update/delete mutations rather than the placeholder's full-set
-# replacement — the grants editor diffs its rows against the loaded ones
-# on save (SpaceGrantsPage.tsx). `grants` returns rows only to instance
-# admins / this space's space-admin ("absent, not forbidden"), which also
-# serves as the page's access gate: a space always has at least one grant
-# by construction, so an empty list means "not yours to manage".
+# create/update/delete mutations rather than a full-set replacement — each
+# section of the grants editor diffs its rows against the loaded ones on
+# save (SpaceGrantsPage.tsx).
+#
+# design.md §6.4: two KINDS of grant live on a space now, and they answer
+# different questions. An ACCESS_GRANT says who may SEE the space's pages and
+# carries the selector values (§21.15) that reader is granted here; a
+# ROLE_GRANT says who may EDIT (Editor) or ADMINISTER (Space admin) and
+# confers no visibility of its own. There is no viewer role: viewing IS
+# holding a matching access grant. `grants` returns both kinds, discriminated
+# by `kind`, and only to callers who may manage the space.
+#
+# `canManageAccess` is the page's gate — the server's own answer, not an
+# inference from the list being non-empty (a manager on a space with no
+# grants must still be able to add the first one). `viewerHasAccess` is what
+# lets the screen tell a manager that they hold no access grant themselves.
 query SpaceGrants($key: String!) {
   space(key: $key) {
     id
     key
     name
+    canManageAccess
+    viewerHasAccess
     grants {
       id
       kind
       role
+      action
       expressionJson
+      selectorValues {
+        category
+        value
+      }
     }
   }
 }
@@ -26,6 +43,10 @@ mutation CreateAccessRule($input: CreateAccessRuleRequestInput!) {
       kind
       role
       expressionJson
+      selectorValues {
+        category
+        value
+      }
     }
     error {
       ...MutationError
@@ -40,6 +61,10 @@ mutation UpdateAccessRule($input: UpdateAccessRuleRequestInput!) {
       kind
       role
       expressionJson
+      selectorValues {
+        category
+        value
+      }
     }
     error {
       ...MutationError

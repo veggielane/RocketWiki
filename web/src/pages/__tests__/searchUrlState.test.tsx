@@ -181,7 +181,7 @@ function pageOf(count: number, { hasNextPage = true, totalCount = 100 } = {}) {
               level: 'OFFICIAL',
               levelName: 'OFFICIAL',
               eyesOnly: [],
-              prefix: 'UK',
+              ukPrefix: true, selectors: [],
               label: 'UK OFFICIAL',
             },
           },

@@ -1,81 +1,148 @@
-# The page read shared by the view and edit routes. The viewer-permission
-# fields (canEdit/canComment/canManageAccess) are server-computed, batched,
-# and replica-aware (design.md §8 "Known deltas") — the UI hides affordances
-# the server would refuse rather than offering-and-refusing, while the
-# server stays the enforcement point (§6.7). `viewerIsWatching` is the
-# server truth behind the watch toggle; `labelDetails` carries the label
-# ids that attach/detach need; `author`/`uploadedBy` are UserRef
-# display-name resolutions.
-query PageById($id: UUID!) {
-  page(id: $id) {
+# Everything the page view and edit routes read about a page. The
+# viewer-permission fields (canEdit/canComment/canManageAccess) are
+# server-computed, batched, and replica-aware (design.md §8 "Known deltas")
+# — the UI hides affordances the server would refuse rather than
+# offering-and-refusing, while the server stays the enforcement point
+# (§6.7). `viewerIsWatching` is the server truth behind the watch toggle;
+# `labelDetails` carries the label ids that attach/detach need;
+# `author`/`uploadedBy` are UserRef display-name resolutions.
+#
+# A fragment rather than a query body so the two ways of reading a page —
+# the plain `page(id)` the editor uses and the disclosing `pageAccess(id)` the
+# view uses — select the same page the same way, and cannot drift into two
+# page shapes.
+fragment PageCore on Page {
+  id
+  spaceId
+  spaceKey
+  title
+  slug
+  icon
+  content
+  currentRevisionNumber
+  canEdit
+  canComment
+  canManageAccess
+  viewerIsWatching
+  labels
+  labelDetails {
     id
     spaceId
-    spaceKey
+    name
+  }
+  # design.md §20: the page view's read-only properties panel. Carried on
+  # this read rather than fetched separately because the values are a
+  # handful of short strings resolved through the same DataLoader batch,
+  # and the panel renders with the header — a second round trip would make
+  # it pop in after the page it belongs to.
+  properties {
+    keyId
+    key
+    value
+    sortOrder
+  }
+  # design.md §21: the marking gates who may read this page, so it rides on
+  # the page read itself rather than a second round trip — a banner that
+  # popped in after the content would show the page unmarked for a beat,
+  # and the top-and-bottom convention exists precisely so the marking is
+  # never missing from what a reader (or a screenshot) sees.
+  marking {
+    ...PageMarking
+  }
+  parent {
+    id
     title
-    slug
-    icon
-    content
-    currentRevisionNumber
-    canEdit
-    canComment
-    canManageAccess
-    viewerIsWatching
-    labels
-    labelDetails {
+  }
+  children {
+    id
+  }
+  comments {
+    id
+    parentCommentId
+    body
+    isDeleted
+    authorUserId
+    author {
       id
-      spaceId
-      name
+      displayName
+      hasAvatar
     }
-    # design.md §20: the page view's read-only properties panel. Carried on
-    # this read rather than fetched separately because the values are a
-    # handful of short strings resolved through the same DataLoader batch,
-    # and the panel renders with the header — a second round trip would make
-    # it pop in after the page it belongs to.
-    properties {
-      keyId
-      key
-      value
-      sortOrder
+    createdAtUtc
+    editedAtUtc
+  }
+  attachments {
+    id
+    fileName
+    contentType
+    sizeBytes
+    uploadedBy {
+      id
+      displayName
+      hasAvatar
     }
-    # design.md §21: the marking gates who may read this page, so it rides on
-    # the page read itself rather than a second round trip — a banner that
-    # popped in after the content would show the page unmarked for a beat,
-    # and the top-and-bottom convention exists precisely so the marking is
-    # never missing from what a reader (or a screenshot) sees.
-    marking {
-      ...PageMarking
-    }
-    parent {
+  }
+}
+
+# The plain page read (the edit route, and any content-only consumer). Null
+# for a page that does not exist AND for one this caller may not read —
+# unchanged, and pinned byte-identical server-side, so the plain read stays
+# leak-free (design.md §6.7).
+query PageById($id: UUID!) {
+  page(id: $id) {
+    ...PageCore
+  }
+}
+
+# The page VIEW's read (design.md §6.7 / §21.8): the same page, through the
+# disclosing query. Exactly one of `page` and `denial` is non-null; the whole
+# result is null only for a page that does not exist. A denial is a
+# placeholder — marking and failing gates, never a title — which the view
+# renders as the "Protected page" screen instead of pretending not to know.
+# One request, one `page.view` audit row either way.
+#
+# Two things ride on the readable page that the plain read does not carry:
+#
+# `linkTargets` resolves every `page://{id}` link in THIS page's own content
+# (ids extracted server-side, distinct, first-occurrence order) to a readable
+# target, a denial, or neither (the page no longer exists). Nested on the
+# page rather than a root field taking ids, because a root field would be an
+# unaudited existence-and-marking oracle for any id you cared to type; here
+# the ids come from content the caller has already been allowed to read. The
+# read-only editor's link view renders each as a router link, an inert
+# `(protected)` marker carrying the label, or a missing marker (editor/marks).
+#
+# `parentDenial` says, when `parent` is null, whether that is because the
+# parent is withheld rather than absent — beside the unchanged `parent`.
+fragment PageView on Page {
+  ...PageCore
+  parentDenial {
+    ...AccessDenial
+  }
+  linkTargets {
+    id
+    page {
       id
       title
+      slug
+      spaceKey
     }
-    children {
-      id
-    }
-    comments {
-      id
-      parentCommentId
-      body
-      isDeleted
-      authorUserId
-      author {
-        id
-        displayName
-        hasAvatar
+    denial {
+      placeholderTitle
+      noSpaceAccess
+      marking {
+        label
       }
-      createdAtUtc
-      editedAtUtc
     }
-    attachments {
-      id
-      fileName
-      contentType
-      sizeBytes
-      uploadedBy {
-        id
-        displayName
-        hasAvatar
-      }
+  }
+}
+
+query PageAccessById($id: UUID!) {
+  pageAccess(id: $id) {
+    page {
+      ...PageView
+    }
+    denial {
+      ...AccessDenial
     }
   }
 }
@@ -157,14 +224,25 @@ mutation UpdatePageContentInSession($input: UpdatePageContentRequestInput!) {
 }
 
 # The slug route: /spaces/{spaceKey}/{slug}. Resolves ONLY the id, on purpose —
-# the route then renders the same PageViewPage, which does its normal PageById
-# read. Selecting the whole page here instead would fetch it twice, once to learn
-# its id and again to render it. Null covers every failure alike (no such space,
-# no such slug, or a page this caller may not view) because the server collapses
-# them: a slug URL must not answer "does this page exist?" (design.md 6.7).
-query PageBySlug($spaceKey: String!, $slug: String!) {
-  pageBySlug(spaceKey: $spaceKey, slug: $slug) {
-    id
+# the route then renders the same PageViewPage, which does its normal read.
+# Selecting the whole page here instead would fetch it twice, once to learn
+# its id and again to render it.
+#
+# Through the disclosing query (design.md §6.7 / §21.8): a page this caller
+# may not read answers a `denial`, which the route renders as the protected
+# screen before any id exists to hand on; a slug nobody has answers null,
+# which is the not-found notice. The slug form is a bounded space-key oracle
+# — a space the caller cannot enter still answers the no-space-access
+# placeholder rather than null — accepted in the design as the price of an
+# honest tree.
+query PageAccessBySlug($spaceKey: String!, $slug: String!) {
+  pageAccessBySlug(spaceKey: $spaceKey, slug: $slug) {
+    page {
+      id
+    }
+    denial {
+      ...AccessDenial
+    }
   }
 }
 

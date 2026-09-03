@@ -7,12 +7,15 @@ import { createMockUrqlClient, type MockClient } from '../../../test/mockUrqlCli
 const wireDetail = {
   userId: 'sub-1',
   userDisplayName: 'Ada Lovelace',
+  hasSpaceAccess: true,
   spaceRole: 'SPACE_ADMIN',
   isReplicaSpace: false,
   canView: true,
   canEdit: false,
   viewDenialReason: null,
   editDenialReason: 'insufficient-space-role',
+  viewGates: [],
+  editGates: [],
   viewRestrictions: [
     {
       ruleId: 'r1',
@@ -62,7 +65,7 @@ describe('PermissionInspectorPanel', () => {
     expect(screen.getByText('View: allowed')).toBeInTheDocument()
     expect(screen.getByText('Edit: denied')).toBeInTheDocument()
     // The server's denial-reason vocabulary is byte-exact — mapped copy shows.
-    expect(screen.getByText(/below editor/i)).toBeInTheDocument()
+    expect(screen.getByText(/Editor or Space admin/)).toBeInTheDocument()
     // expressionJson parsed client-side into the shared rule summary.
     expect(screen.getByText('group: export-cleared')).toBeInTheDocument()
     expect(screen.getByText('Restricted Parent')).toBeInTheDocument()

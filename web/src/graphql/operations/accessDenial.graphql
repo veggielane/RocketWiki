@@ -1,0 +1,42 @@
+# design.md §6.7 / §21.8: a denied page is DISCLOSED — on the page view, in
+# the page tree and behind an in-page link — as a placeholder carrying its
+# marking and every failing gate. These two fragments are that placeholder's
+# whole vocabulary, shared by every surface that renders one so the page
+# screen, a tree leaf and a link marker cannot select three different subsets
+# of the same denial.
+#
+# What is NOT here is the point. `AccessDenial` carries no page id, title,
+# slug, icon, timestamps, rule expression or ancestor title — the server's
+# `AccessDenialView` projects Core's denial exactly once and an introspection
+# test pins that shape. `placeholderTitle` is the server constant; the SPA
+# renders it verbatim and never spells a "(protected)" literal of its own, so
+# there is one answer to "what does a withheld page read as".
+fragment GateCheck on GateResult {
+  gate
+  passed
+  requiredLevel
+  requiredLevelName
+  category
+  value
+  countries
+  ruleId
+  inherited
+  requiredRole
+}
+
+# `noSpaceAccess` is the withholding rule: when the caller holds no access
+# grant in the space, `marking` is null and `reasons` is the single
+# SPACE_ACCESS entry — a space you cannot enter tells you only that. Otherwise
+# `marking` is the page's own (rendered through the same `PageMarking`
+# fragment the readable page uses, so it is the same server-built label) and
+# `reasons` lists every FAILED view gate in ladder order.
+fragment AccessDenial on AccessDenial {
+  placeholderTitle
+  noSpaceAccess
+  marking {
+    ...PageMarking
+  }
+  reasons {
+    ...GateCheck
+  }
+}

@@ -22,8 +22,27 @@ import {
 } from '../unavailableCopy'
 import { describeBlockedSubtree } from '../blockedSubtreeCopy'
 import { describeDenialReason } from '../../access/permission/describeDenialReason'
+import { accessGateTitle, describeAccessGate } from '../../access/denial/describeAccessGate'
+import {
+  GRANT_KINDS_EXPLANATION,
+  MANAGE_WITHOUT_ACCESS_NOTE,
+  MISSING_LINK_TITLE,
+  NO_SPACE_ACCESS,
+  PROTECTED_PAGE_TITLE,
+  PROTECTED_TREE_NOTE,
+  WHY_PROTECTED_BUTTON,
+  WHY_PROTECTED_HEADING,
+  protectedLinkTitle,
+} from '../../access/denial/protectedCopy'
+import {
+  ABOVE_CLEARANCE_REASON,
+  NOT_GRANTED_REASON,
+  describeMarkingRefusal,
+  notEligibleReason,
+  type MarkingRefusal,
+} from '../../markings/clearance'
 import { describeSave } from '../../editor/describeSave'
-import type { AskWikiUnavailableReason, GitLabUnavailableReason } from '../../graphql/generated/graphql'
+import type { AccessGate, AskWikiUnavailableReason, GitLabUnavailableReason } from '../../graphql/generated/graphql'
 
 /**
  * `design.md` is not shipped to an instance and is not linked from anywhere in
@@ -71,20 +90,50 @@ const LOAD_REASONS: LoadFailureReason[] = [
   'AUDIT_EVENTS',
   'EMOJI_REGISTRY',
   'PROPERTY_KEY_REGISTRY',
-  'NATIONALITY_VOCABULARY',
+  'SELECTOR_CATEGORIES',
+  'SELECTOR_GRANTS',
+  'PAGE_ACCESS',
   'SYNC_STATUS',
   'SEARCH',
   { kind: 'PERMISSION_INSPECTION', forPrincipal: true },
   { kind: 'PERMISSION_INSPECTION', forPrincipal: false },
 ]
-const WRITE_REASONS: WriteFailureReason[] = ['PAGE_PROPERTY', 'PROPERTY_KEY', 'PAGE_MARKING']
+const WRITE_REASONS: WriteFailureReason[] = ['PAGE_PROPERTY', 'PROPERTY_KEY', 'PAGE_MARKING', 'ACCESS_GRANT', 'ROLE_GRANT']
 const DIAGRAM_REASONS: DiagramUnavailableReason[] = ['MERMAID_SOURCE', 'DRAWIO_PAYLOAD']
 const PAGE_LIST_REASONS: PageListUnavailableReason[] = ['REQUEST_FAILED', 'QUERY_INVALID']
 const DENIAL_REASONS = [
-  'no-space-role',
+  'no-space-access',
   'replica-read-only',
   'insufficient-space-role',
+  'classification:SECRET',
+  'selector:not_eligible:FRUIT',
+  'selector:unknown:FRUIT',
+  'selector:not_granted:FRUIT',
+  'caveat:eyes_only',
   'restriction:page-1:rule-9',
+]
+/** Every gate, in both states, with the detail each can carry — so every branch of the sentence table is walked. */
+const ACCESS_GATES: AccessGate[] = [
+  'SPACE_ACCESS',
+  'CLASSIFICATION',
+  'SELECTOR_ELIGIBILITY',
+  'SELECTOR_GRANT',
+  'NATIONAL_CAVEAT',
+  'RESTRICTION',
+  'REPLICA',
+  'ROLE',
+]
+const GATE_DETAILS = [
+  {},
+  { requiredLevelName: 'SECRET', category: 'FRUIT', value: 'APPLE', countries: ['AUS', 'NZ'], inherited: true, requiredRole: 'EDITOR' as const },
+  { requiredLevelName: 'SECRET', category: 'FRUIT', countries: [], requiredRole: 'SPACE_ADMIN' as const },
+]
+const MARKING_REFUSALS: MarkingRefusal[] = [
+  { kind: 'ABOVE_CLEARANCE', level: 'TOP_SECRET' },
+  { kind: 'SELECTOR_NOT_ELIGIBLE', category: 'FRUIT' },
+  { kind: 'SELECTOR_NOT_GRANTED', category: 'FRUIT', value: 'BANANA' },
+  { kind: 'EYES_ONLY_EXCLUDES_YOU', viewerHasNoNationality: true },
+  { kind: 'EYES_ONLY_EXCLUDES_YOU', viewerHasNoNationality: false },
 ]
 
 /** Every sentence the shared copy modules can put in front of a user. */
@@ -103,6 +152,32 @@ function allUserFacingCopy(): { source: string; text: string }[] {
   for (const r of DIAGRAM_REASONS) add(`describeDiagramUnavailable(${r})`, describeDiagramUnavailable(r).summary)
   for (const r of PAGE_LIST_REASONS) add(`describePageListUnavailable(${r})`, describePageListUnavailable(r).summary)
   for (const r of DENIAL_REASONS) add(`describeDenialReason(${r})`, describeDenialReason(r))
+  for (const gate of ACCESS_GATES) {
+    add(`accessGateTitle(${gate})`, accessGateTitle(gate))
+    for (const passed of [true, false]) {
+      for (const detail of GATE_DETAILS) {
+        add(`describeAccessGate(${gate}, ${passed}, ${JSON.stringify(detail)})`, describeAccessGate({ gate, passed, ...detail }))
+        add(
+          `describeAccessGate(${gate}, ${passed}, held)`,
+          describeAccessGate({ gate, passed, ...detail }, { heldLevelName: 'OFFICIAL-SENSITIVE' }),
+        )
+      }
+    }
+  }
+  for (const refusal of MARKING_REFUSALS) add(`describeMarkingRefusal(${refusal.kind})`, describeMarkingRefusal(refusal))
+  add('ABOVE_CLEARANCE_REASON', ABOVE_CLEARANCE_REASON)
+  add('NOT_GRANTED_REASON', NOT_GRANTED_REASON)
+  add('notEligibleReason(FRUIT)', notEligibleReason('FRUIT'))
+  add('PROTECTED_PAGE_TITLE', PROTECTED_PAGE_TITLE)
+  add('NO_SPACE_ACCESS', NO_SPACE_ACCESS)
+  add('PROTECTED_TREE_NOTE', PROTECTED_TREE_NOTE)
+  add('WHY_PROTECTED_HEADING', WHY_PROTECTED_HEADING)
+  add('WHY_PROTECTED_BUTTON', WHY_PROTECTED_BUTTON)
+  add('protectedLinkTitle(label)', protectedLinkTitle('UK SECRET'))
+  add('protectedLinkTitle(null)', protectedLinkTitle(null))
+  add('MISSING_LINK_TITLE', MISSING_LINK_TITLE)
+  add('MANAGE_WITHOUT_ACCESS_NOTE', MANAGE_WITHOUT_ACCESS_NOTE)
+  add('GRANT_KINDS_EXPLANATION', GRANT_KINDS_EXPLANATION)
 
   add('REPLICA_EXPLANATION', REPLICA_EXPLANATION)
   add('replicaBadgeLabel(LOW)', replicaBadgeLabel('LOW'))
@@ -131,7 +206,7 @@ describe('shared copy modules never cite the design document', () => {
   it('exercised every module, so an empty pass cannot be a vacuous one', () => {
     // A refactor that renamed a reason would otherwise silently shrink the set
     // this walks, and the test above would keep passing over nothing.
-    expect(allUserFacingCopy().length).toBeGreaterThanOrEqual(40)
+    expect(allUserFacingCopy().length).toBeGreaterThanOrEqual(150)
   })
 
   it('still says why a replica cannot be edited, rather than dropping the sentence', () => {

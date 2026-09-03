@@ -15,10 +15,10 @@ const space = {
   isReplica: false,
   originInstanceId: 'HIGH',
   viewerIsWatching: false,
-  grants: [{ id: 'g1' }] as { id: string }[],
-  // The server's own permission answer. `grants` no longer decides anything
-  // on this screen — see the zero-grant test below for why that mattered.
+  // The server's own permission answers (design.md §6.4): a role lets the
+  // caller manage, an access grant lets them read, and the two are separate.
   canManageAccess: true,
+  viewerHasAccess: true,
   owner: { id: "u1", displayName: "Ada Lovelace", hasAvatar: false } as
     | { id: string; displayName: string; hasAvatar: boolean }
     | null,
@@ -121,18 +121,38 @@ describe('SpaceSettingsPage default page', () => {
     expect(await screen.findByLabelText('Default page')).toHaveAttribute('aria-disabled', 'true')
   })
 
-  it('lets a permitted manager manage a space that has NO grants', async () => {
-    // The bug the proxy had. `canManage` was `grants.length > 0`, which
+  it('lets a manager manage on the server\'s say-so alone, whatever the grant list holds', async () => {
+    // The bug the old proxy had. `canManage` was `grants.length > 0`, which
     // conflated "you may SEE the grants" with "there ARE grants to see" — the
     // resolver hands a permitted manager the real, empty list, and the screen
-    // read that as "not permitted". An instance admin on a grantless space was
-    // shown the read-only notice with every control disabled, while the server
-    // would have accepted all of them. An imported replica is exactly the space
-    // that can be both grantless and ownerless, so this also unblocked the one
-    // person who could assign its owner.
-    renderSettings({ overrides: { grants: [], canManageAccess: true } })
+    // read that as "not permitted". This screen no longer selects the list at
+    // all; the server's answer is the only input.
+    renderSettings({ overrides: { canManageAccess: true } })
     expect(await screen.findByLabelText('Default page')).not.toHaveAttribute('aria-disabled', 'true')
     expect(screen.queryByText(/managing it needs instance admin/)).not.toBeInTheDocument()
+  })
+
+  it('tells a manager who holds no access grant that the pages show as protected to them', async () => {
+    // design.md §6.4: a role confers no visibility, so managing without
+    // reading is a normal state — and one worth a sentence, since the tree
+    // beneath will be nothing but placeholders.
+    renderSettings({ overrides: { canManageAccess: true, viewerHasAccess: false } })
+    expect(
+      await screen.findByText(
+        'You can manage this space but hold no access grant in it, so its pages show as protected to you.',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('says nothing of the sort to a manager who can read the space', async () => {
+    renderSettings({ overrides: { canManageAccess: true, viewerHasAccess: true } })
+    await screen.findByLabelText('Default page')
+    expect(screen.queryByText(/hold no access grant/)).toBeNull()
+  })
+
+  it('describes the grants row in terms of both kinds of grant', async () => {
+    renderSettings()
+    expect(await screen.findByText('Who may see this space, and who may edit or administer it.')).toBeInTheDocument()
   })
 
   it('has no axe violations with the picker present', async () => {

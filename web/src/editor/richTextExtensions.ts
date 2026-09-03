@@ -6,6 +6,8 @@ import { DrawioDiagram } from './nodes/DrawioDiagram'
 import { DrawioDiagramWithView } from './nodes/DrawioDiagramWithView'
 import { GitLabIssueLink } from './marks/GitLabIssueLink'
 import { GitLabIssueLinkWithView } from './marks/GitLabIssueLinkWithView'
+import { PageLink } from './marks/PageLink'
+import { PageLinkWithView } from './marks/PageLinkWithView'
 import { EmojiDecorations } from './emoji/EmojiDecorations'
 import { EmojiSuggestion } from './emoji/EmojiSuggestion'
 
@@ -31,6 +33,7 @@ export const richTextExtensions = [
     if (ext === codeBlockExtension) return MermaidCodeBlock
     if (ext === DrawioDiagram) return DrawioDiagramWithView
     if (ext === GitLabIssueLink) return GitLabIssueLinkWithView
+    if (ext === PageLink) return PageLinkWithView
     return ext
   }),
   EmojiDecorations,

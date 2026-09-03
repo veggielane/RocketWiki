@@ -18,8 +18,8 @@ const definition = {
   ],
 }
 
-const official = { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' }
-const secret = { level: 'SECRET', levelName: 'SECRET', eyesOnly: [], prefix: 'UK', label: 'UK SECRET' }
+const official = { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' }
+const secret = { level: 'SECRET', levelName: 'SECRET', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK SECRET' }
 
 const entries = [
   {

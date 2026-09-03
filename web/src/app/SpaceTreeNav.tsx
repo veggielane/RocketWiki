@@ -30,10 +30,14 @@ import { describeLoadFailure, describeNoSpaces, replicaBadgeLabel } from '../fee
 import { useIsInstanceAdmin } from '../auth/useIsInstanceAdmin'
 import { lookupPageIcon } from '../pages/pageIcons'
 import { SYSTEM_SEGMENT, sameSlug, sameSpaceKey } from '../pages/pageSlug'
+import { isProtectedEntry } from '../pages/treeEntries'
+import { ProtectedTreeLeaf, type ProtectedLeafDenial } from '../access/denial/ProtectedTreeLeaf'
+import { PROTECTED_TREE_NOTE } from '../access/denial/protectedCopy'
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 
-/** One node of the nav tree. Only what the drawer renders — no labels, no markings. */
+/** One readable node of the nav tree. Only what the drawer renders — no labels, no markings. */
 interface NavNode {
+  __typename?: 'PageTreeNode'
   id: string
   title: string
   /**
@@ -59,8 +63,21 @@ interface NavNode {
    * "this page is restricted" was on the screen nobody visits.
    */
   hasRestrictions?: boolean
-  children?: NavNode[]
+  children?: NavEntry[]
 }
+
+/**
+ * A page this caller may not read, at its sibling position (design.md §6.7 /
+ * §21.8). The server's placeholder title and the denial — no id, no slug, so
+ * it can neither be linked nor be on anyone's path.
+ */
+interface NavProtected {
+  __typename: 'ProtectedTreeNode'
+  title: string
+  denial: ProtectedLeafDenial
+}
+
+type NavEntry = NavNode | NavProtected
 
 /** Only what the picker draws. Structural, so the generated `SpaceList` row satisfies it. */
 interface SpaceChoice {
@@ -68,6 +85,8 @@ interface SpaceChoice {
   name: string
   isReplica: boolean
   originInstanceId?: string | null
+  /** `Space.viewerHasAccess` — false means the space is listed on a role grant alone and its tree comes back empty. */
+  viewerHasAccess?: boolean
 }
 
 /**
@@ -118,11 +137,14 @@ function routeContext(pathname: string): { spaceKey?: string; pageId?: string; s
  * search result links by id, the ordinary route by slug, and both have to
  * open the same branch.
  */
-function ancestorsOfActive(nodes: NavNode[], activePageId?: string, activeSlug?: string): string[] {
+function ancestorsOfActive(nodes: NavEntry[], activePageId?: string, activeSlug?: string): string[] {
   if (activePageId === undefined && activeSlug === undefined) return []
   const found: string[] = []
-  function walk(list: NavNode[], trail: string[]): boolean {
+  function walk(list: NavEntry[], trail: string[]): boolean {
     for (const node of list) {
+      // A placeholder has no id and no slug, is never the current page, and
+      // has nothing beneath it to search.
+      if (isProtectedEntry(node)) continue
       if (node.id === activePageId || sameSlug(node.slug, activeSlug)) {
         found.push(...trail, node.id)
         return true
@@ -142,9 +164,10 @@ function ancestorsOfActive(nodes: NavNode[], activePageId?: string, activeSlug?:
  * query on arrival plus one per branch someone chooses to look inside — rather
  * than one large payload containing levels nobody expanded.
  *
- * An empty result renders nothing at all: the server prunes what the caller may
- * not see, so "no visible children" and "no children" are the same answer here
- * by design (§6.7). It does not report having found fewer than it expected.
+ * An empty result renders nothing at all. A child the caller may not read
+ * arrives as a placeholder rather than being pruned (§6.7 / §21.8), so an
+ * empty answer really does mean no children — or a branch of a placeholder,
+ * which the server never descends.
  */
 function LazyChildren({
   spaceId,
@@ -178,7 +201,7 @@ function LazyChildren({
     )
   }
 
-  const nodes = (data?.pageSubtree ?? []) as NavNode[]
+  const nodes = (data?.pageSubtree ?? []) as NavEntry[]
   if (nodes.length === 0) return null
 
   return (
@@ -205,7 +228,7 @@ function PageTree({
   onToggle,
   depth = 0,
 }: {
-  nodes: NavNode[]
+  nodes: NavEntry[]
   spaceId: string
   spaceKey: string
   activePageId?: string
@@ -219,7 +242,15 @@ function PageTree({
   // screen reader rather than a flat run of links with decorative indentation.
   return (
     <List dense disablePadding>
-      {nodes.map((node) => {
+      {nodes.map((node, index) => {
+        // A withheld page is a leaf at its sibling position: not a link, no
+        // chevron, one disclosure for its reasons. Keyed by position because
+        // it carries no id — by design, so nothing about it can be keyed on.
+        if (isProtectedEntry(node)) {
+          return (
+            <ProtectedTreeLeaf key={`protected-${index}`} denial={node.denial} indent={2 + depth * 1.5} leadingSpacer />
+          )
+        }
         // The page's own icon when it has one, the generic page glyph when it
         // doesn't — and when it names one this build has no glyph for. The
         // glyph is decorative: the title beside it already names the page.
@@ -369,9 +400,10 @@ function SpaceOption({ space }: { space: SpaceChoice }) {
 
 /**
  * The drawer's space picker and the page tree beneath it — server-filtered to
- * spaces the caller can view (design.md §6.7), and a tree that is already
- * permission-filtered and marking-pruned server-side (§21.9), so what appears
- * here is only what this caller may read.
+ * spaces the caller holds a grant in (design.md §6.7), and a tree the server
+ * has already gated node by node (§21.9): a page this caller may read is a
+ * link, a page they may not is a placeholder leaf carrying its marking and
+ * the reasons (§21.8), and nothing beneath a placeholder is sent at all.
  *
  * The spaces used to be a list, every one of them a row, with the active one
  * expanding to show its tree. They are a dropdown now: one space's hierarchy
@@ -379,9 +411,9 @@ function SpaceOption({ space }: { space: SpaceChoice }) {
  * was competing with the thing they came for.
  *
  * The tree arrives whole and opens only along the current page's path.
- * Collapsing is presentation and nothing else — every node here is one the
- * server already decided this caller may see, and a folded branch says
- * "not now", never "not yours".
+ * Collapsing is presentation and nothing else — a folded branch says
+ * "not now", never "not yours"; "not yours" is a placeholder, and it is
+ * never folded away.
  */
 export function SpaceTreeNav() {
   const { pathname } = useLocation()
@@ -404,7 +436,7 @@ export function SpaceTreeNav() {
     context: PAGE_TREE_CONTEXT,
   })
 
-  const tree = useMemo(() => (treeData?.pageTree ?? []) as NavNode[], [treeData])
+  const tree = useMemo(() => (treeData?.pageTree ?? []) as NavEntry[], [treeData])
   const ancestors = useMemo(() => ancestorsOfActive(tree, pageId, slug), [tree, pageId, slug])
 
   // Which branches are open. Held here rather than derived on every render
@@ -558,6 +590,14 @@ export function SpaceTreeNav() {
               expanded={expanded}
               onToggle={toggle}
             />
+          ) : activeSpace.viewerHasAccess === false ? (
+            // design.md §6.4: listed on a role grant alone, so the server
+            // answered an empty tree — "no pages yet" would be a claim about
+            // pages this caller cannot see. `=== false` because this is a
+            // claim about the server's answer, not about its absence.
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', px: 2, py: 0.5 }}>
+              {PROTECTED_TREE_NOTE}
+            </Typography>
           ) : (
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', pl: 4, py: 0.5 }}>
               No pages yet

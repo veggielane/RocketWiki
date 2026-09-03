@@ -106,6 +106,25 @@
   border-bottom: 1px dashed currentColor;
 }
 
+/* In-page links resolved in page view (design.md §6.7 / §21.8). A withheld
+   or vanished target keeps the author's text, inert, with a small marker
+   after it; what the marker means rides on `title` and in the visually
+   hidden span (editor/marks/PageLinkView.tsx) — never inline, because a
+   page of prose is not where every linked page's marking gets printed. */
+.rw-page-link-protected,
+.rw-page-link-missing {
+  color: inherit;
+  border-bottom-style: dotted;
+  cursor: help;
+}
+
+.rw-page-link-marker {
+  font-size: 0.8em;
+  font-style: italic;
+  margin-left: 0.3em;
+  color: var(--rw-muted, #5b6270);
+}
+
 .rw-mention {
   background: var(--rw-mention-bg, rgba(107, 155, 247, 0.15));
   border-radius: 4px;

@@ -6,17 +6,26 @@ import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../../test/axe'
 
 /**
- * The marking control (design.md §21). Two things it has to get right beyond
- * rendering: it must PREVENT the two markings §21.6 refuses rather than offer
- * them and report the refusal, and it must never assemble a marking string —
- * `label` is the server's, and there is exactly one formatter.
+ * The marking control (design.md §21). Three things it has to get right
+ * beyond rendering: it must PREVENT the markings §21.6 refuses rather than
+ * offer them and report the refusal — by level, by selector (§21.15) and by
+ * caveat; it must never assemble a marking string — `label` is the server's,
+ * and there is exactly one formatter; and every vocabulary it offers is the
+ * server's — level spellings from the scheme, the five caveat countries
+ * pinned to the schema, selector categories from configuration.
  */
+
+interface Selector {
+  category: string
+  value: string
+}
 
 const baseMarking = {
   level: 'OFFICIAL',
   levelName: 'OFFICIAL',
   eyesOnly: [] as string[],
-  prefix: 'UK',
+  selectors: [] as Selector[],
+  ukPrefix: true,
   label: 'UK OFFICIAL',
 }
 
@@ -28,13 +37,22 @@ const scheme = [
   { level: 'TOP_SECRET', name: 'TOP SECRET' },
 ]
 
+/** §21.15: the instance's configured categories — the test catalog. */
+const catalog = [
+  { name: 'FRUIT', description: 'Fruit programme compartments', requiresAttribute: true, values: ['APPLE', 'BANANA'] },
+  { name: 'REGION', description: null, requiresAttribute: false, values: ['NORTH', 'SOUTH'] },
+]
+
 interface Options {
   marking?: typeof baseMarking
   canEdit?: boolean
   clearance?: string
   nationality?: string[]
-  /** null stages a registry with no `nationality` attribute at all (§21.4's accepted consequence). */
-  countries?: string[] | null
+  eligibility?: string[]
+  /** null stages an unanswered grants read, so the picker's "unknown grants" path is exercised. */
+  grants?: Selector[] | null
+  /** null stages an unanswered categories read. */
+  categories?: typeof catalog | null
   /** null stages an unanswered classificationScheme, so the picker's fallback is exercised. */
   levelNames?: typeof scheme | null
   setMarkingError?: Record<string, unknown> | null
@@ -46,7 +64,13 @@ function renderSection(options: Options = {}) {
     canEdit = true,
     clearance = 'SECRET',
     nationality = ['UK'],
-    countries = ['UK', 'US', 'AU'],
+    eligibility = ['FRUIT', 'REGION'],
+    grants = [
+      { category: 'FRUIT', value: 'APPLE' },
+      { category: 'REGION', value: 'NORTH' },
+      { category: 'REGION', value: 'SOUTH' },
+    ],
+    categories = catalog,
     levelNames = scheme,
     setMarkingError = null,
   } = options
@@ -58,16 +82,14 @@ function renderSection(options: Options = {}) {
       return {
         me: {
           id: 'sub-1', email: null, name: 'Editor', groups: [], isAuthenticated: true,
-          isInstanceAdmin: false, localUserId: 'user-1', hasAvatar: false, clearance, nationality,
+          isInstanceAdmin: false, localUserId: 'user-1', hasAvatar: false,
+          clearance, nationality, selectorEligibility: eligibility,
         },
       }
     if (name === 'ClassificationScheme') return levelNames === null ? undefined : { classificationScheme: levelNames }
-    if (name === 'RuleVocabulary')
-      return {
-        groups: [],
-        attributeRegistry:
-          countries === null ? [] : [{ key: 'nationality', displayName: 'Nationality', allowedValues: countries }],
-      }
+    if (name === 'SelectorCategories') return categories === null ? undefined : { selectorCategories: categories }
+    if (name === 'SpaceSelectorGrants')
+      return grants === null ? undefined : { space: { id: 'space-1', key: 'ENG', viewerSelectorGrants: grants } }
     if (name === 'SetPageMarking')
       return {
         setPageMarking: {
@@ -81,6 +103,7 @@ function renderSection(options: Options = {}) {
     <UrqlProvider value={mock.client}>
       <PageMarkingSection
         pageId="page-1"
+        spaceKey="ENG"
         marking={marking as never}
         canEdit={canEdit}
         onFeedback={onFeedback}
@@ -104,27 +127,48 @@ const levelRadio = (level: string) => {
   return radio
 }
 
+const saveButton = () => screen.findByRole('button', { name: 'Save marking' })
+
+interface SentInput {
+  pageId: string
+  level: string
+  eyesOnly: string[]
+  selectors: Selector[]
+  ukPrefix: boolean
+}
+
+function sentMarking(mock: ReturnType<typeof renderSection>['mock']): SentInput {
+  const op = mock.operations.find((o) => o.name === 'SetPageMarking')
+  if (!op) throw new Error('SetPageMarking was not sent')
+  return (op.variables as { input: SentInput }).input
+}
+
+async function openSelect(label: string) {
+  fireEvent.mouseDown(await screen.findByLabelText(label))
+  return screen.findByRole('listbox')
+}
+
 describe('rendering the marking', () => {
-  it("renders the server's label verbatim rather than composing prefix + level + caveat", () => {
+  it("renders the server's label verbatim rather than composing prefix + level + selectors + caveat", () => {
     renderSection({
       marking: {
         level: 'SECRET',
         levelName: 'SECRET',
         eyesOnly: ['UK', 'US'],
-        prefix: 'UK',
-        label: 'UK SECRET [UK/US EYES ONLY]',
+        selectors: [{ category: 'FRUIT', value: 'APPLE' }],
+        ukPrefix: true,
+        label: 'UK SECRET APPLE UK/US EYES ONLY',
       },
     })
-    expect(screen.getByText('UK SECRET [UK/US EYES ONLY]')).toBeTruthy()
+    expect(screen.getByText('UK SECRET APPLE UK/US EYES ONLY')).toBeTruthy()
   })
 
-  it('renders a bare level for a marking with no prefix — §21.12 keeps null legal and unpadded', () => {
+  it('renders a bare level for a marking with no prefix — §21.12 keeps the toggle off legal and unpadded', () => {
     renderSection({
-      marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: [], prefix: null as never, label: 'TOP SECRET' },
+      marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: [], selectors: [], ukPrefix: false, label: 'TOP SECRET' },
     })
-    // Scoped to the read-out: the picker now offers an option spelled the same
-    // way (§21.1's display name), and this assertion is about the MARKING, so
-    // it must not be able to pass by finding the option instead.
+    // Scoped to the read-out: the picker offers an option spelled the same
+    // way (§21.1's display name), and this assertion is about the MARKING.
     expect(document.querySelector('[data-marking-placement="section"]')?.textContent).toBe('TOP SECRET')
   })
 
@@ -137,7 +181,8 @@ describe('rendering the marking', () => {
 
   it('has no axe violations in the editable state', async () => {
     renderSection()
-    await screen.findByRole('button', { name: 'Save marking' })
+    await saveButton()
+    await screen.findByLabelText('FRUIT')
     await expectNoAxeViolations()
   })
 })
@@ -147,17 +192,13 @@ describe('the level picker names levels from the server (design.md §21.1)', () 
     renderSection()
     expect(await screen.findByText('OFFICIAL-SENSITIVE')).toBeTruthy()
     expect(screen.getByText('TOP SECRET')).toBeTruthy()
-    // A picker has no marking in hand, so these cannot come from `levelName`
-    // — and spelling them locally is the drift §21.1 exists to prevent.
     expect(screen.queryByText('OFFICIAL_SENSITIVE')).toBeNull()
     expect(screen.queryByText('TOP_SECRET')).toBeNull()
   })
 
   it('still offers every level when the scheme query answers nothing', async () => {
-    // The ladder is compile-time exhaustive, so an unanswered vocabulary query
-    // degrades to ugly wire names rather than a picker with holes in it.
     renderSection({ levelNames: null })
-    await screen.findByRole('button', { name: 'Save marking' })
+    await saveButton()
     for (const level of ['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET']) {
       expect(levelRadio(level)).toBeTruthy()
     }
@@ -165,11 +206,9 @@ describe('the level picker names levels from the server (design.md §21.1)', () 
 
   it('renders options in ladder order, so position never contradicts availability', async () => {
     renderSection({ clearance: 'OFFICIAL_SENSITIVE' })
-    await screen.findByRole('button', { name: 'Save marking' })
+    await saveButton()
     const rendered = [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')].map((r) => r.value)
     expect(rendered).toEqual(['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET'])
-    // Everything below the cut is available and everything above it is not,
-    // which only reads correctly because the order IS the comparison.
     expect(rendered.map((level) => levelRadio(level).disabled)).toEqual([false, false, true, true])
   })
 })
@@ -185,45 +224,41 @@ describe('prevent, do not refuse — levels (design.md §21.6)', () => {
   it('makes a level above the caller clearance unavailable, with the reason beside it', async () => {
     renderSection({ clearance: 'SECRET' })
     await waitFor(() => expect(levelRadio('TOP_SECRET').hasAttribute('disabled')).toBe(true))
-    // The reason is text on the option, not a tooltip and not a colour — it
-    // has to be readable before the choice, which is the whole point.
     expect(screen.getByText('Above your clearance')).toBeTruthy()
   })
 
-  it('greys everything above OFFICIAL for a caller with no usable clearance (§21.3s floor)', async () => {
-    renderSection({ clearance: 'OFFICIAL' })
-    await waitFor(() => expect(levelRadio('OFFICIAL_SENSITIVE').hasAttribute('disabled')).toBe(true))
-    expect(levelRadio('SECRET').hasAttribute('disabled')).toBe(true)
+  it('greys everything above OFFICIAL-SENSITIVE for a caller at the floor (§21.3)', async () => {
+    // `me.clearance` arrives already resolved to the floor for a token with
+    // no usable value; the two everyday tiers stay offered, the rest do not.
+    renderSection({ clearance: 'OFFICIAL_SENSITIVE' })
+    await waitFor(() => expect(levelRadio('SECRET').hasAttribute('disabled')).toBe(true))
     expect(levelRadio('TOP_SECRET').hasAttribute('disabled')).toBe(true)
     expect(levelRadio('OFFICIAL').hasAttribute('disabled')).toBe(false)
+    expect(levelRadio('OFFICIAL_SENSITIVE').hasAttribute('disabled')).toBe(false)
   })
 })
 
-describe('prevent, do not refuse — the eyes-only caveat (design.md §21.4/§21.6)', () => {
-  it('draws its options from the registered nationality attribute, not an ISO list', async () => {
-    renderSection({ countries: ['GB', 'US'] })
+describe('the eyes-only caveat draws on the fixed five (design.md §21.4/§21.6)', () => {
+  it('offers exactly AUS, CAN, NZ, UK and US — no registry, no ISO list, no GB', async () => {
+    renderSection()
     const field = await screen.findByLabelText('Eyes only')
     fireEvent.mouseDown(field)
     fireEvent.focus(field)
     fireEvent.change(field, { target: { value: '' } })
-    await waitFor(() => expect(screen.getByRole('option', { name: 'GB' })).toBeTruthy())
-    expect(screen.getByRole('option', { name: 'US' })).toBeTruthy()
-    // An instance registering GB does not also get UK for free.
-    expect(screen.queryByRole('option', { name: 'UK' })).toBeNull()
+    const listbox = await screen.findByRole('listbox')
+    expect(within(listbox).getAllByRole('option').map((o) => o.textContent)).toEqual(['AUS', 'CAN', 'NZ', 'UK', 'US'])
   })
 
   it('blocks the save and explains when the set would exclude the caller', async () => {
     renderSection({ nationality: ['UK'], marking: { ...baseMarking, eyesOnly: ['UK'] } })
-    const save = await screen.findByRole('button', { name: 'Save marking' })
+    const save = await saveButton()
     const field = screen.getByLabelText('Eyes only')
     // Drop UK, add US: a set the caller holds nothing in.
     fireEvent.keyDown(field, { key: 'Backspace' })
     fireEvent.mouseDown(field)
     fireEvent.change(field, { target: { value: 'US' } })
     fireEvent.click(await screen.findByRole('option', { name: 'US' }))
-    await waitFor(() =>
-      expect(screen.getByText(/holds none of your own nationalities/)).toBeTruthy(),
-    )
+    await waitFor(() => expect(screen.getByText(/holds none of your own nationalities/)).toBeTruthy())
     expect((save as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -231,84 +266,166 @@ describe('prevent, do not refuse — the eyes-only caveat (design.md §21.4/§21
     renderSection({ nationality: [] })
     const field = await screen.findByLabelText('Eyes only')
     fireEvent.mouseDown(field)
-    fireEvent.change(field, { target: { value: 'UK' } })
-    fireEvent.click(await screen.findByRole('option', { name: 'UK' }))
+    fireEvent.change(field, { target: { value: 'NZ' } })
+    fireEvent.click(await screen.findByRole('option', { name: 'NZ' }))
     await waitFor(() => expect(screen.getByText(/You hold no nationality value/)).toBeTruthy())
   })
 
-  it('keeps the page\'s own countries selectable when the registry comes back empty', async () => {
-    // §6.2 gates the attribute registry to rule managers; an editor who is not
-    // one must still see — and be able to clear — what this page carries.
-    renderSection({ countries: null, marking: { ...baseMarking, eyesOnly: ['UK'] } })
-    const field = await screen.findByLabelText('Eyes only')
-    expect((field as HTMLInputElement).disabled).toBe(false)
-    expect(screen.getByText('UK')).toBeTruthy()
+  it('warns that a legacy caveat token the mutation cannot send will be dropped on save', async () => {
+    // A token stored before the vocabulary was fixed is readable (output is a
+    // string list) but not writable (input is the enum): said up front.
+    renderSection({ marking: { ...baseMarking, eyesOnly: ['GB'], label: 'UK OFFICIAL GB EYES ONLY' } })
+    await saveButton()
+    expect(screen.getByText(/This marking names GB/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'GB' })).toBeNull()
+  })
+})
+
+describe('prevent, do not refuse — selectors (design.md §21.15)', () => {
+  it('offers one picker per configured category, from the server, none typed by hand', async () => {
+    renderSection()
+    expect(await screen.findByLabelText('FRUIT')).toBeTruthy()
+    expect(screen.getByLabelText('REGION')).toBeTruthy()
+    expect(screen.getByText('Fruit programme compartments')).toBeTruthy()
   })
 
-  it('disables the picker and says why when there is nothing at all to name', async () => {
-    renderSection({ countries: null })
-    const field = await screen.findByLabelText('Eyes only')
-    expect((field as HTMLInputElement).disabled).toBe(true)
-    expect(screen.getByText(/No countries to pick from/)).toBeTruthy()
+  it('renders no selector pickers on an instance that configures no categories', async () => {
+    renderSection({ categories: [] })
+    await saveButton()
+    expect(screen.queryByLabelText('FRUIT')).toBeNull()
+    expect(screen.queryByText('Selectors')).toBeNull()
+  })
+
+  it('disables a whole category the caller is not eligible for, with the reason where the values would be', async () => {
+    renderSection({ eligibility: ['REGION'] })
+    expect(await screen.findByLabelText('FRUIT')).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByText('Not eligible for FRUIT material')).toBeTruthy()
+    expect(screen.getByLabelText('REGION')).not.toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('greys a value no access grant confers on the caller in this space, with the reason', async () => {
+    renderSection({ grants: [{ category: 'FRUIT', value: 'APPLE' }] })
+    const listbox = await openSelect('FRUIT')
+    expect(within(listbox).getByRole('option', { name: 'APPLE' })).not.toHaveAttribute('aria-disabled', 'true')
+    const banana = within(listbox).getByRole('option', { name: /BANANA/ })
+    expect(banana).toHaveAttribute('aria-disabled', 'true')
+    expect(banana).toHaveTextContent('Not granted to you in this space')
+  })
+
+  it('greys nothing while the grants are unknown — the server still decides', async () => {
+    renderSection({ grants: null })
+    const listbox = await openSelect('FRUIT')
+    expect(within(listbox).getByRole('option', { name: 'BANANA' })).not.toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it("keeps offering the page's own value when the catalog no longer lists it, so it can be seen and cleared", async () => {
+    renderSection({ marking: { ...baseMarking, selectors: [{ category: 'FRUIT', value: 'CHERRY' }], label: 'UK OFFICIAL CHERRY' } })
+    expect(await screen.findByLabelText('FRUIT')).toHaveTextContent('CHERRY')
+  })
+
+  it('says why when the page already carries a value the caller is not granted here', async () => {
+    renderSection({
+      grants: [{ category: 'FRUIT', value: 'APPLE' }],
+      marking: { ...baseMarking, selectors: [{ category: 'FRUIT', value: 'BANANA' }], label: 'UK OFFICIAL BANANA' },
+    })
+    await waitFor(() =>
+      expect(
+        screen.getByText('BANANA is not granted to you in this space, so you could not read this page after marking it.'),
+      ).toBeTruthy(),
+    )
+  })
+
+  it('sends the chosen selectors as category/value pairs, one per category', async () => {
+    const { mock } = renderSection()
+    const save = await saveButton()
+    const listbox = await openSelect('FRUIT')
+    fireEvent.click(within(listbox).getByRole('option', { name: 'APPLE' }))
+    await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(save)
+    await waitFor(() => expect(mock.operations.some((op) => op.name === 'SetPageMarking')).toBe(true))
+    expect(sentMarking(mock).selectors).toEqual([{ category: 'FRUIT', value: 'APPLE' }])
+  })
+
+  it('clears a selector by choosing None', async () => {
+    const { mock } = renderSection({
+      marking: { ...baseMarking, selectors: [{ category: 'FRUIT', value: 'APPLE' }], label: 'UK OFFICIAL APPLE' },
+    })
+    const save = await saveButton()
+    const listbox = await openSelect('FRUIT')
+    fireEvent.click(within(listbox).getByRole('option', { name: 'None' }))
+    await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(save)
+    await waitFor(() => expect(mock.operations.some((op) => op.name === 'SetPageMarking')).toBe(true))
+    expect(sentMarking(mock).selectors).toEqual([])
+  })
+})
+
+describe('the UK prefix is a switch (design.md §21.12)', () => {
+  it('says it is presentational, and sends ukPrefix: false when turned off', async () => {
+    const { mock } = renderSection()
+    const save = await saveButton()
+    expect(screen.getByText('Presentational only. It grants and denies nothing.')).toBeTruthy()
+    const toggle = screen.getByLabelText('UK prefix') as HTMLInputElement
+    expect(toggle.checked).toBe(true)
+    fireEvent.click(toggle)
+    await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(save)
+    await waitFor(() => expect(mock.operations.some((op) => op.name === 'SetPageMarking')).toBe(true))
+    expect(sentMarking(mock).ukPrefix).toBe(false)
   })
 })
 
 describe('saving', () => {
-  it('sends the whole marking — level, canonical country set and an explicit prefix', async () => {
-    const { mock } = renderSection({ marking: { ...baseMarking, eyesOnly: ['us', 'UK'] } })
-    const save = await screen.findByRole('button', { name: 'Save marking' })
+  it('sends the whole marking — level, enum caveat, selectors and the prefix flag, every time', async () => {
+    const { mock } = renderSection({
+      marking: {
+        ...baseMarking,
+        eyesOnly: ['us', 'UK'],
+        selectors: [{ category: 'REGION', value: 'NORTH' }],
+        label: 'UK OFFICIAL NORTH UK/US EYES ONLY',
+      },
+    })
+    const save = await saveButton()
     fireEvent.click(levelRadio('SECRET'))
     await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(save)
     await waitFor(() => expect(mock.operations.some((op) => op.name === 'SetPageMarking')).toBe(true))
-    const sent = mock.operations.find((op) => op.name === 'SetPageMarking')?.variables as {
-      input: { level: string; eyesOnly: string[]; prefix: string | null }
-    }
-    expect(sent.input.level).toBe('SECRET')
-    expect(sent.input.eyesOnly).toEqual(['UK', 'US'])
-    expect(sent.input.prefix).toBe('UK')
-  })
-
-  it('sends prefix: null for a cleared prefix rather than omitting it into the UK default', async () => {
-    const { mock } = renderSection()
-    const save = await screen.findByRole('button', { name: 'Save marking' })
-    fireEvent.change(screen.getByLabelText('National prefix'), { target: { value: '   ' } })
-    await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(save)
-    await waitFor(() => expect(mock.operations.some((op) => op.name === 'SetPageMarking')).toBe(true))
-    const sent = mock.operations.find((op) => op.name === 'SetPageMarking')?.variables as {
-      input: { prefix: string | null }
-    }
-    expect(sent.input.prefix).toBeNull()
+    expect(sentMarking(mock)).toEqual({
+      pageId: 'page-1',
+      level: 'SECRET',
+      eyesOnly: ['UK', 'US'],
+      selectors: [{ category: 'REGION', value: 'NORTH' }],
+      ukPrefix: true,
+    })
   })
 
   it('offers no save until something actually changed', async () => {
     renderSection()
-    const save = await screen.findByRole('button', { name: 'Save marking' })
+    const save = await saveButton()
     expect((save as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('reports the new marking using the label the server sent back', async () => {
     const { onFeedback } = renderSection()
-    const save = await screen.findByRole('button', { name: 'Save marking' })
+    const save = await saveButton()
     fireEvent.click(levelRadio('SECRET'))
     await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(save)
     await waitFor(() => expect(onFeedback).toHaveBeenCalledWith({ notice: 'Marking set to UK SECRET.', error: null }))
   })
 
-  it('surfaces a server refusal instead of swallowing it — a clearance can change mid-session', async () => {
+  it('surfaces a server refusal instead of swallowing it — a clearance or a grant can change mid-session', async () => {
     const { onFeedback } = renderSection({
-      setMarkingError: { kind: 'Forbidden', message: 'clearance below the resulting marking' },
+      setMarkingError: { kind: 'Forbidden', message: 'selector:not_granted:FRUIT' },
     })
-    const save = await screen.findByRole('button', { name: 'Save marking' })
+    const save = await saveButton()
     fireEvent.click(levelRadio('SECRET'))
     await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(save)
     await waitFor(() =>
       expect(onFeedback).toHaveBeenCalledWith({
         notice: null,
-        error: 'Not permitted: clearance below the resulting marking',
+        error: 'Not permitted: selector:not_granted:FRUIT',
       }),
     )
   })
@@ -317,7 +434,7 @@ describe('saving', () => {
     const { onReplicaRefusal } = renderSection({
       setMarkingError: { kind: 'ReadOnlyReplica', spaceId: 'space-1', originInstanceId: 'LOW' },
     })
-    const save = await screen.findByRole('button', { name: 'Save marking' })
+    const save = await saveButton()
     fireEvent.click(levelRadio('SECRET'))
     await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(save)

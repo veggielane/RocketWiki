@@ -12,9 +12,9 @@ import { markingTone } from '../markingTone'
  */
 describe('MarkingBanner', () => {
   it('renders the label exactly as given, with nothing added or transformed', () => {
-    render(<MarkingBanner label="UK SECRET [UK/US EYES ONLY]" level="SECRET" placement="head" />)
+    render(<MarkingBanner label="UK SECRET UK/US EYES ONLY" level="SECRET" placement="head" />)
     // Not a regex and not a substring match: byte-for-byte is the point (§21.4).
-    expect(screen.getByText('UK SECRET [UK/US EYES ONLY]').textContent).toContain('UK SECRET [UK/US EYES ONLY]')
+    expect(screen.getByText('UK SECRET UK/US EYES ONLY').textContent).toContain('UK SECRET UK/US EYES ONLY')
   })
 
   it('renders a prefix-less label without inventing one', () => {

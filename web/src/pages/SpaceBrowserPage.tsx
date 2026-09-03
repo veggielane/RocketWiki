@@ -40,18 +40,21 @@ import { filterTreeByLabel } from '../labels/filterTreeByLabel'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { CreatePageDialog, type CreatePageValues } from './CreatePageDialog'
 import { flattenParentOptions } from './parentOptions'
+import { isProtectedEntry, readableTree } from './treeEntries'
 import { lookupPageIcon } from './pageIcons'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
+import { ProtectedTreeLeaf, type ProtectedLeafDenial } from '../access/denial/ProtectedTreeLeaf'
+import { PROTECTED_TREE_NOTE } from '../access/denial/protectedCopy'
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 
 /**
  * The generated query type only nests as deep as the `.graphql` operation
- * asked for (4 levels), so a genuinely recursive tree component needs its
- * own recursive shape rather than one extracted from the query result —
- * the deepest selected level structurally satisfies this via its optional
- * `children`.
+ * asked for, so a genuinely recursive tree component needs its own recursive
+ * shape rather than one extracted from the query result — the deepest
+ * selected level structurally satisfies this via its optional `children`.
  */
 interface PageTreeNode {
+  __typename?: 'PageTreeNode'
   id: string
   title: string
   /** `PageTreeNode.icon` — null for most pages; the tree draws its generic glyph then. */
@@ -62,13 +65,26 @@ interface PageTreeNode {
   hasRestrictions: boolean
   labels: string[]
   /**
-   * `PageTreeNode.marking` — the value the tree's own pruning walk gated on
+   * `PageTreeNode.marking` — the value the tree's own gate walk decided on
    * (design.md §21.9), so the badge shows the marking that decided this node
-   * is visible rather than a second lookup that could disagree with it.
+   * is readable rather than a second lookup that could disagree with it.
    */
   marking: { level: ClassificationLevel; levelName: string }
-  children?: PageTreeNode[]
+  children?: TreeEntry[]
 }
+
+/**
+ * A page this caller may not read, at its sibling position (design.md §6.7 /
+ * §21.8): the server's placeholder title and the denial, nothing else — no
+ * id, so nothing here can be keyed, linked or created under.
+ */
+interface ProtectedEntry {
+  __typename: 'ProtectedTreeNode'
+  title: string
+  denial: ProtectedLeafDenial
+}
+
+type TreeEntry = PageTreeNode | ProtectedEntry
 
 /**
  * Fully expanded, deliberately — this is the one screen whose job is "show me
@@ -83,13 +99,20 @@ function PageTreeList({
   spaceKey,
   depth = 0,
 }: {
-  nodes: PageTreeNode[]
+  nodes: TreeEntry[]
   spaceKey: string
   depth?: number
 }) {
   return (
     <List dense disablePadding>
-      {nodes.map((node) => {
+      {nodes.map((node, index) => {
+        // A withheld page is a leaf at its sibling position: the placeholder
+        // title, its marking label, and one disclosure for the reasons. Keyed
+        // by position because it carries no id — by design, so nothing about
+        // it can be keyed on.
+        if (isProtectedEntry(node)) {
+          return <ProtectedTreeLeaf key={`protected-${index}`} denial={node.denial} indent={2 + depth * 2} />
+        }
         // The page's own icon, or the generic page glyph when it has none —
         // and when it names one this build doesn't know. Every row gets one
         // either way: an icon on only the pages that set one would indent
@@ -108,9 +131,9 @@ function PageTreeList({
                 <Icon fontSize="small" />
               </ListItemIcon>
               <ListItemText primary={node.title} />
-              {/* §21.5: an over-classified node is pruned with its whole
-                  subtree, so every node still here is one this caller may read —
-                  the badge says how sensitive it is, not whether it is reachable. */}
+              {/* §21.8: a page this caller may not read is a placeholder leaf
+                  above, so every node reaching here is one they may read — the
+                  badge says how sensitive it is, not whether it is reachable. */}
               <MarkingLevelBadge level={node.marking.level} levelName={node.marking.levelName} />
               {node.hasRestrictions && (
                 <Tooltip title="This page has access restrictions">
@@ -130,10 +153,12 @@ function PageTreeList({
   )
 }
 
-function distinctLabels(nodes: PageTreeNode[]): string[] {
+/** Every label on a readable page; a placeholder carries none, and could not be filtered to anyway. */
+function distinctLabels(nodes: TreeEntry[]): string[] {
   const labels = new Set<string>()
-  function walk(list: PageTreeNode[]): void {
+  function walk(list: TreeEntry[]): void {
     for (const node of list) {
+      if (isProtectedEntry(node)) continue
       for (const label of node.labels) labels.add(label)
       if (node.children) walk(node.children)
     }
@@ -144,14 +169,14 @@ function distinctLabels(nodes: PageTreeNode[]): string[] {
 
 /**
  * Space browser: page tree with restriction lock badges
- * (`PageTreeNode.hasRestrictions`, design.md §6.6), a label-filter facet
- * (`PageTreeNode.labels` + labels/filterTreeByLabel.ts), and a proactive
- * replica banner (`Space.isReplica`, design.md §12). Space management is
- * gated on `grants` being non-empty: the server returns grant rows only to
- * instance/space admins ("absent, not forbidden"), and a space always has
- * at least one grant by construction, so an empty list means "not yours to
- * manage". The import-report link is deliberately absent until the
- * importer (milestone 5) exists to produce reports.
+ * (`PageTreeNode.hasRestrictions`, design.md §6.6) and protected placeholders
+ * where pages this caller may not read sit (§6.7 / §21.8), a label-filter
+ * facet (`PageTreeNode.labels` + labels/filterTreeByLabel.ts), and a
+ * proactive replica banner (`Space.isReplica`, design.md §12). Space
+ * management is gated on the server's own `canManageAccess` — a role grant,
+ * which needs no access grant, so a manager can be here with every page
+ * reading as protected. The import-report link is deliberately absent until
+ * the importer (milestone 5) exists to produce reports.
  */
 export function SpaceBrowserPage() {
   const { spaceKey } = useParams<{ spaceKey: string }>()
@@ -188,9 +213,12 @@ export function SpaceBrowserPage() {
 
   useDocumentTitle(data?.space?.name)
 
-  const tree: PageTreeNode[] = useMemo(() => treeData?.pageTree ?? [], [treeData])
+  const tree: TreeEntry[] = useMemo(() => treeData?.pageTree ?? [], [treeData])
   const availableLabels = useMemo(() => distinctLabels(tree), [tree])
-  const labelMatches = useMemo(() => (labelFilter ? filterTreeByLabel(tree, labelFilter) : []), [tree, labelFilter])
+  // The filter and the parent picker want readable pages only; the tree
+  // itself renders the placeholders in place.
+  const readable = useMemo(() => readableTree(tree), [tree])
+  const labelMatches = useMemo(() => (labelFilter ? filterTreeByLabel(readable, labelFilter) : []), [readable, labelFilter])
 
     // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
   // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
@@ -213,7 +241,9 @@ export function SpaceBrowserPage() {
   }
 
   const space = data.space
-  const canManage = space.grants.length > 0
+  // The server's own answer, not an inference from the grant list — see
+  // SpaceSettingsPage for the bug the proxy had.
+  const canManage = space.canManageAccess
   const watching = watchOverride ?? space.viewerIsWatching
 
   const surfaceError = (mutationError: Parameters<typeof asReadOnlyReplica>[0]): boolean => {
@@ -314,10 +344,7 @@ export function SpaceBrowserPage() {
             </Button>
             {/* Space management lives on its own page now (design.md §6.5.1):
                 rename, description, grants, trash and archiving were four
-                separate header buttons competing with the page actions. Same
-                `grants`-non-empty gate as before — the server returns grant rows
-                only to instance/space admins, so an empty list means "not yours
-                to manage". */}
+                separate header buttons competing with the page actions. */}
             {canManage && (
               <Button
                 component={RouterLink}
@@ -369,6 +396,14 @@ export function SpaceBrowserPage() {
         </Alert>
       )}
 
+      {/* design.md §6.4: the space is listed for this caller (a role grant
+          got them here) but no ACCESS grant matches them, so the server
+          answers an empty tree and every page reads as protected. Said once,
+          here, rather than as an empty state that would claim "no pages".
+          `=== false` because this is a claim about the server's answer, not
+          about its absence. */}
+      {space.viewerHasAccess === false && <Alert severity="info">{PROTECTED_TREE_NOTE}</Alert>}
+
       {availableLabels.length > 0 && (
         <Autocomplete
           options={availableLabels}
@@ -407,10 +442,13 @@ export function SpaceBrowserPage() {
         <Box role="region" aria-label="Page tree">
           {tree.length > 0 ? (
             <PageTreeList nodes={tree} spaceKey={space.key} />
-          ) : (
+          ) : space.viewerHasAccess === false ? null : (
             /* A space with no pages rendered an empty <List> and nothing else —
                and this is the screen you land on right after creating one.
-               web/README.md's rule: the fact AND the consequence. */
+               web/README.md's rule: the fact AND the consequence. (Not for a
+               caller with no access: the note above already said why the
+               tree is empty, and "no pages yet" would be a claim about pages
+               they cannot see.) */
             <Typography color="text.secondary">{describeNoPages(true)}</Typography>
           )}
         </Box>
@@ -419,7 +457,7 @@ export function SpaceBrowserPage() {
       <CreatePageDialog
         open={createOpen}
         parentLabel={space.name}
-        parentOptions={flattenParentOptions(tree)}
+        parentOptions={flattenParentOptions(readable)}
         defaultParentId={null}
         error={createError}
         busy={creating}

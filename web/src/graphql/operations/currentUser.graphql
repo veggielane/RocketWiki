@@ -14,13 +14,21 @@ query CurrentUser {
     isInstanceAdmin
     localUserId
     hasAvatar
-    # design.md §21: the caller's OWN clearance and nationality, resolved
-    # server-side through the same ClearanceGate path enforcement uses. They
-    # exist so the marking control can PREVENT rather than refuse — a level
-    # above this clearance, or an eyes-only set holding none of these
-    # nationalities, is a marking §21.6 would reject and the UI therefore
+    # design.md §21: the caller's OWN clearance, nationality and selector
+    # eligibility, resolved server-side through the same gate paths
+    # enforcement uses. They exist so the marking control can PREVENT rather
+    # than refuse — a level above this clearance, an eyes-only set holding
+    # none of these nationalities, or a selector in a category this caller is
+    # not eligible for, is a marking §21.6 would reject and the UI therefore
     # never offers. Affordance data, never a decision: the server enforces.
+    #
+    # `clearance` is never absent: a token without a usable value resolves to
+    # OFFICIAL_SENSITIVE (§21.3's floor), and this is that resolved value.
+    # `selectorEligibility` lists CATEGORY names — every category with no
+    # attribute gate, plus the gated ones this token satisfies — in the
+    # instance's configured order.
     clearance
     nationality
+    selectorEligibility
   }
 }

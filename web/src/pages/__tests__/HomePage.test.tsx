@@ -24,7 +24,7 @@ const page = (n: number, over: Record<string, unknown> = {}) => ({
   spaceKey: 'ENG',
   slug: `page-${n}`,
   icon: null,
-  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
   ...over,
 })
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { filterTreeByLabel, type LabeledTreeNode } from '../filterTreeByLabel'
+import { readableTree } from '../../pages/treeEntries'
 import type { SpacePageTreeQuery } from '../../graphql/generated/graphql'
 
 describe('filterTreeByLabel', () => {
@@ -64,11 +65,14 @@ describe('filterTreeByLabel', () => {
     expect(filterTreeByLabel(tree, 'x').map((m) => m.id)).toEqual(['a1', 'b1'])
   })
 
-  it('accepts the generated SpacePageTree node shape without adaptation', () => {
+  it('accepts the generated SpacePageTree shape through readableTree', () => {
     // Compile-time round-trip against the REAL generated type
     // (`PageTreeNode.labels` landed in the schema): if the operation's
-    // shape drifts from LabeledTreeNode, this stops compiling.
+    // shape drifts from what readableTree hands LabeledTreeNode, this stops
+    // compiling. The tree is a union now (a protected page is a placeholder
+    // with no labels), so the readable projection is the adaptation.
     const apiNode: SpacePageTreeQuery['pageTree'][number] = {
+      __typename: 'PageTreeNode',
       id: 'api-a',
       title: 'From API',
       // `icon` and `hasChildren` joined the TreeNode fragment when the rail
@@ -81,9 +85,15 @@ describe('filterTreeByLabel', () => {
       sortOrder: 0,
       hasRestrictions: false,
       labels: ['onboarding'],
-      marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+      marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
       children: [],
     }
-    expect(filterTreeByLabel([apiNode], 'onboarding').map((m) => m.id)).toEqual(['api-a'])
+    const placeholder: SpacePageTreeQuery['pageTree'][number] = {
+      __typename: 'ProtectedTreeNode',
+      title: '(protected)',
+      sortOrder: 1,
+      denial: { placeholderTitle: '(protected)', noSpaceAccess: false, marking: null, reasons: [] },
+    }
+    expect(filterTreeByLabel(readableTree([apiNode, placeholder]), 'onboarding').map((m) => m.id)).toEqual(['api-a'])
   })
 })

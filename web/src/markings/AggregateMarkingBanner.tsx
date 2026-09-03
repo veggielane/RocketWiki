@@ -71,7 +71,7 @@ const SCOPE_NOTE: Record<AggregateMarkingPlacement, string | null> = {
  *
  * The label is rendered verbatim by MarkingBanner and composed nowhere: an
  * aggregate's caveat is a *conjunction* of the distinct source sets
- * (`UK SECRET [GB EYES ONLY] [US EYES ONLY]` — a reader needs both), which
+ * (`UK SECRET NZ EYES ONLY, US EYES ONLY` — a reader needs both), which
  * the per-page marking shape cannot express and which client-side assembly
  * would flatten into either a widening union or an empty intersection that
  * reads as no caveat at all.

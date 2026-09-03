@@ -138,7 +138,7 @@ const page = {
   ],
   // design.md §21.5: no page is unmarked, and §21.4 puts the one formatter
   // server-side — `label` is staged as the server would render it.
-  marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
+  marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK', 'US'], ukPrefix: true, selectors: [], label: 'UK SECRET UK/US EYES ONLY' },
   properties: [
     { keyId: 'k-owner', key: 'Owner', value: 'Ada Lovelace', sortOrder: 0 },
     { keyId: 'k-review', key: 'Review Date', value: '2026-11-01', sortOrder: 1 },
@@ -191,6 +191,7 @@ const spaces = [
 function mockClient() {
   return createMockUrqlClient((name) => {
     if (name === 'PageById') return { page }
+    if (name === 'PageAccessById') return { pageAccess: { page: { ...page, parentDenial: null, linkTargets: [] }, denial: null } }
     if (name === 'CurrentUser')
       return {
         me: {
@@ -223,13 +224,13 @@ function mockClient() {
         search: {
           // §21.13: over the whole permission-filtered hit set, not the three
           // edges below it.
-          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [UK/US EYES ONLY]' },
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET UK/US EYES ONLY' },
           totalCount: 12,
           pageInfo: { hasNextPage: true, endCursor: 'c10' },
           edges: [
             { cursor: 'c1', node: { snippet: '…showed a 270 ms ignition delay on the stage two vacuum engine…', headingPath: ['Stage two ignition anomaly review'], anchorId: 'stage-two-ignition-anomaly-review', page: { id: 'page-1', title: 'Stage two ignition anomaly review', spaceKey: 'PROP', marking: page.marking } } },
-            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } } } },
-            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: null, label: 'OFFICIAL' } } } },
+            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL-SENSITIVE' } } } },
+            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: false, selectors: [], label: 'OFFICIAL' } } } },
           ],
         },
       }
@@ -242,12 +243,12 @@ function mockClient() {
             'The corrective actions are an extended pre-press hold and an unfiltered igniter-feed channel [S1].',
           citations: [
             { pageId: 'page-1', title: 'Stage two ignition anomaly review', headingPath: ['Findings so far'], anchorId: 'findings-so-far', marking: page.marking },
-            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } },
+            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL-SENSITIVE' } },
           ],
           unavailable: null,
           // §21.13's conjunctive caveat: distinct source sets are listed, so
           // the README shot shows the widest marking the app can render.
-          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [GB EYES ONLY] [US EYES ONLY]' },
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET NZ EYES ONLY, US EYES ONLY' },
         },
       }
     if (name === 'SearchFacets')

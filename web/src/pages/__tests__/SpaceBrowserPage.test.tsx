@@ -15,11 +15,28 @@ const baseSpace = {
   isReplica: false,
   originInstanceId: 'HIGH',
   viewerIsWatching: false,
-  grants: [] as { id: string }[],
+  // The server's own answers (design.md §6.4): whether this caller may
+  // manage the space (a role), and whether they may read it (an access grant).
+  canManageAccess: false,
+  viewerHasAccess: true,
+}
+
+/** A page this caller may not read, at its sibling position (design.md §6.7 / §21.8). */
+const protectedLeaf = {
+  __typename: 'ProtectedTreeNode',
+  title: '(protected)',
+  sortOrder: 1,
+  denial: {
+    placeholderTitle: '(protected)',
+    noSpaceAccess: false,
+    marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: ['UK'], ukPrefix: true, selectors: [], label: 'UK TOP SECRET UK EYES ONLY' },
+    reasons: [{ gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'TOP SECRET' }],
+  },
 }
 
 const tree = [
   {
+    __typename: 'PageTreeNode',
     id: 'open',
     title: 'Open Page',
     slug: 'open',
@@ -29,9 +46,10 @@ const tree = [
     labels: ['onboarding'],
     // design.md §21.5: every page is marked, so every tree node carries one.
     // Two levels here so the tree shows a badge that actually differs.
-    marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+    marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
     children: [
       {
+        __typename: 'PageTreeNode',
         id: 'restricted',
         title: 'Restricted Page',
         slug: 'restricted',
@@ -45,19 +63,21 @@ const tree = [
           level: 'SECRET',
           levelName: 'SECRET',
           eyesOnly: ['UK'],
-          prefix: 'UK',
-          label: 'UK SECRET [UK EYES ONLY]',
+          ukPrefix: true,
+          selectors: [],
+          label: 'UK SECRET UK EYES ONLY',
         },
         children: [],
       },
+      protectedLeaf,
     ],
   },
 ]
 
-function renderPage({ spaceOverrides = {} as Partial<typeof baseSpace> } = {}) {
+function renderPage({ spaceOverrides = {} as Partial<typeof baseSpace>, pageTree = tree as unknown[] } = {}) {
   const mock = createMockUrqlClient((name) => {
     if (name === 'SpaceTree') return { space: { ...baseSpace, ...spaceOverrides } }
-    if (name === 'SpacePageTree') return { pageTree: tree }
+    if (name === 'SpacePageTree') return { pageTree }
     return undefined
   })
   render(
@@ -84,11 +104,9 @@ describe('SpaceBrowserPage', () => {
     expect(screen.getAllByRole('img', { name: 'This page has access restrictions' })).toHaveLength(1)
   })
 
-  it('badges each tree node with its classification (design.md §21)', async () => {
+  it('badges each readable node with its classification (design.md §21)', async () => {
     renderPage()
     expect(await screen.findByText('Restricted Page')).toBeInTheDocument()
-    // Every node shows one, because §21.5 leaves no page unmarked — and it is
-    // the LEVEL, as text, not colour alone (WCAG 1.4.1).
     const open = screen.getByText('Open Page').closest('a')
     const restricted = screen.getByText('Restricted Page').closest('a')
     expect(open?.textContent).toContain('Classification: OFFICIAL')
@@ -98,30 +116,40 @@ describe('SpaceBrowserPage', () => {
     expect(restricted?.textContent).not.toContain('EYES ONLY')
   })
 
+  it('shows a page this caller may not read as a protected leaf at its position — its label, not a link', async () => {
+    renderPage()
+    await screen.findByText('Restricted Page')
+    const leaf = screen.getByText('(protected)').closest('li')
+    expect(leaf).not.toBeNull()
+    // The whole marking, because that is the one fact about the page the
+    // caller is allowed to see — and it must not be a link to anywhere.
+    expect(within(leaf as HTMLElement).getByText('UK TOP SECRET UK EYES ONLY')).toBeInTheDocument()
+    expect(within(leaf as HTMLElement).queryByRole('link')).toBeNull()
+    const why = within(leaf as HTMLElement).getByRole('button', { name: 'Why is this page protected?' })
+    fireEvent.click(why)
+    expect(within(leaf as HTMLElement).getByText('Clearance: Needs TOP SECRET clearance.')).toBeInTheDocument()
+  })
+
   it("draws each page's own icon, and the generic page glyph for one without", async () => {
     renderPage()
     await screen.findByText('Restricted Page')
     const iconed = screen.getByText('Open Page').closest('a')
     const plain = screen.getByText('Restricted Page').closest('a')
-    // MUI's dev-only test id: the glyph is decorative (the title beside it
-    // names the page), so it has no accessible name to query by. Every row
-    // gets one — a slot filled on only some rows would indent those titles
-    // past the rest and read as a hierarchy that isn't there.
     expect(within(iconed as HTMLElement).getByTestId('RocketLaunchOutlinedIcon')).toBeInTheDocument()
     expect(within(plain as HTMLElement).getByTestId('ArticleOutlinedIcon')).toBeInTheDocument()
   })
 
-  it('filters the tree by label into a breadcrumbed result list', async () => {
+  it('filters the tree by label into a breadcrumbed result list, and never lists a placeholder', async () => {
     renderPage()
     const facet = await screen.findByLabelText('Filter by label')
     fireEvent.mouseDown(facet)
     fireEvent.change(facet, { target: { value: 'onboarding' } })
     fireEvent.click(screen.getByText('onboarding'))
 
-    // The match list replaces the tree: only the labelled page shows.
     expect(await screen.findByRole('region', { name: 'Pages labelled onboarding' })).toBeInTheDocument()
     expect(screen.getByText('Open Page')).toBeInTheDocument()
     expect(screen.queryByText('Restricted Page')).not.toBeInTheDocument()
+    expect(screen.queryByText('(protected)')).not.toBeInTheDocument()
   })
 
   it('proactively shows the replica banner from Space.isReplica (design.md §12)', async () => {
@@ -134,42 +162,41 @@ describe('SpaceBrowserPage', () => {
     expect(await screen.findByRole('button', { name: 'Watching' })).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('hides Grants/Rename/Archive when the grants list comes back empty (not yours to manage)', async () => {
-    renderPage()
-    await screen.findByRole('heading', { name: 'Engineering' })
-    expect(screen.queryByRole('link', { name: 'Grants' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument()
-  })
-
-  it('offers space management when the server returns grant rows', async () => {
-    // One way in, not four buttons: rename, description, grants, trash and
-    // archiving all live on the space's settings page now.
-    renderPage({ spaceOverrides: { grants: [{ id: 'g1' }] } })
+  it('offers space management on the server\'s canManageAccess, and not otherwise', async () => {
+    renderPage({ spaceOverrides: { canManageAccess: true } })
     const settings = await screen.findByRole('link', { name: 'Space settings' })
     expect(settings).toHaveAttribute('href', '/spaces/ENG/-/admin')
   })
 
-  it('offers no management entry when the server returns no grant rows', async () => {
-    // Grants come back only to instance/space admins ("absent, not forbidden"),
-    // and a space always has at least one by construction — so an empty list
-    // means this caller does not manage it.
-    renderPage({ spaceOverrides: { grants: [] } })
+  it('offers no management entry to a caller who may not manage the space', async () => {
+    renderPage({ spaceOverrides: { canManageAccess: false } })
     await screen.findByText('Restricted Page')
     expect(screen.queryByRole('link', { name: 'Space settings' })).toBeNull()
+  })
+
+  it('says why the tree is empty for a caller with no access grant, rather than "no pages yet"', async () => {
+    // design.md §6.4: a role grant lists the space; without an access grant
+    // the server answers an empty tree, and every page reads as protected.
+    renderPage({ spaceOverrides: { canManageAccess: true, viewerHasAccess: false }, pageTree: [] })
+    expect(await screen.findByText('You have no access to this space, so its pages are shown as protected.')).toBeInTheDocument()
+    expect(screen.queryByText(/No pages yet/)).toBeNull()
   })
 
   it('declares the same tree dependencies as the sidebar — this page creates pages too', async () => {
     const mock = renderPage()
     await screen.findByText('Restricted Page')
 
-    const tree = mock.operations.find((op) => op.name === 'SpacePageTree')
-    expect(tree?.additionalTypenames).toContain('Page')
+    const treeQuery = mock.operations.find((op) => op.name === 'SpacePageTree')
+    expect(treeQuery?.additionalTypenames).toContain('Page')
   })
 
-  it('has no axe violations with tree, lock badge, replica banner, and management affordances', async () => {
-    renderPage({ spaceOverrides: { isReplica: true, originInstanceId: 'LOW', grants: [{ id: 'g1' }] } })
+  it('has no axe violations with tree, lock badge, protected leaf, replica banner, and management affordances', async () => {
+    renderPage({ spaceOverrides: { isReplica: true, originInstanceId: 'LOW', canManageAccess: true } })
     await screen.findByText('Restricted Page')
+    await expectNoAxeViolations()
+
+    // With the leaf's reasons disclosed.
+    fireEvent.click(screen.getByRole('button', { name: 'Why is this page protected?' }))
     await expectNoAxeViolations()
 
     // And again with the label filter active — the match list is a separate

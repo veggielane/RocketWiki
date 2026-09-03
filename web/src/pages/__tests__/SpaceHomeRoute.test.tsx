@@ -21,7 +21,8 @@ const space = {
   isReplica: false,
   originInstanceId: 'HIGH',
   viewerIsWatching: false,
-  grants: [] as { id: string }[],
+  canManageAccess: false,
+  viewerHasAccess: true,
 }
 
 const homepage = {
@@ -40,21 +41,34 @@ const homepage = {
   labels: [] as string[],
   labelDetails: [] as unknown[],
   properties: [] as unknown[],
-  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
   parent: null,
+  parentDenial: null,
+  linkTargets: [] as unknown[],
   children: [] as unknown[],
   comments: [] as unknown[],
   attachments: [] as unknown[],
 }
 
+const denial = {
+  placeholderTitle: '(protected)',
+  noSpaceAccess: false,
+  marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK TOP SECRET' },
+  reasons: [{ gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'TOP SECRET' }],
+}
+
 function renderHome({
   homepageId = null as string | null,
-  pageResolves = true,
+  access = 'page' as 'page' | 'missing' | 'denied',
 } = {}) {
   const mock = createMockUrqlClient((name) => {
     if (name === 'SpaceTree') return { space: { ...space, homepageId } }
     if (name === 'SpacePageTree') return { pageTree: [] }
-    if (name === 'PageById') return { page: pageResolves ? homepage : null }
+    if (name === 'PageAccessById')
+      return {
+        pageAccess:
+          access === 'page' ? { page: homepage, denial: null } : access === 'denied' ? { page: null, denial } : null,
+      }
     return undefined
   })
   render(
@@ -80,13 +94,18 @@ describe('SpaceHomeRoute', () => {
     expect(await screen.findByRole('heading', { name: 'Engineering handbook' })).toBeInTheDocument()
   })
 
-  it('falls back to the browser when the default page is not viewable', async () => {
-    // design.md §6.7: the server collapses denied into absent, so a space whose
-    // default page is above this caller's clearance must behave like a space
-    // with no default page — never a dead end where the space used to be, and
-    // never a hint that a page is there.
-    renderHome({ homepageId: 'page-1', pageResolves: false })
+  it('falls back to the browser when the default page no longer exists', async () => {
+    renderHome({ homepageId: 'page-1', access: 'missing' })
     expect(await screen.findByRole('heading', { name: 'Engineering' })).toBeInTheDocument()
     expect(screen.queryByText("Couldn't load this page.")).toBeNull()
+  })
+
+  it('falls back to the browser when the default page is withheld from this caller, not to the protected screen', async () => {
+    // A space whose default page is above this caller's clearance behaves like
+    // a space with no default page — never a dead end where the space used to
+    // be. The tree beneath the browser still shows the page as protected.
+    renderHome({ homepageId: 'page-1', access: 'denied' })
+    expect(await screen.findByRole('heading', { name: 'Engineering' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Protected page' })).toBeNull()
   })
 })

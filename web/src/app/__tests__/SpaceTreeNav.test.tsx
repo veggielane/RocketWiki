@@ -8,8 +8,8 @@ import { expectNoAxeViolations } from '../../test/axe'
 
 const SPACES = {
   spaces: [
-    { id: 'space-1', key: 'ENG', name: 'Engineering', description: null, isReplica: false, originInstanceId: null },
-    { id: 'space-2', key: 'OPS', name: 'Operations', description: null, isReplica: true, originInstanceId: 'LOW' },
+    { id: 'space-1', key: 'ENG', name: 'Engineering', description: null, isReplica: false, originInstanceId: null, viewerHasAccess: true },
+    { id: 'space-2', key: 'OPS', name: 'Operations', description: null, isReplica: true, originInstanceId: 'LOW', viewerHasAccess: true },
   ],
 }
 
@@ -20,6 +20,7 @@ const node = (
   children: unknown[] = [],
   icon: string | null = null,
 ) => ({
+  __typename: 'PageTreeNode',
   id,
   title,
   slug,
@@ -30,10 +31,24 @@ const node = (
   children,
 })
 
+/** A page this caller may not read, at its sibling position (design.md §6.7 / §21.8). */
+const PROTECTED_LEAF = {
+  __typename: 'ProtectedTreeNode',
+  title: '(protected)',
+  sortOrder: 2,
+  denial: {
+    placeholderTitle: '(protected)',
+    noSpaceAccess: false,
+    marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['NZ'], ukPrefix: true, selectors: [], label: 'UK SECRET NZ EYES ONLY' },
+    reasons: [{ gate: 'NATIONAL_CAVEAT', passed: false, countries: ['NZ'] }],
+  },
+}
+
 /**
  * Two roots, so there is always a branch OFF the current page's path to assert
  * stays folded. 'Launch notes' is three deep — the auto-expansion has to open
- * more than one level to reveal 'Igniter trace'.
+ * more than one level to reveal 'Igniter trace'. A protected leaf sits last
+ * among the roots, at its sibling position.
  */
 const TREE = {
   pageTree: [
@@ -43,6 +58,7 @@ const TREE = {
       ], 'SATELLITE'),
     ], 'ROCKET'),
     node('page-3', 'Runbooks', 'runbooks', [node('page-4', 'Chill-in', 'chill-in')]),
+    PROTECTED_LEAF,
   ],
 }
 
@@ -445,6 +461,61 @@ describe('SpaceTreeNav rows', () => {
     // And with the picker open — the options portal out of the drawer.
     fireEvent.mouseDown(picker())
     await screen.findByRole('option', { name: /Operations/ })
+    await expectNoAxeViolations()
+  })
+})
+
+describe('SpaceTreeNav protected pages (design.md §6.7 / §21.8)', () => {
+  it('shows a withheld page as a leaf in place — its label and one disclosure, never a link or a chevron', async () => {
+    renderNav('/spaces/ENG')
+    await screen.findByRole('link', { name: 'Launch notes' })
+    const leaf = screen.getByText('(protected)').closest('li')
+    expect(leaf).not.toBeNull()
+    expect(within(leaf as HTMLElement).getByText('UK SECRET NZ EYES ONLY')).toBeInTheDocument()
+    expect(within(leaf as HTMLElement).queryByRole('link')).toBeNull()
+    expect(within(leaf as HTMLElement).queryByRole('button', { name: /Expand/ })).toBeNull()
+    const why = within(leaf as HTMLElement).getByRole('button', { name: 'Why is this page protected?' })
+    expect(why).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(why)
+    expect(why).toHaveAttribute('aria-expanded', 'true')
+    expect(within(leaf as HTMLElement).getByText('National caveat: Releasable to NZ only.')).toBeInTheDocument()
+  })
+
+  it('never treats a placeholder as the current page or as part of anyone\'s path', async () => {
+    // The leaf has no slug and no id, so no route can select it; and the path
+    // to a readable page is computed past it without tripping.
+    renderNav('/spaces/ENG/igniter-trace')
+    expect(await screen.findByRole('link', { name: 'Igniter trace' })).toHaveClass('Mui-selected')
+    expect(screen.getByText('(protected)').closest('li')?.querySelector('.Mui-selected')).toBeNull()
+  })
+
+  it('says why the tree is empty for a caller with no access grant, rather than "no pages yet"', async () => {
+    // design.md §6.4: a role grant lists the space; without an access grant
+    // the server answers an empty tree and every page reads as protected.
+    const mock = createMockUrqlClient((name) => {
+      if (name === 'SpaceList')
+        return { spaces: [{ ...SPACES.spaces[0], viewerHasAccess: false }] }
+      if (name === 'SpacePageTree') return { pageTree: [] }
+      return undefined
+    })
+    render(
+      <Provider value={mock.client}>
+        <MemoryRouter initialEntries={['/spaces/ENG']}>
+          <SpaceTreeNav />
+        </MemoryRouter>
+      </Provider>,
+    )
+    expect(
+      await screen.findByText('You have no access to this space, so its pages are shown as protected.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('No pages yet')).toBeNull()
+  })
+
+  it('has no axe violations with a protected leaf, closed and disclosed', async () => {
+    renderNav('/spaces/ENG')
+    await screen.findByRole('link', { name: 'Launch notes' })
+    await expectNoAxeViolations()
+    fireEvent.click(screen.getByRole('button', { name: 'Why is this page protected?' }))
     await expectNoAxeViolations()
   })
 })

@@ -17,7 +17,7 @@ const hit = (id: string, title: string, level: string, levelName: string, label:
     snippet: '…matched text from the page body…',
     headingPath: [title],
     anchorId: 'anchor',
-    page: { id, title, spaceKey: 'ENG', marking: { level, levelName, eyesOnly: [], prefix: 'UK', label } },
+    page: { id, title, spaceKey: 'ENG', marking: { level, levelName, eyesOnly: [], ukPrefix: true, selectors: [], label } },
   },
 })
 
@@ -42,7 +42,7 @@ function renderSearch(aggregateMarking: Aggregate = null, totalCount = 2) {
             // it comes from the server (§21.1's levelName) — the SPA must not
             // be able to produce it from the OFFICIAL_SENSITIVE wire name.
             hit('page-1', 'Runbook', 'OFFICIAL_SENSITIVE', 'OFFICIAL-SENSITIVE', 'UK OFFICIAL-SENSITIVE'),
-            hit('page-2', 'Igniter data', 'SECRET', 'SECRET', 'UK SECRET [UK EYES ONLY]'),
+            hit('page-2', 'Igniter data', 'SECRET', 'SECRET', 'UK SECRET UK EYES ONLY'),
           ],
         },
       }
@@ -103,7 +103,7 @@ describe('SearchPage protective markings (design.md §21)', () => {
  * the edges currently on screen, which is the property these tests pin.
  */
 describe('SearchPage aggregate marking (design.md §21.13)', () => {
-  const TOP_SECRET_AGGREGATE = { level: 'TOP_SECRET', label: 'TOP SECRET [GB EYES ONLY] [US EYES ONLY]' }
+  const TOP_SECRET_AGGREGATE = { level: 'TOP_SECRET', label: 'TOP SECRET NZ EYES ONLY, US EYES ONLY' }
 
   it('renders the aggregate label verbatim above the results', async () => {
     renderSearch(TOP_SECRET_AGGREGATE)
@@ -111,7 +111,7 @@ describe('SearchPage aggregate marking (design.md §21.13)', () => {
     const banner = document.querySelector('[data-aggregate-marking="results"]')
     // Byte-for-byte: the conjunctive caveat is a shape only the server's
     // formatter builds, and any client-side assembly would mangle it.
-    expect(banner?.textContent).toContain('TOP SECRET [GB EYES ONLY] [US EYES ONLY]')
+    expect(banner?.textContent).toContain('TOP SECRET NZ EYES ONLY, US EYES ONLY')
   })
 
   it('out-ranks every row on screen without that being a contradiction', async () => {

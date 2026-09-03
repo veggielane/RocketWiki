@@ -12,7 +12,7 @@ export interface MarkingBannerProps {
    * MCP client and an audit reviewer read identical text, so this component
    * never sees prefix/level/caveat separately and could not compose them if
    * it wanted to. That matters most for an aggregate, whose caveat is a
-   * conjunction (`UK SECRET [GB EYES ONLY] [US EYES ONLY]`) the per-page
+   * conjunction (`UK SECRET NZ EYES ONLY, US EYES ONLY`) the per-page
    * shape cannot even express.
    */
   label: string

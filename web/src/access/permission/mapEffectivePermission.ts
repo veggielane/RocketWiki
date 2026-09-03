@@ -20,8 +20,6 @@ type RestrictionCheckView = EffectivePermissionView['viewRestrictions'][number]
 
 export function mapSpaceRole(role: ApiSpaceRole | null): SpaceRole | null {
   switch (role) {
-    case 'VIEWER':
-      return 'viewer'
     case 'EDITOR':
       return 'editor'
     case 'SPACE_ADMIN':
@@ -52,12 +50,18 @@ export function toEffectivePermissionDetail(view: EffectivePermissionView): Effe
   return {
     userId: view.userId,
     userDisplayName: view.userDisplayName,
+    hasSpaceAccess: view.hasSpaceAccess,
     spaceRole: mapSpaceRole(view.spaceRole),
     isReplicaSpace: view.isReplicaSpace,
     canView: view.canView,
     canEdit: view.canEdit,
     viewDenialReason: view.viewDenialReason,
     editDenialReason: view.editDenialReason,
+    // The gate rows are carried as the wire sends them — their enum is the
+    // one `describeAccessGate` reads, so re-casing would only add a second
+    // vocabulary to keep in step.
+    viewGates: view.viewGates.map((gate) => ({ ...gate })),
+    editGates: view.editGates.map((gate) => ({ ...gate })),
     viewRestrictions: view.viewRestrictions.map(mapRestrictionCheck),
     editRestrictions: view.editRestrictions.map(mapRestrictionCheck),
   }

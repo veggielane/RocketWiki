@@ -134,6 +134,12 @@ const pageContent = [
   'two vacuum engine. This page tracks the investigation — see `PT-201` for',
   'the inlet pressure channel.',
   '',
+  // Three in-page links, one per resolution (design.md §21.8): a readable
+  // target (a router link), a withheld one (inert, with the `(protected)`
+  // marker) and a vanished one (inert, with the missing marker) — so the
+  // browser tier judges the two marker styles for contrast in both themes.
+  'Related: [the chill-in procedure](page://page-3), [export-controlled test data](page://page-4) and [an old note](page://page-9).',
+  '',
   '## Findings so far',
   '',
   '- Turbopump inlet pressure sagged during chill-in :banana:',
@@ -185,7 +191,7 @@ const page = {
   // design.md §21: staged with a caveat and a prefix so the page-view capture
   // exercises a real label rather than the shortest possible one. `label` is
   // the server's formatting — the SPA never composes it (§21.4).
-  marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
+  marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK', 'US'], ukPrefix: true, selectors: [], label: 'UK SECRET UK/US EYES ONLY' },
   properties: [
     { keyId: 'k-owner', key: 'Owner', value: 'Ada Lovelace', sortOrder: 0 },
     { keyId: 'k-review', key: 'Review Date', value: '2026-11-01', sortOrder: 1 },
@@ -227,6 +233,42 @@ const page = {
       uploadedBy: { id: 'user-ada', displayName: 'Ada Lovelace', hasAvatar: true },
     },
   ],
+  parentDenial: null,
+  // What the three `page://` links in the content resolved to (§21.8).
+  linkTargets: [
+    { id: 'page-3', page: { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', spaceKey: 'PROP' }, denial: null },
+    { id: 'page-4', page: null, denial: { placeholderTitle: '(protected)', noSpaceAccess: false, marking: { label: 'UK TOP SECRET UK EYES ONLY' } } },
+    { id: 'page-9', page: null, denial: null },
+  ],
+}
+
+/**
+ * A page this caller may not read (design.md §6.7 / §21.8): the marking and
+ * every failing gate, never a title. Staged with the widest label the
+ * scheme can build and three reasons, so the protected screen and the tree
+ * leaf both show the fullest shape in both themes.
+ */
+const PROTECTED_DENIAL = {
+  placeholderTitle: '(protected)',
+  noSpaceAccess: false,
+  marking: {
+    level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: ['NZ', 'US'], ukPrefix: true,
+    selectors: [{ category: 'FRUIT', value: 'BANANA' }, { category: 'REGION', value: 'NORTH' }],
+    label: 'UK TOP SECRET BANANA NORTH NZ/US EYES ONLY',
+  },
+  reasons: [
+    { gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'TOP SECRET' },
+    { gate: 'SELECTOR_GRANT', passed: false, category: 'FRUIT', value: 'BANANA' },
+    { gate: 'NATIONAL_CAVEAT', passed: false, countries: ['NZ', 'US'] },
+  ],
+}
+
+/** The withheld shape: no access grant in the space, so the marking is withheld and only the space sentence remains. */
+const NO_SPACE_DENIAL = {
+  placeholderTitle: '(protected)',
+  noSpaceAccess: true,
+  marking: null,
+  reasons: [{ gate: 'SPACE_ACCESS', passed: false }],
 }
 
 const spaces = [
@@ -240,6 +282,7 @@ const spaces = [
 // layer's contrast check in both themes.
 const spaceTreeNodes = [
   {
+    __typename: 'PageTreeNode',
     id: 'page-1',
     title: 'Stage two ignition anomaly review',
     slug: 'stage-two-ignition-anomaly',
@@ -249,29 +292,44 @@ const spaceTreeNodes = [
     sortOrder: 0,
     hasRestrictions: false,
     labels: ['anomaly'],
-    marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK', 'US'], prefix: 'UK', label: 'UK SECRET [UK/US EYES ONLY]' },
+    marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK', 'US'], ukPrefix: true, selectors: [], label: 'UK SECRET UK/US EYES ONLY' },
     children: [
       {
+        __typename: 'PageTreeNode',
         id: 'page-4',
         title: 'Export-controlled test data',
         slug: 'export-controlled-test-data',
         sortOrder: 0,
         hasRestrictions: true,
         labels: [],
-        marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: ['UK'], prefix: 'UK', label: 'UK TOP SECRET [UK EYES ONLY]' },
+        marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: ['UK'], ukPrefix: true, selectors: [], label: 'UK TOP SECRET UK EYES ONLY' },
         children: [],
       },
+      // A withheld page at its sibling position (design.md §21.8): the
+      // placeholder title, the whole marking label as a chip, and one
+      // disclosure — the browser tier judges the chip and the muted row in
+      // both themes.
+      { __typename: 'ProtectedTreeNode', title: '(protected)', sortOrder: 1, denial: PROTECTED_DENIAL },
     ],
   },
-  { id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', sortOrder: 1, hasRestrictions: false, labels: [], marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' }, children: [] },
+  { __typename: 'PageTreeNode', id: 'page-3', title: 'Chill-in procedure v3', slug: 'chill-in-procedure-v3', sortOrder: 1, hasRestrictions: false, labels: [], marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' }, children: [] },
 ]
 
 /** One unchanged line and one that moves, so the history capture has both fills. */
 const HISTORY_BODY = (cause: string) => `Stage two ignition held at T-4 seconds.\n\n${cause}\n`
 
 function mockClient() {
-  return createMockUrqlClient((name) => {
+  return createMockUrqlClient((name, op) => {
     if (name === 'PageById') return { page }
+    // The disclosing read (§6.7 / §21.8): the staged page, or one of the two
+    // denial shapes, by id — so the protected captures come from the same
+    // route and screen a real reader would hit.
+    if (name === 'PageAccessById') {
+      const id = (op.variables as { id: string }).id
+      if (id === 'page-protected') return { pageAccess: { page: null, denial: PROTECTED_DENIAL } }
+      if (id === 'page-nospace') return { pageAccess: { page: null, denial: NO_SPACE_DENIAL } }
+      return { pageAccess: { page, denial: null } }
+    }
     if (name === 'CurrentUser')
       return {
         me: {
@@ -281,6 +339,9 @@ function mockClient() {
           // the marking control, which is the state worth capturing — the
           // "Above your clearance" reason has to be readable in both themes.
           clearance: 'SECRET', nationality: ['UK'],
+          // §21.15: eligible for FRUIT (the token says so) and REGION (no
+          // attribute gate); the marking control's pickers are both live.
+          selectorEligibility: ['FRUIT', 'REGION'],
         },
       }
     if (name === 'SpaceReplicaBanner')
@@ -351,13 +412,13 @@ function mockClient() {
           // §21.13: the aggregate spans the whole permission-filtered hit set,
           // so it legitimately out-ranks the three rows rendered here — which
           // is exactly the state worth capturing, banner plus scope note.
-          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [UK/US EYES ONLY]' },
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET UK/US EYES ONLY' },
           totalCount: 12,
           pageInfo: { hasNextPage: true, endCursor: 'c10' },
           edges: [
             { cursor: 'c1', node: { snippet: '…showed a 270 ms ignition delay on the stage two vacuum engine…', headingPath: ['Stage two ignition anomaly review'], anchorId: 'stage-two-ignition-anomaly-review', page: { id: 'page-1', title: 'Stage two ignition anomaly review', spaceKey: 'PROP', marking: page.marking } } },
-            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } } } },
-            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: null, label: 'OFFICIAL' } } } },
+            { cursor: 'c2', node: { snippet: '…igniter feed line transient is visible on the unfiltered channel…', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', page: { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL-SENSITIVE' } } } },
+            { cursor: 'c3', node: { snippet: '…extended pre-press hold keeps PT-201 above the redline through ignition…', headingPath: ['Chill-in procedure', 'Pre-press'], anchorId: 'pre-press', page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: false, selectors: [], label: 'OFFICIAL' } } } },
           ],
         },
       }
@@ -370,7 +431,7 @@ function mockClient() {
           // aggregate banner and marking badges rendered inside EDITOR CONTENT,
           // which is plain CSS with its own theme variables rather than the MUI
           // page chrome the search capture exercises.
-          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [UK/US EYES ONLY]' },
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET UK/US EYES ONLY' },
           // Deliberately more than the two rows shown, so the capture includes
           // the "Showing the first N of M" line — the sentence §6.7 constrains
           // most tightly, and the one worth having a human look at.
@@ -378,7 +439,7 @@ function mockClient() {
           errors: [],
           edges: [
             { cursor: 'q1', node: { page: { id: 'page-1', title: 'Stage two ignition anomaly review', spaceKey: 'PROP', marking: page.marking } } },
-            { cursor: 'q2', node: { page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' } } } },
+            { cursor: 'q2', node: { page: { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' } } } },
           ],
           pageInfo: { hasNextPage: true, endCursor: 'q2' },
         },
@@ -391,7 +452,7 @@ function mockClient() {
             'The igniter feed transient was masked by the telemetry filter — the unfiltered channel confirms it [S2].',
           citations: [
             { pageId: 'page-1', title: 'Stage two ignition anomaly review', headingPath: ['Findings so far'], anchorId: 'findings-so-far', marking: page.marking },
-            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL-SENSITIVE' } },
+            { pageId: 'page-2', title: 'Telemetry review notes', headingPath: ['Findings', 'Igniter feed'], anchorId: 'igniter-feed', marking: { level: 'OFFICIAL_SENSITIVE', levelName: 'OFFICIAL-SENSITIVE', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL-SENSITIVE' } },
           ],
           unavailable: null,
           // §21.13's conjunctive caveat — distinct source eyes-only sets are
@@ -401,17 +462,35 @@ function mockClient() {
           // for contrast and for wrapping/overflow in both themes. It also
           // out-ranks both citation badges below it, which is the honest
           // rendering of "the aggregate covers uncited context too".
-          aggregateMarking: { level: 'SECRET', label: 'UK SECRET [GB EYES ONLY] [US EYES ONLY]' },
+          aggregateMarking: { level: 'SECRET', label: 'UK SECRET NZ EYES ONLY, US EYES ONLY' },
         },
       }
     if (name === 'SpaceTree')
       return {
         space: {
           id: 'space-eng', key: 'PROP', name: 'Propulsion', description: 'Engines, test stands, anomalies',
-          homepageId: null, isReplica: false, originInstanceId: 'LOW', viewerIsWatching: true, grants: [{ id: 'g1' }],
+          homepageId: null, isReplica: false, originInstanceId: 'LOW', viewerIsWatching: true,
+          canManageAccess: true, viewerHasAccess: true,
         },
       }
     if (name === 'SpacePageTree') return { pageTree: spaceTreeNodes }
+    // §21.15: the dev catalog, and the caller's grants in this space — APPLE
+    // but not BANANA, so the marking control captures a greyed value with
+    // its reason beside an offered one.
+    if (name === 'SelectorCategories')
+      return {
+        selectorCategories: [
+          { name: 'FRUIT', description: 'Fruit programme compartments', requiresAttribute: true, values: ['APPLE', 'BANANA'] },
+          { name: 'REGION', description: 'Regional releasability', requiresAttribute: false, values: ['NORTH', 'SOUTH'] },
+        ],
+      }
+    if (name === 'SpaceSelectorGrants')
+      return {
+        space: {
+          id: 'space-eng', key: 'PROP',
+          viewerSelectorGrants: [{ category: 'FRUIT', value: 'APPLE' }, { category: 'REGION', value: 'NORTH' }, { category: 'REGION', value: 'SOUTH' }],
+        },
+      }
     // The form blocks: a definition plus records at two different markings, so the
     // browser tier judges the table's badges as well as the form controls.
     if (name === 'PageForms')
@@ -439,7 +518,7 @@ function mockClient() {
             data: JSON.stringify({ severity: 'high', summary: 'Turbopump inlet pressure sagged', occurredAt: '2026-08-14' }),
             version: 1,
             createdAtUtc: '2026-08-14T00:00:00Z',
-            marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+            marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
           },
           {
             id: 'entry-2',
@@ -447,7 +526,7 @@ function mockClient() {
             data: JSON.stringify({ severity: 'low', summary: 'Igniter feed transient', occurredAt: '2026-08-15' }),
             version: 1,
             createdAtUtc: '2026-08-15T00:00:00Z',
-            marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK'], prefix: 'UK', label: 'UK SECRET [UK EYES ONLY]' },
+            marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK'], ukPrefix: true, selectors: [], label: 'UK SECRET UK EYES ONLY' },
           },
         ],
       }
@@ -547,8 +626,22 @@ function mockClient() {
     if (name === 'EffectivePermission')
       return {
         effectivePermission: {
-          userId: 'sub-chris', userDisplayName: 'Chris', spaceRole: 'SPACE_ADMIN', isReplicaSpace: false,
+          userId: 'sub-chris', userDisplayName: 'Chris', hasSpaceAccess: true, spaceRole: 'SPACE_ADMIN', isReplicaSpace: false,
           canView: true, canEdit: true, viewDenialReason: null, editDenialReason: null,
+          // The whole ladder, every gate evaluated (§6.6): pass and fail icons
+          // both reach the contrast check.
+          viewGates: [
+            { gate: 'SPACE_ACCESS', passed: true },
+            { gate: 'CLASSIFICATION', passed: true },
+            { gate: 'SELECTOR_ELIGIBILITY', passed: true, category: 'FRUIT' },
+            { gate: 'SELECTOR_GRANT', passed: true, category: 'FRUIT', value: 'APPLE' },
+            { gate: 'NATIONAL_CAVEAT', passed: true },
+            { gate: 'RESTRICTION', passed: true },
+          ],
+          editGates: [
+            { gate: 'REPLICA', passed: true },
+            { gate: 'ROLE', passed: true, requiredRole: 'EDITOR' },
+          ],
           viewRestrictions: [], editRestrictions: [],
         },
       }
@@ -598,7 +691,7 @@ interface Screen {
 const STAGED_MARKINGS: Record<(typeof CLASSIFICATION_LADDER)[number], { label: string; levelName: string }> = {
   OFFICIAL: { label: 'UK OFFICIAL', levelName: 'OFFICIAL' },
   OFFICIAL_SENSITIVE: { label: 'UK OFFICIAL-SENSITIVE', levelName: 'OFFICIAL-SENSITIVE' },
-  SECRET: { label: 'UK SECRET [UK/US EYES ONLY]', levelName: 'SECRET' },
+  SECRET: { label: 'UK SECRET UK/US EYES ONLY', levelName: 'SECRET' },
   TOP_SECRET: { label: 'TOP SECRET', levelName: 'TOP SECRET' },
 }
 
@@ -679,7 +772,25 @@ const SCREENS: Screen[] = [
     name: 'permissions',
     render: (mode) => shell(mode, '/pages/page-1/permissions', 'pages/:pageId/permissions', <PagePermissionsPage />),
   },
-  { name: 'space-browser', render: (mode) => shell(mode, '/spaces/PROP/-/browse', 'spaces/:spaceKey/-/browse', <SpaceBrowserPage />) },
+  {
+    // The browser with a protected leaf disclosed, so the reasons list under
+    // the placeholder — muted caption text over the page surface — is judged
+    // for contrast in both themes, not only the collapsed row.
+    name: 'space-browser',
+    render: (mode) => shell(mode, '/spaces/PROP/-/browse', 'spaces/:spaceKey/-/browse', <SpaceBrowserPage />),
+    stage: async () => {
+      fireEvent.click(await screen.findByRole('button', { name: 'Why is this page protected?' }))
+      await settle()
+    },
+  },
+  // The two shapes of a withheld page (design.md §6.7 / §21.8), through the
+  // real route: the marking banner and the reasons list, and the withheld
+  // shape with only the space sentence.
+  { name: 'protected-page', render: (mode) => shell(mode, '/pages/page-protected', 'pages/:pageId', <PageViewPage />) },
+  {
+    name: 'protected-page-no-space-access',
+    render: (mode) => shell(mode, '/pages/page-nospace', 'pages/:pageId', <PageViewPage />),
+  },
   { name: 'analytics', render: (mode) => shell(mode, '/spaces/PROP/-/analytics', 'spaces/:spaceKey/-/analytics', <AnalyticsPage />) },
   // Help renders long prose through the read-only editor, so this is also the
   // capture that would catch a body-copy contrast regression in either theme.

@@ -30,7 +30,7 @@ import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined'
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined'
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined'
 import {
-  usePageByIdQuery,
+  usePageAccessByIdQuery,
   useCurrentUserQuery,
   useSpaceReplicaBannerQuery,
   useSpaceLabelDetailsQuery,
@@ -53,7 +53,9 @@ import { useDocumentTitle } from '../app/documentTitle'
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { CreatePageDialog, type CreatePageValues } from './CreatePageDialog'
 import { flattenParentOptions } from './parentOptions'
+import { readableTree } from './treeEntries'
 import { lookupPageIcon } from './pageIcons'
+import { ProtectedPageOrNotFound } from '../access/denial/ProtectedPageOrNotFound'
 import { DeletePageDialog } from '../trash/DeletePageDialog'
 import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { PermissionInspectorPanel } from '../access/permission/PermissionInspectorPanel'
@@ -88,10 +90,11 @@ export function PageViewPage({
 }: {
   pageId?: string
   /**
-   * What to render instead of the "couldn't load this page" notice. Only the
-   * space-home route passes it: a space whose default page this caller cannot
-   * view should behave like a space without one, not become a dead end where
-   * the space used to be. The default stays the notice, so the ordinary page
+   * What to render instead of the "couldn't load this page" notice AND
+   * instead of the protected screen. Only the space-home route passes it: a
+   * space whose default page this caller cannot view should behave like a
+   * space without one, not become a dead end where the space used to be. The
+   * default stays the notice or the protected screen, so the ordinary page
    * routes are unchanged.
    */
   onUnavailable?: ReactNode
@@ -103,7 +106,14 @@ export function PageViewPage({
   const params = useParams<{ pageId: string }>()
   const pageId = pageIdFromRoute ?? params.pageId
   const navigate = useNavigate()
-  const [{ data, fetching, error }, refetchPage] = usePageByIdQuery({ variables: { id: pageId ?? '' }, pause: !pageId })
+  // The DISCLOSING read (design.md §6.7 / §21.8): page, or a denial the
+  // protected screen renders, or null for no such page — one request, one
+  // audit row. The plain `page(id)` stays for content-only consumers.
+  const [{ data, fetching, error }, refetchPage] = usePageAccessByIdQuery({
+    variables: { id: pageId ?? '' },
+    pause: !pageId,
+  })
+  const access = data?.pageAccess
   const [{ data: meData }] = useCurrentUserQuery()
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -143,12 +153,14 @@ export function PageViewPage({
   // in the DOM yet at the moment of navigation (content loads and the
   // editor mounts asynchronously), so this watches for it to appear rather
   // than relying on the browser's one-shot native hash scroll.
-  useScrollToHash(data?.page?.content)
-  useDocumentTitle(data?.page?.title)
+  useScrollToHash(access?.page?.content)
+  // A denial never reaches this: `access.page` is null then, so the tab keeps
+  // the route's own name until the protected screen sets its own.
+  useDocumentTitle(access?.page?.title)
 
-  const spaceId = data?.page?.spaceId
-  const spaceKey = data?.page?.spaceKey
-  const canEdit = data?.page?.canEdit === true
+  const spaceId = access?.page?.spaceId
+  const spaceKey = access?.page?.spaceKey
+  const canEdit = access?.page?.canEdit === true
   // The "add child page" dialog needs the space's tree for its parent picker,
   // and only an editor can create one. (The move dialog used to share this
   // query; it has gone to the details screen and fetches its own.)
@@ -195,7 +207,7 @@ export function PageViewPage({
     return false
   }
 
-  const watching = watchOverride ?? data?.page?.viewerIsWatching ?? false
+  const watching = watchOverride ?? access?.page?.viewerIsWatching ?? false
 
   const handleCreateChild = async (values: CreatePageValues) => {
     if (!page) return
@@ -273,15 +285,22 @@ export function PageViewPage({
     )
   }
 
-  if (error || !data?.page) {
-    // Same message for "doesn't exist", "not viewable" and "API down" —
-    // design.md §6.7's absent-not-forbidden applies client-side too, which is
-    // also why a caller can substitute its own fallback without learning which
-    // of the three it got.
-    return onUnavailable ?? <Alert severity="info">{describeLoadFailure('PAGE').summary}</Alert>
+  if (error) {
+    // The request never got an answer — distinct from the two answers below,
+    // because "try the URL again" and "this page is gone" are different advice.
+    return onUnavailable ?? <Alert severity="info">{describeLoadFailure('PAGE_ACCESS').summary}</Alert>
   }
 
-  const page = data.page
+  if (!access?.page) {
+    // Null: no such page. A denial: the page exists and is withheld — the
+    // protected screen says so, with the marking and every failing gate
+    // (design.md §6.7 / §21.8), never the title. A caller that substituted
+    // its own fallback gets it for both: the space-home route wants a
+    // withheld default page to behave like no default page.
+    return onUnavailable ?? <ProtectedPageOrNotFound denial={access?.denial} />
+  }
+
+  const page = access.page
   const replicaSpace = spaceMeta?.space?.isReplica === true ? spaceMeta.space : null
   // No fallback glyph here, unlike the trees: a row in a list needs its icon
   // slot filled to stay aligned with its neighbours, but a heading has no
@@ -519,7 +538,15 @@ export function PageViewPage({
           screen, which any viewer can open read-only. Two renderings of the
           same rows, one of them a panel wedged above the content, was the
           clutter this move exists to remove. */}
-      <RichTextEditor initialMarkdown={page.content} editable={false} showToolbar={false} />
+      {/* `linkTargets` rode on the same read as the content: every page://
+          link in it renders resolved — a router link, an inert (protected)
+          marker, or a missing marker (editor/marks/PageLinkView.tsx). */}
+      <RichTextEditor
+        initialMarkdown={page.content}
+        editable={false}
+        showToolbar={false}
+        linkTargets={page.linkTargets}
+      />
 
       {page.canEdit && (
         <Box sx={{ mt: 2 }}>
@@ -569,7 +596,7 @@ export function PageViewPage({
       <CreatePageDialog
         open={createOpen}
         parentLabel={page.title}
-        parentOptions={flattenParentOptions(treeData?.pageTree ?? [])}
+        parentOptions={flattenParentOptions(readableTree(treeData?.pageTree ?? []))}
         defaultParentId={page.id}
         error={createError}
         busy={creating}

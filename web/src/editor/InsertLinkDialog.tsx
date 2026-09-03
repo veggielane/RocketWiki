@@ -15,6 +15,7 @@ import { usePageSpaceRefQuery, useSpacePageTreeQuery } from '../graphql/generate
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 import { useCurrentPageId } from '../pages/pageContext'
 import { flattenParentOptions } from '../pages/parentOptions'
+import { readableTree } from '../pages/treeEntries'
 import { useDialogFullScreen } from '../app/useDialogFullScreen'
 
 /**
@@ -114,8 +115,10 @@ export function InsertLinkDialog({
     context: PAGE_TREE_CONTEXT,
   })
   // `flattenParentOptions` leads with "(top level)", which is a parent choice
-  // and not a page — a link cannot point at it.
-  const pageOptions = flattenParentOptions(treeData?.pageTree ?? []).filter((option) => option.id !== null)
+  // and not a page — a link cannot point at it. Protected entries are dropped
+  // first: a page this author cannot read has no id to link to, and offering
+  // its placeholder would be offering nothing.
+  const pageOptions = flattenParentOptions(readableTree(treeData?.pageTree ?? [])).filter((option) => option.id !== null)
 
   const targetValid = kind === 'external' ? isUsableHref(href) : pageId !== null
   const canSubmit = targetValid && text.trim().length > 0

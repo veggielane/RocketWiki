@@ -37,6 +37,8 @@ import { PageHeader } from '../app/PageHeader'
 import { SpaceOwnerSection } from '../spaces/SpaceOwnerSection'
 import { useDocumentTitle } from '../app/documentTitle'
 import { flattenParentOptions } from './parentOptions'
+import { readableTree } from './treeEntries'
+import { MANAGE_WITHOUT_ACCESS_NOTE } from '../access/denial/protectedCopy'
 import { PAGE_TREE_CONTEXT } from '../graphql/treeDependencies'
 
 /**
@@ -51,12 +53,12 @@ const NO_HOMEPAGE = '__none__'
  * Everything that manages one space, in one place (design.md §6.5.1): its name
  * and description, the way through to its grants and trash, and archiving.
  *
- * Gated the same way the space browser gates its management affordances —
- * `grants` non-empty. The server returns grant rows only to instance admins and
- * that space's own space-admins ("absent, not forbidden"), and a space always
- * has at least one grant by construction, so an empty list means "not yours to
- * manage" without the client having to guess. The server re-checks every
- * mutation regardless; this only decides what to offer.
+ * Gated on the server's own `canManageAccess` (a space-admin role grant, or
+ * instance admin). Managing needs no ACCESS grant (design.md §6.4 keeps the
+ * two kinds apart), so a manager can arrive here holding none — in which case
+ * every page in the space reads as protected to them, and the screen says so
+ * rather than letting them wonder. The server re-checks every mutation
+ * regardless; this only decides what to offer.
  *
  * The key is deliberately not editable. It is in every URL and every sync
  * bundle's identity, so renaming it is a migration rather than a setting.
@@ -130,7 +132,8 @@ export function SpaceSettingsPage() {
   // leads with "(top level)" because a NEW PAGE can hang off the space itself.
   // A default page cannot — the space is the thing being defaulted, so the only
   // "nothing" here is NO_HOMEPAGE.
-  const pageOptions = flattenParentOptions(treeData?.pageTree ?? []).filter((option) => option.id !== null)
+  // Readable pages only: a placeholder has no id and cannot be a default page.
+  const pageOptions = flattenParentOptions(readableTree(treeData?.pageTree ?? [])).filter((option) => option.id !== null)
   const homepageValue = homepageDraft ?? space.homepageId ?? NO_HOMEPAGE
   // A homepage the picker has no row for means the tree has not arrived yet, or
   // the page left the space. Either way the Select must not silently show "None"
@@ -235,6 +238,10 @@ export function SpaceSettingsPage() {
           space-admin role.
         </Alert>
       )}
+      {/* The other direction (design.md §6.4): a role lets you manage and
+          says nothing about reading. `=== false` because this is a claim
+          about the server's answer, not about its absence. */}
+      {canManage && space.viewerHasAccess === false && <Alert severity="info">{MANAGE_WITHOUT_ACCESS_NOTE}</Alert>}
 
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Stack spacing={2}>
@@ -362,7 +369,7 @@ export function SpaceSettingsPage() {
           <ListItem disablePadding>
             <ListItemButton component={RouterLink} to={`/spaces/${space.key}/-/grants`}>
               <ShieldOutlinedIcon fontSize="small" sx={{ mr: 2 }} />
-              <ListItemText primary="Grants" secondary="Who holds which role in this space." />
+              <ListItemText primary="Grants" secondary="Who may see this space, and who may edit or administer it." />
             </ListItemButton>
           </ListItem>
           <ListItem disablePadding>

@@ -2,22 +2,25 @@ import { describe, expect, it } from 'vitest'
 import type { ClassificationLevel } from '../../graphql/generated/graphql'
 import {
   CLASSIFICATION_LADDER,
+  DEFAULT_CLEARANCE,
   canonicalCountries,
   canonicalCountry,
-  canonicalPrefix,
   clearanceRank,
   describeMarkingRefusal,
   eyesOnlyAdmits,
   levelIsWithinClearance,
   markingLevelRank,
   markingRefusal,
+  selectorEligible,
+  selectorGranted,
+  type ViewerClearance,
 } from '../clearance'
 
 /**
- * design.md §21's comparison, client-side. These tests are the reason the
- * marking control is allowed to grey anything out: the UI is only entitled to
- * prevent what the server would actually refuse, so this suite pins the
- * mirror to `ClearanceGate`'s rules rather than to what looked reasonable.
+ * design.md §21's gates, client-side. These tests are the reason the marking
+ * control is allowed to grey anything out: the UI is only entitled to prevent
+ * what the server would actually refuse, so this suite pins the mirror to
+ * `MarkingGate`'s rules rather than to what looked reasonable.
  */
 describe('the classification ladder (design.md §21.1)', () => {
   it('is the four levels, lowest to highest', () => {
@@ -38,8 +41,14 @@ describe('fail-closed directions (design.md §21.3)', () => {
     expect(markingLevelRank('COSMIC' as ClassificationLevel)).toBeGreaterThan(markingLevelRank('TOP_SECRET'))
   })
 
-  it('ranks an unplaceable CLEARANCE at OFFICIAL, the only thing "nothing" is worth', () => {
-    expect(clearanceRank('COSMIC' as ClassificationLevel)).toBe(clearanceRank('OFFICIAL'))
+  it('ranks an unplaceable CLEARANCE at the floor, OFFICIAL-SENSITIVE — and only there', () => {
+    // The floor moved one notch up from OFFICIAL: the two everyday tiers stay
+    // readable to a token with no usable clearance, and the line sits above
+    // them. Not OFFICIAL (the old floor) and not the top.
+    expect(DEFAULT_CLEARANCE).toBe('OFFICIAL_SENSITIVE')
+    expect(clearanceRank('COSMIC' as ClassificationLevel)).toBe(clearanceRank('OFFICIAL_SENSITIVE'))
+    expect(clearanceRank('COSMIC' as ClassificationLevel)).toBeGreaterThan(clearanceRank('OFFICIAL'))
+    expect(clearanceRank('COSMIC' as ClassificationLevel)).toBeLessThan(clearanceRank('SECRET'))
   })
 
   it('never lets an unplaceable clearance reach an unplaceable level', () => {
@@ -78,13 +87,6 @@ describe('country canonical form (design.md §21.4)', () => {
   it('de-duplicates and sorts ordinally, and drops blanks', () => {
     expect(canonicalCountries(['us', 'UK', ' us ', '', '   '])).toEqual(['UK', 'US'])
   })
-
-  it('collapses null, empty and whitespace prefixes to one no-prefix state (§21.12)', () => {
-    expect(canonicalPrefix(null)).toBeNull()
-    expect(canonicalPrefix('')).toBeNull()
-    expect(canonicalPrefix('   ')).toBeNull()
-    expect(canonicalPrefix(' uk ')).toBe('UK')
-  })
 })
 
 describe('eyesOnlyAdmits (design.md §21.4)', () => {
@@ -109,68 +111,155 @@ describe('eyesOnlyAdmits (design.md §21.4)', () => {
   })
 })
 
-const secretCleared = { clearance: 'SECRET' as ClassificationLevel, nationality: ['UK'] }
+describe('the selector gates (design.md §21.15)', () => {
+  it('eligibility is by category name, case-folded on both sides', () => {
+    expect(selectorEligible('FRUIT', ['FRUIT', 'REGION'])).toBe(true)
+    expect(selectorEligible('fruit', [' Fruit '])).toBe(true)
+    expect(selectorEligible('FRUIT', ['REGION'])).toBe(false)
+    expect(selectorEligible('FRUIT', [])).toBe(false)
+  })
+
+  it('a grant is by category AND value — APPLE granted says nothing about BANANA', () => {
+    const grants = [{ category: 'FRUIT', value: 'APPLE' }]
+    expect(selectorGranted({ category: 'FRUIT', value: 'APPLE' }, grants)).toBe(true)
+    expect(selectorGranted({ category: 'FRUIT', value: 'BANANA' }, grants)).toBe(false)
+    expect(selectorGranted({ category: 'REGION', value: 'APPLE' }, grants)).toBe(false)
+    expect(selectorGranted({ category: 'fruit', value: 'apple' }, grants)).toBe(true)
+  })
+})
+
+const secretCleared: ViewerClearance = {
+  clearance: 'SECRET',
+  nationality: ['UK'],
+  selectorEligibility: ['FRUIT'],
+  selectorGrants: [{ category: 'FRUIT', value: 'APPLE' }],
+}
 
 describe('markingRefusal — §21.6 mirrored so the UI prevents rather than refuses', () => {
   it('finds nothing wrong with a marking the caller could still read', () => {
-    expect(markingRefusal({ level: 'SECRET', eyesOnly: ['UK', 'US'] }, secretCleared)).toBeNull()
+    expect(
+      markingRefusal(
+        { level: 'SECRET', eyesOnly: ['UK', 'US'], selectors: [{ category: 'FRUIT', value: 'APPLE' }] },
+        secretCleared,
+      ),
+    ).toBeNull()
   })
 
   it('refuses a level above the caller clearance', () => {
-    expect(markingRefusal({ level: 'TOP_SECRET', eyesOnly: [] }, secretCleared)).toEqual({
+    expect(markingRefusal({ level: 'TOP_SECRET', eyesOnly: [], selectors: [] }, secretCleared)).toEqual({
       kind: 'ABOVE_CLEARANCE',
       level: 'TOP_SECRET',
     })
   })
 
+  it('refuses a selector in a category the caller is not eligible for, whatever the value', () => {
+    // Bob's case from the truth table: `UK OFFICIAL BANANA` with a grant for
+    // BANANA but no `fruit=yes` — granted but not eligible is still refused.
+    expect(
+      markingRefusal(
+        { level: 'OFFICIAL', eyesOnly: [], selectors: [{ category: 'REGION', value: 'NORTH' }] },
+        secretCleared,
+      ),
+    ).toEqual({ kind: 'SELECTOR_NOT_ELIGIBLE', category: 'REGION' })
+  })
+
+  it('refuses a selector value no access grant confers on the caller in this space', () => {
+    expect(
+      markingRefusal(
+        { level: 'OFFICIAL', eyesOnly: [], selectors: [{ category: 'FRUIT', value: 'BANANA' }] },
+        secretCleared,
+      ),
+    ).toEqual({ kind: 'SELECTOR_NOT_GRANTED', category: 'FRUIT', value: 'BANANA' })
+  })
+
+  it('claims no grant refusal while the grants are unknown — the server still decides', () => {
+    // The grants read may not have answered; a refusal the SPA cannot justify
+    // would hide a value from someone entitled to it.
+    expect(
+      markingRefusal(
+        { level: 'OFFICIAL', eyesOnly: [], selectors: [{ category: 'FRUIT', value: 'BANANA' }] },
+        { ...secretCleared, selectorGrants: null },
+      ),
+    ).toBeNull()
+  })
+
+  it('still refuses on eligibility while the grants are unknown — eligibility comes from the token, which is known', () => {
+    expect(
+      markingRefusal(
+        { level: 'OFFICIAL', eyesOnly: [], selectors: [{ category: 'REGION', value: 'NORTH' }] },
+        { ...secretCleared, selectorGrants: null },
+      ),
+    ).toEqual({ kind: 'SELECTOR_NOT_ELIGIBLE', category: 'REGION' })
+  })
+
   it('refuses an eyes-only set that excludes the caller, even at a level they hold', () => {
-    // §21.6's own example: SECRET [US EYES ONLY] set by a GB national loses
+    // §21.6's own example: SECRET US EYES ONLY set by a UK national loses
     // them the page just as completely as over-classifying it would.
-    expect(markingRefusal({ level: 'SECRET', eyesOnly: ['US'] }, secretCleared)).toEqual({
+    expect(markingRefusal({ level: 'SECRET', eyesOnly: ['US'], selectors: [] }, secretCleared)).toEqual({
       kind: 'EYES_ONLY_EXCLUDES_YOU',
       viewerHasNoNationality: false,
     })
   })
 
-  it('reports the level first when both halves fail, matching the gate order', () => {
-    expect(markingRefusal({ level: 'TOP_SECRET', eyesOnly: ['US'] }, secretCleared)?.kind).toBe('ABOVE_CLEARANCE')
+  it('reports the gates in ladder order — level, then eligibility, then grant, then caveat', () => {
+    const failsEverything = {
+      level: 'TOP_SECRET' as const,
+      eyesOnly: ['US'],
+      selectors: [
+        { category: 'FRUIT', value: 'BANANA' },
+        { category: 'REGION', value: 'NORTH' },
+      ],
+    }
+    expect(markingRefusal(failsEverything, secretCleared)?.kind).toBe('ABOVE_CLEARANCE')
+    // Level fixed: the first selector fails on grant, but the SECOND fails on
+    // eligibility — and eligibility comes before grant per selector, in the
+    // order the selectors are listed, so the first selector's grant failure
+    // is what the server would name.
+    expect(markingRefusal({ ...failsEverything, level: 'SECRET' }, secretCleared)).toEqual({
+      kind: 'SELECTOR_NOT_GRANTED',
+      category: 'FRUIT',
+      value: 'BANANA',
+    })
+    expect(
+      markingRefusal({ ...failsEverything, level: 'SECRET', selectors: [failsEverything.selectors[1]!] }, secretCleared),
+    ).toEqual({ kind: 'SELECTOR_NOT_ELIGIBLE', category: 'REGION' })
+    // Every selector fine: the caveat is last.
+    expect(markingRefusal({ ...failsEverything, level: 'SECRET', selectors: [] }, secretCleared)?.kind).toBe(
+      'EYES_ONLY_EXCLUDES_YOU',
+    )
   })
 
   it('distinguishes "you hold no nationality at all" so the copy can say the more useful thing', () => {
-    expect(markingRefusal({ level: 'OFFICIAL', eyesOnly: ['UK'] }, { clearance: 'SECRET', nationality: [] })).toEqual({
+    expect(
+      markingRefusal({ level: 'OFFICIAL', eyesOnly: ['UK'], selectors: [] }, { ...secretCleared, nationality: [] }),
+    ).toEqual({
       kind: 'EYES_ONLY_EXCLUDES_YOU',
       viewerHasNoNationality: true,
     })
   })
 
   it('survives a nationality that arrives in any case or padding — the comparison canonicalizes both sides', () => {
-    // This is the §21.4 case-mismatch trap one layer up, and it is worth its
-    // own test at THIS level rather than only on eyesOnlyAdmits: a marking's
-    // country set is always canonical, so a principal whose token says `gb`
-    // IS admitted to a `GB` marking by the server. A comparison that folded
-    // only one side would conclude the opposite and warn an author out of a
-    // marking that would have worked — a false refusal in the affordance whose
-    // entire purpose is to predict the server's answer.
-    //
-    // It also guards a tempting future simplification: "the server already
-    // canonicalizes `me.nationality`, so we can drop ours". The wire value is
-    // not this module's to assume, and the cost of being wrong is silent.
-    for (const held of [['gb'], [' GB '], ['Gb']]) {
-      expect(markingRefusal({ level: 'OFFICIAL', eyesOnly: ['GB'] }, { clearance: 'SECRET', nationality: held })).toBeNull()
+    // A false refusal in the affordance whose entire purpose is to predict
+    // the server's answer would warn an author out of a marking that would
+    // have worked. Also guards the tempting simplification "the server
+    // already canonicalizes `me.nationality`, so we can drop ours".
+    for (const held of [['nz'], [' NZ '], ['Nz']]) {
+      expect(
+        markingRefusal({ level: 'OFFICIAL', eyesOnly: ['NZ'], selectors: [] }, { ...secretCleared, nationality: held }),
+      ).toBeNull()
     }
   })
 
-  it('ignores the prefix entirely — §21.12 gives it no access-control semantics', () => {
-    // The draft type has no prefix field at all, which is the structural half
-    // of this; the behavioural half is that nothing about a prefix can change
-    // a verdict, so a marking that passes still passes whatever is written in
-    // front of it.
-    expect(markingRefusal({ level: 'SECRET', eyesOnly: ['UK'] }, secretCleared)).toBeNull()
-    expect(Object.keys({ level: 'SECRET' as ClassificationLevel, eyesOnly: ['UK'] })).not.toContain('prefix')
+  it('has no input for the UK prefix — §21.12 gives it no access-control semantics', () => {
+    // Structural: the draft type has no prefix field, so nothing about a
+    // prefix can change a verdict.
+    expect(Object.keys({ level: 'SECRET' as ClassificationLevel, eyesOnly: ['UK'], selectors: [] })).not.toContain(
+      'ukPrefix',
+    )
   })
 
   it('claims no refusal when the caller is unknown — the server still decides', () => {
-    expect(markingRefusal({ level: 'TOP_SECRET', eyesOnly: ['XX'] }, null)).toBeNull()
+    expect(markingRefusal({ level: 'TOP_SECRET', eyesOnly: ['XX'], selectors: [] }, null)).toBeNull()
   })
 })
 
@@ -178,6 +267,15 @@ describe('describeMarkingRefusal', () => {
   it('leads a level refusal with the same short reason the option carries', () => {
     expect(describeMarkingRefusal({ kind: 'ABOVE_CLEARANCE', level: 'TOP_SECRET' })).toMatch(
       /^Above your clearance —/,
+    )
+  })
+
+  it('names the category or the value for the two selector refusals', () => {
+    expect(describeMarkingRefusal({ kind: 'SELECTOR_NOT_ELIGIBLE', category: 'FRUIT' })).toBe(
+      'Not eligible for FRUIT material, so you could not read this page after marking it.',
+    )
+    expect(describeMarkingRefusal({ kind: 'SELECTOR_NOT_GRANTED', category: 'FRUIT', value: 'BANANA' })).toBe(
+      'BANANA is not granted to you in this space, so you could not read this page after marking it.',
     )
   })
 

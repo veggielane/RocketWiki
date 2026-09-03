@@ -30,7 +30,7 @@ const baseMarking = {
   level: 'OFFICIAL',
   levelName: 'OFFICIAL',
   eyesOnly: [] as string[],
-  prefix: 'UK',
+  ukPrefix: true, selectors: [],
   label: 'UK OFFICIAL',
 }
 
@@ -67,19 +67,22 @@ function renderPage(options: Options = {}) {
     // The move dialog's destination tree lives on this screen now.
     if (name === 'SpaceTreeForMove') return { pageTree: [] }
     if (name === 'MovePage') return { movePage: { page: { id: 'page-1' }, error: null } }
-    // The marking section (design.md §21) reads the caller's own clearance and
-    // the nationality vocabulary; both are staged so this screen's property
-    // assertions aren't testing the marking control by accident.
+    // The marking section (design.md §21) reads the caller's own clearance,
+    // eligibility and per-space selector grants, and the instance's selector
+    // categories; all are staged so this screen's property assertions aren't
+    // testing the marking control by accident.
     if (name === 'CurrentUser')
       return {
         me: {
           id: 'sub-1', email: null, name: 'Editor', groups: [], isAuthenticated: true,
           isInstanceAdmin: false, localUserId: 'user-1', hasAvatar: false,
-          clearance: 'SECRET', nationality: ['UK'],
+          clearance: 'SECRET', nationality: ['UK'], selectorEligibility: ['FRUIT'],
         },
       }
-    if (name === 'RuleVocabulary')
-      return { groups: [], attributeRegistry: [{ key: 'nationality', displayName: 'Nationality', allowedValues: ['UK', 'US'] }] }
+    if (name === 'SelectorCategories')
+      return { selectorCategories: [{ name: 'FRUIT', description: null, requiresAttribute: true, values: ['APPLE', 'BANANA'] }] }
+    if (name === 'SpaceSelectorGrants')
+      return { space: { id: 'space-1', key: 'ENG', viewerSelectorGrants: [{ category: 'FRUIT', value: 'APPLE' }] } }
     if (name === 'ClassificationScheme')
       return {
         classificationScheme: [

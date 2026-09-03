@@ -48,7 +48,7 @@ const basePage = {
   viewerIsWatching: false,
   labels: [],
   labelDetails: [],
-  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [] as string[], prefix: 'UK', label: 'UK OFFICIAL' },
+  marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [] as string[], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
   properties: [],
   parent: null,
   children: [],
@@ -89,7 +89,7 @@ function createDeferredClient(respond: (name: string) => Record<string, unknown>
         const result = { operation: op, data: respond(name), stale: false, hasNext: false }
         // The FIRST page read resolves at once so the screen can mount; the
         // refetch that a write triggers is what gets held.
-        if (name === 'PageById' && ++pageReads > 1) {
+        if (name === 'PageAccessById' && ++pageReads > 1) {
           return fromPromise(held.then(() => result))
         }
         return fromValue(result)
@@ -104,7 +104,7 @@ function createDeferredClient(respond: (name: string) => Record<string, unknown>
 }
 
 const RESPONSES: Record<string, Record<string, unknown> | undefined> = {
-  PageById: { page: basePage },
+  PageAccessById: { pageAccess: { page: { ...basePage, parentDenial: null, linkTargets: [] }, denial: null } },
   CurrentUser: {
     me: {
       id: 'sub-1',
@@ -140,7 +140,7 @@ function renderPage() {
 async function writeAndHoldRefetch(deferred: ReturnType<typeof createDeferredClient>) {
   fireEvent.click(screen.getByRole('button', { name: 'Watch' }))
   await waitFor(() => expect(deferred.names).toContain('WatchPage'))
-  await waitFor(() => expect(deferred.names.filter((n) => n === 'PageById').length).toBeGreaterThan(1))
+  await waitFor(() => expect(deferred.names.filter((n) => n === 'PageAccessById').length).toBeGreaterThan(1))
 }
 
 describe('a write does not tear the screen down', () => {

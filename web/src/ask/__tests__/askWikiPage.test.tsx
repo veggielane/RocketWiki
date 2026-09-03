@@ -33,7 +33,7 @@ const CITATIONS = [
     title: 'Turbopump overview',
     headingPath: ['Design', 'Impeller'],
     anchorId: 'impeller',
-    marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], prefix: 'UK', label: 'UK OFFICIAL' },
+    marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
   },
   {
     pageId: 'p2',
@@ -44,8 +44,8 @@ const CITATIONS = [
       level: 'SECRET',
       levelName: 'SECRET',
       eyesOnly: ['GB'],
-      prefix: 'UK',
-      label: 'UK SECRET [GB EYES ONLY]',
+      ukPrefix: true, selectors: [],
+      label: 'UK SECRET NZ EYES ONLY',
     },
   },
 ] as const
@@ -55,12 +55,12 @@ const CITATIONS = [
  * eyes-only sets are LISTED, never unioned or intersected. It is one opaque
  * server-built string here and the SPA must render it byte-for-byte.
  */
-const CONJUNCTIVE = { level: 'SECRET', label: 'UK SECRET [GB EYES ONLY] [US EYES ONLY]' } as const
+const CONJUNCTIVE = { level: 'SECRET', label: 'UK SECRET NZ EYES ONLY, US EYES ONLY' } as const
 
 const answered = (
   answer: string,
   citations: readonly (typeof CITATIONS)[number][] = CITATIONS,
-  aggregateMarking: Payload['aggregateMarking'] = { level: 'SECRET', label: 'UK SECRET [GB EYES ONLY]' },
+  aggregateMarking: Payload['aggregateMarking'] = { level: 'SECRET', label: 'UK SECRET NZ EYES ONLY' },
 ): { askWiki: Payload } => ({
   askWiki: { answer, citations: citations as unknown as Payload['citations'], unavailable: null, aggregateMarking },
 })
@@ -231,7 +231,7 @@ describe('AskWikiPage — the answer carries its aggregate marking', () => {
     const answer = await screen.findByText(/Titanium impeller/)
 
     const banner = document.querySelector('[data-aggregate-marking="answer-head"]')
-    expect(banner?.textContent).toContain('UK SECRET [GB EYES ONLY]')
+    expect(banner?.textContent).toContain('UK SECRET NZ EYES ONLY')
     // Order, not just presence: the marking must precede the prose it marks.
     expect(banner && (banner.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy()
   })
@@ -241,20 +241,20 @@ describe('AskWikiPage — the answer carries its aggregate marking', () => {
     askQuestion('q')
     await screen.findByText('Titanium.')
     const foot = document.querySelector('[data-aggregate-marking="answer-foot"]')
-    expect(foot?.textContent).toContain('UK SECRET [GB EYES ONLY]')
+    expect(foot?.textContent).toContain('UK SECRET NZ EYES ONLY')
     // Named as a repeat for a screen reader, so meeting it twice doesn't read
     // as the answer changing classification part-way down.
     expect(foot?.textContent).toContain('repeated at the end of this answer')
   })
 
   it('renders a conjunctive aggregate label verbatim — the SPA composes nothing (§21.1)', async () => {
-    // `[GB EYES ONLY] [US EYES ONLY]` is a shape the per-page marking model
+    // `NZ EYES ONLY, US EYES ONLY` is a shape the per-page marking model
     // cannot express: a union would widen it and an intersection would empty
     // it. Byte-for-byte is the assertion.
     renderAsk(() => answered('Both sources agree [S1][S2].', CITATIONS, CONJUNCTIVE))
     askQuestion('q')
     await screen.findByText(/Both sources agree/)
-    expect(screen.getAllByText('UK SECRET [GB EYES ONLY] [US EYES ONLY]').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('UK SECRET NZ EYES ONLY, US EYES ONLY').length).toBeGreaterThan(0)
   })
 
   it('announces the marking with the answer, not only in the banner', async () => {
@@ -263,7 +263,7 @@ describe('AskWikiPage — the answer carries its aggregate marking', () => {
     await screen.findByText('Titanium.')
     // A screen-reader user who jumps to the new text would otherwise never
     // meet the banner. Verbatim label after a fixed lead-in.
-    expect(screen.getByRole('status')).toHaveTextContent('Answer ready. Protective marking: UK SECRET [GB EYES ONLY]')
+    expect(screen.getByRole('status')).toHaveTextContent('Answer ready. Protective marking: UK SECRET NZ EYES ONLY')
   })
 
   it('badges each citation with its OWN source marking, so the sensitive source is visible', async () => {

@@ -2,12 +2,14 @@
 # {origin} — read-only" marking (design.md §12) on the space list,
 # nav, space browser, and page view; replica-ness still also surfaces
 # reactively on any write via the typed ReadOnlyReplica error.
-# `viewerIsWatching` is the server truth behind the watch toggle. There is
-# no per-space viewer-role field; `grants` is the server-computed admin
-# signal — it returns rows only to instance/space admins ("absent, not
-# forbidden") and a space always has at least one grant by construction
-# (creation is atomic with its first grant), so a non-empty list means
-# "this caller may manage the space".
+# `viewerIsWatching` is the server truth behind the watch toggle.
+#
+# `viewerHasAccess` (§6.4): whether the caller holds an ACCESS grant here —
+# the thing that lets them read pages. A space is listed when the caller
+# matches an access grant OR any role grant, so a space admin with no access
+# grant sees the space in this list with `viewerHasAccess: false`; its tree
+# then comes back empty and every page in it reads as protected. The rail
+# and the browser use the flag to say so rather than "No pages yet".
 query SpaceList {
   spaces {
     id
@@ -16,6 +18,7 @@ query SpaceList {
     description
     isReplica
     originInstanceId
+    viewerHasAccess
   }
 }
 
@@ -29,12 +32,16 @@ query SpaceTree($key: String!) {
     isReplica
     originInstanceId
     viewerIsWatching
-    # The server's own answer to "may this caller manage the space", replacing a
-    # proxy that inferred it from `grants` coming back non-empty. The proxy read
-    # an EMPTY grant list as "not permitted" — which is what a permitted manager
-    # sees on a space that simply has no grants, so it locked them out of
-    # controls the server would have accepted.
+    # The server's own answer to "may this caller manage the space" (space-admin
+    # role grant, or instance admin). It needs no access grant: managing a
+    # space you cannot read is a normal state now that access and role are
+    # separate kinds of grant (§6.4), which is why the old `grants`-non-empty
+    # proxy is gone — it read an empty grant list as "not permitted", and it
+    # would now also read "may see the grants" as "may see the pages".
     canManageAccess
+    # See SpaceList. On the settings screen this is what warns a manager that
+    # they hold no access grant of their own.
+    viewerHasAccess
     # Accountability metadata (design.md §6.5), NOT access. Nullable, and null is
     # a real state: an imported replica starts ownerless until somebody on the
     # high side takes responsibility for it.
@@ -42,9 +49,6 @@ query SpaceTree($key: String!) {
       id
       displayName
       hasAvatar
-    }
-    grants {
-      id
     }
   }
 }
@@ -74,29 +78,75 @@ query SpaceReplicaBanner($key: String!) {
 # `hasChildren` is what makes the truncation honest. The disclosure control is
 # drawn from it rather than from whether children arrived, so the tree no longer
 # claims a page is a leaf when the document simply stopped short of it.
+#
+# Every level is a `PageTreeEntry` UNION (design.md §6.7 / §21.8): a readable
+# page is a `PageTreeNode`, a page this caller may not read is a
+# `ProtectedTreeNode` — a leaf at its sibling position carrying only its
+# denial (marking + failing gates), never an id, slug, icon, labels or
+# children. `__typename` is selected explicitly so the SPA branches on the
+# server's own discriminator rather than on which fields happened to arrive.
+# `hasChildren` is true when only placeholders lie beneath, so a branch of
+# nothing but protected leaves still draws its chevron.
 query SpacePageTree($spaceId: UUID!) {
   pageTree(spaceId: $spaceId) {
-    ...TreeNode
-    children {
+    __typename
+    ... on PageTreeNode {
       ...TreeNode
       children {
-        ...TreeNode
+        __typename
+        ... on PageTreeNode {
+          ...TreeNode
+          children {
+            __typename
+            ... on PageTreeNode {
+              ...TreeNode
+            }
+            ... on ProtectedTreeNode {
+              ...ProtectedTreeEntry
+            }
+          }
+        }
+        ... on ProtectedTreeNode {
+          ...ProtectedTreeEntry
+        }
       }
+    }
+    ... on ProtectedTreeNode {
+      ...ProtectedTreeEntry
     }
   }
 }
 
 # The children of one node, fetched when it is expanded and the query above did
-# not reach them. Same pruned walk on the server, so a subtree inherits the same
-# grants, restrictions and clearance gate the first fetch did.
+# not reach them. Same walk on the server, so a subtree inherits the same
+# grants, restrictions and marking gates the first fetch did — and the same
+# placeholders. Asking for the subtree of a placeholder answers `[]`.
 query PageSubtree($spaceId: UUID!, $pageId: UUID!) {
   pageSubtree(spaceId: $spaceId, pageId: $pageId) {
-    ...TreeNode
-    children {
+    __typename
+    ... on PageTreeNode {
       ...TreeNode
       children {
-        ...TreeNode
+        __typename
+        ... on PageTreeNode {
+          ...TreeNode
+          children {
+            __typename
+            ... on PageTreeNode {
+              ...TreeNode
+            }
+            ... on ProtectedTreeNode {
+              ...ProtectedTreeEntry
+            }
+          }
+        }
+        ... on ProtectedTreeNode {
+          ...ProtectedTreeEntry
+        }
       }
+    }
+    ... on ProtectedTreeNode {
+      ...ProtectedTreeEntry
     }
   }
 }
@@ -110,13 +160,12 @@ query PageSubtree($spaceId: UUID!, $pageId: UUID!) {
 # on the node rather than read per page: the drawer renders the whole tree at
 # once, and a lookup per row would be a query per row.
 #
-# `marking` is the value the tree's own pruning walk gated on (design.md
+# `marking` is the value the tree's own gate walk decided on (design.md
 # §21.9 — GetPageTreeAsync loads every marking for the space anyway, and a
 # node that displayed a marking other than the one that decided it was
-# visible would be the wrong kind of wrong). The tree shows the LEVEL only:
-# §21.5 prunes an over-classified node together with its whole subtree, so
-# what remains is what this caller may read, and the level is the compact
-# fact a reader scanning the tree needs.
+# visible would be the wrong kind of wrong). A readable node shows the LEVEL
+# only: what remains readable is what this caller may read, and the level is
+# the compact fact a reader scanning the tree needs.
 fragment TreeNode on PageTreeNode {
   id
   title
@@ -128,5 +177,17 @@ fragment TreeNode on PageTreeNode {
   labels
   marking {
     ...PageMarking
+  }
+}
+
+# A page this caller may not read, at its place in the tree. `title` is the
+# server's placeholder constant, rendered verbatim; `denial` says why, with
+# the page's whole marking label when the caller holds access to the space
+# and nothing but the space sentence when they do not.
+fragment ProtectedTreeEntry on ProtectedTreeNode {
+  title
+  sortOrder
+  denial {
+    ...AccessDenial
   }
 }

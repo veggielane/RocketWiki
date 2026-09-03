@@ -1,0 +1,38 @@
+# design.md §21.15: additional selectors. A marking may carry at most one
+# value per CATEGORY, and both the categories and their values are instance
+# configuration (`ProtectiveMarking:SelectorCategories`) read here — the SPA
+# hard-codes no category and no value, because the vocabulary is policy fixed
+# per deployment and a picker that knew "FRUIT" would be wrong on the next
+# instance.
+#
+# `requiresAttribute` says whether eligibility is gated by a Keycloak
+# attribute at all; the attribute's NAME is deliberately not exposed. Whether
+# THIS caller is eligible comes from `me.selectorEligibility`, resolved
+# server-side through the same gate enforcement uses. Readable by any
+# authenticated user and un-audited: it names vocabulary, not content.
+query SelectorCategories {
+  selectorCategories {
+    name
+    description
+    requiresAttribute
+    values
+  }
+}
+
+# The selector values the caller is GRANTED in one space — the union over
+# every access grant they match (§6.4). This is the second half of the
+# selector gate: eligible for a category (site-wide, from the token) AND
+# granted the value here (per space, from the grants). The marking control
+# reads it so a value the caller could not then read is greyed out with its
+# reason rather than offered and refused (§21.6's self-lockout rule, extended
+# to selectors). Affordance data; the server still decides.
+query SpaceSelectorGrants($key: String!) {
+  space(key: $key) {
+    id
+    key
+    viewerSelectorGrants {
+      category
+      value
+    }
+  }
+}

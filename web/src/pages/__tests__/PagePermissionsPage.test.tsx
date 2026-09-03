@@ -45,12 +45,15 @@ const inheritedRestriction: Restriction = {
 const selfDetail = {
   userId: 'sub-1',
   userDisplayName: 'Ada Lovelace',
+  hasSpaceAccess: true,
   spaceRole: 'SPACE_ADMIN',
   isReplicaSpace: false,
   canView: true,
   canEdit: true,
   viewDenialReason: null,
   editDenialReason: null,
+  viewGates: [],
+  editGates: [],
   viewRestrictions: [],
   editRestrictions: [],
 }

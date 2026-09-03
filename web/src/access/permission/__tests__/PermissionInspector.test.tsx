@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { PermissionInspector } from '../PermissionInspector'
 import type { EffectivePermissionDetail } from '../effectivePermissionTypes'
 import { attr, group } from '../../ruleTypes'
@@ -8,12 +8,15 @@ function baseDetail(overrides: Partial<EffectivePermissionDetail> = {}): Effecti
   return {
     userId: 'user-1',
     userDisplayName: 'Ada Lovelace',
+    hasSpaceAccess: true,
     spaceRole: 'editor',
     isReplicaSpace: false,
     canView: true,
     canEdit: true,
     viewDenialReason: null,
     editDenialReason: null,
+    viewGates: [],
+    editGates: [],
     viewRestrictions: [],
     editRestrictions: [],
     ...overrides,
@@ -28,24 +31,55 @@ describe('PermissionInspector', () => {
     expect(screen.getByText('Edit: allowed')).toBeInTheDocument()
   })
 
-  it('shows the space role', () => {
-    render(<PermissionInspector detail={baseDetail({ spaceRole: 'viewer' })} />)
-    expect(screen.getByText('Viewer')).toBeInTheDocument()
+  it('shows space access and space role as two separate facts (design.md §6.4)', () => {
+    render(<PermissionInspector detail={baseDetail({ hasSpaceAccess: true, spaceRole: 'spaceAdmin' })} />)
+    expect(screen.getByText('Space access')).toBeInTheDocument()
+    expect(screen.getByText('Granted')).toBeInTheDocument()
+    expect(screen.getByText('Space admin')).toBeInTheDocument()
   })
 
-  it('shows "no role" when no grant matched', () => {
-    render(<PermissionInspector detail={baseDetail({ spaceRole: null })} />)
-    expect(screen.getByText('No role — no grant matched')).toBeInTheDocument()
+  it('shows "no access grant matched" and "None" for a role — a role-only manager, or a reader with no role', () => {
+    render(<PermissionInspector detail={baseDetail({ hasSpaceAccess: false, spaceRole: null })} />)
+    expect(screen.getByText('No access grant matched')).toBeInTheDocument()
+    expect(screen.getByText('None')).toBeInTheDocument()
+    expect(screen.queryByText(/viewer/i)).toBeNull()
   })
 
   it('explains a denial with the mapped human-readable reason', () => {
     render(
       <PermissionInspector
-        detail={baseDetail({ canEdit: false, editDenialReason: 'insufficient-space-role', spaceRole: 'viewer' })}
+        detail={baseDetail({ canEdit: false, editDenialReason: 'insufficient-space-role', spaceRole: null })}
       />,
     )
     expect(screen.getByText('Edit: denied')).toBeInTheDocument()
-    expect(screen.getByText(/below editor/i)).toBeInTheDocument()
+    expect(screen.getByText(/Editor or Space admin/)).toBeInTheDocument()
+  })
+
+  it('lists every view gate and edit gate with its pass/fail state and sentence', () => {
+    render(
+      <PermissionInspector
+        detail={baseDetail({
+          canView: false,
+          viewDenialReason: 'classification:SECRET',
+          viewGates: [
+            { gate: 'SPACE_ACCESS', passed: true },
+            { gate: 'CLASSIFICATION', passed: false },
+            { gate: 'SELECTOR_ELIGIBILITY', passed: true, category: 'FRUIT' },
+            { gate: 'NATIONAL_CAVEAT', passed: true },
+          ],
+          editGates: [{ gate: 'ROLE', passed: false, requiredRole: 'EDITOR' }],
+        })}
+      />,
+    )
+    const viewGates = screen.getByRole('list', { name: 'View gates' })
+    expect(within(viewGates).getAllByRole('listitem')).toHaveLength(4)
+    expect(within(viewGates).getByText('You hold an access grant in this space.')).toBeInTheDocument()
+    expect(within(viewGates).getByText('Above your clearance.')).toBeInTheDocument()
+    expect(within(viewGates).getByText('Eligible for FRUIT material.')).toBeInTheDocument()
+    expect(within(viewGates).getAllByRole('img', { name: 'Passed' })).toHaveLength(3)
+    expect(within(viewGates).getAllByRole('img', { name: 'Failed' })).toHaveLength(1)
+    const editGates = screen.getByRole('list', { name: 'Edit gates' })
+    expect(within(editGates).getByText('Needs the Editor role in this space.')).toBeInTheDocument()
   })
 
   it('shows the replica banner when the space is a read-only replica', () => {

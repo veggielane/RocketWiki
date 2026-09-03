@@ -48,6 +48,7 @@ import { ReadOnlyReplicaDialog } from '../feedback/ReadOnlyReplicaDialog'
 import { SNACKBAR_AUTO_HIDE_MS } from '../feedback/snackbar'
 import { MovePageDialog } from '../access/move/MovePageDialog'
 import { ancestorRestrictionsOf, flattenMoveTargets, nextSortOrderByTarget } from '../access/move/flattenMoveTargets'
+import { readableTree } from './treeEntries'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { PageMarkingSection } from '../markings/PageMarkingSection'
@@ -443,17 +444,20 @@ export function PageDetailsPage() {
   })
   const [, movePage] = useMovePageMutation()
 
+  // Readable pages only: a page this caller cannot read arrives as a
+  // placeholder with no id, and nothing can be moved under it.
+  const moveTree = useMemo(() => readableTree(treeData?.pageTree ?? []), [treeData])
   const targetOptions = useMemo(
-    () => (treeData?.pageTree && pageId ? flattenMoveTargets(treeData.pageTree, pageId) : []),
-    [treeData, pageId],
+    () => (pageId ? flattenMoveTargets(moveTree, pageId) : []),
+    [moveTree, pageId],
   )
   // The "before" side of the move dialog's visibility warning: what this page
   // currently inherits from its ancestor chain.
   const currentAncestorRestrictions = useMemo(
-    () => (treeData?.pageTree && pageId ? ancestorRestrictionsOf(treeData.pageTree, pageId) : []),
-    [treeData, pageId],
+    () => (pageId ? ancestorRestrictionsOf(moveTree, pageId) : []),
+    [moveTree, pageId],
   )
-  const sortOrders = useMemo(() => nextSortOrderByTarget(treeData?.pageTree ?? []), [treeData])
+  const sortOrders = useMemo(() => nextSortOrderByTarget(moveTree), [moveTree])
 
     // FIRST LOAD ONLY. urql retains `data` across a refetch and flips `fetching`
   // true (urql.js computeNextState), so a bare `if (fetching)` threw the screen
@@ -518,8 +522,14 @@ export function PageDetailsPage() {
           would say otherwise. Remounted on change for the same draft
           re-baselining reason as the table below. */}
       <PageMarkingSection
-        key={`${page.marking.level}|${page.marking.eyesOnly.join(',')}|${page.marking.prefix ?? ''}`}
+        key={[
+          page.marking.level,
+          page.marking.eyesOnly.join(','),
+          page.marking.ukPrefix ? 'UK' : '',
+          page.marking.selectors.map((selector) => `${selector.category}=${selector.value}`).join(','),
+        ].join('|')}
         pageId={page.id}
+        spaceKey={page.spaceKey}
         marking={page.marking}
         canEdit={page.canEdit}
         onFeedback={setFeedback}

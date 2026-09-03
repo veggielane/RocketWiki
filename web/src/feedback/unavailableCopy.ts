@@ -153,12 +153,25 @@ export type LoadFailureReason =
   /** The page-property key registry (design.md §20.1) — instance vocabulary, so it can name itself. */
   | 'PROPERTY_KEY_REGISTRY'
   /**
-   * The registered `nationality` attribute behind the eyes-only caveat
-   * (design.md §21.4). Kept apart from PROPERTY_KEY_REGISTRY because they are
-   * different registries and a user told "the property key registry is
-   * unreachable" while editing a marking would go looking in the wrong place.
+   * The instance's selector categories (design.md §21.15) — configuration,
+   * not content, so it can name itself. Says what still works without it:
+   * a marking's other parts do not depend on the catalog.
    */
-  | 'NATIONALITY_VOCABULARY'
+  | 'SELECTOR_CATEGORIES'
+  /**
+   * The selector values the caller is granted in one space. Without it the
+   * marking control cannot say which values it may offer, and says so rather
+   * than guessing either way.
+   */
+  | 'SELECTOR_GRANTS'
+  /**
+   * The disclosing page read (`pageAccess`) failed at the transport. Distinct
+   * from PAGE, which is what a null answer — no such page — reads as: this is
+   * the absence of an answer, and a reader told "couldn't load this page" for
+   * a request that never arrived would try the URL again believing the page
+   * gone.
+   */
+  | 'PAGE_ACCESS'
   /**
    * The accumulated group vocabulary (design.md §6.6). Names the instance has
    * observed in tokens, never a membership list — so, like the other
@@ -217,11 +230,15 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       return { summary: "Couldn't load the emoji registry.", pointsToSettings: false }
     case 'PROPERTY_KEY_REGISTRY':
       return { summary: "Couldn't load the property key registry.", pointsToSettings: false }
-    case 'NATIONALITY_VOCABULARY':
+    case 'SELECTOR_CATEGORIES':
       return {
-        summary: "Couldn't load the countries an eyes-only caveat can name. A classification on its own still works.",
+        summary: "Couldn't load the selector categories. A marking without a selector still works.",
         pointsToSettings: false,
       }
+    case 'SELECTOR_GRANTS':
+      return { summary: "Couldn't load which selector values you hold in this space.", pointsToSettings: false }
+    case 'PAGE_ACCESS':
+      return { summary: "Couldn't check your access to this page.", pointsToSettings: false }
     case 'NOTIFICATIONS':
       return { summary: "Couldn't load notifications.", pointsToSettings: false }
     case 'ACTIVITY_FEED':
@@ -265,9 +282,20 @@ export type WriteFailureReason =
   | 'FORM_ENTRY'
   /** Reassigning who is accountable for a space (design.md §6.5) — not an access change. */
   | 'SPACE_OWNER'
+  /**
+   * The two grant sections of the space grants screen (design.md §6.4), each
+   * its own save. Named separately so a section can say which set of rows is
+   * unchanged while the other carries on.
+   */
+  | 'ACCESS_GRANT'
+  | 'ROLE_GRANT'
 
 export function describeWriteFailure(reason: WriteFailureReason): UnavailableCopy {
   switch (reason) {
+    case 'ACCESS_GRANT':
+      return { summary: "Couldn't reach the API — the access grants are unchanged.", pointsToSettings: false }
+    case 'ROLE_GRANT':
+      return { summary: "Couldn't reach the API — the role grants are unchanged.", pointsToSettings: false }
     case 'SPACE':
       return { summary: "Couldn't reach the API — the space wasn't created.", pointsToSettings: false }
     case 'RESTORE_SPACE':

@@ -1,10 +1,15 @@
-# design.md §6.5.1: space creation is atomic with its first grant — the
-# real mutation takes `initialGrant` as a separate required argument, so
-# the API cannot succeed without one and never substitutes a default.
+# design.md §6.5.1: space creation is atomic with its first grants — the
+# real mutation takes `initialGrants` as a separate required list, and the
+# server refuses a list without at least one ROLE_GRANT of SPACE_ADMIN, so a
+# space is born administrable and the API can never substitute a default.
+# Access grants are optional in that list: by default nobody can see a new
+# space until one says otherwise (§6.4), which is the user's rule and the
+# reason the form never pre-fills "everyone".
+#
 # A duplicate key comes back as the flattened error with kind
 # "Validation" (there is no dedicated keyAlreadyInUse error type).
-mutation CreateSpace($input: CreateSpaceRequestInput!, $initialGrant: InitialSpaceGrantInput!) {
-  createSpace(input: $input, initialGrant: $initialGrant) {
+mutation CreateSpace($input: CreateSpaceRequestInput!, $initialGrants: [InitialGrantInput!]!) {
+  createSpace(input: $input, initialGrants: $initialGrants) {
     space {
       id
       key

@@ -7,15 +7,34 @@
 # down the tree (restrictions are positional and accumulate, design.md
 # §6.4) so the dialog can warn when a move would change who can see the
 # page.
+#
+# Only readable nodes are selected (`... on PageTreeNode`): a page this caller
+# cannot read is a `ProtectedTreeNode` with no id, and nothing can be moved
+# under a page whose id the caller does not hold. `__typename` still rides
+# along so the placeholder entries — which arrive as objects carrying nothing
+# but their discriminator — are dropped by pages/treeEntries.ts on the way
+# in, rather than reaching the flattener as id-less nodes.
 query SpaceTreeForMove($spaceId: UUID!) {
   pageTree(spaceId: $spaceId) {
-    ...MoveTreeNode
-    children {
+    __typename
+    ... on PageTreeNode {
       ...MoveTreeNode
       children {
-        ...MoveTreeNode
-        children {
+        __typename
+        ... on PageTreeNode {
           ...MoveTreeNode
+          children {
+            __typename
+            ... on PageTreeNode {
+              ...MoveTreeNode
+              children {
+                __typename
+                ... on PageTreeNode {
+                  ...MoveTreeNode
+                }
+              }
+            }
+          }
         }
       }
     }

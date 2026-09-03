@@ -49,7 +49,7 @@ const basePage = {
     level: 'OFFICIAL' as string,
     levelName: 'OFFICIAL' as string,
     eyesOnly: [] as string[],
-    prefix: 'UK' as string | null,
+    ukPrefix: true as boolean, selectors: [] as { category: string; value: string }[],
     label: 'UK OFFICIAL',
   },
   properties: [
@@ -81,14 +81,38 @@ const basePage = {
   ],
 }
 
+/** A denial the disclosing read can answer instead of a page (design.md §6.7 / §21.8). */
+const denial: {
+  placeholderTitle: string
+  noSpaceAccess: boolean
+  marking: Record<string, unknown> | null
+  reasons: Record<string, unknown>[]
+} = {
+  placeholderTitle: '(protected)',
+  noSpaceAccess: false,
+  marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: [], ukPrefix: true, selectors: [{ category: 'FRUIT', value: 'APPLE' }], label: 'UK SECRET APPLE' },
+  reasons: [
+    { gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'SECRET' },
+    { gate: 'SELECTOR_GRANT', passed: false, category: 'FRUIT', value: 'APPLE' },
+  ],
+}
+
 function renderPage({
   pageOverrides = {} as Partial<typeof basePage>,
+  /** What `pageAccess` answers instead of the staged page: a denial, or null for no such page. */
+  access = undefined as { page: null; denial: typeof denial | null } | null | undefined,
   isReplica = false,
   localUserId = 'user-someone-else' as string | null,
   presence = { viewers: [] as PresenceViewer[], setRoom: () => {} },
 } = {}) {
   const mock = createMockUrqlClient((name) => {
-    if (name === 'PageById') return { page: { ...basePage, ...pageOverrides } }
+    if (name === 'PageAccessById')
+      return {
+        pageAccess:
+          access !== undefined
+            ? access
+            : { page: { ...basePage, ...pageOverrides, parentDenial: null, linkTargets: [] }, denial: null },
+      }
     if (name === 'CurrentUser')
       return {
         me: {
@@ -309,8 +333,8 @@ describe('PageViewPage protective marking (design.md §21)', () => {
           level: 'SECRET',
           levelName: 'SECRET',
           eyesOnly: ['UK', 'US'],
-          prefix: 'UK',
-          label: 'UK SECRET [UK/US EYES ONLY]',
+          ukPrefix: true, selectors: [],
+          label: 'UK SECRET UK/US EYES ONLY',
         },
       },
     })
@@ -326,7 +350,7 @@ describe('PageViewPage protective marking (design.md §21)', () => {
       'print-head',
     ])
     for (const banner of banners) {
-      expect(banner.textContent).toContain('UK SECRET [UK/US EYES ONLY]')
+      expect(banner.textContent).toContain('UK SECRET UK/US EYES ONLY')
     }
   })
 
@@ -345,13 +369,69 @@ describe('PageViewPage protective marking (design.md §21)', () => {
     // and no "UK" invented for it (design.md §21.12).
     renderPage({
       pageOverrides: {
-        marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: [], prefix: null, label: 'TOP SECRET' },
+        marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: [], ukPrefix: false, selectors: [], label: 'TOP SECRET' },
       },
     })
     await screen.findByRole('heading', { name: 'Runbook' })
     expect(document.querySelector('[data-classification-banner="fixed"]')?.textContent).toBe(
       'Protective marking for this page: TOP SECRET',
     )
+  })
+})
+
+describe('PageViewPage withheld and missing pages (design.md §6.7 / §21.8)', () => {
+  it('renders the protected screen for a denial — marking and reasons, and never the title', async () => {
+    renderPage({ access: { page: null, denial } })
+    expect(await screen.findByRole('heading', { level: 1, name: 'Protected page' })).toBeInTheDocument()
+    expect(screen.getByText('UK SECRET APPLE')).toBeInTheDocument()
+    expect(screen.getByText('Needs SECRET clearance.')).toBeInTheDocument()
+    expect(screen.getByText('APPLE is not granted to you in this space.')).toBeInTheDocument()
+    // Nothing of the page itself: no title, no content, no actions.
+    expect(document.body.textContent).not.toContain('Runbook')
+    expect(document.body.textContent).not.toContain('Hello world')
+    expect(screen.queryByRole('button', { name: 'Watch' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull()
+  })
+
+  it('renders only the space sentence when the caller holds no access grant in the space', async () => {
+    renderPage({
+      access: { page: null, denial: { ...denial, noSpaceAccess: true, marking: null, reasons: [{ gate: 'SPACE_ACCESS', passed: false }] } },
+    })
+    expect(await screen.findByText('You have no access to this space.')).toBeInTheDocument()
+    expect(screen.queryByText(/SECRET/)).toBeNull()
+  })
+
+  it('renders the not-found notice for a page that does not exist', async () => {
+    renderPage({ access: null })
+    expect(await screen.findByText("Couldn't load this page.")).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Protected page' })).toBeNull()
+  })
+
+  it('substitutes the caller\'s own fallback for a denial as well as for nothing', async () => {
+    // The space-home route wants a withheld default page to behave like no
+    // default page — the browser, not the protected screen.
+    const mock = createMockUrqlClient((name) =>
+      name === 'PageAccessById' ? { pageAccess: { page: null, denial } } : undefined,
+    )
+    render(
+      <MemoryRouter initialEntries={['/pages/page-1']}>
+        <UrqlProvider value={mock.client}>
+          <PresenceRoomContext value={{ viewers: [], setRoom: () => {} }}>
+            <Routes>
+              <Route path="/pages/:pageId" element={<PageViewPage onUnavailable={<div>the browser instead</div>} />} />
+            </Routes>
+          </PresenceRoomContext>
+        </UrqlProvider>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('the browser instead')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Protected page' })).toBeNull()
+  })
+
+  it('has no axe violations on the protected screen', async () => {
+    renderPage({ access: { page: null, denial } })
+    await screen.findByRole('heading', { level: 1, name: 'Protected page' })
+    await expectNoAxeViolations()
   })
 })
 
