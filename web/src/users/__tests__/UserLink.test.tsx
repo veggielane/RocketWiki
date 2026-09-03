@@ -19,7 +19,7 @@ const renderLink = (ui: ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter
 describe('UserLink', () => {
   it('links the display name to the profile route by local id', () => {
     renderLink(<UserLink user={ada} />)
-    expect(screen.getByRole('link', { name: 'Ada Lovelace' })).toHaveAttribute('href', '/users/u-1')
+    expect(screen.getByRole('link', { name: 'Ada Lovelace' })).toHaveAttribute('href', '/people/u-1')
   })
 
   it('shows a face when asked, without letting it name the link a second time', () => {
@@ -45,8 +45,8 @@ describe('UserLink', () => {
 
   it('escapes the id into the path', () => {
     // Ids are UUIDs in practice; the path must still be well-formed for any string.
-    expect(profilePath('a b/c')).toBe('/users/a%20b%2Fc')
-    expect(profilePath('7d2a1c9e-1111-2222-3333-444455556666')).toBe('/users/7d2a1c9e-1111-2222-3333-444455556666')
+    expect(profilePath('a b/c')).toBe('/people/a%20b%2Fc')
+    expect(profilePath('7d2a1c9e-1111-2222-3333-444455556666')).toBe('/people/7d2a1c9e-1111-2222-3333-444455556666')
   })
 
   it('has no axe violations', async () => {

@@ -135,9 +135,9 @@ describe('crumbsFor', () => {
 
   it('names a profile as the screen, not the person', () => {
     // The shell holds only an id; the page's own heading says the name. Without
-    // a branch this fell through to a lowercase "users".
-    expect(crumbsFor('/users/u-1').map((c) => c.label)).toEqual(['Profile'])
-    expect(routeTitleFor('/users/u-1')).toBe('Profile')
+    // a branch this fell through to a lowercase "people".
+    expect(crumbsFor('/people/u-1').map((c) => c.label)).toEqual(['Profile'])
+    expect(routeTitleFor('/people/u-1')).toBe('Profile')
   })
 })
 

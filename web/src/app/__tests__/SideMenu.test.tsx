@@ -54,7 +54,7 @@ describe('SideMenu account menu', () => {
   it("offers My profile, pointing at the signed-in user's own profile", async () => {
     renderRail('user-1')
     fireEvent.click(await screen.findByRole('button', { name: 'Account menu' }))
-    expect(await screen.findByRole('menuitem', { name: 'My profile' })).toHaveAttribute('href', '/users/user-1')
+    expect(await screen.findByRole('menuitem', { name: 'My profile' })).toHaveAttribute('href', '/people/user-1')
     // Beside the account's other affordances, not instead of them.
     expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: 'Sign out' })).toBeInTheDocument()

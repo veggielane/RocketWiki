@@ -195,7 +195,7 @@ export function SideMenu({
         >
           {/* Hidden, not disabled, until `me.localUserId` has arrived: the
               profile route takes the local id, and an item that navigated to
-              /users/undefined would be a menu entry that leads to a 404. A
+              /people/undefined would be a menu entry that leads to a 404. A
               user's own id is not a secret from them, so this is not the
               absent-rather-than-forbidden question — just a link that cannot
               be written yet. */}

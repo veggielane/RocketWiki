@@ -61,8 +61,8 @@ describe('PageHistoryPage', () => {
     const table = await screen.findByRole('table', { name: 'Revisions' })
     expect(within(table).getAllByText('Ada Lovelace').length).toBeGreaterThan(0)
     // A byline is a link (users/UserLink.tsx): the name goes somewhere.
-    expect(within(table).getAllByRole('link', { name: 'Ada Lovelace' })[0]).toHaveAttribute('href', '/users/u1')
-    expect(within(table).getAllByRole('link', { name: 'Grace Hopper' })[0]).toHaveAttribute('href', '/users/u2')
+    expect(within(table).getAllByRole('link', { name: 'Ada Lovelace' })[0]).toHaveAttribute('href', '/people/u1')
+    expect(within(table).getAllByRole('link', { name: 'Grace Hopper' })[0]).toHaveAttribute('href', '/people/u2')
   })
 
   it('credits who typed as well, when a revision was co-edited', async () => {
@@ -73,7 +73,7 @@ describe('PageHistoryPage', () => {
     const table = await screen.findByRole('table', { name: 'Revisions' })
     const credit = within(table).getByText(/^with/)
     expect(credit).toHaveTextContent('with Grace Hopper')
-    expect(within(credit).getByRole('link', { name: 'Grace Hopper' })).toHaveAttribute('href', '/users/u2')
+    expect(within(credit).getByRole('link', { name: 'Grace Hopper' })).toHaveAttribute('href', '/people/u2')
   })
 
   it('shows an edit summary where there is one, and says so where there is not', async () => {

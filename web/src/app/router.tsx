@@ -270,8 +270,11 @@ export const routes: RouteObject[] = [
       // readable by every signed-in user by product decision, and the server
       // returns null for an id that matches nobody, which the page renders as
       // not-found. Addressed by the local user id every UserRef carries.
+      // `people`, not `users`: the API owns `/users/{id}/avatar` and the dev
+      // proxy and nginx forward that whole prefix to it, so `/users/{id}`
+      // 404s on a direct load (users/profilePath.ts, and its test).
       {
-        path: 'users/:userId',
+        path: 'people/:userId',
         lazy: async () => {
           const { UserProfilePage } = await import('../pages/UserProfilePage')
           return { Component: UserProfilePage }

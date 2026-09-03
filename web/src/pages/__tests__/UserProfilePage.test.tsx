@@ -56,10 +56,10 @@ function failingClient(): Client {
 function renderProfile(profile: Record<string, unknown> | null = PROFILE, client?: Client) {
   const mock = createMockUrqlClient((name) => (name === 'UserProfile' ? { userProfile: profile } : undefined))
   render(
-    <MemoryRouter initialEntries={['/users/u-1']}>
+    <MemoryRouter initialEntries={['/people/u-1']}>
       <UrqlProvider value={client ?? mock.client}>
         <Routes>
-          <Route path="/users/:userId" element={<UserProfilePage />} />
+          <Route path="/people/:userId" element={<UserProfilePage />} />
         </Routes>
       </UrqlProvider>
     </MemoryRouter>,
@@ -140,10 +140,10 @@ describe('UserProfilePage', () => {
     // Nationality, email and last-seen stay admin-only (design.md §6.2) — the
     // profile must not grow them back by accident.
     const { container } = render(
-      <MemoryRouter initialEntries={['/users/u-1']}>
+      <MemoryRouter initialEntries={['/people/u-1']}>
         <UrqlProvider value={createMockUrqlClient((name) => (name === 'UserProfile' ? { userProfile: PROFILE } : undefined)).client}>
           <Routes>
-            <Route path="/users/:userId" element={<UserProfilePage />} />
+            <Route path="/people/:userId" element={<UserProfilePage />} />
           </Routes>
         </UrqlProvider>
       </MemoryRouter>,
