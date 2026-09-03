@@ -1,0 +1,31 @@
+# A person's profile (design.md §6.2, §8): what their claims carried at their
+# last sign-in, resolved through the same gate functions enforcement runs.
+# Readable by any signed-in user; null for an unknown id and for an anonymous
+# caller alike, like `page`.
+#
+# `clearance` is never absent on the wire — an absent or unrecognised claim
+# resolves to the OFFICIAL-SENSITIVE floor — which is why `clearanceRecorded`
+# travels beside it: false means the floor is the gate's default, not a fact
+# about this person, and the page must say "not recorded" rather than show
+# the floor as a clearance they hold. `selectorEligibility` lists every
+# configured category in catalog order; `requiresAttribute: false` means the
+# category has no claim gate and everyone is eligible.
+#
+# Deliberately no nationality, email or last-seen: those stay admin-only on
+# the audited roster (§6.2).
+query UserProfile($id: UUID!) {
+  userProfile(id: $id) {
+    id
+    displayName
+    hasAvatar
+    isExternal
+    clearance
+    clearanceName
+    clearanceRecorded
+    selectorEligibility {
+      category
+      requiresAttribute
+      eligible
+    }
+  }
+}

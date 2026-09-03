@@ -62,3 +62,22 @@ already see.
 - **Ask** answers a question in prose, citing the pages it drew on.
 
 All three only ever return things you are allowed to read.
+
+## Your profile
+
+Everyone who has signed in has a profile page, and anyone who is signed in can
+see anyone's. Open your own from the account menu at the bottom of the left
+sidebar, or a colleague's by following their name wherever it appears — on a
+comment, an attachment, a page's history, or as the owner of a space.
+
+A profile shows two things: the person's **clearance**, and for each selector
+category whether they are **eligible** for it. That is what a colleague needs
+before showing someone a page at a given level or in a given compartment, and
+it is all the page shows — no email address, no nationality, no activity.
+
+Both values are whatever the person's sign-in carried the last time they signed
+in here, and both are managed in Keycloak rather than in RocketWiki: nothing on
+the page can be edited, and a change made in Keycloak shows once the person
+next signs in. A clearance that was never recorded shows as **Not recorded**
+rather than as a level. An account that was created by sync and has never
+signed in here has nothing to show yet, and says so.

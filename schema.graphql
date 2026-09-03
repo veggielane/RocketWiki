@@ -144,6 +144,7 @@ type Query {
       requireOneSlicingArgument: false
     )
     @cost(weight: "10")
+  userProfile(id: UUID!): UserProfile @cost(weight: "10")
   users(
     "Returns the first _n_ elements from the list."
     first: Int
@@ -1082,6 +1083,12 @@ type SelectorCategory {
   values: [String!]!
 }
 
+type SelectorEligibilityStatus {
+  category: String!
+  requiresAttribute: Boolean!
+  eligible: Boolean!
+}
+
 type SelectorValue {
   category: String!
   value: String!
@@ -1210,6 +1217,20 @@ type UserDirectoryEdge {
   cursor: String!
   "The item at the end of the edge."
   node: UserRef!
+}
+
+type UserProfile {
+  id: UUID!
+  displayName: String!
+  hasAvatar: Boolean!
+  "A shadow account created by sync; it has never signed in here, so nothing below was recorded."
+  isExternal: Boolean!
+  "Resolved exactly as the clearance gate resolves it from the recorded claim (absent/unrecognised => OFFICIAL_SENSITIVE)."
+  clearance: ClassificationLevel!
+  clearanceName: String!
+  "False when no recognised clearance claim was recorded - the floor above is the gate's default, not a recorded fact."
+  clearanceRecorded: Boolean!
+  selectorEligibility: [SelectorEligibilityStatus!]!
 }
 
 type UserRef {

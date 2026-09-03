@@ -242,12 +242,15 @@ The local `User` row mirrors claims at each request for display/admin UI only.
 
 The selector claims are the one attribute family that is **not** declared in the
 registry (§6.2): `PrincipalBuilder` maps every `ClaimName` the configured
-selector catalog names, and nothing else about them is stored — JIT
-provisioning (§11.3) does not mirror them into the `User` row, because
-eligibility is an access input, not display data. Eligibility is the literal
-value `yes` (trimmed, compared case-insensitively) and nothing else: a
-boolean-shaped claim leaves nothing to misparse, so `true`, `1` or a list of
-codewords cannot be read as consent by a mapper that emits them by accident.
+selector catalog names. JIT provisioning (§11.3) mirrors those same claims
+into the `User` row beside nationality and clearance — raw values, never a
+derived "eligible" — since the profile page (§6.2, 2026-09-03) began showing
+each person's eligibility; the mirror is display data for that page and the
+admin roster, and it is never an authorization input — the gate reads the
+token. Eligibility is the literal value `yes` (trimmed, compared
+case-insensitively) and nothing else: a boolean-shaped claim leaves nothing to
+misparse, so `true`, `1` or a list of codewords cannot be read as consent by a
+mapper that emits them by accident.
 
 ### 6.2 Attribute registry
 
@@ -262,8 +265,37 @@ A small config table declaring which claims become rule-usable attributes:
 
 Attributes are stored and managed in **Keycloak** (single source of truth);
 RocketWiki only declares which ones exist and mirrors current values.
-Nationality is sensitive personal data: mirrored values are visible to
-instance admins only, and only registered attributes are ever stored.
+Nationality is sensitive personal data: its mirrored values are visible to
+instance admins only, and only registered attributes and the configured
+selector claims (§21.15) are ever stored.
+
+**The profile page, and the census it accepts (product decision,
+2026-09-03).** Every user has a profile page, readable by every signed-in
+user (`userProfile(id)`, §8), showing the **clearance** and the **selector
+eligibility** per configured category that the person's claims carried at
+their last sign-in. Both are resolved through the same gate functions
+enforcement runs — over a `Principal` rebuilt from the mirror — so the page
+says what the gate would have decided from those claims, never a friendlier
+reading of them: an unrecognised clearance shows "Not recorded" — the API still resolves it to the
+OFFICIAL-SENSITIVE floor with `clearanceRecorded: false`, and the page shows that
+flag rather than the floor as a clearance they hold; a `fruit` claim that is not `yes` shows not
+eligible. The page says "as of their last sign-in" in words and carries no
+timestamp. This is a deliberate widening of what `userDirectory` refused, and
+it is recorded here so nobody mistakes it for an oversight: the directory
+carries no rule-engine attribute because a directory of them is a
+who-holds-what-clearance census, and a profile page is exactly that census
+one person at a time — an insider with one ordinary account can learn,
+profile by profile, whose credentials would reach a given level or
+compartment. The product owner accepted that exposure on 2026-09-03; the
+everyday use is a colleague checking whether a person may be shown a level
+or a compartment before sharing it. Two bounds hold the widening where it
+is. The directory itself is unchanged (`UserRef` only), so a census is still
+one profile request per person rather than one list — a rate, not a barrier,
+and it is stated as such rather than counted as a control; and **nationality,
+email and last-seen remain admin-only** on the audited `users` roster —
+nationality because it is sensitive personal data, email and last-seen
+because together they are a surveillance surface (§15's reasoning). The
+mirror is still never read for an authorization decision (§6.1).
 
 **The registry is rule-builder vocabulary, not marking vocabulary.** The
 `nationality` row's allowed values once doubled as the eyes-only caveat's
@@ -1052,6 +1084,18 @@ plumbing an attacker would otherwise be told to forge);
 `CurrentUser.selectorEligibility`. MCP is unchanged in shape and keeps
 omitting on every tool; `get_page_tree` drops placeholders before mapping.
 
+**The profile page (§6.2, 2026-09-03) adds `userProfile(id: UUID!):
+UserProfile`** — `id`, `displayName`, `hasAvatar`, `isExternal`, `clearance`
+with `clearanceName` and `clearanceRecorded` (false when no recognised
+clearance claim was recorded, so the floor reads as a floor), and
+`selectorEligibility: [SelectorEligibilityStatus { category,
+requiresAttribute, eligible }]` over every configured category in catalog
+order. Readable by any signed-in user; anonymous and unknown id are both null,
+like `page`. Unaudited on `userDirectory`'s reasoning, with the widening
+stated plainly in the field's own `[NoAudit]` declaration. Resolved through
+the gates over the mirrored claims (§6.2), fetching exactly one row's mirror.
+`userDirectory` is unchanged.
+
 ```
 POST /attachments/{pageId}   multipart upload
 GET  /attachments/{id}       download — auth-checked, audited, then streamed
@@ -1605,7 +1649,11 @@ and hit the same bearer-token validation — one auth path for every channel.
 ### 11.3 JIT user provisioning
 
 On each authenticated request, middleware upserts the local `User` row from
-claims (JIT provisioning), including registered attributes (§6.2).
+claims (JIT provisioning), including registered attributes (§6.2) and, since
+the profile page (§6.2, 2026-09-03), every configured selector claim (§21.15)
+— the raw claim values, so that eligibility is derived at read time, through
+the gate, against the catalog current then. The mirror feeds the admin roster
+and the profile page; the gate still reads the token (§11.4).
 
 ### 11.4 The request principal
 
@@ -3978,7 +4026,10 @@ anonymous caller.
   the diagnosis is one audit row away. E answers "may this person *ever* see
   this material", and it belongs with clearance and nationality: a per-category
   claim keeps that decision in the identity provider, alongside every other
-  fact about a person that RocketWiki reads and never writes.
+  fact about a person that RocketWiki reads and never writes. JIT provisioning
+  (§11.3) now mirrors the claim into the `User` row — raw, for the profile
+  page (§6.2), which derives eligibility from it through this same gate at
+  read time; the gate itself still reads the token, never the mirror.
 - **G — grant** is per space and lives in the access grants (§6.4). Every
   selector on the page must be in the union of selector values over the access
   grants the principal matches in that space. G answers "has this space's

@@ -203,6 +203,14 @@ export type LoadFailureReason =
   /** The notification inbox — a failed read must not read as an empty one. */
   | 'NOTIFICATIONS'
   | 'SEARCH'
+  /**
+   * A person's profile page. Transport only: a null answer is "no such user"
+   * and takes the not-found screen, so this must not borrow that sentence —
+   * a reader told the account is gone for a request that never arrived would
+   * not try the link again. Readable by every signed-in user, so it can name
+   * what failed.
+   */
+  | 'USER_PROFILE'
   /** The what-if inspector: `forPrincipal` distinguishes "your own view" from a staged subject. */
   | { kind: 'PERMISSION_INSPECTION'; forPrincipal: boolean }
 
@@ -257,6 +265,8 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       return { summary: "Couldn't load the usage report.", pointsToSettings: false }
     case 'SEARCH':
       return { summary: "Couldn't search — there's no live API in this environment yet.", pointsToSettings: false }
+    case 'USER_PROFILE':
+      return { summary: "Couldn't load this profile.", pointsToSettings: false }
   }
 }
 

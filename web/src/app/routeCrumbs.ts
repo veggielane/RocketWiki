@@ -131,6 +131,13 @@ export function crumbsFor(pathname: string, canonicalSpace?: CanonicalSpace): Cr
     return [{ label: 'Help' }]
   }
 
+  // `/users/{id}` — a person's profile. The crumb names the screen, not the
+  // person: the shell holds only an id, and the page's own heading says the
+  // name a line below. Without this it fell through to a lowercase "users".
+  if (first === 'users') {
+    return [{ label: 'Profile' }]
+  }
+
   return [{ label: TOP_LEVEL_PAGES[first] ?? first }]
 }
 

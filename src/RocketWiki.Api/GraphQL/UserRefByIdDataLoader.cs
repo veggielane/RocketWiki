@@ -6,13 +6,15 @@ namespace RocketWiki.Api.GraphQL;
 
 /// <summary>
 /// The id + display-name projection of a local <c>User</c> row, and the ONLY shape of
-/// that row this schema ever hands to a client outside the admin-only audit viewer.
-/// Deliberately not the entity: <c>User.AttributesJson</c> mirrors registered
-/// attributes (nationality — sensitive personal data, instance-admin-visible only,
-/// design.md §6.2), and exposing the entity would leak it to anyone who can read a
-/// comment. Display only, per design.md §6.1: the mirror "is for display/admin UI
-/// only" — nothing that resolves a <c>UserRef</c> feeds an authorization decision,
-/// which always evaluates the token, never this table.
+/// that row this schema hands to a client outside the admin-only roster and audit
+/// viewer and the one-person-at-a-time profile page (<c>userProfile</c>, which carries
+/// the gate-resolved clearance and eligibility by the decision design.md §6.2 records,
+/// and never nationality). Deliberately not the entity: <c>User.AttributesJson</c>
+/// mirrors registered attributes (nationality — sensitive personal data,
+/// instance-admin-visible only, design.md §6.2), and exposing the entity would leak it
+/// to anyone who can read a comment. Display only, per design.md §6.1: the mirror "is
+/// for display/admin UI only" — nothing that resolves a <c>UserRef</c> feeds an
+/// authorization decision, which always evaluates the token, never this table.
 ///
 /// <see cref="HasAvatar"/> is the phase-2 contract for rendering: image when true
 /// (fetched from <c>GET /users/{id}/avatar</c>, authenticated, through the same

@@ -3,7 +3,7 @@ import { Alert, Button, Paper, Stack, Typography } from '@mui/material'
 import { useSetSpaceOwnerMutation } from '../graphql/generated/graphql'
 import { describeMutationError } from '../graphql/mutationError'
 import { describeWriteFailure } from '../feedback/unavailableCopy'
-import { UserAvatar } from '../avatars/UserAvatar'
+import { UserLink } from '../users/UserLink'
 import { UserDirectoryPicker, type DirectoryUser } from './UserDirectoryPicker'
 
 export interface SpaceOwnerSectionProps {
@@ -93,9 +93,11 @@ export function SpaceOwnerSection({ spaceId, owner, canManageAccess, onChanged }
         )}
 
         {owner ? (
-          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-            <UserAvatar userId={owner.id} hasAvatar={owner.hasAvatar} displayName={owner.displayName} size={32} />
-            <Typography>{owner.displayName}</Typography>
+          // A link to the owner's profile, not just a name: "who answers for
+          // this space" is usually asked before "may I show them this", which
+          // is the question the profile answers.
+          <Stack direction="row" sx={{ alignItems: 'center' }}>
+            <UserLink user={owner} avatarSize={32} variant="body1" />
           </Stack>
         ) : (
           // Said plainly, and to everyone. A gap in accountability is worth

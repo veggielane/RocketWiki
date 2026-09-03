@@ -14,6 +14,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
+import AccountCircleOutlinedIcon from '@mui/icons-material/AccountCircleOutlined'
 import LogoutIcon from '@mui/icons-material/Logout'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
 import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
@@ -28,6 +29,7 @@ import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
 import { SpaceTreeNav } from './SpaceTreeNav'
 import { RecentSpaces } from './RecentSpaces'
 import { clearRecentSpaces } from '../spaces/recentSpaces'
+import { profilePath } from '../users/profilePath'
 
 export const SIDE_MENU_WIDTH = 240
 
@@ -191,6 +193,24 @@ export function SideMenu({
           anchorOrigin={{ horizontal: 'right', vertical: 'top' }}
           transformOrigin={{ horizontal: 'right', vertical: 'bottom' }}
         >
+          {/* Hidden, not disabled, until `me.localUserId` has arrived: the
+              profile route takes the local id, and an item that navigated to
+              /users/undefined would be a menu entry that leads to a 404. A
+              user's own id is not a secret from them, so this is not the
+              absent-rather-than-forbidden question — just a link that cannot
+              be written yet. */}
+          {meData?.me.localUserId && (
+            <MenuItem
+              component={RouterLink}
+              to={profilePath(meData.me.localUserId)}
+              onClick={() => setAccountMenuAnchor(null)}
+            >
+              <ListItemIcon>
+                <AccountCircleOutlinedIcon fontSize="small" />
+              </ListItemIcon>
+              My profile
+            </MenuItem>
+          )}
           <MenuItem
             onClick={() => {
               setAccountMenuAnchor(null)

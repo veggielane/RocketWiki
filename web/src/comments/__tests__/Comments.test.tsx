@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render as renderBare, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import type { ReactElement } from 'react'
 import { Comments } from '../Comments'
 import type { FlatComment } from '../buildCommentTree'
+
+// Author bylines link to profiles (users/UserLink.tsx), and a link needs a
+// router to render. Nothing here asserts on navigation.
+const render = (ui: ReactElement) => renderBare(<MemoryRouter>{ui}</MemoryRouter>)
 
 function comment(overrides: Partial<FlatComment> & Pick<FlatComment, 'id'>): FlatComment {
   return {

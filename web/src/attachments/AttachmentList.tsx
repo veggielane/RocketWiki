@@ -4,7 +4,7 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined'
 import { fetchAttachmentBlob } from './attachmentApi'
 import { formatBytes } from './formatBytes'
-import { UserAvatar } from '../avatars/UserAvatar'
+import { UserLink } from '../users/UserLink'
 import { describeAttachmentUnavailable } from '../feedback/unavailableCopy'
 
 export interface AttachmentSummary {
@@ -14,8 +14,8 @@ export interface AttachmentSummary {
   sizeBytes: number
   /** Resolved from `Attachment.uploadedBy` (UserRef). */
   uploadedByDisplayName: string
-  /** `UserRef.id` — the local user id the avatar route takes (design.md §19). */
-  uploadedById?: string
+  /** `UserRef.id` — the local user id the avatar route and the profile route take (design.md §19, §6.2). */
+  uploadedById: string
   /** `UserRef.hasAvatar` — image when true, initials otherwise, never a probing GET. */
   uploadedByHasAvatar?: boolean
 }
@@ -81,13 +81,14 @@ export function AttachmentList({ attachments }: { attachments: AttachmentSummary
               secondary={
                 <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
                   <span>{`${formatBytes(attachment.sizeBytes)} · uploaded by`}</span>
-                  <UserAvatar
-                    userId={attachment.uploadedById}
-                    hasAvatar={attachment.uploadedByHasAvatar ?? false}
-                    displayName={attachment.uploadedByDisplayName}
-                    size={16}
+                  <UserLink
+                    user={{
+                      id: attachment.uploadedById,
+                      displayName: attachment.uploadedByDisplayName,
+                      hasAvatar: attachment.uploadedByHasAvatar ?? false,
+                    }}
+                    avatarSize={16}
                   />
-                  <span>{attachment.uploadedByDisplayName}</span>
                 </Stack>
               }
             />

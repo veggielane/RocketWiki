@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { Box, Button, Stack, Typography } from '@mui/material'
 import { RichTextEditor, type RichTextEditorHandle } from '../editor/RichTextEditor'
 import { buildCommentTree, type CommentNode, type FlatComment } from './buildCommentTree'
-import { UserAvatar } from '../avatars/UserAvatar'
+import { UserLink } from '../users/UserLink'
 import { formatTimestamp } from '../format/dateTime'
 import { ConfirmDialog } from '../feedback/ConfirmDialog'
 
@@ -195,16 +195,15 @@ function CommentItem({
     >
       <Stack spacing={0.5}>
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-          {/* Face + name (design.md §19): image only when `hasAvatar` says
-              so; the initials chip is the unchanged fallback. One fetch per
-              author per session via the avatar cache, not per comment row. */}
-          <UserAvatar
-            userId={node.authorUserId}
-            hasAvatar={node.authorHasAvatar ?? false}
-            displayName={node.authorDisplayName}
-            size={24}
+          {/* Face + name (design.md §19), as a link to the author's profile:
+              image only when `hasAvatar` says so; the initials chip is the
+              unchanged fallback. One fetch per author per session via the
+              avatar cache, not per comment row. */}
+          <UserLink
+            user={{ id: node.authorUserId, displayName: node.authorDisplayName, hasAvatar: node.authorHasAvatar ?? false }}
+            avatarSize={24}
+            variant="subtitle2"
           />
-          <Typography variant="subtitle2">{node.authorDisplayName}</Typography>
           <Typography variant="caption" color="text.secondary">
             {formatTimestamp(node.createdAtUtc)}
           </Typography>

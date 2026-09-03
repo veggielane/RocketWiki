@@ -1,11 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render as renderBare, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import type { ReactElement } from 'react'
 import { Provider as UrqlProvider } from 'urql'
 import { SpaceOwnerSection } from '../SpaceOwnerSection'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { Client, type Exchange, type Operation, CombinedError } from 'urql'
 import { filter, map, pipe } from 'wonka'
 import { expectNoAxeViolations } from '../../test/axe'
+
+// The owner's name links to their profile (users/UserLink.tsx), and a link
+// needs a router to render. Nothing here asserts on navigation.
+const render = (ui: ReactElement) => renderBare(<MemoryRouter>{ui}</MemoryRouter>)
 
 /**
  * Who is accountable for a space.

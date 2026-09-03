@@ -42,6 +42,15 @@ import {
   type MarkingRefusal,
 } from '../../markings/clearance'
 import { describeSave } from '../../editor/describeSave'
+import {
+  CLEARANCE_NOT_RECORDED,
+  CLEARANCE_NOT_RECORDED_DETAIL,
+  EXTERNAL_ACCOUNT_NOTE,
+  NO_SELECTOR_CATEGORIES,
+  PROFILE_RECORDED_CAPTION,
+  SELECTOR_SECTION_DESCRIPTION,
+  describeEligibility,
+} from '../../users/profileCopy'
 import type { AccessGate, AskWikiUnavailableReason, GitLabUnavailableReason } from '../../graphql/generated/graphql'
 
 /**
@@ -95,6 +104,7 @@ const LOAD_REASONS: LoadFailureReason[] = [
   'PAGE_ACCESS',
   'SYNC_STATUS',
   'SEARCH',
+  'USER_PROFILE',
   { kind: 'PERMISSION_INSPECTION', forPrincipal: true },
   { kind: 'PERMISSION_INSPECTION', forPrincipal: false },
 ]
@@ -190,6 +200,18 @@ function allUserFacingCopy(): { source: string; text: string }[] {
   add('describeBlockedSubtree(included)', describeBlockedSubtree(1, 'included'))
   add('describeSave(manual)', describeSave({ revisionNumber: 12, contributors: ['Ada'], auto: false }))
   add('describeSave(auto)', describeSave({ revisionNumber: 12, contributors: [], auto: true }))
+
+  // The profile page (users/profileCopy.ts): every sentence it can show,
+  // and each of the three things an eligibility row can say.
+  add('PROFILE_RECORDED_CAPTION', PROFILE_RECORDED_CAPTION)
+  add('CLEARANCE_NOT_RECORDED', CLEARANCE_NOT_RECORDED)
+  add('CLEARANCE_NOT_RECORDED_DETAIL', CLEARANCE_NOT_RECORDED_DETAIL)
+  add('EXTERNAL_ACCOUNT_NOTE', EXTERNAL_ACCOUNT_NOTE)
+  add('SELECTOR_SECTION_DESCRIPTION', SELECTOR_SECTION_DESCRIPTION)
+  add('NO_SELECTOR_CATEGORIES', NO_SELECTOR_CATEGORIES)
+  add('describeEligibility(everyone)', describeEligibility({ requiresAttribute: false, eligible: true }))
+  add('describeEligibility(eligible)', describeEligibility({ requiresAttribute: true, eligible: true }))
+  add('describeEligibility(not eligible)', describeEligibility({ requiresAttribute: true, eligible: false }))
 
   return out
 }

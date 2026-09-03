@@ -41,6 +41,50 @@ public sealed class JitProvisioningTests(RocketWikiApiFactory factory) : IClassF
         Assert.Equal(["NZ", "GB"], attributes["nationality"]);
     }
 
+    /// <summary>
+    /// design.md §6.2 (2026-09-03): the mirror now records every configured selector
+    /// claim, raw, so the profile page can derive eligibility through the gate at read
+    /// time — and it records ONLY the configured ones. The allowlist is the same one the
+    /// principal builder maps (nationality, clearance, the catalog's claim names); a
+    /// claim nobody configured, however much it looks like a selector claim, is not
+    /// stored. Mirror every claim on the token and this goes red on <c>vegetable</c>.
+    /// </summary>
+    [Fact]
+    public async Task JitProvisioning_MirrorsConfiguredSelectorClaims_AndNothingElse()
+    {
+        var subject = $"jit-selectors-{Guid.NewGuid()}";
+        var client = factory.CreateClient();
+        client.SetTestUser(
+            sub: subject,
+            email: "jit.selectors@example.test",
+            groups: ["engineering"],
+            nationality: ["NZ"],
+            clearance: "SECRET",
+            roles: ["user"],
+            claims:
+            [
+                // The configured claim, with the raw shape a realm mapper might emit: the
+                // mirror must keep it verbatim, not reduce it to "eligible".
+                (RocketWikiApiFactory.FruitClaim, " Yes "),
+                // Looks exactly like a selector claim; no configured category names it.
+                ("vegetable", "yes"),
+            ]);
+
+        await client.PostGraphQLAsync("{ me { id } }");
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        var user = await db.Users.SingleAsync(u => u.Subject == subject);
+
+        var attributes = JsonSerializer.Deserialize<Dictionary<string, string[]>>(user.AttributesJson)!;
+        Assert.Equal(
+            ["clearance", RocketWikiApiFactory.FruitClaim, "nationality"],
+            attributes.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Equal([" Yes "], attributes[RocketWikiApiFactory.FruitClaim]);
+        Assert.Equal(["SECRET"], attributes["clearance"]);
+        Assert.Equal(["NZ"], attributes["nationality"]);
+    }
+
     [Fact]
     public async Task SameSubjectTwice_UpsertsSameUserRow_DoesNotDuplicate()
     {

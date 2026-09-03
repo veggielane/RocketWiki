@@ -56,19 +56,24 @@ describe('PageHistoryPage', () => {
     expect(rows[2]!.textContent).toContain('1')
   })
 
-  it('names who saved each revision', async () => {
+  it('names who saved each revision, each name a link to their profile', async () => {
     renderHistory()
     const table = await screen.findByRole('table', { name: 'Revisions' })
     expect(within(table).getAllByText('Ada Lovelace').length).toBeGreaterThan(0)
-    expect(within(table).getByText('Grace Hopper')).toBeInTheDocument()
+    // A byline is a link (users/UserLink.tsx): the name goes somewhere.
+    expect(within(table).getAllByRole('link', { name: 'Ada Lovelace' })[0]).toHaveAttribute('href', '/users/u1')
+    expect(within(table).getAllByRole('link', { name: 'Grace Hopper' })[0]).toHaveAttribute('href', '/users/u2')
   })
 
   it('credits who typed as well, when a revision was co-edited', async () => {
     // A co-edited revision carries other people's live edits; crediting only the
-    // person who pressed save would be wrong about it.
+    // person who pressed save would be wrong about it. The credit reads "with
+    // Grace Hopper", the name a profile link like the author's.
     renderHistory()
     const table = await screen.findByRole('table', { name: 'Revisions' })
-    expect(within(table).getByText(/with Grace Hopper/)).toBeInTheDocument()
+    const credit = within(table).getByText(/^with/)
+    expect(credit).toHaveTextContent('with Grace Hopper')
+    expect(within(credit).getByRole('link', { name: 'Grace Hopper' })).toHaveAttribute('href', '/users/u2')
   })
 
   it('shows an edit summary where there is one, and says so where there is not', async () => {

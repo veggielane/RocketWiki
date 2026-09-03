@@ -1,8 +1,7 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   Alert,
-  Box,
   Chip,
   Divider,
   Paper,
@@ -21,7 +20,7 @@ import { describeLoadFailure } from '../feedback/unavailableCopy'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { MarkdownDiffView } from '../diff/MarkdownDiffView'
-import { UserAvatar } from '../avatars/UserAvatar'
+import { UserLink } from '../users/UserLink'
 
 interface Revision {
   id: string
@@ -135,28 +134,26 @@ export function PageHistoryPage() {
                 </TableCell>
                 <TableCell>{revision.revisionNumber}</TableCell>
                 <TableCell>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                    <UserAvatar
-                      userId={revision.author.id}
-                      displayName={revision.author.displayName}
-                      hasAvatar={revision.author.hasAvatar}
-                      sx={{ width: 24, height: 24, fontSize: '0.75rem' }}
-                    />
-                    <Box>
-                      <Typography variant="body2">{revision.author.displayName}</Typography>
-                      {/* Who typed, when that differs from who saved — a co-edited
-                          revision carries other people's live edits, and crediting
-                          only the person who pressed save would be wrong about it. */}
-                      {revision.contributors.filter((c) => c.id !== revision.author.id).length > 0 && (
-                        <Typography variant="caption" color="text.secondary">
-                          with{' '}
-                          {revision.contributors
-                            .filter((c) => c.id !== revision.author.id)
-                            .map((c) => c.displayName)
-                            .join(', ')}
-                        </Typography>
-                      )}
-                    </Box>
+                  <Stack spacing={0.25} sx={{ alignItems: 'flex-start' }}>
+                    <UserLink user={revision.author} avatarSize={24} variant="body2" />
+                    {/* Who typed, when that differs from who saved — a co-edited
+                        revision carries other people's live edits, and crediting
+                        only the person who pressed save would be wrong about it.
+                        Each name is a link like the author's: a contributor is a
+                        person too, not a footnote. */}
+                    {revision.contributors.filter((c) => c.id !== revision.author.id).length > 0 && (
+                      <Typography variant="caption" color="text.secondary">
+                        with{' '}
+                        {revision.contributors
+                          .filter((c) => c.id !== revision.author.id)
+                          .map((c, index) => (
+                            <Fragment key={c.id}>
+                              {index > 0 && ', '}
+                              <UserLink user={c} />
+                            </Fragment>
+                          ))}
+                      </Typography>
+                    )}
                   </Stack>
                 </TableCell>
                 <TableCell>

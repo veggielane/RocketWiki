@@ -418,7 +418,7 @@ Local mirror for display only — **authorization never reads this table**
 | Subject | nvarchar(255) null | OIDC `sub`; **null for shadow users** from sync |
 | Email | nvarchar(320) null | |
 | DisplayName | nvarchar(200) | |
-| AttributesJson | nvarchar(max) | mirrored registered attributes; admin-visible only |
+| AttributesJson | nvarchar(max) | mirrored registered attributes plus the configured selector claims, raw values keyed by claim name; nationality admin-visible only, clearance and selector eligibility shown on the profile page (design.md §6.2); never an authorization input |
 | IsExternal | bit | shadow user (sync author), never loginable |
 | CreatedAtUtc / LastSeenAtUtc | | |
 
@@ -503,12 +503,15 @@ other — and both are absent rather than empty when the claim is missing, which
 is what makes their fail-closed defaults land on the intended answer.
 
 The **selector categories** (design.md §21.15) are deliberately *not* registry
-rows. They come from configuration (`ProtectiveMarking:SelectorCategories`), the
-claims they name are mapped into the `Principal` from that catalog rather than
-from this table, and JIT provisioning never mirrors those claims into
-`User.AttributesJson` — eligibility is an access input, not display data, and a
-vocabulary that gates access lives in a reviewed diff, not in an editable row
-(design.md §6.2).
+rows. They come from configuration (`ProtectiveMarking:SelectorCategories`), and
+the claims they name are mapped into the `Principal` from that catalog rather
+than from this table. JIT provisioning mirrors those claims into
+`User.AttributesJson` beside nationality and clearance — the raw values, keyed
+by claim name, never a derived "eligible" — so the profile page (design.md
+§6.2, 2026-09-03) can derive each person's eligibility through the gate at read
+time, against the catalog current then. A vocabulary that gates access still
+lives in a reviewed diff, not in an editable row, and the mirror is never an
+authorization input (design.md §6.1).
 
 ### KnownGroup — rule-builder picker source
 
