@@ -51,7 +51,7 @@ public class BundleExportImportTests : SqliteTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -64,7 +64,7 @@ public class BundleExportImportTests : SqliteTestBase
     /// <summary>SpaceAdmin outranks Editor (EffectivePermissionCalculator: role >= Editor can edit), and AccessRuleService.CreateAsync requires exactly SpaceAdmin - so this one grant covers both page mutation and restriction management for tests that need to create a PageRestriction.</summary>
     private static AccessRule SpaceAdminGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.SpaceAdmin,
         ExpressionJson = """{ "everyone": true }""",
@@ -187,7 +187,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(SpaceAdminGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(SpaceAdminGrant(space.Id)), SpaceAdminGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -409,7 +409,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -477,7 +477,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -516,7 +516,7 @@ public class BundleExportImportTests : SqliteTestBase
                 // neither may be silently reset by the other travelling in the same payload.
                 var raised = await entryService.UpdateAsync(
                     new UpdatePageEntryRequest(entry.Value.Id, 1, """{"severity":"critical"}""",
-                        ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], "UK")),
+                        ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], prefix: "UK")),
                     ClearedEditorPrincipal("SECRET", "UK"), actor.Id, AuditCtx);
                 Assert.True(raised.IsSuccess, $"{raised.Error}");
 
@@ -718,7 +718,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(SpaceAdminGrant(space.Id)); // needed to create the PageRestriction below, not just edit
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(SpaceAdminGrant(space.Id)), SpaceAdminGrant(space.Id)); // needed to create the PageRestriction below, not just edit
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -792,7 +792,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -845,7 +845,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         // Created via PageService (not a raw Add) so a PageUpsert sync event actually
@@ -905,7 +905,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         // Created via PageService (not a raw Add) so a PageUpsert sync event actually
@@ -969,7 +969,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -1068,7 +1068,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.AddRange(goodSpace, gappedSpace);
-        lowContext.AccessRules.Add(EditorGrant(goodSpace.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(goodSpace.Id)), EditorGrant(goodSpace.Id));
         lowContext.SaveChanges();
 
         var lowStorage = CreateFileStorage(out var lowStorageDir);
@@ -1139,7 +1139,7 @@ public class BundleExportImportTests : SqliteTestBase
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
         lowContext.Pages.Add(page);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var storage = CreateFileStorage(out var storageDir);
@@ -1382,7 +1382,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -1442,7 +1442,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.AddRange(alice, bob);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -1461,12 +1461,13 @@ public class BundleExportImportTests : SqliteTestBase
             var exportService = new BundleExportService(lowContext, storage);
             var baseline = await exportService.ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
 
-            // The bundle file declares the format it is: manifest formatVersion 2, events
-            // under the version-specific entry name, and NO legacy entry - a format-1
-            // importer must hit its missing-events.ndjson guard, never a silent absorb.
+            // The bundle file declares the format it is: the manifest's formatVersion, events
+            // under the version-specific entry name, and NO earlier era's entry - a format-1
+            // or format-2 importer must hit its missing-entry guard, never a silent absorb.
             using (var archive = System.IO.Compression.ZipFile.OpenRead(baseline.BundleFilePath))
             {
                 Assert.Null(archive.GetEntry("events.ndjson"));
+                Assert.Null(archive.GetEntry("events.v2.ndjson"));
                 Assert.NotNull(archive.GetEntry(BundleFormat.EventsEntryName(BundleFormat.CurrentVersion)));
                 using var manifestStream = archive.GetEntry("manifest.json")!.Open();
                 using var manifestJson = System.Text.Json.JsonDocument.Parse(manifestStream);
@@ -1534,7 +1535,7 @@ public class BundleExportImportTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -1670,6 +1671,72 @@ public class BundleExportImportTests : SqliteTestBase
                 Assert.Equal("# Legacy", page.CurrentContent);
                 Assert.Empty(highContext.PageRevisions.ToList()); // format 1 never carried history
                 Assert.Equal(1, highContext.SyncImportStates.Single().LastBundleNumber);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_Format2Bundle_AcceptedUnderItsOwnEntryName_WithNoSelectors()
+    {
+        // The era before selectors (design.md §21.10): manifest formatVersion 2, events
+        // under "events.v2.ndjson", a marking with no selectors key. Already-produced
+        // bundles keep importing, and the page lands with no compartments - what its
+        // origin said.
+        var webOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var pageId = Guid.NewGuid();
+        var spaceId = Guid.NewGuid();
+        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            pageId,
+            spaceId,
+            parentPageId = (Guid?)null,
+            ancestorPath = "/",
+            slug = "era-two",
+            title = "Era Two",
+            sortOrder = 0,
+            content = "# Era two",
+            revisionNumber = 1,
+            revisions = Array.Empty<object>(),
+            marking = new { level = "SECRET", eyesOnly = Array.Empty<string>(), prefix = "UK" },
+        }, webOptions);
+        var ndjson = System.Text.Json.JsonSerializer.Serialize(
+            new NdjsonEventRecord("ERA", spaceId, 1, nameof(SyncEventType.PageUpsert), payload, DateTime.UtcNow), webOptions) + "\n";
+        var payloadHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(ndjson)));
+
+        var outputDir = CreateBundleOutputDir();
+        Directory.CreateDirectory(outputDir);
+        var storage = CreateFileStorage(out var storageDir);
+        try
+        {
+            var bundlePath = Path.Combine(outputDir, "bundle-000001.zip");
+            WriteRawBundle(bundlePath, new
+            {
+                instanceId = LowInstanceId,
+                bundleNumber = 1,
+                previousManifestHash = (string?)null,
+                payloadSha256 = payloadHash,
+                spaceEventRanges = new Dictionary<string, object>
+                {
+                    ["ERA"] = new { spaceId, fromSequence = 1, toSequence = 1, eventCount = 1 },
+                },
+                formatVersion = BundleFormat.RevisionHistoryVersion,
+            }, "events.v2.ndjson", ndjson);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var result = await new BundleImportService(highContext, storage).ImportAsync(bundlePath, LowInstanceId, AuditCtx);
+
+                Assert.True(result.IsSuccess);
+                var marking = highContext.PageMarkings.Include(m => m.Selectors).Single(m => m.PageId == pageId);
+                Assert.Equal(ClassificationLevel.Secret, marking.Level);
+                Assert.Empty(marking.Selectors);
             }
         }
         finally

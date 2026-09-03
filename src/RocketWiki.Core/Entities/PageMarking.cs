@@ -38,13 +38,21 @@ public class PageMarking
     public string? Prefix { get; set; } = ProtectiveMarking.DefaultPrefix;
 
     /// <summary>
-    /// The eyes-only country set (design.md §21). Empty means no caveat. Values are
+    /// The eyes-only country set (design.md §21.4). Empty means no caveat. Values are
     /// canonical (upper-case, see <see cref="ProtectiveMarking.CanonicalizeCountry"/>)
-    /// and drawn from the registered <c>nationality</c> attribute's allowed values, NOT
-    /// from an ISO list — see <c>PageMarkingService</c> for why that distinction is
-    /// load-bearing.
+    /// and, for anything written through the product, drawn from the fixed
+    /// <c>NationalCaveatVocabulary</c>. A row can still hold a token outside it — legacy
+    /// data, or a bundle from an older instance — and such a token matches nobody.
     /// </summary>
     public ICollection<PageMarkingCountry> Countries { get; set; } = new List<PageMarkingCountry>();
+
+    /// <summary>
+    /// The additional selectors (design.md §21.15), at most one per category — a
+    /// database fact via <see cref="PageMarkingSelector"/>'s primary key. Empty means
+    /// none. A row can hold a category or value this instance no longer (or never)
+    /// configured; the gate reads it as unknown, which admits nobody.
+    /// </summary>
+    public ICollection<PageMarkingSelector> Selectors { get; set; } = new List<PageMarkingSelector>();
 
     public DateTime SetAtUtc { get; set; }
 
@@ -60,10 +68,18 @@ public class PageMarking
 
     /// <summary>
     /// The comparison value the rule engine actually uses. Canonicalizes on the way out
-    /// so a row hand-edited into a non-canonical state still compares correctly.
+    /// so a row hand-edited into a non-canonical state still compares correctly. The
+    /// caller must have loaded <see cref="Countries"/> and <see cref="Selectors"/>
+    /// (every marking query includes both); a row read without its children would
+    /// compare as a LESS restrictive marking than it is, which is the one direction this
+    /// type must never err in.
     /// </summary>
     public ProtectiveMarking ToMarking() =>
-        ProtectiveMarking.Create(Level, Countries.Select(c => c.CountryValue), Prefix);
+        ProtectiveMarking.Create(
+            Level,
+            Countries.Select(c => c.CountryValue),
+            Selectors.Select(s => SelectorValue.Canonical(s.Category, s.Value)),
+            Prefix);
 }
 
 /// <summary>

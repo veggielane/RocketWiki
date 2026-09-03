@@ -4,6 +4,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Core.Tests.Access;
 using RocketWiki.Data.Services;
 using Xunit;
 
@@ -45,9 +46,14 @@ public class PageEntryServiceTests : SqliteTestBase
         await context.SaveChangesAsync();
 
         var grant = await new AccessRuleService(context).CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, space.Id, null, SpaceRole.Editor, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, space.Id, null, SpaceRole.Editor, null, """{ "everyone": true }"""),
             Principal.Create("bootstrap", []), isInstanceAdmin: true, actor.Id, AuditCtx);
         Assert.True(grant.IsSuccess, $"grant failed: {grant.Error}");
+        // A role confers no visibility (design.md §6.4); the access grant sits beside it.
+        var access = await new AccessRuleService(context).CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, space.Id, null, null, null, """{ "everyone": true }"""),
+            Principal.Create("bootstrap", []), isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.True(access.IsSuccess, $"access grant failed: {access.Error}");
 
         var page = TestData.NewPage(space, "runbook");
         context.Pages.Add(page);
@@ -135,7 +141,7 @@ public class PageEntryServiceTests : SqliteTestBase
         {
             var secret = await service.CreateAsync(
                 new CreatePageEntryRequest(page.Id, "notes", $$"""{"n":{{i}}}""",
-                    ProtectiveMarking.Create(ClassificationLevel.Secret, [], "UK")),
+                    ProtectiveMarking.Create(ClassificationLevel.Secret, [], prefix: "UK")),
                 cleared, actor.Id, AuditCtx);
             Assert.True(secret.IsSuccess, $"{secret.Error}");
         }
@@ -163,7 +169,7 @@ public class PageEntryServiceTests : SqliteTestBase
 
         await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "classified", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.Secret, [], "UK")),
+                ProtectiveMarking.Create(ClassificationLevel.Secret, [], prefix: "UK")),
             ClearedCaller("SECRET"), actor.Id, AuditCtx);
 
         var pruned = Assert.IsType<ReadResult<IReadOnlyList<PageEntryView>>.Found>(
@@ -184,7 +190,7 @@ public class PageEntryServiceTests : SqliteTestBase
 
         var created = await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.Secret, [], "UK")),
+                ProtectiveMarking.Create(ClassificationLevel.Secret, [], prefix: "UK")),
             ClearedCaller("SECRET"), actor.Id, AuditCtx);
         Assert.True(created.IsSuccess);
 
@@ -204,7 +210,7 @@ public class PageEntryServiceTests : SqliteTestBase
 
         var result = await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.Official, [], "UK")),
+                ProtectiveMarking.Create(ClassificationLevel.Official, [], prefix: "UK")),
             ClearedCaller("SECRET"), actor.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
@@ -221,7 +227,7 @@ public class PageEntryServiceTests : SqliteTestBase
 
         var result = await NewService(context).CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.TopSecret, [], "UK")),
+                ProtectiveMarking.Create(ClassificationLevel.TopSecret, [], prefix: "UK")),
             Caller(), actor.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
@@ -275,7 +281,7 @@ public class PageEntryServiceTests : SqliteTestBase
         var service = NewService(context);
         var created = await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.Secret, [], "UK")),
+                ProtectiveMarking.Create(ClassificationLevel.Secret, [], prefix: "UK")),
             ClearedCaller("SECRET"), actor.Id, AuditCtx);
 
         var result = await service.UpdateAsync(
@@ -335,5 +341,23 @@ public class PageEntryServiceTests : SqliteTestBase
 
         var result = await NewService(context).ListAsync(page.Id, "notes", stranger);
         Assert.IsType<ReadResult<IReadOnlyList<PageEntryView>>.Denied>(result);
+    }
+
+    [Fact]
+    public async Task Create_WithAMarkingCarryingSelectors_IsRefused_UntilEntriesCanStoreThem()
+    {
+        // design.md §21.14: entries carry no selector storage this round. A selector the
+        // row cannot hold is refused, never silently dropped into a wider marking.
+        var (context, page, actor) = await SeedAsync();
+        using var _ = context;
+
+        var result = await NewService(context).CreateAsync(
+            new CreatePageEntryRequest(page.Id, "notes", "{}",
+                ProtectiveMarking.Create(ClassificationLevel.Official, [], [TestCatalogs.Apple], "UK")),
+            ClearedCaller("SECRET"), actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("selectors", Assert.IsType<ValidationError>(result.Error).Message, StringComparison.Ordinal);
+        Assert.Empty(context.PageEntries.ToList());
     }
 }

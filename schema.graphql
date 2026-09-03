@@ -30,8 +30,8 @@ type Query {
     @cost(weight: "10")
   page(id: UUID!): Page @cost(weight: "10")
   pageBySlug(spaceKey: String!, slug: String!): Page @cost(weight: "10")
-  pageTree(spaceId: UUID!): [PageTreeNode!]! @cost(weight: "10")
-  pageSubtree(spaceId: UUID!, pageId: UUID!): [PageTreeNode!]!
+  pageTree(spaceId: UUID!): [PageTreeEntry!]! @cost(weight: "10")
+  pageSubtree(spaceId: UUID!, pageId: UUID!): [PageTreeEntry!]!
     @cost(weight: "10")
   me: CurrentUser! @cost(weight: "10")
   customEmojis: [CustomEmojiRef!]! @cost(weight: "10")
@@ -102,6 +102,9 @@ type Query {
   labels(spaceKey: String): [String!]! @cost(weight: "10")
   labelDetails(spaceKey: String): [LabelRef!]! @cost(weight: "10")
   notifications: [Notification!]! @cost(weight: "10")
+  pageAccess(id: UUID!): PageAccessResult @cost(weight: "10")
+  pageAccessBySlug(spaceKey: String!, slug: String!): PageAccessResult
+    @cost(weight: "10")
   pageEntries(pageId: UUID!, collection: String!): [PageEntryView!]
     @cost(weight: "10")
   pagePropertyKeys: [PagePropertyKeyRef!]! @cost(weight: "10")
@@ -109,6 +112,7 @@ type Query {
     @cost(weight: "10")
   parseRql(query: String!): RqlParseResult!
   classificationScheme: [ClassificationLevelInfo!]!
+  selectorCategories: [SelectorCategory!]!
   groups: [String!]! @cost(weight: "10")
   attributeRegistry: [AttributeDefinition!]! @cost(weight: "10")
   search(
@@ -215,7 +219,7 @@ type Mutation {
     @cost(weight: "10")
   createSpace(
     input: CreateSpaceRequestInput!
-    initialGrant: InitialSpaceGrantInput!
+    initialGrants: [InitialGrantInput!]!
   ): CreateSpacePayload! @cost(weight: "10")
   renameSpace(input: RenameSpaceRequestInput!): RenameSpacePayload!
     @cost(weight: "10")
@@ -239,7 +243,15 @@ type Mutation {
     @cost(weight: "10")
 }
 
+type AccessDenial {
+  noSpaceAccess: Boolean!
+  marking: PageMarkingView
+  reasons: [GateResult!]!
+  placeholderTitle: String!
+}
+
 type AccessRule {
+  selectorValues: [SelectorValue!]!
   id: UUID!
   kind: AccessRuleKind!
   spaceId: UUID
@@ -305,8 +317,9 @@ type AdminUser {
 
 type AggregateMarkingLabel {
   level: ClassificationLevel!
+  selectors: [SelectorValue!]!
   eyesOnlySets: [[String!]!]!
-  prefix: String
+  ukPrefix: Boolean!
   label: String!
   levelName: String!
 }
@@ -496,6 +509,7 @@ type CurrentUser {
   hasAvatar: Boolean!
   clearance: ClassificationLevel!
   nationality: [String!]!
+  selectorEligibility: [String!]!
 }
 
 type CustomEmojiRef {
@@ -546,12 +560,15 @@ type EditCommentPayload {
 type EffectivePermissionDetail {
   userId: String!
   userDisplayName: String!
+  hasSpaceAccess: Boolean!
   spaceRole: SpaceRole
   isReplicaSpace: Boolean!
   canView: Boolean!
   canEdit: Boolean!
   viewDenialReason: String
   editDenialReason: String
+  viewGates: [GateResult!]!
+  editGates: [GateResult!]!
   viewRestrictions: [RestrictionCheckView!]!
   editRestrictions: [RestrictionCheckView!]!
 }
@@ -579,6 +596,19 @@ type FormFieldView {
   type: FormFieldType!
   required: Boolean!
   options: [String!]!
+}
+
+type GateResult {
+  gate: AccessGate!
+  passed: Boolean!
+  requiredLevel: ClassificationLevel
+  requiredLevelName: String
+  category: String
+  value: String
+  countries: [String!]
+  ruleId: UUID
+  inherited: Boolean
+  requiredRole: SpaceRole
 }
 
 type GitLabFile {
@@ -716,7 +746,9 @@ type Notification {
 type Page {
   content: String!
   parent: Page @cost(weight: "10")
+  parentDenial: AccessDenial @cost(weight: "10")
   children: [Page!]! @cost(weight: "10")
+  linkTargets: [PageLinkTarget!]! @cost(weight: "10")
   revisions: [PageRevision!]! @cost(weight: "10")
   comments: [Comment!]! @cost(weight: "10")
   attachments: [Attachment!]! @cost(weight: "10")
@@ -746,6 +778,11 @@ type Page {
   deleteBatchId: UUID
   createdAtUtc: DateTime!
   updatedAtUtc: DateTime!
+}
+
+type PageAccessResult {
+  page: Page
+  denial: AccessDenial
 }
 
 type PageActivity {
@@ -798,10 +835,17 @@ type PageLabel {
   label: Label
 }
 
+type PageLinkTarget {
+  id: UUID!
+  page: Page
+  denial: AccessDenial
+}
+
 type PageMarkingView {
   level: ClassificationLevel!
   eyesOnly: [String!]!
-  prefix: String
+  selectors: [SelectorValue!]!
+  ukPrefix: Boolean!
   label: String!
   levelName: String!
 }
@@ -894,7 +938,7 @@ type PageTreeNode {
   hasRestrictions: Boolean!
   ownViewRestrictions: [PageTreeRestriction!]!
   marking: PageMarkingView!
-  children: [PageTreeNode!]!
+  children: [PageTreeEntry!]! @cost(weight: "10")
   hasChildren: Boolean! @cost(weight: "10")
   labels: [String!]! @cost(weight: "10")
 }
@@ -910,9 +954,16 @@ type PersonActivity {
   count: Int!
 }
 
+type ProtectedTreeNode {
+  title: String! @cost(weight: "10")
+  sortOrder: Int!
+  denial: AccessDenial! @cost(weight: "10")
+}
+
 type ProtectiveMarking {
-  format: String!
   level: ClassificationLevel!
+  selectors: [SelectorValue!]!
+  hasSelectors: Boolean!
   prefix: String
   hasPrefix: Boolean!
   eyesOnly: [String!]!
@@ -1024,6 +1075,18 @@ type SearchPageInfo {
   endCursor: String
 }
 
+type SelectorCategory {
+  name: String!
+  description: String
+  requiresAttribute: Boolean!
+  values: [String!]!
+}
+
+type SelectorValue {
+  category: String!
+  value: String!
+}
+
 type SetGitLabTokenPayload {
   tokenState: GitLabTokenState
   error: PageMutationErrorView
@@ -1059,6 +1122,8 @@ type Space {
   viewerIsWatching: Boolean! @cost(weight: "10")
   homepage: Page @cost(weight: "10")
   canManageAccess: Boolean! @cost(weight: "10")
+  viewerHasAccess: Boolean! @cost(weight: "10")
+  viewerSelectorGrants: [SelectorValue!]! @cost(weight: "10")
   owner: UserRef @cost(weight: "10")
   grants: [AccessRule!]! @cost(weight: "10")
   trashedPages: [Page!]! @cost(weight: "10")
@@ -1190,6 +1255,8 @@ type WatchView {
   createdAtUtc: DateTime!
 }
 
+union PageTreeEntry = PageTreeNode | ProtectedTreeNode
+
 input AddCommentRequestInput {
   pageId: UUID!
   parentCommentId: UUID
@@ -1222,6 +1289,7 @@ input CreateAccessRuleRequestInput {
   role: SpaceRole
   action: PageAction
   expressionJson: String!
+  selectorValues: [SelectorValueInput!]
 }
 
 input CreateLabelRequestInput {
@@ -1296,9 +1364,11 @@ input GitLabIssueFilterInput {
   sort: String
 }
 
-input InitialSpaceGrantInput {
-  role: SpaceRole!
+input InitialGrantInput {
+  kind: AccessRuleKind!
+  role: SpaceRole
   expressionJson: String!
+  selectorValues: [SelectorValueInput!]
 }
 
 input InspectedAttributeInput {
@@ -1353,6 +1423,11 @@ input RestoreSpaceRequestInput {
   spaceId: UUID!
 }
 
+input SelectorValueInput {
+  category: String!
+  value: String!
+}
+
 input SetGitLabTokenRequestInput {
   token: String!
 }
@@ -1360,8 +1435,9 @@ input SetGitLabTokenRequestInput {
 input SetPageMarkingRequestInput {
   pageId: UUID!
   level: ClassificationLevel!
-  eyesOnly: [String!]!
-  prefix: String = "UK"
+  eyesOnly: [NationalCaveatCountry!]!
+  selectors: [SelectorValueInput!]!
+  ukPrefix: Boolean!
 }
 
 input SetPagePropertyRequestInput {
@@ -1398,6 +1474,7 @@ input UpdateAccessRuleRequestInput {
   expressionJson: String!
   role: SpaceRole
   action: PageAction
+  selectorValues: [SelectorValueInput!]
 }
 
 input UpdatePageContentRequestInput {
@@ -1424,9 +1501,21 @@ input WatchSpaceRequestInput {
   spaceId: UUID!
 }
 
+enum AccessGate {
+  SPACE_ACCESS
+  CLASSIFICATION
+  SELECTOR_ELIGIBILITY
+  SELECTOR_GRANT
+  NATIONAL_CAVEAT
+  RESTRICTION
+  REPLICA
+  ROLE
+}
+
 enum AccessRuleKind {
-  SPACE_GRANT
+  ROLE_GRANT
   PAGE_RESTRICTION
+  ACCESS_GRANT
 }
 
 enum AskWikiUnavailableReason {
@@ -1483,6 +1572,14 @@ enum GitLabUnavailableReason {
   INVALID_CREDENTIAL
   NOT_FOUND
   UNREACHABLE
+}
+
+enum NationalCaveatCountry {
+  AUS
+  CAN
+  NZ
+  UK
+  US
 }
 
 enum PageAction {
@@ -1571,7 +1668,6 @@ enum RqlValueKind {
 }
 
 enum SpaceRole {
-  VIEWER
   EDITOR
   SPACE_ADMIN
 }

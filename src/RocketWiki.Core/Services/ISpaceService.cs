@@ -7,11 +7,15 @@ namespace RocketWiki.Core.Services;
 /// <summary>
 /// design.md §6.5.1: Create requires instance `admin` - nothing else can authorize it,
 /// since a space that doesn't exist yet has no grants to evaluate a role against. Create
-/// also takes the space's <see cref="InitialSpaceGrant"/> and commits it in the SAME
-/// transaction as the Space row - see that type's doc comment for why: without this, a
-/// new space could exist with zero grants and no way for anyone to ever create the
-/// first one, since AccessRuleService.CreateAsync's own space-admin check has nothing to
-/// evaluate against on a space that has never had a grant.
+/// also takes the space's initial grants (<see cref="InitialGrant"/>) and commits every
+/// one of them in the SAME transaction as the Space row, each with its own audited
+/// <c>permission.change</c> - see that type's doc comment for why: without this, a new
+/// space could exist with zero grants and no way for anyone to ever create the first
+/// one, since AccessRuleService.CreateAsync's own space-admin check has nothing to
+/// evaluate against on a space that has never had a grant. The list must contain at
+/// least one <c>SpaceAdmin</c> role grant (a <c>ValidationError</c> otherwise): a space
+/// is born administrable. Access grants are optional — a space nobody can see yet is the
+/// correct starting state, since roles confer no visibility (§6.4).
 ///
 /// Rename, Archive, and Restore all accept EITHER instance `admin` OR that space's own
 /// `space-admin` (evaluated the normal way via EffectivePermissionCalculator), matching
@@ -27,7 +31,7 @@ namespace RocketWiki.Core.Services;
 public interface ISpaceService
 {
     Task<PageMutationResult<Space>> CreateAsync(
-        CreateSpaceRequest request, InitialSpaceGrant initialGrant, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
+        CreateSpaceRequest request, IReadOnlyList<InitialGrant> initialGrants, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);
 
     Task<PageMutationResult<Space>> RenameAsync(
         RenameSpaceRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default);

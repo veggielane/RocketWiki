@@ -142,7 +142,7 @@ public class NotificationReadModelService : INotificationReadModelService
 
         // A space with no grants yields an empty list here, and no role, which denies.
         return row.SpaceId is { } spaceId
-            && EffectivePermissionCalculator.ComputeSpaceRole(permissions.GrantsFor(spaceId), principal) is not null;
+            && EffectivePermissionCalculator.HasSpaceAccess(permissions.GrantsFor(spaceId), principal);
     }
 
     public async Task<PageMutationResult<NotificationListItem>> MarkNotificationReadAsync(
@@ -243,7 +243,7 @@ public class NotificationReadModelService : INotificationReadModelService
         if (row.SpaceId is { } spaceId)
         {
             var grants = await _permissions.LoadSpaceGrantsAsync(spaceId, cancellationToken);
-            return grants.Count > 0 && EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is not null;
+            return grants.Count > 0 && EffectivePermissionCalculator.HasSpaceAccess(grants, principal);
         }
 
         return false;

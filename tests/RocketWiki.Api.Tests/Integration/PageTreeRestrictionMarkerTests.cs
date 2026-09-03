@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using RocketWiki.Api.GraphQL;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
@@ -13,15 +14,16 @@ namespace RocketWiki.Api.Tests.Integration;
 /// lock badge, ownViewRestrictions (rule id + expression) for the move dialog's
 /// visibility-change warning - computed inside the same single tree walk, and
 /// leak-tested: an edit rule's contents never appear (only its existence, via the
-/// boolean), a pruned node's rule never appears at all, and every expression that
-/// DOES appear is one the caller provably passed. Fixture:
+/// boolean), a protected node's rule EXPRESSION never appears (its id does, by design -
+/// §21.8), and every expression that DOES appear is one the caller provably passed.
+/// Fixture:
 ///
 /// <code>
-/// Space (viewer: everyone)
+/// Space (access: everyone)
 /// ├── PageA (unrestricted)
 /// │   ├── PageB (VIEW restriction: nationality NZ - our caller passes)
 /// │   ├── PageC (EDIT restriction: group "senior" - existence visible, contents not)
-/// │   └── PageD (VIEW restriction: nationality US - pruned for our NZ caller)
+/// │   └── PageD (VIEW restriction: nationality US - a protected leaf for our NZ caller)
 /// </code>
 /// </summary>
 public sealed class PageTreeRestrictionMarkerTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
@@ -51,9 +53,8 @@ public sealed class PageTreeRestrictionMarkerTests(RocketWikiApiFactory factory)
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = now,
             CreatedByUserId = creator.Id,
@@ -104,25 +105,36 @@ public sealed class PageTreeRestrictionMarkerTests(RocketWikiApiFactory factory)
             viewRule.Id, viewRule.ExpressionJson, editRule.Id, usOnlyRule.Id);
     }
 
+    private const string NodeFields = "id title hasRestrictions ownViewRestrictions { ruleId expressionJson }";
+
     private async Task<(JsonDocument Doc, string Body)> QueryTreeAsync(Guid spaceId)
     {
         var client = factory.CreateClient();
         client.SetTestUser(sub: $"trm-{Guid.NewGuid()}", nationality: ["NZ"]);
         var doc = await client.PostGraphQLAsync($$"""
             { pageTree(spaceId: "{{spaceId}}") {
-                id title hasRestrictions ownViewRestrictions { ruleId expressionJson }
-                children { id title hasRestrictions ownViewRestrictions { ruleId expressionJson } }
+                ... on PageTreeNode {
+                  {{NodeFields}}
+                  children {
+                    ... on PageTreeNode { {{NodeFields}} }
+                    ... on ProtectedTreeNode {
+                      title sortOrder
+                      denial { placeholderTitle noSpaceAccess marking { label } reasons { gate passed ruleId inherited } }
+                    }
+                  }
+                }
               } }
             """);
         return (doc, doc.RootElement.ToString());
     }
 
-    private static JsonElement ChildById(JsonDocument doc, Guid id)
-    {
-        var root = Assert.Single(doc.RootElement.GetProperty("data").GetProperty("pageTree").EnumerateArray());
-        return root.GetProperty("children").EnumerateArray()
-            .Single(c => string.Equals(c.GetProperty("id").GetString(), id.ToString(), StringComparison.OrdinalIgnoreCase));
-    }
+    private static JsonElement Root(JsonDocument doc) =>
+        Assert.Single(doc.RootElement.GetProperty("data").GetProperty("pageTree").EnumerateArray());
+
+    private static JsonElement ChildById(JsonDocument doc, Guid id) =>
+        Root(doc).GetProperty("children").EnumerateArray()
+            .Single(c => c.TryGetProperty("id", out var childId)
+                && string.Equals(childId.GetString(), id.ToString(), StringComparison.OrdinalIgnoreCase));
 
     [Fact]
     public async Task HasRestrictions_TrueOnlyWhereARuleActuallySits()
@@ -130,8 +142,7 @@ public sealed class PageTreeRestrictionMarkerTests(RocketWikiApiFactory factory)
         var f = await SeedAsync();
         var (doc, _) = await QueryTreeAsync(f.SpaceId);
 
-        var root = Assert.Single(doc.RootElement.GetProperty("data").GetProperty("pageTree").EnumerateArray());
-        Assert.False(root.GetProperty("hasRestrictions").GetBoolean(), "PageA carries no rule of its own.");
+        Assert.False(Root(doc).GetProperty("hasRestrictions").GetBoolean(), "PageA carries no rule of its own.");
         Assert.True(ChildById(doc, f.PageBId).GetProperty("hasRestrictions").GetBoolean());
         Assert.True(ChildById(doc, f.PageCId).GetProperty("hasRestrictions").GetBoolean(),
             "An edit-only restriction still lights the lock badge (§6.6).");
@@ -162,18 +173,35 @@ public sealed class PageTreeRestrictionMarkerTests(RocketWikiApiFactory factory)
     }
 
     [Fact]
-    public async Task PrunedNode_LeaksNeitherItsExistenceNorItsRule()
+    public async Task ProtectedNode_LeaksNeitherItsIdNorItsRuleExpression()
     {
-        // The §6.7 regression guard for the new fields: adding restriction data to
-        // the tree must not have created a channel that mentions a pruned page's
-        // rule. PageD and its US-only rule are absent from the entire response.
+        // The §21.8 regression guard for the placeholder: PageD is DISCLOSED - a
+        // ProtectedTreeNode at its sibling position, with its marking and the rule id
+        // the audit row would name - and what it must never carry is exactly what
+        // identifies the page or its protected audience: the page id, the rule's
+        // expression, and the distinctive allowed-value inside it.
         var f = await SeedAsync();
-        var (_, body) = await QueryTreeAsync(f.SpaceId);
+        var (doc, body) = await QueryTreeAsync(f.SpaceId);
+
+        var placeholder = Assert.Single(
+            Root(doc).GetProperty("children").EnumerateArray(),
+            c => c.TryGetProperty("denial", out _));
+        Assert.Equal(AccessDenialView.ProtectedTitle, placeholder.GetProperty("title").GetString());
+        Assert.Equal(2, placeholder.GetProperty("sortOrder").GetInt32());
+        var denial = placeholder.GetProperty("denial");
+        Assert.False(denial.GetProperty("noSpaceAccess").GetBoolean());
+        Assert.Equal("UK OFFICIAL", denial.GetProperty("marking").GetProperty("label").GetString());
+
+        var reason = Assert.Single(denial.GetProperty("reasons").EnumerateArray());
+        Assert.Equal("RESTRICTION", reason.GetProperty("gate").GetString());
+        Assert.False(reason.GetProperty("passed").GetBoolean());
+        Assert.Equal(f.UsOnlyRuleId.ToString(), reason.GetProperty("ruleId").GetString(), ignoreCase: true);
+        Assert.False(reason.GetProperty("inherited").GetBoolean(), "The rule sits on PageD itself.");
 
         Assert.DoesNotContain(f.PageDId.ToString(), body, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(f.UsOnlyRuleId.ToString(), body, StringComparison.OrdinalIgnoreCase);
-        // The pruned rule's distinctive allowed-value never appears either (no title
-        // or expression in this fixture legitimately contains the uppercase token).
+        // The pruned rule's distinctive allowed-value never appears (no title, label,
+        // gate name or expression in this fixture legitimately contains the uppercase
+        // token - the placeholder's own vocabulary was chosen to keep it that way).
         Assert.DoesNotContain("US", body);
     }
 }

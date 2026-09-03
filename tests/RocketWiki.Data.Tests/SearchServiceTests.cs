@@ -21,9 +21,8 @@ public class SearchServiceTests : SqliteTestBase
 
     private static AccessRule ViewerGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.AccessGrant,
         SpaceId = spaceId,
-        Role = SpaceRole.Viewer,
         ExpressionJson = """{ "everyone": true }""",
         CreatedAtUtc = DateTime.UtcNow,
         CreatedByUserId = Guid.NewGuid(),

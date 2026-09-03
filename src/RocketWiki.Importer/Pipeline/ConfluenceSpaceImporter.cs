@@ -25,7 +25,7 @@ namespace RocketWiki.Importer.Pipeline;
 /// <b>The space-admin bootstrap gap found while building this is now fixed upstream</b>
 /// (design.md §6.5.1): a freshly created <c>Space</c> used to have zero <c>AccessRule</c>
 /// rows with no way to create the first one through the public service surface at all.
-/// <c>ISpaceService.CreateAsync</c> now takes an <see cref="RocketWiki.Core.Services.InitialSpaceGrant"/>
+/// <c>ISpaceService.CreateAsync</c> now takes an <see cref="RocketWiki.Core.Services.InitialGrant"/>
 /// and commits it atomically with the space itself, which is also why this importer no
 /// longer depends on <c>IAccessRuleService</c> at all — there is nothing left for it to do here.
 /// </para>
@@ -114,11 +114,11 @@ public sealed class ConfluenceSpaceImporter
     {
         var grant = options.InitialSpaceGrant;
 
-        if (grant.Role < SpaceRole.Editor)
+        if (grant.Kind != AccessRuleKind.RoleGrant || grant.Role != SpaceRole.SpaceAdmin)
         {
-            return $"the initial space grant is '{grant.Role}', but creating pages needs Editor or higher " +
-                "(design.md §6.4). The space would be created and then every page would be refused. " +
-                "Re-run with --grant-role editor or space-admin; users can be narrowed afterwards.";
+            return $"the initial space grant is '{grant.Role}', but a space must be created with a space-admin " +
+                "role grant (design.md §6.5.1), and that grant is also the importer's own write permission for " +
+                "the run. Re-run with --grant-role space-admin; grants can be narrowed afterwards.";
         }
 
         var evaluation = AccessRuleExpression.Evaluate(grant.ExpressionJson, options.ImporterPrincipal);
@@ -188,7 +188,11 @@ public sealed class ConfluenceSpaceImporter
 
         var spaceResult = await _spaceService.CreateAsync(
             new CreateSpaceRequest(export.Key, export.Name, export.Description),
-            options.InitialSpaceGrant, isInstanceAdmin: true, options.ActingUserId, options.AuditContext, cancellationToken);
+            // The role grant the operator named, plus the access grant that lets the same
+            // subjects SEE the space (design.md §6.4: roles confer no visibility) - the
+            // importer principal needs both to land a page, and so do the users it names.
+            [options.InitialSpaceGrant, new InitialGrant(AccessRuleKind.AccessGrant, null, options.InitialSpaceGrant.ExpressionJson)],
+            isInstanceAdmin: true, options.ActingUserId, options.AuditContext, cancellationToken);
         if (!spaceResult.IsSuccess)
         {
             var blockedSummary = ImportReportSummarizer.Summarize(report, export.Pages.Count);

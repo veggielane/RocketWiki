@@ -42,7 +42,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
             mutation {
               createSpace(
                 input: { key: "{{key}}", name: "Test Space", description: null }
-                initialGrant: { role: SPACE_ADMIN, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }
+                initialGrants: [{ kind: ROLE_GRANT, role: SPACE_ADMIN, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }]
               ) { space { id key } error { kind } }
             }
             """);
@@ -55,7 +55,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
         var spaceId = data.GetProperty("space").GetProperty("id").GetGuid();
         var grantExists = await db.AccessRules.AnyAsync(r =>
-            r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId && r.Role == SpaceRole.SpaceAdmin);
+            r.Kind == AccessRuleKind.RoleGrant && r.SpaceId == spaceId && r.Role == SpaceRole.SpaceAdmin);
         Assert.True(grantExists, "createSpace must commit the initial grant atomically with the space row.");
     }
 
@@ -69,7 +69,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
             mutation {
               createSpace(
                 input: { key: "{{key}}", name: "Nope", description: null }
-                initialGrant: { role: VIEWER, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }
+                initialGrants: [{ kind: ROLE_GRANT, role: SPACE_ADMIN, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }]
               ) { space { id } error { kind } }
             }
             """);
@@ -92,7 +92,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
             mutation {
               createSpace(
                 input: { key: "{{key}}", name: "Archive Me", description: null }
-                initialGrant: { role: SPACE_ADMIN, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }
+                initialGrants: [{ kind: ROLE_GRANT, role: SPACE_ADMIN, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }]
               ) { space { id } error { kind } }
             }
             """);
@@ -225,7 +225,11 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
             mutation {
               createSpace(
                 input: { key: "{{key}}", name: "Homepage Space", description: null }
-                initialGrant: { role: {{role}}, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }
+                initialGrants: [
+                  { kind: ROLE_GRANT, role: SPACE_ADMIN, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new GroupCondition("space-admins")))}} }
+                  { kind: ROLE_GRANT, role: {{role}}, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }
+                  { kind: ACCESS_GRANT, expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}} }
+                ]
               ) { space { id } error { kind } }
             }
             """);
@@ -269,7 +273,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
         var result = await adminClient.PostGraphQLAsync($$"""
             mutation {
               createAccessRule(input: {
-                kind: SPACE_GRANT, spaceId: "{{space.Id}}", pageId: null, role: SPACE_ADMIN, action: null,
+                kind: ROLE_GRANT, spaceId: "{{space.Id}}", pageId: null, role: SPACE_ADMIN, action: null,
                 expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}}
               }) { rule { id } error { kind } }
             }
@@ -292,7 +296,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Viewer,
+            Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
         });
@@ -302,7 +306,7 @@ public sealed class SpaceAndAccessRuleMutationTests(RocketWikiApiFactory factory
         var result = await client.PostGraphQLAsync($$"""
             mutation {
               createAccessRule(input: {
-                kind: SPACE_GRANT, spaceId: "{{space.Id}}", pageId: null, role: EDITOR, action: null,
+                kind: ROLE_GRANT, spaceId: "{{space.Id}}", pageId: null, role: EDITOR, action: null,
                 expressionJson: {{JsonSerializer.Serialize(RuleExpressionSerializer.Serialize(new EveryoneCondition()))}}
               }) { rule { id } error { kind } }
             }

@@ -1,5 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
+using RocketWiki.Core.Tests.Access;
 
 namespace RocketWiki.Data.Tests;
 
@@ -59,6 +61,14 @@ public abstract class SqliteTestBase : IDisposable
     /// </summary>
     protected virtual string DefaultLocalInstanceId => "local-instance";
 
+    /// <summary>
+    /// The selector catalog stamped into every context (design.md §21.15) — the shared
+    /// test vocabulary (<c>FRUIT</c> gated by <c>fruit</c>, <c>REGION</c> gated by nobody),
+    /// so a scenario reads the same here as in the Core and API tiers. Override with
+    /// <see cref="SelectorCatalog.Empty"/> to model an instance that configured nothing.
+    /// </summary>
+    protected virtual SelectorCatalog DefaultSelectorCatalog => TestCatalogs.Fruit;
+
     protected RocketWikiDbContext CreateContext() => CreateContext(DefaultLocalInstanceId);
 
     /// <summary>Pass null to build a context with NO local instance id configured —
@@ -67,7 +77,8 @@ public abstract class SqliteTestBase : IDisposable
     protected RocketWikiDbContext CreateContext(string? localInstanceId)
     {
         var optionsBuilder = new DbContextOptionsBuilder<RocketWikiDbContext>()
-            .UseSqlite(_connection);
+            .UseSqlite(_connection)
+            .UseSelectorCatalog(DefaultSelectorCatalog);
         if (localInstanceId is not null)
         {
             optionsBuilder.UseLocalInstanceId(localInstanceId);

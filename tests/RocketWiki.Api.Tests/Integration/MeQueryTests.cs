@@ -56,20 +56,20 @@ public sealed class MeQueryTests(RocketWikiApiFactory factory) : IClassFixture<R
         // standing lie in a security-adjacent file. Authorization still happens
         // server-side; this is affordance data, never a decision (design.md §6.1).
         var client = factory.CreateClient();
-        client.SetTestUser(sub: "user-dual", groups: ["engineering"], nationality: ["NZ", "GB"]);
+        client.SetTestUser(sub: "user-dual", groups: ["engineering"], nationality: ["NZ", "UK"]);
 
         var result = await client.PostGraphQLAsync("{ me { id isAuthenticated nationality } }");
 
         var me = result.RootElement.GetProperty("data").GetProperty("me");
         Assert.Equal("user-dual", me.GetProperty("id").GetString());
         Assert.True(me.GetProperty("isAuthenticated").GetBoolean());
-        Assert.Equal(["GB", "NZ"], me.GetProperty("nationality").EnumerateArray().Select(e => e.GetString()));
+        Assert.Equal(["NZ", "UK"], me.GetProperty("nationality").EnumerateArray().Select(e => e.GetString()));
     }
 
     [Theory]
-    [InlineData("gb")]
-    [InlineData("  Gb  ")]
-    [InlineData("GB")]
+    [InlineData("uk")]
+    [InlineData("  Uk  ")]
+    [InlineData("UK")]
     public async Task Me_Nationality_IsCanonicalized_SoTheUiComparesLikeTheServerDoes(string claimValue)
     {
         // design.md §21.4's case-mismatch trap, one layer up. A marking's country set is
@@ -85,24 +85,24 @@ public sealed class MeQueryTests(RocketWikiApiFactory factory) : IClassFixture<R
         var result = await client.PostGraphQLAsync("{ me { nationality } }");
 
         Assert.Equal(
-            ["GB"],
+            ["UK"],
             result.RootElement.GetProperty("data").GetProperty("me")
                 .GetProperty("nationality").EnumerateArray().Select(e => e.GetString()));
     }
 
     [Fact]
-    public async Task Me_Clearance_ResolvesThroughTheGate_SoGarbageReadsAsOfficialNotAsTheRawClaim()
+    public async Task Me_Clearance_ResolvesThroughTheGate_SoGarbageReadsAsOfficialSensitiveNotAsTheRawClaim()
     {
         // Same discipline for the level: the SPA must grey out what the server refuses,
-        // and §21.3 says an unrecognised clearance claim is worth OFFICIAL and nothing
-        // above. Echoing the raw claim would let the UI offer SECRET to someone the
+        // and §21.3 says an unrecognised clearance claim is worth OFFICIAL-SENSITIVE and
+        // nothing above. Echoing the raw claim would let the UI offer SECRET to someone the
         // server will refuse.
         var client = factory.CreateClient();
         client.SetTestUser(sub: $"user-{Guid.NewGuid()}", clearance: "not-a-level");
 
         var garbage = await client.PostGraphQLAsync("{ me { clearance } }");
         Assert.Equal(
-            "OFFICIAL",
+            "OFFICIAL_SENSITIVE",
             garbage.RootElement.GetProperty("data").GetProperty("me").GetProperty("clearance").GetString());
 
         client.SetTestUser(sub: $"user-{Guid.NewGuid()}", clearance: "SECRET");
@@ -113,9 +113,9 @@ public sealed class MeQueryTests(RocketWikiApiFactory factory) : IClassFixture<R
     }
 
     [Fact]
-    public async Task Me_Anonymous_ReportsOfficialAndNoNationality()
+    public async Task Me_Anonymous_ReportsOfficialSensitiveAndNoNationality()
     {
-        // The fail-closed floor, so an unauthenticated SPA renders "you may set OFFICIAL"
+        // The fail-closed floor, so an unauthenticated SPA renders "you may set OFFICIAL-SENSITIVE"
         // rather than an empty picker or a crash.
         var client = factory.CreateClient();
         client.ClearTestUser();
@@ -124,7 +124,7 @@ public sealed class MeQueryTests(RocketWikiApiFactory factory) : IClassFixture<R
 
         var me = result.RootElement.GetProperty("data").GetProperty("me");
         Assert.False(me.GetProperty("isAuthenticated").GetBoolean());
-        Assert.Equal("OFFICIAL", me.GetProperty("clearance").GetString());
+        Assert.Equal("OFFICIAL_SENSITIVE", me.GetProperty("clearance").GetString());
         Assert.Empty(me.GetProperty("nationality").EnumerateArray());
     }
 }

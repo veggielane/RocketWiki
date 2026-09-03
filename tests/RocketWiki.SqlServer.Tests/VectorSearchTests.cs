@@ -59,9 +59,9 @@ public sealed class VectorSearchTests : SqlServerTestBase
 
     private static Principal Viewer(params string[] groups) => Principal.Create("viewer-sub", groups);
 
-    private static AccessRule ViewerGrant(Guid spaceId) => new()
+    private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -135,7 +135,7 @@ public sealed class VectorSearchTests : SqlServerTestBase
         var space = TestData.NewSpace();
         context.Users.Add(user);
         context.Spaces.Add(space);
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var pageService = new PageService(context, DefaultLocalInstanceId);
@@ -179,7 +179,7 @@ public sealed class VectorSearchTests : SqlServerTestBase
         var space = TestData.NewSpace();
         context.Users.Add(user);
         context.Spaces.Add(space);
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var pageService = new PageService(context, DefaultLocalInstanceId);
@@ -271,7 +271,7 @@ public sealed class VectorSearchTests : SqlServerTestBase
         var space = TestData.NewSpace();
         context.Users.Add(user);
         context.Spaces.Add(space);
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var pageService = new PageService(context, DefaultLocalInstanceId);

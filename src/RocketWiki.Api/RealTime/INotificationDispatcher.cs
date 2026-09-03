@@ -206,8 +206,11 @@ public sealed class NotificationDispatcher(
         var space = await db.Spaces.AsNoTracking().FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         var actor = await db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == actorUserId, cancellationToken);
 
+        // Both grant kinds, selector rows included: the calculator's S gate reads access
+        // grants and its edit ladder reads role grants from the one list (design.md §6.4).
         var spaceGrants = await db.AccessRules.AsNoTracking()
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == page.SpaceId)
+            .Include(r => r.Selectors)
+            .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant) && r.SpaceId == page.SpaceId)
             .ToListAsync(cancellationToken);
         var ancestorIds = page.GetAncestorIds();
         var restrictions = await db.AccessRules.AsNoTracking()
@@ -224,9 +227,14 @@ public sealed class NotificationDispatcher(
         // a missing row reads as TOP SECRET, the same substitution the loader makes.
         var markingRow = await db.PageMarkings.AsNoTracking()
             .Include(m => m.Countries)
+            .Include(m => m.Selectors)
             .FirstOrDefaultAsync(m => m.PageId == page.Id, cancellationToken);
         var marking = markingRow?.ToMarking() ?? ProtectiveMarking.FailClosed;
         var isReplica = space is not null && space.IsReplicaOf(localInstanceId);
+
+        // The five inputs in the calculator's own shape, catalog included, so the selector
+        // gates (§21.15) run here exactly as they do behind the loader.
+        var inputs = new PermissionInputs(spaceGrants, restrictions, isReplica, marking, db.SelectorCatalog);
 
         // Split the (already precedence-resolved) candidate set by connectivity. The
         // split happens AFTER the recipients dictionary is final, so mention-beats-watch
@@ -264,7 +272,7 @@ public sealed class NotificationDispatcher(
 
         foreach (var (recipientId, recipientType, principal) in connected)
         {
-            var permission = EffectivePermissionCalculator.Compute(spaceGrants, restrictions, isReplica, marking, principal);
+            var permission = EffectivePermissionCalculator.Compute(inputs, principal);
             if (!permission.CanView)
             {
                 Bump(skippedNotViewable, recipientType);

@@ -185,9 +185,8 @@ public sealed class ParseRqlQueryTests(RocketWikiApiFactory factory) : IClassFix
             db.Spaces.Add(space);
             db.AccessRules.Add(new AccessRule
             {
-                Kind = AccessRuleKind.SpaceGrant,
+                Kind = AccessRuleKind.AccessGrant,
                 SpaceId = space.Id,
-                Role = SpaceRole.Viewer,
                 ExpressionJson = expressionJson,
                 CreatedAtUtc = DateTime.UtcNow,
                 CreatedByUserId = creator.Id,

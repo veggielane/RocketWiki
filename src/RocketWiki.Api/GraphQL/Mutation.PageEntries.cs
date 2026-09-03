@@ -18,7 +18,7 @@ namespace RocketWiki.Api.GraphQL;
 /// </summary>
 public sealed record PageEntryMarkingInput(ClassificationLevel Level, string[]? EyesOnly, string? Prefix)
 {
-    public ProtectiveMarking ToMarking() => ProtectiveMarking.Create(Level, EyesOnly ?? [], Prefix);
+    public ProtectiveMarking ToMarking() => ProtectiveMarking.Create(Level, EyesOnly ?? [], selectors: null, Prefix);
 }
 
 public sealed record CreatePageEntryInput(Guid PageId, string Collection, string Data, PageEntryMarkingInput? Marking);

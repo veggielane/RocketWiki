@@ -1,3 +1,4 @@
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Enums;
 
 namespace RocketWiki.Core.Services;
@@ -5,17 +6,32 @@ namespace RocketWiki.Core.Services;
 public sealed record CreateSpaceRequest(string Key, string Name, string? Description);
 
 /// <summary>
-/// design.md §6.5.1: the grant a brand-new space is born with - required, never
+/// design.md §6.5.1: one of the grants a brand-new space is born with - required, never
 /// defaulted. Before this existed, a freshly created Space had zero AccessRule rows and
 /// no way to create the first one through the public service surface, since
 /// AccessRuleService.CreateAsync requires the caller to already be that space's
 /// space-admin (computed from the space's CURRENT grants) - unsatisfiable when there are
-/// none. ISpaceService.CreateAsync now commits this grant in the SAME transaction as the
-/// Space row, so a space never exists in a state nobody can administer. There is
-/// deliberately no default: silently opening a new space to "everyone" is exactly the
-/// footgun this access model exists to prevent, so the caller must decide.
+/// none. ISpaceService.CreateAsync commits the whole list in the SAME transaction as the
+/// Space row, and refuses a list without a <see cref="SpaceRole.SpaceAdmin"/> role grant,
+/// so a space never exists in a state nobody can administer.
+///
+/// <para>Access grants (<see cref="AccessRuleKind.AccessGrant"/>) are optional here, and
+/// there is deliberately no default for them either: a new space nobody can see is the
+/// correct starting state (§6.4 — roles confer no visibility), and silently opening one to
+/// "everyone" is exactly the footgun this access model exists to prevent. The caller
+/// states each grant.</para>
 /// </summary>
-public sealed record InitialSpaceGrant(SpaceRole Role, string ExpressionJson);
+/// <param name="Kind">A role grant (<see cref="AccessRuleKind.RoleGrant"/>) or an access
+/// grant; a page restriction is meaningless at space creation and is refused.</param>
+/// <param name="Role">Required on a role grant, must be null on an access grant.</param>
+/// <param name="ExpressionJson">The subject rule, validated like any other rule's.</param>
+/// <param name="SelectorValues">Access grants only: the selector values conferred (§21.15),
+/// each a configured category/value pair.</param>
+public sealed record InitialGrant(
+    AccessRuleKind Kind,
+    SpaceRole? Role,
+    string ExpressionJson,
+    IReadOnlyList<SelectorValue>? SelectorValues = null);
 
 public sealed record RenameSpaceRequest(Guid SpaceId, string Name, string? Description);
 

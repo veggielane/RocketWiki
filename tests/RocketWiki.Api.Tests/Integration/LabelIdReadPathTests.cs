@@ -17,7 +17,7 @@ namespace RocketWiki.Api.Tests.Integration;
 /// </summary>
 public sealed class LabelIdReadPathTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
 {
-    private async Task<(Space Space, Page Root, Page Child, Page Grandchild)> SeedSpaceWithTreeAsync(SpaceRole everyoneRole)
+    private async Task<(Space Space, Page Root, Page Child, Page Grandchild)> SeedSpaceWithTreeAsync(SpaceRole? everyoneRole)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
@@ -27,12 +27,12 @@ public sealed class LabelIdReadPathTests(RocketWikiApiFactory factory) : IClassF
 
         var space = new Space { Key = $"LI{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Label Id Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = everyoneRole,
+            Kind = everyoneRole is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = everyoneRole,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-        });
+        }));
 
         var root = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "root", Title = "Root", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
         db.Pages.Add(root);
@@ -63,7 +63,7 @@ public sealed class LabelIdReadPathTests(RocketWikiApiFactory factory) : IClassF
     [Fact]
     public async Task LabelDetails_ReturnsIdsAndNames_ForViewableSpace()
     {
-        var (space, root, _, _) = await SeedSpaceWithTreeAsync(SpaceRole.Viewer);
+        var (space, root, _, _) = await SeedSpaceWithTreeAsync(null);
         var label = await SeedLabelAsync(space.Id, $"rocketry-{Guid.NewGuid():N}"[..16], root.Id);
 
         var client = factory.CreateClient();
@@ -152,7 +152,7 @@ public sealed class LabelIdReadPathTests(RocketWikiApiFactory factory) : IClassF
     [Fact]
     public async Task PageTreeNodes_CarryLabels_ResolvedWithOnePageLabelsQuery()
     {
-        var (space, root, _, grandchild) = await SeedSpaceWithTreeAsync(SpaceRole.Viewer);
+        var (space, root, _, grandchild) = await SeedSpaceWithTreeAsync(null);
         var rootLabel = await SeedLabelAsync(space.Id, $"tree-root-{Guid.NewGuid():N}"[..16], root.Id);
         var deepLabel = await SeedLabelAsync(space.Id, $"tree-deep-{Guid.NewGuid():N}"[..16], grandchild.Id);
 
@@ -161,7 +161,7 @@ public sealed class LabelIdReadPathTests(RocketWikiApiFactory factory) : IClassF
 
         using var counter = new EfSelectCommandCounter(factory, text => text.Contains("PageLabels"));
         var result = await client.PostGraphQLAsync($$"""
-            { pageTree(spaceId: "{{space.Id}}") { id title labels children { id labels children { id labels } } } }
+            { pageTree(spaceId: "{{space.Id}}") { ... on PageTreeNode { id title labels children { ... on PageTreeNode { id labels children { ... on PageTreeNode { id labels } } } } } } }
             """);
 
         var rootNode = result.RootElement.GetProperty("data").GetProperty("pageTree")

@@ -12,6 +12,7 @@ using RocketWiki.Api.Emojis;
 using RocketWiki.Api.GitLab;
 using RocketWiki.Api.GraphQL;
 using RocketWiki.Api.Identity;
+using RocketWiki.Api.Markings;
 using RocketWiki.Api.Mcp;
 using RocketWiki.Api.RealTime;
 using RocketWiki.Core.Services;
@@ -28,6 +29,14 @@ builder.AddServiceDefaults();
 // services" section for the singleton/service wiring.
 var localInstanceId = builder.Configuration["Instance:Id"] ?? "standalone";
 
+// --- Protective-marking selector catalog (design.md §21.15) ---
+// One validated vocabulary for the whole process: registered as a singleton for the
+// GraphQL vocabulary query, the principal builder and every formatter, and stamped into
+// the DbContext options (ConfigureDbContext, below the Aspire registration it layers
+// onto) so every gate the data layer runs reads the same object. Invalid configuration
+// fails the host at start (ValidateOnStart) — see ProtectiveMarkingConfiguration.
+builder.AddRocketWikiProtectiveMarking();
+
 // --- Database (design.md §14/§15) ---
 // Official Aspire client integration: wires RocketWikiDbContext to the
 // "rocketwiki" connection string the AppHost injects via service discovery
@@ -36,7 +45,9 @@ var localInstanceId = builder.Configuration["Instance:Id"] ?? "standalone";
 // AddDbContext/UseSqlServer. UseLocalInstanceId stamps the instance id into the
 // context options (per-deployment config, pool-safe) so the sync outbox writer can
 // verify a space is native before journaling it — design.md §12's "enforced rather
-// than assumed" follow-up; see LocalInstanceDbContextOptionsExtension.
+// than assumed" follow-up; see LocalInstanceDbContextOptionsExtension. The selector
+// catalog is stamped the same way (SelectorCatalogDbContextOptionsExtension), by
+// AddRocketWikiProtectiveMarking above, through the provider-aware hook.
 builder.AddSqlServerDbContext<RocketWikiDbContext>("rocketwiki",
     configureDbContextOptions: options => options.UseLocalInstanceId(localInstanceId));
 
@@ -139,7 +150,11 @@ builder.Services.AddScoped<ICurrentAuditContextAccessor, CurrentAuditContextAcce
 builder.Services.AddScoped<IAuditSink, DbAuditSink>();
 
 // The ABAC Principal (design.md §6.1) — built fresh from the validated token on every
-// request, never from the local User mirror.
+// request, never from the local User mirror. PrincipalBuilder is the one claim-to-
+// Principal mapping, shared by the request accessor and the SignalR hub; a singleton
+// because its only state is the immutable selector catalog (§21.15), which decides
+// which selector claims are mapped at all.
+builder.Services.AddSingleton<PrincipalBuilder>();
 builder.Services.AddScoped<ICurrentPrincipalAccessor, CurrentPrincipalAccessor>();
 
 // design.md §6.6: the rule builder's group picker, accumulated from observed logins by

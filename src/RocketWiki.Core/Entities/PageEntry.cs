@@ -80,7 +80,7 @@ public class PageEntry
     /// <see cref="PageMarking.ToMarking"/>.
     /// </summary>
     public ProtectiveMarking ToMarking() =>
-        ProtectiveMarking.Create(Level, Countries.Select(c => c.CountryValue), Prefix);
+        ProtectiveMarking.Create(Level, Countries.Select(c => c.CountryValue), selectors: null, Prefix);
 }
 
 /// <summary>One country in an entry's eyes-only set. See <see cref="PageMarkingCountry"/>

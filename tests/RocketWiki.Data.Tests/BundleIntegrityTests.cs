@@ -434,9 +434,9 @@ public class BundleIntegrityTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(new AccessRule
+        var editorGrant = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = SpaceRole.Editor,
             ExpressionJson = """{ "everyone": true }""",
@@ -444,7 +444,8 @@ public class BundleIntegrityTests : SqliteTestBase
             CreatedByUserId = Guid.NewGuid(),
             UpdatedAtUtc = DateTime.UtcNow,
             UpdatedByUserId = Guid.NewGuid(),
-        });
+        };
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(editorGrant), editorGrant);
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);

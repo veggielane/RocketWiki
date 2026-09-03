@@ -1,3 +1,4 @@
+using HotChocolate;
 using HotChocolate.Types;
 using RocketWiki.Api.Markings;
 using RocketWiki.Core.Access;
@@ -21,7 +22,7 @@ public sealed class PageQueryConnectionType : ObjectType<PageQueryConnection>
         // to "what classification is this empty list" is no label at all (design.md §21.13).
         descriptor.Field("aggregateMarking")
             .Type<ObjectType<AggregateMarkingLabel>>()
-            .ResolveWith<PageQueryConnectionFieldResolvers>(r => r.GetAggregateMarkingAsync(default!, default!, default));
+            .ResolveWith<PageQueryConnectionFieldResolvers>(r => r.GetAggregateMarkingAsync(default!, default!, default!, default));
     }
 }
 
@@ -49,6 +50,7 @@ public sealed class PageQueryConnectionFieldResolvers
     public async Task<AggregateMarkingLabel?> GetAggregateMarkingAsync(
         [Parent] PageQueryConnection connection,
         PageMarkingByPageIdDataLoader markingLoader,
+        [Service] SelectorCatalog catalog,
         CancellationToken cancellationToken)
     {
         if (connection.MatchedPageIds.Count == 0)
@@ -57,7 +59,7 @@ public sealed class PageQueryConnectionFieldResolvers
         }
 
         var markings = await markingLoader.LoadAsync(connection.MatchedPageIds, cancellationToken);
-        return AggregateMarkingLabel.Of(markings.Select(m => m ?? ProtectiveMarking.FailClosed));
+        return AggregateMarkingLabel.Of(markings.Select(m => m ?? ProtectiveMarking.FailClosed), catalog);
     }
 }
 

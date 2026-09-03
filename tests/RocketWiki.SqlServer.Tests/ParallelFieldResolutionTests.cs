@@ -40,13 +40,17 @@ public sealed class ParallelFieldResolutionTests
         var client = factory.CreateClient();
 
         // An instance admin creates the space (design.md §6.5) and grants the
-        // engineering group SpaceAdmin, which is what makes the author able to write.
+        // engineering group SpaceAdmin plus access - a role confers no visibility
+        // (§6.4), so the author needs both to write.
         client.SetTestUser(sub: "admin-user", name: "Admin", roles: ["admin"]);
         var spaceResult = await client.PostGraphQLAsync("""
             mutation {
               createSpace(
                 input: { key: "PAR", name: "Parallel" }
-                initialGrant: { role: SPACE_ADMIN, expressionJson: "{\"group\":\"engineering\"}" }
+                initialGrants: [
+                  { kind: ROLE_GRANT, role: SPACE_ADMIN, expressionJson: "{\"group\":\"engineering\"}" }
+                  { kind: ACCESS_GRANT, expressionJson: "{\"group\":\"engineering\"}" }
+                ]
               ) { space { id } error { kind message } }
             }
             """);
@@ -76,7 +80,7 @@ public sealed class ParallelFieldResolutionTests
                 canEdit canComment canManageAccess viewerIsWatching labels
                 labelDetails { id spaceId name }
                 properties { keyId key value sortOrder }
-                marking { level levelName eyesOnly prefix label }
+                marking { level levelName eyesOnly ukPrefix label }
                 parent { id title }
                 children { id }
                 comments { id body authorUserId author { id displayName hasAvatar } }
@@ -132,7 +136,10 @@ public sealed class ParallelFieldResolutionTests
             mutation {
               createSpace(
                 input: { key: "KIDS", name: "Children" }
-                initialGrant: { role: SPACE_ADMIN, expressionJson: "{\"group\":\"engineering\"}" }
+                initialGrants: [
+                  { kind: ROLE_GRANT, role: SPACE_ADMIN, expressionJson: "{\"group\":\"engineering\"}" }
+                  { kind: ACCESS_GRANT, expressionJson: "{\"group\":\"engineering\"}" }
+                ]
               ) { space { id } error { kind message } }
             }
             """);

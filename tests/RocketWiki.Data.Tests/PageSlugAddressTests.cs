@@ -33,11 +33,20 @@ public class PageSlugAddressTests : SqliteTestBase
         await context.SaveChangesAsync();
         var service = new AccessRuleService(context);
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, spaceId, null, role, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, spaceId, null, role, null, """{ "everyone": true }"""),
             Principal.Create("test-bootstrap", []), isInstanceAdmin: true, actingUserId, AuditCtx);
         if (!result.IsSuccess)
         {
             throw new InvalidOperationException($"Test setup grant failed: {result.Error}");
+        }
+
+        // A role confers no visibility (design.md §6.4); the access grant sits beside it.
+        var access = await service.CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, spaceId, null, null, null, """{ "everyone": true }"""),
+            Principal.Create("test-bootstrap", []), isInstanceAdmin: true, actingUserId, AuditCtx);
+        if (!access.IsSuccess)
+        {
+            throw new InvalidOperationException($"Test setup access grant failed: {access.Error}");
         }
     }
 
@@ -378,7 +387,7 @@ public class PageSlugAddressTests : SqliteTestBase
         context.SaveChanges();
 
         var service = new SpaceService(context, LocalInstanceId);
-        var grant = new InitialSpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }""");
+        IReadOnlyList<InitialGrant> grant = [new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "everyone": true }""")];
 
         var created = await service.CreateAsync(
             new CreateSpaceRequest(" mIxEd ", "Mixed", null), grant, isInstanceAdmin: true, actor.Id, AuditCtx);

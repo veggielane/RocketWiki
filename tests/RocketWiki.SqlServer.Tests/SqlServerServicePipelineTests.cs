@@ -50,7 +50,7 @@ public sealed class SqlServerServicePipelineTests : SqlServerTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -72,7 +72,7 @@ public sealed class SqlServerServicePipelineTests : SqlServerTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.AddRange(root, child, grandchild);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, DefaultLocalInstanceId);
@@ -118,7 +118,7 @@ public sealed class SqlServerServicePipelineTests : SqlServerTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.AddRange(oldParent, moved, descendant, newParent);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, DefaultLocalInstanceId);
@@ -201,7 +201,7 @@ public sealed class SqlServerServicePipelineTests : SqlServerTestBase
         var space = TestData.NewSpace();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, DefaultLocalInstanceId);
@@ -255,10 +255,9 @@ public sealed class SqlServerServicePipelineTests : SqlServerTestBase
         {
             violating.AccessRules.Add(new AccessRule
             {
-                Kind = AccessRuleKind.SpaceGrant,
+                Kind = AccessRuleKind.AccessGrant,
                 SpaceId = space.Id,
                 PageId = Guid.NewGuid(), // forbidden for a SpaceGrant
-                Role = SpaceRole.Viewer,
                 ExpressionJson = """{ "everyone": true }""",
                 CreatedAtUtc = DateTime.UtcNow,
                 CreatedByUserId = Guid.NewGuid(),

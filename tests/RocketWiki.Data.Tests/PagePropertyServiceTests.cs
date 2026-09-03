@@ -25,9 +25,9 @@ public class PagePropertyServiceTests : SqliteTestBase
     private static Principal EditorPrincipal() => Principal.Create("editor-sub", Array.Empty<string>());
     private static Principal ViewerOnlyPrincipal() => Principal.Create("viewer-sub", Array.Empty<string>());
 
-    private static AccessRule Grant(Guid spaceId, SpaceRole role) => new()
+    private static AccessRule Grant(Guid spaceId, SpaceRole? role) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = role,
         ExpressionJson = """{ "everyone": true }""",
@@ -60,7 +60,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PagePropertyKeys.Add(key);
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -89,7 +89,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PagePropertyKeys.Add(key);
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Viewer));
+        context.AccessRules.Add(Grant(space.Id, null));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -132,7 +132,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -157,7 +157,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PagePropertyKeys.Add(key);
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -186,7 +186,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PagePropertyKeys.Add(key);
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -214,7 +214,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PagePropertyKeys.Add(key);
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -243,7 +243,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         {
             PageId = page.Id, PagePropertyKeyId = key.Id, Value = "Ada Lovelace", UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = actor.Id,
         });
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -272,7 +272,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PagePropertyKeys.Add(key);
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -301,7 +301,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         {
             PageId = page.Id, PagePropertyKeyId = key.Id, Value = "Ada", UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = actor.Id,
         });
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Viewer));
+        context.AccessRules.Add(Grant(space.Id, null));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -335,7 +335,7 @@ public class PagePropertyServiceTests : SqliteTestBase
         {
             PageId = page.Id, PagePropertyKeyId = key.Id, Value = "mirrored", UpdatedAtUtc = DateTime.UtcNow,
         });
-        context.AccessRules.Add(Grant(space.Id, SpaceRole.Editor));
+        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);

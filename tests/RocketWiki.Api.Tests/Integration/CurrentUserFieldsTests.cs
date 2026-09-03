@@ -116,9 +116,8 @@ public sealed class CurrentUserFieldsTests(RocketWikiApiFactory factory) : IClas
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = now,
             CreatedByUserId = creator.Id,

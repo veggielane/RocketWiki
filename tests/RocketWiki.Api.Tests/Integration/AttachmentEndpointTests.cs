@@ -40,9 +40,9 @@ public sealed class AttachmentEndpointTests(RocketWikiApiFactory factory) : ICla
             CreatedByUserId = creator.Id,
         };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
@@ -50,7 +50,7 @@ public sealed class AttachmentEndpointTests(RocketWikiApiFactory factory) : ICla
             CreatedByUserId = creator.Id,
             UpdatedAtUtc = DateTime.UtcNow,
             UpdatedByUserId = creator.Id,
-        });
+        }));
 
         var page = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "p", Title = "Test Page", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
         db.Pages.Add(page);
@@ -128,7 +128,7 @@ public sealed class AttachmentEndpointTests(RocketWikiApiFactory factory) : ICla
         // Only a Viewer grant - nobody can edit, so nobody can upload.
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Viewer,
+            Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = creator.Id,
         });

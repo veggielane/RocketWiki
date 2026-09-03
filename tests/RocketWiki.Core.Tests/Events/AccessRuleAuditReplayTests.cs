@@ -1,3 +1,4 @@
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
@@ -23,14 +24,55 @@ public class AccessRuleAuditReplayTests
     }
 
     private static AccessRuleSnapshot SpaceGrant(Guid ruleId, Guid spaceId, SpaceRole role, string expressionJson) =>
-        new(ruleId, AccessRuleKind.SpaceGrant, spaceId, null, role, null, expressionJson);
+        new(ruleId, AccessRuleKind.RoleGrant, spaceId, null, role, null, expressionJson, []);
+
+    private static AccessRuleSnapshot AccessGrant(Guid ruleId, Guid spaceId, string expressionJson, params SelectorValue[] selectors) =>
+        new(ruleId, AccessRuleKind.AccessGrant, spaceId, null, null, null, expressionJson, selectors);
+
+    [Fact]
+    public void Snapshot_WithSelectors_RoundTrips()
+    {
+        // design.md §21.15/§7: the selectors an access grant confers are part of what the
+        // rule set at an instant WAS, so they must survive the audit JSON round trip -
+        // in canonical order, so two snapshots of one grant serialize identically.
+        var ruleId = Guid.NewGuid();
+        var spaceId = Guid.NewGuid();
+        var created = AccessGrant(ruleId, spaceId, """{ "everyone": true }""", new SelectorValue("FRUIT", "APPLE"), new SelectorValue("REGION", "NORTH"));
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        var state = AccessRuleAuditReplay.ReconstructAsOf([Change(t0, ruleId, before: null, after: created)], t0);
+
+        var snapshot = state[ruleId];
+        Assert.Equal(AccessRuleKind.AccessGrant, snapshot.Kind);
+        Assert.Null(snapshot.Role);
+        Assert.Equal([new SelectorValue("FRUIT", "APPLE"), new SelectorValue("REGION", "NORTH")], snapshot.Selectors);
+    }
+
+    [Fact]
+    public void LegacyDetailsWithoutSelectorsKey_ParsesWithNullSelectors()
+    {
+        // A permission.change row written before selectors existed carries no
+        // "selectors" key. It must still replay - as a grant conferring nothing, which is
+        // the only meaning it could have had - rather than being skipped as malformed.
+        var ruleId = Guid.NewGuid();
+        var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var legacy = Change(t0, ruleId, before: null, after: SpaceGrant(ruleId, Guid.NewGuid(), SpaceRole.Editor, """{ "everyone": true }"""));
+        legacy.DetailsJson = legacy.DetailsJson!.Replace(",\"selectors\":[]", string.Empty);
+        Assert.DoesNotContain("selectors", legacy.DetailsJson, StringComparison.Ordinal);
+
+        var state = AccessRuleAuditReplay.ReconstructAsOf([legacy], t0);
+
+        Assert.True(state.ContainsKey(ruleId));
+        Assert.Null(state[ruleId].Selectors);
+        Assert.Equal(SpaceRole.Editor, state[ruleId].Role);
+    }
 
     [Fact]
     public void SingleCreate_IsPresentAtOrAfterItsTimestamp()
     {
         var ruleId = Guid.NewGuid();
         var spaceId = Guid.NewGuid();
-        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Viewer, """{ "everyone": true }""");
+        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Editor, """{ "everyone": true }""");
         var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         var events = new[] { Change(t0, ruleId, before: null, after: created) };
@@ -38,7 +80,7 @@ public class AccessRuleAuditReplayTests
         var state = AccessRuleAuditReplay.ReconstructAsOf(events, t0);
 
         Assert.True(state.ContainsKey(ruleId));
-        Assert.Equal(SpaceRole.Viewer, state[ruleId].Role);
+        Assert.Equal(SpaceRole.Editor, state[ruleId].Role);
     }
 
     [Fact]
@@ -46,7 +88,7 @@ public class AccessRuleAuditReplayTests
     {
         var ruleId = Guid.NewGuid();
         var spaceId = Guid.NewGuid();
-        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Viewer, """{ "everyone": true }""");
+        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Editor, """{ "everyone": true }""");
         var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         var events = new[] { Change(t0, ruleId, before: null, after: created) };
@@ -64,8 +106,8 @@ public class AccessRuleAuditReplayTests
         var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var t1 = t0.AddDays(1);
 
-        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Viewer, """{ "everyone": true }""");
-        var updated = SpaceGrant(ruleId, spaceId, SpaceRole.Editor, """{ "group": "engineering" }""");
+        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Editor, """{ "everyone": true }""");
+        var updated = SpaceGrant(ruleId, spaceId, SpaceRole.SpaceAdmin, """{ "group": "engineering" }""");
 
         var events = new[]
         {
@@ -76,10 +118,10 @@ public class AccessRuleAuditReplayTests
         var asOfBetween = AccessRuleAuditReplay.ReconstructAsOf(events, t0.AddHours(12));
         var asOfAfterUpdate = AccessRuleAuditReplay.ReconstructAsOf(events, t1);
 
-        Assert.Equal(SpaceRole.Viewer, asOfBetween[ruleId].Role);
+        Assert.Equal(SpaceRole.Editor, asOfBetween[ruleId].Role);
         Assert.Equal("""{ "everyone": true }""", asOfBetween[ruleId].ExpressionJson);
 
-        Assert.Equal(SpaceRole.Editor, asOfAfterUpdate[ruleId].Role);
+        Assert.Equal(SpaceRole.SpaceAdmin, asOfAfterUpdate[ruleId].Role);
         Assert.Equal("""{ "group": "engineering" }""", asOfAfterUpdate[ruleId].ExpressionJson);
     }
 
@@ -91,7 +133,7 @@ public class AccessRuleAuditReplayTests
         var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var t1 = t0.AddDays(1);
 
-        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Viewer, """{ "everyone": true }""");
+        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Editor, """{ "everyone": true }""");
 
         var events = new[]
         {
@@ -114,7 +156,7 @@ public class AccessRuleAuditReplayTests
         var spaceId = Guid.NewGuid();
         var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
-        var aCreated = SpaceGrant(ruleA, spaceId, SpaceRole.Viewer, """{ "everyone": true }""");
+        var aCreated = SpaceGrant(ruleA, spaceId, SpaceRole.Editor, """{ "everyone": true }""");
         var bCreated = SpaceGrant(ruleB, spaceId, SpaceRole.Editor, """{ "group": "engineering" }""");
         var aDeleted = aCreated;
 
@@ -140,8 +182,8 @@ public class AccessRuleAuditReplayTests
         var t0 = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var future = t0.AddYears(1);
 
-        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Viewer, """{ "everyone": true }""");
-        var deletedLater = SpaceGrant(ruleId, spaceId, SpaceRole.Viewer, """{ "everyone": true }""");
+        var created = SpaceGrant(ruleId, spaceId, SpaceRole.Editor, """{ "everyone": true }""");
+        var deletedLater = SpaceGrant(ruleId, spaceId, SpaceRole.Editor, """{ "everyone": true }""");
 
         var events = new[]
         {

@@ -1,5 +1,6 @@
 using System.Reflection;
 using HotChocolate.Resolvers;
+using RocketWiki.Api.GraphQL;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 
@@ -31,6 +32,13 @@ namespace RocketWiki.Api.Audit;
 /// results that a resolver collapsed a denial *into* (an empty tree), DbAuditSink
 /// suppresses this middleware's Success row for a subject already recorded as Denied
 /// this request.
+///
+/// <para>A <see cref="PageAccessResult"/> carrying a placeholder is the third shape of
+/// "the read was refused" (design.md §6.7 / §21.8): non-null, because the placeholder
+/// reaches the caller, but not a success — the resolver recorded the Denied row, and
+/// recording a Success beside it would claim a read that never happened. It is skipped
+/// here outright rather than left to the sink's suppression, so the rule does not depend
+/// on the two rows sharing a subject id.</para>
 /// </summary>
 public sealed class AuditFieldMiddleware(FieldDelegate next)
 {
@@ -39,6 +47,14 @@ public sealed class AuditFieldMiddleware(FieldDelegate next)
         await next(context);
 
         if (context.Result is null)
+        {
+            return;
+        }
+
+        // A placeholder is a refused read that the caller is shown (§6.7/§21.8): the
+        // denial was audited in the resolver with its reason, and there is no success
+        // to record.
+        if (context.Result is PageAccessResult { Page: null })
         {
             return;
         }
@@ -86,6 +102,14 @@ public sealed class AuditFieldMiddleware(FieldDelegate next)
             return (AuditSubjectType.Page, resultPage.Id, null);
         }
 
+        // Query.pageAccess / pageAccessBySlug with a viewable page: the page is the
+        // subject exactly as it would be on Query.page. (The placeholder case never
+        // reaches here - see InvokeAsync.)
+        if (context.Result is PageAccessResult { Page: { } accessPage })
+        {
+            return (AuditSubjectType.Page, accessPage.Id, null);
+        }
+
         if (context.Parent<object?>() is Page parentPage)
         {
             return (AuditSubjectType.Page, parentPage.Id, null);
@@ -101,7 +125,7 @@ public sealed class AuditFieldMiddleware(FieldDelegate next)
         }
 
         // Query.PageTree(spaceId) - the only space.browse field whose result is neither
-        // a Page nor a Space (a list of PageTreeNode), so its own spaceId argument is
+        // a Page nor a Space (a list of tree entries), so its own spaceId argument is
         // the subject. Guarded on the field actually declaring that argument: Query.Space
         // and Query.Spaces also emit "space.browse" but take no spaceId argument at all
         // (Space's own case above already handles the former; ArgumentOptional would

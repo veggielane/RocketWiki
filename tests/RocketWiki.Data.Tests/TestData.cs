@@ -76,6 +76,25 @@ internal static class TestData
         return marking;
     }
 
+    /// <summary>
+    /// Adds selector rows (design.md §21.15) to a marking built by <see cref="NewMarking"/>.
+    /// A separate step rather than another parameter, for the reason
+    /// <see cref="NewMarkingWithPrefix"/> gives: the country <c>params</c> must stay the
+    /// only trailing variadic on those builders.
+    /// </summary>
+    public static PageMarking WithSelectors(this PageMarking marking, params SelectorValue[] selectors)
+    {
+        foreach (var selector in selectors)
+        {
+            marking.Selectors.Add(new PageMarkingSelector
+            {
+                PageId = marking.PageId, Category = selector.Category, Value = selector.Value,
+            });
+        }
+
+        return marking;
+    }
+
     public static PageRevision NewRevision(Page page, User author, int revisionNumber = 1) => new()
     {
         PageId = page.Id,
@@ -84,5 +103,23 @@ internal static class TestData
         Content = page.CurrentContent,
         AuthorUserId = author.Id,
         CreatedAtUtc = DateTime.UtcNow,
+    };
+
+    /// <summary>
+    /// The access grant a role grant needs beside it before its holders can see anything
+    /// (design.md §6.4: roles never supersede access). Same subject expression, same space,
+    /// no selectors - exactly the mirror row the split migration writes for a pre-split
+    /// Editor or Space-admin grant. Fixtures that mean "an editor of this space" add both;
+    /// fixtures that mean "a role without access" deliberately add only the role grant.
+    /// </summary>
+    public static AccessRule AccessGrantMirroring(AccessRule roleGrant) => new()
+    {
+        Kind = AccessRuleKind.AccessGrant,
+        SpaceId = roleGrant.SpaceId,
+        ExpressionJson = roleGrant.ExpressionJson,
+        CreatedAtUtc = roleGrant.CreatedAtUtc,
+        CreatedByUserId = roleGrant.CreatedByUserId,
+        UpdatedAtUtc = roleGrant.UpdatedAtUtc,
+        UpdatedByUserId = roleGrant.UpdatedByUserId,
     };
 }

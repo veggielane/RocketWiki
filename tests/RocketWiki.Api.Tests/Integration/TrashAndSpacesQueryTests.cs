@@ -11,7 +11,7 @@ namespace RocketWiki.Api.Tests.Integration;
 
 public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
 {
-    private async Task<(User Seeder, Space Space, Page Page)> SeedSpaceWithGrantAsync(SpaceRole role)
+    private async Task<(User Seeder, Space Space, Page Page)> SeedSpaceWithGrantAsync(SpaceRole? role)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
@@ -21,12 +21,12 @@ public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : ICl
 
         var space = new Space { Key = $"TR{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Trash Test Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = role,
+            Kind = role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = role,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-        });
+        }));
         var page = new Page
         {
             SpaceId = space.Id, AncestorPath = "/", Slug = "p", Title = "Trashed Page",
@@ -58,7 +58,7 @@ public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : ICl
     {
         // Viewer role satisfies canView on the space, but not the Editor+ trash requires
         // (design.md §6.4: canEdit needs Editor+, and restore needs canEdit).
-        var (_, space, _) = await SeedSpaceWithGrantAsync(SpaceRole.Viewer);
+        var (_, space, _) = await SeedSpaceWithGrantAsync(null);
         var client = factory.CreateClient();
         client.SetTestUser(sub: $"viewer-{Guid.NewGuid()}");
 
@@ -71,7 +71,7 @@ public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : ICl
     [Fact]
     public async Task Spaces_OnlyReturnsSpacesCallerHasARoleIn()
     {
-        var (_, spaceTheyCanSee, _) = await SeedSpaceWithGrantAsync(SpaceRole.Viewer);
+        var (_, spaceTheyCanSee, _) = await SeedSpaceWithGrantAsync(null);
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
@@ -123,16 +123,18 @@ public sealed class TrashAndSpacesQueryTests(RocketWikiApiFactory factory) : ICl
         await db.SaveChangesAsync();
         var space = new Space { Key = $"GR{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Grants Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
-        // Two grants: everyone is a Viewer, and a specific "boss" group is SpaceAdmin.
+        // Two grants: everyone holds access, and a specific "boss" group is SpaceAdmin.
+        // The admin group is covered by the everyone access grant, so no mirror is added
+        // beside the role grant - the listing below counts exactly these two rows.
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Viewer,
+            Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
         });
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.SpaceAdmin,
+            Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.SpaceAdmin,
             ExpressionJson = RuleExpressionSerializer.Serialize(new GroupCondition("boss")),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
         });

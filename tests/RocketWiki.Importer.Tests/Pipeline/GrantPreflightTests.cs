@@ -16,7 +16,7 @@ namespace RocketWiki.Importer.Tests.Pipeline;
 /// <para>A grant the importer cannot satisfy therefore created the space and then refused
 /// all 250 pages, and the run still reported success: "Import complete. 0 of 250 page(s)
 /// imported; 250 skipped", leaving an empty space whose key is now taken and a re-run
-/// blocked. Two configurations did it — a viewer-role grant, and an attribute-based grant
+/// blocked. Two configurations did it — a sub-admin role grant, and an attribute-based grant
 /// against a principal with no attributes, which is the natural ABAC shape for an
 /// export-control org. Neither said what was wrong, and the way out that always works is
 /// <c>{"everyone": true}</c>, which design.md §6.5.1 exists to prevent. Refusing before
@@ -40,18 +40,21 @@ public class GrantPreflightTests
     private static ImportOptions OptionsWith(Principal principal, SpaceRole role, string expressionJson) =>
         new(principal, Guid.NewGuid(),
             new AuditContext(AuditChannel.System, "test-import", "127.0.0.1"),
-            new InitialSpaceGrant(role, expressionJson));
+            new InitialGrant(AccessRuleKind.RoleGrant, role, expressionJson));
 
     [Fact]
-    public async Task A_viewer_grant_is_refused_before_the_space_key_is_taken()
+    public async Task An_editor_grant_is_refused_before_the_space_key_is_taken()
     {
+        // design.md §6.5.1: a space is born with a space-admin role grant, and "viewer" is
+        // no longer a role at all - it is an access grant, which the importer adds beside
+        // the role grant on its own.
         var options = OptionsWith(Principal.Create("importer-sub", ["engineering"]),
-            SpaceRole.Viewer, """{ "group": "engineering" }""");
+            SpaceRole.Editor, """{ "group": "engineering" }""");
 
         var result = await CreateImporter().ImportAsync(Export(), options);
 
         Assert.False(result.Success);
-        Assert.Contains("Editor or higher", result.BlockedReason, StringComparison.Ordinal);
+        Assert.Contains("space-admin", result.BlockedReason, StringComparison.Ordinal);
 
         // Nothing was created, so the operator can fix the flag and re-run the same
         // command. Previously the key was gone and the space had to be deleted first.
@@ -66,7 +69,7 @@ public class GrantPreflightTests
         // principal carrying no attributes at all. Fails closed on every page (§6.1),
         // and said nothing about why.
         var options = OptionsWith(Principal.Create("importer-sub", ["confluence-importer"]),
-            SpaceRole.Editor, """{ "attr": "nationality", "in": ["GBR"] }""");
+            SpaceRole.SpaceAdmin, """{ "attr": "nationality", "in": ["GBR"] }""");
 
         var result = await CreateImporter().ImportAsync(Export(), options);
 
@@ -82,7 +85,7 @@ public class GrantPreflightTests
     public async Task A_malformed_grant_expression_is_refused_rather_than_silently_denying_every_page()
     {
         var options = OptionsWith(Principal.Create("importer-sub", ["engineering"]),
-            SpaceRole.Editor, """{ "nonsense": true }""");
+            SpaceRole.SpaceAdmin, """{ "nonsense": true }""");
 
         var result = await CreateImporter().ImportAsync(Export(), options);
 
@@ -96,7 +99,7 @@ public class GrantPreflightTests
     {
         // The non-vacuity half: the pre-flight must not refuse a workable import.
         var options = OptionsWith(Principal.Create("importer-sub", ["engineering"]),
-            SpaceRole.Editor, """{ "group": "engineering" }""");
+            SpaceRole.SpaceAdmin, """{ "group": "engineering" }""");
 
         var result = await CreateImporter().ImportAsync(Export(), options);
 
@@ -112,7 +115,7 @@ public class GrantPreflightTests
         // rules being rejected as a shape — attr grants are the point of the model.
         var principal = Principal.Create("importer-sub", ["confluence-importer"],
             new Dictionary<string, IReadOnlyList<string>> { ["nationality"] = ["GBR"] });
-        var options = OptionsWith(principal, SpaceRole.Editor, """{ "attr": "nationality", "in": ["GBR"] }""");
+        var options = OptionsWith(principal, SpaceRole.SpaceAdmin, """{ "attr": "nationality", "in": ["GBR"] }""");
 
         var result = await CreateImporter().ImportAsync(Export(), options);
 
@@ -129,7 +132,7 @@ public class GrantPreflightTests
         _pageService.FailCreateWhen = _ => new ValidationError("nope");
 
         var options = OptionsWith(Principal.Create("importer-sub", ["engineering"]),
-            SpaceRole.Editor, """{ "group": "engineering" }""");
+            SpaceRole.SpaceAdmin, """{ "group": "engineering" }""");
 
         var result = await CreateImporter().ImportAsync(Export(), options);
 

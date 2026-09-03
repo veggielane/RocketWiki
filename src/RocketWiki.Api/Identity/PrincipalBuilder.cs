@@ -15,10 +15,25 @@ namespace RocketWiki.Api.Identity;
 /// doc), just surfacing in a new place. A Hub's own <c>HubCallerContext.User</c> is
 /// SignalR's reliable equivalent there, so <see cref="RealTime.NotificationsHub"/>
 /// calls this directly instead of going through <see cref="ICurrentPrincipalAccessor"/>.
+///
+/// <para><b>An instance, not a static, since selectors exist</b> (design.md §21.15):
+/// which claims are mapped is no longer a compile-time list. Beside <c>groups</c>,
+/// <c>nationality</c> and <c>clearance</c>, every configured selector category's
+/// <see cref="SelectorCategory.ClaimName"/> is mapped from the token — and ONLY those,
+/// so a claim nobody configured never becomes a principal attribute a rule could match
+/// on by accident. The catalog is the single source of that list; it is the same
+/// singleton the gates read, so the builder and the gate cannot disagree about which
+/// claim gates which category. Values travel as-is: <see cref="SelectorGate"/> decides
+/// that only <c>yes</c> counts, and it decides it once.</para>
+///
+/// <para>Registered as a singleton (the catalog is immutable) and injected into both
+/// callers, so the HTTP path and the hub path build the identical Principal from the
+/// identical claim list — co-edit join and eviction honour selectors with no second
+/// implementation.</para>
 /// </summary>
-public static class PrincipalBuilder
+public sealed class PrincipalBuilder(SelectorCatalog catalog)
 {
-    public static Principal? Build(ClaimsPrincipal? user)
+    public Principal? Build(ClaimsPrincipal? user)
     {
         if (user?.Identity?.IsAuthenticated != true)
         {
@@ -36,7 +51,7 @@ public static class PrincipalBuilder
         // Registered attributes (design.md §6.2). Each is absent entirely (not an empty
         // list) when its claim isn't present, matching Principal's own fail-closed
         // contract for a key nobody holds a value for - which is what makes
-        // ClearanceGate.ResolveClearance's "absent means OFFICIAL" and AttrCondition's
+        // ClearanceGate.ResolveClearance's "absent means the floor" and AttrCondition's
         // "absent matches nothing" both land on the intended answer rather than on an
         // empty-string comparison.
         var attributes = new List<KeyValuePair<string, IReadOnlyList<string>>>();
@@ -47,6 +62,14 @@ public static class PrincipalBuilder
         // plumbing, no separate accessor - precisely so it inherits §6.1's "evaluate the
         // token, never the local User mirror" for free.
         AddIfPresent(attributes, user, ClearanceGate.ClearanceAttributeKey);
+
+        // design.md §21.15: one attribute per selector claim the instance configured.
+        // The catalog already refused a claim name that collides with the three above
+        // (SelectorCatalog.ReservedClaimNames), so nothing here can be mapped twice.
+        foreach (var claimName in catalog.ClaimNames)
+        {
+            AddIfPresent(attributes, user, claimName);
+        }
 
         return Principal.Create(subject, groups, attributes.Count > 0 ? attributes : null);
     }

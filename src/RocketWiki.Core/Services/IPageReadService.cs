@@ -24,10 +24,36 @@ public interface IPageReadService
     /// <summary>
     /// Found(page) if the principal can view it; NotFound if no such live page exists;
     /// Denied(reason) if it exists but canView fails - where reason is the failing
-    /// restriction (<c>restriction:{pageId}:{ruleId}</c>) or <c>no-space-role</c>,
-    /// exactly as EffectivePermissionCalculator computed it.
+    /// gate's token (<c>no-space-access</c>, a <c>classification:</c>/<c>selector:</c>/
+    /// <c>caveat:</c> token, or <c>restriction:{pageId}:{ruleId}</c>), exactly as
+    /// EffectivePermissionCalculator computed it.
     /// </summary>
     Task<ReadResult<Page>> GetPageAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The DISCLOSED form of the same read (design.md §6.7 / §21.8): NotFound if no such
+    /// live page exists; Found(page) if the principal can view it; otherwise
+    /// Denied(<see cref="PageDenial"/>) — the page's marking and every gate the principal
+    /// failed, or, when no access grant admits them to the space at all, only that fact.
+    /// The verdict is exactly <see cref="GetPageAsync"/>'s (one ladder decides both); what
+    /// differs is that this result is meant to reach the caller as a placeholder, where
+    /// <see cref="GetPageAsync"/>'s Denied exists for the audit row and collapses to null.
+    /// A caller that omits keeps using <see cref="GetPageAsync"/>; a caller that discloses
+    /// uses this, and the API still audits the denial exactly once either way.
+    /// </summary>
+    Task<PageAccess> GetPageAccessAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <see cref="GetPageAccessAsync"/> for many pages at once — a constant number of
+    /// queries for the whole batch, for the surfaces that resolve several page references
+    /// in one request (the link targets inside a page's content). Every requested id has
+    /// an entry: NotFound for an id that names no live page, so a missing page and a
+    /// denied one are distinct here and the caller decides what each becomes on the wire.
+    /// No per-target audit row: the page whose content named the targets was the read that
+    /// was audited.
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, PageAccess>> GetPageAccessBatchAsync(
+        IReadOnlyCollection<Guid> pageIds, Principal principal, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The id of the live page addressed by <c>/spaces/{spaceKey}/{slug}</c>, or null
@@ -43,18 +69,23 @@ public interface IPageReadService
     Task<Guid?> FindPageIdBySlugAsync(string spaceKey, string slug, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// The space's page tree, restricted to nodes the principal can view. A node that
-    /// fails canView is pruned along with its entire subtree (restrictions only ever
-    /// accumulate going down, so a hidden ancestor implies every descendant is hidden
-    /// too - design.md §6.4). Pruning is not a Denied result: the browse itself was
-    /// permitted and simply shows less, the same as it does for everyone (§6.7 - no
-    /// gaps that imply something was removed), so per-node denials are not reported
-    /// or audited here. Denied("no-space-role") is returned only when the request as
-    /// a whole is refused because the principal holds no role in the space at all;
-    /// NotFound when the space doesn't exist. The API boundary collapses both to the
-    /// same empty list Found can also legitimately carry.
+    /// The space's page tree, decided node by node with the calculator's own view ladder
+    /// (design.md §6.7/§21.9). A node the principal can view is a <see cref="PageTreeNode"/>
+    /// with its children; a node they cannot is a <see cref="ProtectedTreeNode"/> leaf at
+    /// the same position, carrying the page's marking and every failed gate and nothing
+    /// else - its subtree is never walked (restrictions only ever accumulate going down,
+    /// so a hidden ancestor implies every descendant is hidden too - §6.4). A protected
+    /// entry is not a Denied result: the browse itself was permitted and shows the
+    /// placeholder (or, for a surface that omits, shows less - the same as it does for
+    /// everyone), so per-node denials are not reported or audited here.
+    /// Denied("no-space-access") is returned only when the request as a whole is refused
+    /// because no access grant in the space admits the principal - roles never supersede
+    /// access, so a Space-admin without one is refused like a stranger; NotFound when the
+    /// space doesn't exist. The API boundary collapses both to the same empty list Found
+    /// can also legitimately carry, which is what keeps a space the caller cannot enter
+    /// indistinguishable from one that does not exist.
     /// </summary>
-    Task<ReadResult<IReadOnlyList<PageTreeNode>>> GetPageTreeAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken = default);
+    Task<ReadResult<IReadOnlyList<PageTreeEntry>>> GetPageTreeAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken = default);
 
     /// <summary>Found/NotFound/Denied under the exact same conditions as GetPageAsync for the same pageId - revision history requires nothing beyond canView on the page itself.</summary>
     Task<ReadResult<IReadOnlyList<PageRevision>>> GetRevisionHistoryAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default);

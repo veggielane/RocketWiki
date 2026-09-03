@@ -3,6 +3,7 @@ using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Telemetry;
+using RocketWiki.Core.Tests.Access;
 using Xunit;
 
 namespace RocketWiki.Core.Tests.Telemetry;
@@ -26,9 +27,16 @@ public class CoreTelemetryTests
 
     private static AccessRule SpaceGrant(SpaceRole role, string expressionJson) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = Guid.NewGuid(),
         Role = role,
+        ExpressionJson = expressionJson,
+    };
+
+    private static AccessRule AccessGrant(string expressionJson) => new()
+    {
+        Kind = AccessRuleKind.AccessGrant,
+        SpaceId = Guid.NewGuid(),
         ExpressionJson = expressionJson,
     };
 
@@ -39,6 +47,11 @@ public class CoreTelemetryTests
         Action = action,
         ExpressionJson = expressionJson,
     };
+
+    private static EffectivePermission Compute(
+        IEnumerable<AccessRule> spaceGrants, IEnumerable<AccessRule> restrictions, bool isReplicaSpace, ProtectiveMarking marking, Principal principal) =>
+        EffectivePermissionCalculator.Compute(
+            new PermissionInputs(spaceGrants.ToList(), restrictions.ToList(), isReplicaSpace, marking, TestCatalogs.Fruit), principal);
 
     [Fact]
     public void MatchingSpaceGrant_RecordsAllowDecisionTaggedSpaceGrant()
@@ -51,7 +64,7 @@ public class CoreTelemetryTests
 
         var measurement = Assert.Single(collector.GetMeasurementSnapshot());
         Assert.Equal(1, measurement.Value);
-        Assert.Equal("space_grant", measurement.Tags[CoreTelemetry.RuleKindTag]);
+        Assert.Equal("space_role_grant", measurement.Tags[CoreTelemetry.RuleKindTag]);
         Assert.Equal(CoreTelemetry.DecisionAllow, measurement.Tags[CoreTelemetry.DecisionTag]);
     }
 
@@ -78,7 +91,7 @@ public class CoreTelemetryTests
         using var collector = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.rule_evaluations");
 
         EffectivePermissionCalculator.ComputeSpaceRole(
-            [SpaceGrant(SpaceRole.Viewer, "{ this is not valid json")],
+            [SpaceGrant(SpaceRole.Editor, "{ this is not valid json")],
             Principal());
 
         var measurement = Assert.Single(collector.GetMeasurementSnapshot());
@@ -124,8 +137,8 @@ public class CoreTelemetryTests
         using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
         using var duration = new MetricCollector<double>(CoreTelemetry.Meter, "rocketwiki.access.permission_check.duration");
 
-        var permission = EffectivePermissionCalculator.Compute(
-            [SpaceGrant(SpaceRole.Viewer, """{ "everyone": true }""")],
+        var permission = Compute(
+            [AccessGrant("""{ "everyone": true }""")],
             [],
             isReplicaSpace: false,
             ProtectiveMarking.Baseline,
@@ -147,8 +160,8 @@ public class CoreTelemetryTests
     {
         using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
 
-        EffectivePermissionCalculator.Compute(
-            [SpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }""")],
+        Compute(
+            [AccessGrant("""{ "everyone": true }"""), SpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }""")],
             [],
             isReplicaSpace: true,
             ProtectiveMarking.Baseline,
@@ -163,7 +176,7 @@ public class CoreTelemetryTests
     // dimension that would be one time series per rule, and it would put ids on a
     // dashboard that has no use for them - so it collapses to its shape.
     [InlineData("restriction:8a6e0804-2bd0-4672-b79d-d97027f9071a:31", "restriction")]
-    [InlineData("no-space-role", "no-space-role")]
+    [InlineData("no-space-access", "no-space-access")]
     [InlineData("replica-read-only", "replica-read-only")]
     [InlineData("insufficient-space-role", "insufficient-space-role")]
     // design.md §21's marking reasons collapse the same way, and the level is dropped
@@ -173,6 +186,11 @@ public class CoreTelemetryTests
     [InlineData("classification:top_secret", "classification")]
     [InlineData("classification:official_sensitive", "classification")]
     [InlineData("caveat:eyes_only", "caveat")]
+    // design.md §21.15: the three selector tokens collapse to one word, and the category
+    // name is dropped for the same census reason the level is.
+    [InlineData("selector:not_eligible:FRUIT", "selector")]
+    [InlineData("selector:unknown:FRUIT", "selector")]
+    [InlineData("selector:not_granted:FRUIT", "selector")]
     [InlineData(null, "none")]
     [InlineData("something-new-nobody-mapped", "other")]
     public void CategorizeDenialReason_CollapsesToABoundedVocabulary(string? reason, string expected) =>
@@ -194,8 +212,8 @@ public class CoreTelemetryTests
     {
         using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
 
-        EffectivePermissionCalculator.Compute(
-            [SpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }""")],
+        Compute(
+            [AccessGrant("""{ "everyone": true }"""), SpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }""")],
             [],
             isReplicaSpace: false,
             ProtectiveMarking.Create(ClassificationLevel.TopSecret, ["SENTINELCOUNTRY"]),
@@ -223,5 +241,38 @@ public class CoreTelemetryTests
         Assert.Equal("Denied", measurement.Tags[CoreTelemetry.AuditOutcomeTag]);
         Assert.Equal("Mcp", measurement.Tags[CoreTelemetry.AuditChannelTag]);
         Assert.Equal(CoreTelemetry.AuditWriterSink, measurement.Tags[CoreTelemetry.AuditWriterTag]);
+    }
+
+    [Fact]
+    public void PermissionCheck_OnASelectorDenial_TagsOnlyTheCollapsedCategory_NeverTheCategoryNameOrValue()
+    {
+        // design.md §15/§21.15: a selector category is bounded configured vocabulary, but a
+        // per-category series would be a census of which compartments exist and how hard
+        // each is probed. Neither the category, the value, nor the eligibility claim's
+        // value may reach a metric tag.
+        using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
+        using var evaluations = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.rule_evaluations");
+
+        var permission = Compute(
+            [AccessGrant("""{ "everyone": true }""")],
+            [],
+            isReplicaSpace: false,
+            ProtectiveMarking.Create(ClassificationLevel.Official, null, [TestCatalogs.Apple]),
+            Principal(attributes: new() { [TestCatalogs.FruitClaim] = ["SENTINEL-CLAIM"] }));
+
+        Assert.False(permission.CanView);
+        Assert.Equal("selector:not_eligible:FRUIT", permission.ViewDenialReason);
+
+        var check = Assert.Single(checks.GetMeasurementSnapshot());
+        Assert.Equal("selector", check.Tags[CoreTelemetry.DenialReasonTag]);
+        foreach (var measurement in checks.GetMeasurementSnapshot().Concat(evaluations.GetMeasurementSnapshot()))
+        {
+            foreach (var tag in measurement.Tags)
+            {
+                Assert.DoesNotContain("SENTINEL", $"{tag.Key}={tag.Value}", StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("FRUIT", $"{tag.Key}={tag.Value}", StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("APPLE", $"{tag.Key}={tag.Value}", StringComparison.OrdinalIgnoreCase);
+            }
+        }
     }
 }

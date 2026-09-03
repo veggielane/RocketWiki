@@ -57,12 +57,12 @@ public sealed class EditSessionContributorAndCapTests(RocketWikiApiFactory facto
             CreatedByUserId = seeder.Id,
         };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
+            Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-        });
+        }));
         var page = new Page
         {
             SpaceId = space.Id, AncestorPath = "/", Slug = "p", Title = "Contributor Page",

@@ -50,9 +50,8 @@ public sealed class PageAdversarialLeakTests(RocketWikiApiFactory factory) : ICl
 
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = creator.Id,
@@ -172,7 +171,7 @@ public sealed class PageAdversarialLeakTests(RocketWikiApiFactory factory) : ICl
         var client = NzClient(factory);
 
         var result = await client.PostGraphQLAsync(
-            $$"""{ pageTree(spaceId: "{{f.SpaceId}}") { id children { id children { id } } } }""");
+            $$"""{ pageTree(spaceId: "{{f.SpaceId}}") { ... on PageTreeNode { id children { ... on PageTreeNode { id children { ... on PageTreeNode { id } } } } } } }""");
 
         var json = result.RootElement.GetProperty("data").GetProperty("pageTree").ToString();
         Assert.DoesNotContain(f.PageBId.ToString(), json, StringComparison.OrdinalIgnoreCase);

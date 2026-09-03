@@ -5,6 +5,7 @@ using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Data.Services;
+using RocketWiki.Core.Tests.Access;
 using Xunit;
 
 namespace RocketWiki.Data.Tests;
@@ -26,7 +27,7 @@ public class SpaceServiceTests : SqliteTestBase
 
     private static AccessRule SpaceAdminGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.SpaceAdmin,
         ExpressionJson = """{ "group": "space-admins" }""",
@@ -36,7 +37,8 @@ public class SpaceServiceTests : SqliteTestBase
         UpdatedByUserId = Guid.NewGuid(),
     };
 
-    private static InitialSpaceGrant DefaultInitialGrant() => new(SpaceRole.SpaceAdmin, """{ "group": "space-admins" }""");
+    private static IReadOnlyList<InitialGrant> DefaultInitialGrant() =>
+        [new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "group": "space-admins" }""")];
 
     // --- Create -------------------------------------------------------------------
 
@@ -108,7 +110,7 @@ public class SpaceServiceTests : SqliteTestBase
 
         var service = new SpaceService(context, LocalInstanceId);
         var result = await service.CreateAsync(
-            new CreateSpaceRequest("ENG", "Engineering", null), new InitialSpaceGrant(SpaceRole.SpaceAdmin, "{ not valid json"), isInstanceAdmin: true, actor.Id, AuditCtx);
+            new CreateSpaceRequest("ENG", "Engineering", null), [new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, "{ not valid json")], isInstanceAdmin: true, actor.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
         Assert.IsType<ValidationError>(result.Error);
@@ -144,11 +146,130 @@ public class SpaceServiceTests : SqliteTestBase
         // creates a second rule (an editor grant for everyone) through the real service.
         var accessRuleService = new AccessRuleService(context);
         var secondGrant = await accessRuleService.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, spaceResult.Value.Id, null, SpaceRole.Editor, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, spaceResult.Value.Id, null, SpaceRole.Editor, null, """{ "everyone": true }"""),
             admin, isInstanceAdmin: false, actor.Id, AuditCtx);
 
         Assert.True(secondGrant.IsSuccess);
         Assert.Equal(2, context.AccessRules.Count(r => r.SpaceId == spaceResult.Value.Id));
+    }
+
+    /// <summary>
+    /// design.md §6.5.1, restated for two grant kinds: born administrable means a
+    /// space-admin ROLE grant. An access grant, however broad, administers nothing, and
+    /// an Editor role grant cannot manage the rules either.
+    /// </summary>
+    [Theory]
+    [InlineData(AccessRuleKind.AccessGrant, null)]
+    [InlineData(AccessRuleKind.RoleGrant, SpaceRole.Editor)]
+    public async Task Create_WithoutASpaceAdminRoleGrant_IsAValidationError_AndNothingIsCreated(AccessRuleKind kind, SpaceRole? role)
+    {
+        var actor = TestData.NewUser();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.SaveChanges();
+
+        var result = await new SpaceService(context, LocalInstanceId).CreateAsync(
+            new CreateSpaceRequest("ENG", "Engineering", null),
+            [new InitialGrant(kind, role, """{ "everyone": true }""")],
+            isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("space-admin", Assert.IsType<ValidationError>(result.Error).Message, StringComparison.Ordinal);
+        Assert.Empty(context.Spaces.IgnoreQueryFilters().ToList());
+        Assert.Empty(context.AccessRules.ToList());
+    }
+
+    [Fact]
+    public async Task Create_CommitsEveryInitialGrant_EachAudited_SelectorsIncluded()
+    {
+        // design.md §6.5.1/§7: the role grant and the access grants land in the one
+        // transaction with the Space row, and each row gets its own permission.change,
+        // so a replay reconstructs the newborn space exactly.
+        var actor = TestData.NewUser();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.SaveChanges();
+
+        var result = await new SpaceService(context, LocalInstanceId).CreateAsync(
+            new CreateSpaceRequest("ENG", "Engineering", null),
+            [
+                new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "group": "space-admins" }"""),
+                new InitialGrant(AccessRuleKind.AccessGrant, null, """{ "everyone": true }"""),
+                new InitialGrant(AccessRuleKind.AccessGrant, null, """{ "group": "engineering" }""", [TestCatalogs.Apple, TestCatalogs.North]),
+            ],
+            isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess, $"{result.Error}");
+        var spaceId = result.Value.Id;
+
+        using var readContext = CreateContext();
+        var rules = readContext.AccessRules.Include(r => r.Selectors).Where(r => r.SpaceId == spaceId).ToList();
+        Assert.Equal(3, rules.Count);
+        var roleGrant = Assert.Single(rules, r => r.Kind == AccessRuleKind.RoleGrant);
+        Assert.Equal(SpaceRole.SpaceAdmin, roleGrant.Role);
+        var engineering = Assert.Single(rules, r => r.Kind == AccessRuleKind.AccessGrant && r.ExpressionJson.Contains("engineering"));
+        Assert.Equal([TestCatalogs.Apple, TestCatalogs.North], engineering.SelectorValues().OrderBy(s => s, SelectorValue.CanonicalOrder));
+
+        var audits = context.AuditEvents.Where(e => e.Action == "permission.change").ToList();
+        Assert.Equal(3, audits.Count);
+        Assert.All(audits, a => Assert.Contains("\"before\":null", a.DetailsJson));
+        Assert.Contains(audits, a => a.DetailsJson!.Contains("APPLE", StringComparison.Ordinal));
+        Assert.Single(context.AuditEvents.Where(e => e.Action == "space.create"));
+    }
+
+    [Fact]
+    public async Task Create_AnAccessGrantWithAnUnknownSelector_IsRefused_AndNothingIsCreated()
+    {
+        var actor = TestData.NewUser();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.SaveChanges();
+
+        var result = await new SpaceService(context, LocalInstanceId).CreateAsync(
+            new CreateSpaceRequest("ENG", "Engineering", null),
+            [
+                new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "group": "space-admins" }"""),
+                new InitialGrant(AccessRuleKind.AccessGrant, null, """{ "everyone": true }""", [new SelectorValue("FRUIT", "PEAR")]),
+            ],
+            isInstanceAdmin: true, actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ValidationError>(result.Error);
+        Assert.Empty(context.Spaces.IgnoreQueryFilters().ToList());
+    }
+
+    [Fact]
+    public async Task Create_AnAccessGrantAlone_DoesNotOpenTheRules_ButASpaceAdminRoleGrantDoes()
+    {
+        // Roles never supersede access and access never supersedes roles (§6.4): the
+        // everyone access grant lets the world SEE the space; only the space-admins
+        // group can change its rules.
+        var actor = TestData.NewUser();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.SaveChanges();
+
+        var created = await new SpaceService(context, LocalInstanceId).CreateAsync(
+            new CreateSpaceRequest("ENG", "Engineering", null),
+            [
+                new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "group": "space-admins" }"""),
+                new InitialGrant(AccessRuleKind.AccessGrant, null, """{ "everyone": true }"""),
+            ],
+            isInstanceAdmin: true, actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess, $"{created.Error}");
+
+        var rules = new AccessRuleService(context);
+        var request = new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, created.Value.Id, null, null, null, """{ "group": "engineering" }""");
+
+        var byEveryone = await rules.CreateAsync(request, AnyPrincipal(), isInstanceAdmin: false, actor.Id, AuditCtx);
+        Assert.IsType<ForbiddenError>(byEveryone.Error);
+
+        var byAdmin = await rules.CreateAsync(request, SpaceAdminPrincipal(), isInstanceAdmin: false, actor.Id, AuditCtx);
+        Assert.True(byAdmin.IsSuccess, $"{byAdmin.Error}");
     }
 
     // --- Rename ---------------------------------------------------------------------
@@ -528,7 +649,9 @@ public class SpaceServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        // The admin also writes a page below, which needs an access grant beside the role
+        // (design.md §6.4: roles never supersede access).
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(SpaceAdminGrant(space.Id)), SpaceAdminGrant(space.Id));
         context.SaveChanges();
 
         var pageService = new PageService(context, LocalInstanceId);

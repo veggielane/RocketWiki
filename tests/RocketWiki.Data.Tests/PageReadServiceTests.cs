@@ -2,6 +2,7 @@ using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
+using RocketWiki.Core.Tests.Access;
 using RocketWiki.Data.Services;
 using Xunit;
 
@@ -27,11 +28,10 @@ public class PageReadServiceTests : SqliteTestBase
         return Principal.Create("user-sub", groups ?? Array.Empty<string>(), attrs);
     }
 
-    private static AccessRule ViewerGrant(Guid spaceId) => new()
+    private static AccessRule AccessGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.AccessGrant,
         SpaceId = spaceId,
-        Role = SpaceRole.Viewer,
         ExpressionJson = """{ "everyone": true }""",
         CreatedAtUtc = DateTime.UtcNow,
         CreatedByUserId = Guid.NewGuid(),
@@ -62,7 +62,7 @@ public class PageReadServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(AccessGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageReadService(context);
@@ -82,7 +82,7 @@ public class PageReadServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(AccessGrant(space.Id));
         var restriction = ViewRestriction(page.Id, """{ "group": "top-secret" }""");
         context.AccessRules.Add(restriction);
         context.SaveChanges();
@@ -112,7 +112,7 @@ public class PageReadServiceTests : SqliteTestBase
         using var context = CreateContext();
         var space = TestData.NewSpace();
         context.Spaces.Add(space);
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(AccessGrant(space.Id));
 
         var chains = new[]
         {
@@ -158,7 +158,7 @@ public class PageReadServiceTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task GetPage_NoSpaceRoleAtAll_IsDeniedWithNoSpaceRoleReason()
+    public async Task GetPage_NoSpaceAccessAtAll_IsDeniedWithNoSpaceAccessReason()
     {
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space);
@@ -166,14 +166,14 @@ public class PageReadServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        // No AccessRule at all - no grant means no role, means no view, per design.md §6.4.
+        // No AccessRule at all - no access grant means no view, per design.md §6.4.
         context.SaveChanges();
 
         var service = new PageReadService(context);
         var result = await service.GetPageAsync(page.Id, MakePrincipal());
 
         var denied = Assert.IsType<ReadResult<Page>.Denied>(result);
-        Assert.Equal("no-space-role", denied.Reason);
+        Assert.Equal("no-space-access", denied.Reason);
     }
 
     [Fact]
@@ -185,7 +185,7 @@ public class PageReadServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(AccessGrant(space.Id));
         context.AccessRules.Add(ViewRestriction(page.Id, """{ "attr": "nationality", "in": ["NZ", "US"] }"""));
         context.SaveChanges();
 
@@ -214,7 +214,7 @@ public class PageReadServiceTests : SqliteTestBase
         context.Pages.Add(page);
         context.PageRevisions.Add(TestData.NewRevision(page, actor, 1));
         context.PageRevisions.Add(TestData.NewRevision(page, actor, 2));
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(AccessGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageReadService(context);
@@ -238,7 +238,7 @@ public class PageReadServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PageRevisions.Add(TestData.NewRevision(page, actor, 1));
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(AccessGrant(space.Id));
         var restriction = ViewRestriction(page.Id, """{ "group": "top-secret" }""");
         context.AccessRules.Add(restriction);
         context.SaveChanges();
@@ -280,7 +280,7 @@ public class PageReadServiceTests : SqliteTestBase
 
         context.Spaces.Add(space);
         context.Pages.AddRange(root, publicChild, restrictedBranch, deepGrandchild, anotherChild, deeplyRestrictedLeaf);
-        context.AccessRules.Add(ViewerGrant(space.Id));
+        context.AccessRules.Add(AccessGrant(space.Id));
         context.AccessRules.Add(ViewRestriction(restrictedBranch.Id, """{ "attr": "nationality", "in": ["NZ", "US"] }"""));
         context.AccessRules.Add(ViewRestriction(deeplyRestrictedLeaf.Id, """{ "group": "legal" }"""));
         context.SaveChanges();
@@ -289,14 +289,16 @@ public class PageReadServiceTests : SqliteTestBase
     }
 
     /// <summary>Unwraps a tree result the way only a test may: asserting it IS Found.
-    /// Pruning happens inside a Found - a pruned node is not a Denied (see the
-    /// interface doc); Denied/NotFound have their own dedicated tests below.</summary>
-    private static IReadOnlyList<PageTreeNode> AssertFound(ReadResult<IReadOnlyList<PageTreeNode>> result) =>
-        Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Found>(result).Value;
+    /// A protected entry lives inside a Found - a node the caller fails is not a Denied
+    /// (see the interface doc); Denied/NotFound have their own dedicated tests below.</summary>
+    private static IReadOnlyList<PageTreeEntry> AssertFound(ReadResult<IReadOnlyList<PageTreeEntry>> result) =>
+        Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Found>(result).Value;
 
-    private static IEnumerable<Guid> FlattenIds(IReadOnlyList<PageTreeNode> nodes)
+    /// <summary>The ids of the VISIBLE nodes at every depth - what an omitting surface
+    /// renders; a protected entry has no id and nothing beneath it.</summary>
+    private static IEnumerable<Guid> FlattenIds(IReadOnlyList<PageTreeEntry> entries)
     {
-        foreach (var node in nodes)
+        foreach (var node in entries.OfType<PageTreeNode>())
         {
             yield return node.Id;
             foreach (var id in FlattenIds(node.Children))
@@ -384,14 +386,36 @@ public class PageReadServiceTests : SqliteTestBase
         Assert.DoesNotContain(tree.DeepGrandchild.Title, allTitles);
         Assert.DoesNotContain(tree.DeeplyRestrictedLeaf.Title, allTitles);
 
-        static IEnumerable<PageTreeNode> Flatten(IReadOnlyList<PageTreeNode> nodes)
+        // And the protected entries that stand in for them carry no title, slug, id or
+        // children at all - by type, not by a field that happens to be blank
+        // (design.md §6.7/§21.8). Their denial names the restriction, and only that.
+        var placeholders = FlattenEntries(result).OfType<ProtectedTreeNode>().ToList();
+        Assert.Equal(2, placeholders.Count); // RestrictedBranch and DeeplyRestrictedLeaf; DeepGrandchild is beneath one, never walked
+        Assert.All(placeholders, p => Assert.StartsWith("restriction:", p.Denial.Reason));
+
+        static IEnumerable<PageTreeNode> Flatten(IReadOnlyList<PageTreeEntry> entries)
         {
-            foreach (var node in nodes)
+            foreach (var node in entries.OfType<PageTreeNode>())
             {
                 yield return node;
                 foreach (var descendant in Flatten(node.Children))
                 {
                     yield return descendant;
+                }
+            }
+        }
+
+        static IEnumerable<PageTreeEntry> FlattenEntries(IReadOnlyList<PageTreeEntry> entries)
+        {
+            foreach (var entry in entries)
+            {
+                yield return entry;
+                if (entry is PageTreeNode node)
+                {
+                    foreach (var descendant in FlattenEntries(node.Children))
+                    {
+                        yield return descendant;
+                    }
                 }
             }
         }
@@ -405,11 +429,11 @@ public class PageReadServiceTests : SqliteTestBase
         var service = new PageReadService(context);
         var result = await service.GetPageTreeAsync(Guid.NewGuid(), MakePrincipal());
 
-        Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.NotFound>(result);
+        Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.NotFound>(result);
     }
 
     [Fact]
-    public async Task GetPageTree_PrincipalWithNoSpaceRole_IsDenied_EvenThoughUnrestrictedPagesExist()
+    public async Task GetPageTree_PrincipalWithNoSpaceAccess_IsDenied_EvenThoughUnrestrictedPagesExist()
     {
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space); // no restriction on this page at all
@@ -425,8 +449,8 @@ public class PageReadServiceTests : SqliteTestBase
 
         // Internally a denial with the §15 category-grade reason; the API boundary
         // collapses this to the same empty list a fully-pruned Found produces.
-        var denied = Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Denied>(result);
-        Assert.Equal("no-space-role", denied.Reason);
+        var denied = Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Denied>(result);
+        Assert.Equal("no-space-access", denied.Reason);
     }
 
     [Fact]
@@ -439,12 +463,98 @@ public class PageReadServiceTests : SqliteTestBase
         var principal = MakePrincipal(attributes: new() { ["nationality"] = new[] { "NZ" } });
         var result = AssertFound(await service.GetPageTreeAsync(tree.Space.Id, principal));
 
-        var root = Assert.Single(result);
+        var root = Assert.IsType<PageTreeNode>(Assert.Single(result));
         Assert.Equal(tree.Root.Id, root.Id);
         Assert.Equal(3, root.Children.Count); // PublicChild, RestrictedBranch, AnotherChild
 
-        var restrictedBranchNode = root.Children.Single(n => n.Id == tree.RestrictedBranch.Id);
-        var deepGrandchildNode = Assert.Single(restrictedBranchNode.Children);
+        var restrictedBranchNode = root.Children.OfType<PageTreeNode>().Single(n => n.Id == tree.RestrictedBranch.Id);
+        var deepGrandchildNode = Assert.IsType<PageTreeNode>(Assert.Single(restrictedBranchNode.Children));
         Assert.Equal(tree.DeepGrandchild.Id, deepGrandchildNode.Id);
+    }
+
+    // --- Roles never supersede access; selectors gate the tree (§6.4 / §21.15) ----------
+
+    private static AccessRule RoleGrant(Guid spaceId, SpaceRole role) => new()
+    {
+        Kind = AccessRuleKind.RoleGrant,
+        SpaceId = spaceId,
+        Role = role,
+        ExpressionJson = """{ "everyone": true }""",
+        CreatedAtUtc = DateTime.UtcNow,
+        CreatedByUserId = Guid.NewGuid(),
+        UpdatedAtUtc = DateTime.UtcNow,
+        UpdatedByUserId = Guid.NewGuid(),
+    };
+
+    private static AccessRule AccessGrantWith(Guid spaceId, params SelectorValue[] selectors)
+    {
+        var grant = AccessGrant(spaceId);
+        foreach (var selector in selectors)
+        {
+            grant.Selectors.Add(new AccessRuleSelector { AccessRuleId = grant.Id, Category = selector.Category, Value = selector.Value });
+        }
+
+        return grant;
+    }
+
+    [Fact]
+    public async Task GetPageTree_RoleGrantWithoutAccess_IsDenied_RolesNeverSupersedeAccess()
+    {
+        // A Space-admin holding no access grant manages a space whose pages they cannot
+        // read (§6.5.2): the tree is Denied for them exactly as for a stranger, and the
+        // API collapses both to the empty list a missing space gets.
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.Add(RoleGrant(space.Id, SpaceRole.SpaceAdmin));
+        context.SaveChanges();
+
+        var service = new PageReadService(context);
+
+        var tree = Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Denied>(await service.GetPageTreeAsync(space.Id, MakePrincipal()));
+        Assert.Equal("no-space-access", tree.Reason);
+        var read = Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(page.Id, MakePrincipal()));
+        Assert.Equal("no-space-access", read.Reason);
+    }
+
+    [Fact]
+    public async Task GetPageTree_ANodeWhoseSelectorTheCallerLacks_IsPrunedWithItsSubtree()
+    {
+        // The tree walk runs the calculator's own view ladder per node (§21.9), so the
+        // selector gates prune here exactly as they deny on GetPageAsync - and pruning
+        // takes the subtree with it, since a tree cannot render a child of an absent node.
+        var space = TestData.NewSpace();
+        var root = TestData.NewPage(space, "root");
+        var compartment = TestData.NewPage(space, "compartment", root);
+        var deep = TestData.NewPage(space, "deep", compartment);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.AddRange(root, compartment, deep);
+        context.PageMarkings.Add(TestData.NewMarking(compartment, ClassificationLevel.Official).WithSelectors(TestCatalogs.Apple));
+        context.AccessRules.Add(AccessGrant(space.Id)); // access, but APPLE is not granted
+        context.SaveChanges();
+
+        var service = new PageReadService(context);
+        var eligible = MakePrincipal(attributes: new() { [TestCatalogs.FruitClaim] = ["yes"] });
+
+        var pruned = FlattenIds(AssertFound(await service.GetPageTreeAsync(space.Id, eligible))).ToHashSet();
+        Assert.Contains(root.Id, pruned);
+        Assert.DoesNotContain(compartment.Id, pruned);
+        Assert.DoesNotContain(deep.Id, pruned); // inherited APPLE at insert; pruned with its parent either way
+
+        // The same caller, once a grant carries APPLE, sees the whole subtree.
+        context.AccessRules.Add(AccessGrantWith(space.Id, TestCatalogs.Apple));
+        context.SaveChanges();
+        var visible = FlattenIds(AssertFound(await new PageReadService(context).GetPageTreeAsync(space.Id, eligible))).ToHashSet();
+        Assert.Contains(compartment.Id, visible);
+        Assert.Contains(deep.Id, visible);
+
+        // And the node's verdict is GetPageAsync's verdict, reason for reason.
+        var denied = Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(compartment.Id, MakePrincipal()));
+        Assert.Equal("selector:not_eligible:FRUIT", denied.Reason);
     }
 }

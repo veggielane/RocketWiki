@@ -24,9 +24,11 @@ namespace RocketWiki.Api.Tests.Integration;
 /// </summary>
 public sealed class EditSessionHubTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
 {
-    private async Task<HubConnection> ConnectAsync(string sub, IEnumerable<string>? nationality = null)
+    private async Task<HubConnection> ConnectAsync(
+        string sub, IEnumerable<string>? nationality = null, IEnumerable<string>? selectorClaims = null)
     {
-        var claimsHeader = TestUserHttpClientExtensions.BuildEncodedClaimsHeaderValue(sub, name: sub, nationality: nationality);
+        var claimsHeader = TestUserHttpClientExtensions.BuildEncodedClaimsHeaderValue(
+            sub, name: sub, nationality: nationality, selectorClaims: selectorClaims);
 
         var connection = new HubConnectionBuilder()
             .WithUrl("http://localhost/hubs/notifications", options =>
@@ -61,12 +63,12 @@ public sealed class EditSessionHubTests(RocketWikiApiFactory factory) : IClassFi
             CreatedByUserId = seeder.Id,
         };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
+            Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-        });
+        }));
         var page = new Page
         {
             SpaceId = space.Id, AncestorPath = "/", Slug = "p", Title = "Edit Page",
@@ -178,6 +180,73 @@ public sealed class EditSessionHubTests(RocketWikiApiFactory factory) : IClassFi
         var ghostPageId = Guid.NewGuid();
         Assert.Null(await nz.InvokeAsync<EditSessionJoinResult?>("JoinEditSession", ghostPageId));
         Assert.Empty(AuditRowsFor(ghostPageId, EditSessionAudit.JoinedAction));
+    }
+
+    [Fact]
+    public async Task JoinEditSession_HonoursSelectorGates_ThroughTheHubPrincipal()
+    {
+        // design.md §21.15 on the realtime channel: the hub builds its Principal through
+        // the same PrincipalBuilder the HTTP path uses, so a selector claim on the token
+        // admits (and its absence refuses) a co-editor exactly as it would a GraphQL
+        // read. The page carries FRUIT/APPLE; the space's access grant confers APPLE to
+        // everyone, so eligibility - the `fruit` claim - is the one gate that decides.
+        Guid pageId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+            var seeder = new User { Subject = $"seed-{Guid.NewGuid()}", DisplayName = "Seeder", CreatedAtUtc = DateTime.UtcNow, LastSeenAtUtc = DateTime.UtcNow };
+            db.Users.Add(seeder);
+            await db.SaveChangesAsync();
+
+            var space = new Space
+            {
+                Key = $"ESS{Guid.NewGuid():N}"[..8].ToUpperInvariant(),
+                Name = "Selector Edit Session Space",
+                OriginInstanceId = "standalone",
+                CreatedAtUtc = DateTime.UtcNow,
+                CreatedByUserId = seeder.Id,
+            };
+            db.Spaces.Add(space);
+            db.AccessRules.Add(new AccessRule
+            {
+                Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
+                ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
+                CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
+            });
+            var access = new AccessRule
+            {
+                Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
+                ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
+                CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
+            };
+            access.Selectors.Add(new AccessRuleSelector { Category = "FRUIT", Value = "APPLE" });
+            db.AccessRules.Add(access);
+
+            var page = new Page
+            {
+                SpaceId = space.Id, AncestorPath = "/", Slug = "apple", Title = "Apple Page",
+                CurrentContent = "# Apple", CurrentRevisionNumber = 0,
+                CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow,
+            };
+            db.Pages.Add(page);
+            await db.SaveChangesAsync();
+
+            var marking = await db.PageMarkings.Include(m => m.Selectors).SingleAsync(m => m.PageId == page.Id);
+            marking.Selectors.Add(new PageMarkingSelector { PageId = page.Id, Category = "FRUIT", Value = "APPLE" });
+            await db.SaveChangesAsync();
+            pageId = page.Id;
+        }
+
+        await using var eligible = await ConnectAsync($"eligible-{Guid.NewGuid()}", selectorClaims: [RocketWikiApiFactory.FruitClaim]);
+        Assert.NotNull(await eligible.InvokeAsync<EditSessionJoinResult?>("JoinEditSession", pageId));
+
+        await using var ineligible = await ConnectAsync($"ineligible-{Guid.NewGuid()}");
+        Assert.Null(await ineligible.InvokeAsync<EditSessionJoinResult?>("JoinEditSession", pageId));
+
+        // §7: the refusal names the selector gate by category, never by value.
+        var denied = Assert.Single(AuditRowsFor(pageId, EditSessionAudit.JoinedAction), r => r.Outcome == AuditOutcome.Denied);
+        Assert.Contains("selector:not_eligible:FRUIT", denied.DetailsJson);
+        Assert.DoesNotContain("APPLE", denied.DetailsJson);
     }
 
     [Fact]

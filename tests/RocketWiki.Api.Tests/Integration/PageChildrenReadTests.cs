@@ -59,12 +59,12 @@ public sealed class PageChildrenReadTests(RocketWikiApiFactory factory) : IClass
             OriginInstanceId = "standalone", CreatedAtUtc = now, CreatedByUserId = creator.Id,
         };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.SpaceAdmin,
+            Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.SpaceAdmin,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = now, CreatedByUserId = creator.Id, UpdatedAtUtc = now, UpdatedByUserId = creator.Id,
-        });
+        }));
 
         Page NewPage(string slug, Page? parent) => new()
         {

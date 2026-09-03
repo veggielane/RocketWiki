@@ -40,10 +40,16 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
 
     private const string SentinelPrefix = "ZZSENTINELPREFIXZZ";
 
+    /// <summary>design.md §21.15/§21.13: a selector value on a retrieved page reaches the
+    /// answer's aggregate label (selectors are the union) and each citation's label — a
+    /// third marking part with a route to a span, swept like the country and the
+    /// prefix. The asker is granted it (below), so the page is genuinely retrieved.</summary>
+    private const string SentinelSelector = RocketWikiApiFactory.SentinelSelectorValue;
+
     private static readonly string[] AllSentinels =
     [
         SentinelQuestion, SentinelContent, SentinelTitle, SentinelHeading, SentinelAnswer,
-        SentinelCountry, SentinelPrefix,
+        SentinelCountry, SentinelPrefix, SentinelSelector,
     ];
 
     [Fact]
@@ -96,10 +102,11 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
         }
 
         var client = fixture.Factory.CreateClient();
-        // The nationality claim admits the seeded page's sentinel eyes-only caveat, so the
-        // marking is genuinely evaluated and genuinely aggregated rather than the page
-        // simply being filtered out before any of it happens.
-        client.SetTestUser(sub: $"ask-tel-{Guid.NewGuid():N}", nationality: [SentinelCountry]);
+        // The nationality claim admits the seeded page's eyes-only caveat (NZ, from the fixed
+        // set - design.md §21.4), so the marking is genuinely evaluated and genuinely
+        // aggregated rather than the page simply being filtered out before any of it
+        // happens; the sentinel country rides beside it on both sides, matching nobody.
+        client.SetTestUser(sub: $"ask-tel-{Guid.NewGuid():N}", nationality: [SentinelCountry, "NZ"]);
 
         // 1. A successful ask: the sentinel question as an inline literal, sentinel
         //    title/heading/content through retrieval into the model context, the sentinel
@@ -125,7 +132,15 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
             // both sentinels, so the sweep below has something to find if it leaks.
             var aggregate = ask.GetProperty("aggregateMarking").GetProperty("label").GetString()!;
             Assert.Contains(SentinelCountry, aggregate);
-            Assert.Contains(SentinelPrefix, aggregate);
+            Assert.Contains(SentinelSelector, aggregate);
+            // The aggregate's prefix is the UK toggle on unanimity (design.md §21.12/§21.13),
+            // and a legacy sentinel prefix is not UK, so the aggregate renders bare — but each
+            // citation's own marking label renders its stored prefix verbatim, which is the
+            // surface the sentinel prefix actually reaches and the sweep has to stay clean across.
+            var citationLabel = ask.GetProperty("citations").EnumerateArray().Single()
+                .GetProperty("marking").GetProperty("label").GetString()!;
+            Assert.Contains(SentinelPrefix, citationLabel);
+            Assert.Contains(SentinelCountry, citationLabel);
 
             // 2. The unreachable path: content already traveled, then the endpoint
             //    fails — the degraded disposition must be exactly as clean.
@@ -182,17 +197,24 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
             CreatedByUserId = creator.Id,
         };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        // The access grant confers the sentinel selector (design.md §21.15), so the asker
+        // passes G for the page below and it genuinely enters retrieval and the label.
+        var grant = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = creator.Id,
             UpdatedAtUtc = DateTime.UtcNow,
             UpdatedByUserId = creator.Id,
+        };
+        grant.Selectors.Add(new AccessRuleSelector
+        {
+            Category = RocketWikiApiFactory.SentinelSelectorCategory,
+            Value = SentinelSelector,
         });
+        db.AccessRules.Add(grant);
 
         // Sentinels in title, heading text (→ breadcrumb + context header + citation
         // headingPath), and body (→ chunk text → model context). The body mentions the
@@ -212,8 +234,8 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
         db.Pages.Add(page);
 
         // design.md §21.13: a real marking, at a level the (clearance-less, therefore
-        // OFFICIAL) asker is admitted to, with a sentinel eyes-only country and a sentinel
-        // national prefix. Both flow into the answer's aggregate label and each citation's
+        // OFFICIAL-SENSITIVE) asker is admitted to, with a sentinel eyes-only country and a
+        // sentinel national prefix. Both flow into the answer's aggregate label and each citation's
         // marking — two new surfaces §15 has to stay clean across.
         var marking = new PageMarking
         {
@@ -223,6 +245,13 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
             SetAtUtc = now,
         };
         marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = SentinelCountry });
+        marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = "NZ" });
+        marking.Selectors.Add(new PageMarkingSelector
+        {
+            PageId = page.Id,
+            Category = RocketWikiApiFactory.SentinelSelectorCategory,
+            Value = SentinelSelector,
+        });
         db.PageMarkings.Add(marking);
 
         await db.SaveChangesAsync();

@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using RocketWiki.Core.Access;
 using RocketWiki.Data;
 
 namespace RocketWiki.Api.Tests.Integration;
@@ -28,9 +29,27 @@ namespace RocketWiki.Api.Tests.Integration;
 /// test project to add a *mutation* here should either give it its own
 /// factory instance or wrap each test in a transaction it rolls back, rather
 /// than relying on execution order.
+///
+/// <para><b>The selector catalog</b> (design.md §21.15) is the one every tier shares —
+/// <c>FRUIT</c> (<c>APPLE</c>, <c>BANANA</c>) gated by the <c>fruit</c> claim and
+/// <c>REGION</c> (<c>NORTH</c>, <c>SOUTH</c>) gated by nobody, the same vocabulary as
+/// Core.Tests' <c>TestCatalogs</c> and the dev AppHost — plus a third, claim-less
+/// <see cref="SentinelSelectorCategory"/> whose only value is a telemetry-hygiene
+/// sentinel: a page carrying it is readable by nobody (no grant confers it), so its
+/// placeholder label travels through every disclosing surface and the §15 sweep has
+/// something to find if a selector value ever reaches a span or a metric tag.</para>
 /// </summary>
 public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
 {
+    /// <summary>The claim gating <c>FRUIT</c> eligibility, as the dev realm's mapper names it.</summary>
+    public const string FruitClaim = "fruit";
+
+    /// <summary>The claim-less category that carries only the hygiene sentinel value.</summary>
+    public const string SentinelSelectorCategory = "SENTINEL";
+
+    /// <summary>A selector value that must never appear in telemetry (design.md §15/§21.8).</summary>
+    public const string SentinelSelectorValue = "ZZSENTINELSELECTORZZ";
+
     // A temp *file* rather than a shared :memory: connection: once
     // NotificationsHubTests joined this fixture, a SignalR LongPolling connection
     // holds a "poll" GET open concurrently with a "send" POST invoking a hub
@@ -71,6 +90,23 @@ public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
                 ["Database:MigrateOnStartup"] = "false",
                 ["FileStorage:Provider"] = "FileSystem",
                 ["FileStorage:FileSystem:Root"] = _attachmentsRoot,
+
+                // The shared test catalog (see the class doc). Bound by
+                // ProtectiveMarkingConfiguration exactly as a deployment's environment is.
+                ["ProtectiveMarking:SelectorCategories:0:Name"] = "FRUIT",
+                ["ProtectiveMarking:SelectorCategories:0:Description"] = "Fruit programme compartments",
+                ["ProtectiveMarking:SelectorCategories:0:ClaimName"] = FruitClaim,
+                ["ProtectiveMarking:SelectorCategories:0:Values:0"] = "APPLE",
+                ["ProtectiveMarking:SelectorCategories:0:Values:1"] = "BANANA",
+                ["ProtectiveMarking:SelectorCategories:1:Name"] = "REGION",
+                ["ProtectiveMarking:SelectorCategories:1:Description"] = "Regional releasability",
+                ["ProtectiveMarking:SelectorCategories:1:ClaimName"] = "",
+                ["ProtectiveMarking:SelectorCategories:1:Values:0"] = "NORTH",
+                ["ProtectiveMarking:SelectorCategories:1:Values:1"] = "SOUTH",
+                ["ProtectiveMarking:SelectorCategories:2:Name"] = SentinelSelectorCategory,
+                ["ProtectiveMarking:SelectorCategories:2:Description"] = "Telemetry hygiene sentinel",
+                ["ProtectiveMarking:SelectorCategories:2:ClaimName"] = "",
+                ["ProtectiveMarking:SelectorCategories:2:Values:0"] = SentinelSelectorValue,
             });
         });
 
@@ -102,8 +138,17 @@ public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
             // OriginInstanceId = "standalone" to match. Without it, mutations on
             // exported spaces would throw - the sync outbox writer refuses to journal
             // when it cannot verify ownership (design.md §12).
-            services.AddDbContext<RocketWikiDbContext>(options =>
-                options.UseSqlite(ConnectionString).UseLocalInstanceId("standalone"));
+            //
+            // UseSelectorCatalog mirrors the other half of that wiring: the data layer's
+            // gates read the catalog off the context options (design.md §21.15), and a
+            // replacement registration that forgot to stamp it would run every gate
+            // against SelectorCatalog.Empty — fail-closed, but silently a different
+            // vocabulary from the one the API's own singleton (built from the config
+            // above) validates markings and grants against.
+            services.AddDbContext<RocketWikiDbContext>((provider, options) =>
+                options.UseSqlite(ConnectionString)
+                    .UseLocalInstanceId("standalone")
+                    .UseSelectorCatalog(provider.GetRequiredService<SelectorCatalog>()));
 
             // Replaces "Bearer" (real Keycloak JWT validation) with the fake
             // handler as the default scheme, so tests never need a real token.

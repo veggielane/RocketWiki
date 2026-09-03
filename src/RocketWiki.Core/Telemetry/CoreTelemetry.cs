@@ -151,18 +151,28 @@ public static class CoreTelemetry
     public static string CategorizeDenialReason(string? denialReason) => denialReason switch
     {
         null => "none",
-        "no-space-role" => "no-space-role",
+        "no-space-access" => "no-space-access",
         "replica-read-only" => "replica-read-only",
         "insufficient-space-role" => "insufficient-space-role",
         _ when denialReason.StartsWith("restriction:", StringComparison.Ordinal) => "restriction",
         _ when denialReason.StartsWith("classification:", StringComparison.Ordinal) => "classification",
         _ when denialReason.StartsWith("caveat:", StringComparison.Ordinal) => "caveat",
+        // design.md §21.15: selector:not_eligible:{CATEGORY}, selector:unknown:{CATEGORY}
+        // and selector:not_granted:{CATEGORY} all collapse to one word. The category
+        // name is bounded configured vocabulary, but a per-category series would still be
+        // a census of which compartments exist and how hard each is probed - the §21.8
+        // argument that keeps the level out, applied to the selector.
+        _ when denialReason.StartsWith("selector:", StringComparison.Ordinal) => "selector",
         _ => "other",
     };
 
+    /// <summary>The rule kind as a metric dimension: the two grant kinds are distinct
+    /// series because "are access grants denying more than usual" and "are role grants"
+    /// are different questions (§6.4). Enum names only; never an expression.</summary>
     private static string TagFor(AccessRuleKind kind) => kind switch
     {
-        AccessRuleKind.SpaceGrant => "space_grant",
+        AccessRuleKind.RoleGrant => "space_role_grant",
+        AccessRuleKind.AccessGrant => "space_access_grant",
         AccessRuleKind.PageRestriction => "page_restriction",
         _ => "other",
     };

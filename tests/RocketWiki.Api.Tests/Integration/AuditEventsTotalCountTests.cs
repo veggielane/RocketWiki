@@ -28,7 +28,7 @@ public sealed class AuditEventsTotalCountTests(RocketWikiApiFactory factory) : I
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Viewer,
+            Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
         });

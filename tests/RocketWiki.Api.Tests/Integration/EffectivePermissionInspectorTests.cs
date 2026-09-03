@@ -48,9 +48,9 @@ public sealed class EffectivePermissionInspectorTests(RocketWikiApiFactory facto
         };
         db.Spaces.Add(space);
 
-        void Grant(SpaceRole role, RuleNode expression) => db.AccessRules.Add(new AccessRule
+        void Grant(SpaceRole? role, RuleNode expression) => db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = role,
             ExpressionJson = RuleExpressionSerializer.Serialize(expression),
@@ -58,9 +58,9 @@ public sealed class EffectivePermissionInspectorTests(RocketWikiApiFactory facto
             CreatedByUserId = creator.Id,
             UpdatedAtUtc = now,
             UpdatedByUserId = creator.Id,
-        });
+        }));
 
-        Grant(SpaceRole.Viewer, new EveryoneCondition());
+        Grant(null, new EveryoneCondition()); // access only: may see, holds no role
         Grant(SpaceRole.Editor, new GroupCondition("editors"));
 
         var pageA = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "a", Title = "Page A", CreatedAtUtc = now, UpdatedAtUtc = now };
@@ -125,7 +125,8 @@ public sealed class EffectivePermissionInspectorTests(RocketWikiApiFactory facto
         Assert.Equal(sub, detail.GetProperty("userId").GetString());
         // Display name comes from the JIT-provisioned mirror row for a real user.
         Assert.Equal("Self Inspector", detail.GetProperty("userDisplayName").GetString());
-        Assert.Equal("VIEWER", detail.GetProperty("spaceRole").GetString());
+        // An access grant confers no role (design.md §6.4); the inspector reports none.
+        Assert.Equal(JsonValueKind.Null, detail.GetProperty("spaceRole").ValueKind);
         Assert.False(detail.GetProperty("isReplicaSpace").GetBoolean());
         Assert.True(detail.GetProperty("canView").GetBoolean());
         Assert.False(detail.GetProperty("canEdit").GetBoolean());
@@ -140,6 +141,56 @@ public sealed class EffectivePermissionInspectorTests(RocketWikiApiFactory facto
         var details = JsonDocument.Parse(row.DetailsJson);
         Assert.Equal(sub, details.RootElement.GetProperty("inspectedUserId").GetString());
         Assert.True(details.RootElement.GetProperty("self").GetBoolean());
+    }
+
+    [Fact]
+    public async Task SelfInspection_OnAViewablePage_ListsViewAndEditGates()
+    {
+        // design.md §6.6/§21.2: the whole ladder, every gate with its pass/fail, in the
+        // same GateResult shape a placeholder's reasons use (§21.8). PageA for an
+        // access-only caller: S, C and N pass (no selectors, no restrictions on A), and
+        // the edit half is replica (passed) then role (failed - no role grant matched).
+        var f = await SeedAsync();
+        var client = factory.CreateClient();
+        client.SetTestUser(sub: $"gates-{Guid.NewGuid()}", nationality: ["NZ"]);
+
+        var result = await client.PostGraphQLAsync($$"""
+            { effectivePermission(pageId: "{{f.PageAId}}") {
+                hasSpaceAccess spaceRole canView canEdit
+                viewGates { gate passed ruleId inherited }
+                editGates { gate passed requiredRole }
+              } }
+            """);
+
+        var detail = result.RootElement.GetProperty("data").GetProperty("effectivePermission");
+        Assert.True(detail.GetProperty("hasSpaceAccess").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, detail.GetProperty("spaceRole").ValueKind);
+        Assert.Equal(
+            ["SPACE_ACCESS", "CLASSIFICATION", "NATIONAL_CAVEAT"],
+            detail.GetProperty("viewGates").EnumerateArray().Select(g => g.GetProperty("gate").GetString()));
+        Assert.All(detail.GetProperty("viewGates").EnumerateArray(), g => Assert.True(g.GetProperty("passed").GetBoolean()));
+
+        var editGates = detail.GetProperty("editGates").EnumerateArray().ToList();
+        Assert.Equal(["REPLICA", "ROLE"], editGates.Select(g => g.GetProperty("gate").GetString()));
+        Assert.True(editGates[0].GetProperty("passed").GetBoolean());
+        Assert.False(editGates[1].GetProperty("passed").GetBoolean());
+        Assert.Equal("EDITOR", editGates[1].GetProperty("requiredRole").GetString());
+
+        // A US editor on PageB: the restriction appears as a passed RESTRICTION gate
+        // carrying its rule id and sitting on the page itself (not inherited).
+        var editor = factory.CreateClient();
+        editor.SetTestUser(sub: $"gates-editor-{Guid.NewGuid()}", groups: ["editors"], nationality: ["US"]);
+        var onB = await editor.PostGraphQLAsync($$"""
+            { effectivePermission(pageId: "{{f.PageBId}}") { spaceRole canEdit viewGates { gate passed ruleId inherited } editGates { gate passed } } }
+            """);
+        var detailB = onB.RootElement.GetProperty("data").GetProperty("effectivePermission");
+        Assert.Equal("EDITOR", detailB.GetProperty("spaceRole").GetString());
+        Assert.True(detailB.GetProperty("canEdit").GetBoolean());
+        var restriction = Assert.Single(detailB.GetProperty("viewGates").EnumerateArray(), g => g.GetProperty("gate").GetString() == "RESTRICTION");
+        Assert.True(restriction.GetProperty("passed").GetBoolean());
+        Assert.Equal(f.RestrictionRuleId.ToString(), restriction.GetProperty("ruleId").GetString(), ignoreCase: true);
+        Assert.False(restriction.GetProperty("inherited").GetBoolean());
+        Assert.All(detailB.GetProperty("editGates").EnumerateArray(), g => Assert.True(g.GetProperty("passed").GetBoolean()));
     }
 
     [Fact]

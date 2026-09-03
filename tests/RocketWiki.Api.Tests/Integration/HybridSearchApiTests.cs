@@ -54,9 +54,9 @@ public sealed class HybridSearchApiTests(EmbeddingApiFixture fixture) : IClassFi
         };
         db.Spaces.Add(space);
 
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
@@ -64,7 +64,7 @@ public sealed class HybridSearchApiTests(EmbeddingApiFixture fixture) : IClassFi
             CreatedByUserId = creator.Id,
             UpdatedAtUtc = DateTime.UtcNow,
             UpdatedByUserId = creator.Id,
-        });
+        }));
 
         await db.SaveChangesAsync();
         return (space, creator);

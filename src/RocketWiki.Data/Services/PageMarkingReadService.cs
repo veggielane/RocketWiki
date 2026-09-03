@@ -43,6 +43,7 @@ public sealed class PageMarkingReadService(RocketWikiDbContext db) : IPageMarkin
         var rows = await db.PageMarkings
             .AsNoTracking()
             .Include(m => m.Countries)
+            .Include(m => m.Selectors)
             .Where(m => ids.Contains(m.PageId))
             .ToListAsync(cancellationToken);
 

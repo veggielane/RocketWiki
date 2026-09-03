@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Tests.Access;
 using Xunit;
 
 namespace RocketWiki.Data.Tests;
@@ -13,14 +15,13 @@ namespace RocketWiki.Data.Tests;
 public class CheckConstraintTests : SqliteTestBase
 {
     [Fact]
-    public void AccessRule_SpaceGrantWithPageIdInsteadOfSpaceId_ViolatesKindColumnPairing()
+    public void AccessRule_AccessGrantWithPageIdInsteadOfSpaceId_ViolatesKindColumnPairing()
     {
         using var context = CreateContext();
         context.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             PageId = Guid.NewGuid(), // wrong column for this Kind
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = Guid.NewGuid(),
@@ -32,7 +33,7 @@ public class CheckConstraintTests : SqliteTestBase
     }
 
     [Fact]
-    public void AccessRule_SpaceGrantMissingRole_ViolatesKindColumnPairing()
+    public void AccessRule_RoleGrantMissingRole_ViolatesKindColumnPairing()
     {
         var space = TestData.NewSpace();
 
@@ -40,9 +41,9 @@ public class CheckConstraintTests : SqliteTestBase
         context.Spaces.Add(space);
         context.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
-            Role = null, // required for SpaceGrant
+            Role = null, // required on a role grant
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = Guid.NewGuid(),
@@ -76,7 +77,7 @@ public class CheckConstraintTests : SqliteTestBase
     }
 
     [Fact]
-    public void AccessRule_ValidSpaceGrant_Saves()
+    public void AccessRule_ValidAccessGrant_Saves()
     {
         var space = TestData.NewSpace();
 
@@ -84,9 +85,8 @@ public class CheckConstraintTests : SqliteTestBase
         context.Spaces.Add(space);
         context.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = Guid.NewGuid(),
@@ -96,6 +96,104 @@ public class CheckConstraintTests : SqliteTestBase
 
         var exception = Record.Exception(() => context.SaveChanges());
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public void AccessRule_RoleGrantWithViewerRole_ViolatesKindColumnPairing()
+    {
+        // "Viewer" is retired (design.md §6.4): the value 1 is refused on a role grant by
+        // the constraint itself, so the split migration's conversion cannot be undone one
+        // row at a time by a stray write, and no code path can resurrect the old role.
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.RoleGrant,
+            SpaceId = space.Id,
+            Role = (SpaceRole)1,
+            ExpressionJson = """{ "everyone": true }""",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = Guid.NewGuid(),
+        });
+
+        Assert.ThrowsAny<DbUpdateException>(() => context.SaveChanges());
+    }
+
+    [Fact]
+    public void AccessRule_AccessGrantWithRole_ViolatesKindColumnPairing()
+    {
+        // An access grant confers visibility and nothing else; a role on it would be a
+        // second, unaudited way to hold a role.
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = space.Id,
+            Role = SpaceRole.Editor,
+            ExpressionJson = """{ "everyone": true }""",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = Guid.NewGuid(),
+        });
+
+        Assert.ThrowsAny<DbUpdateException>(() => context.SaveChanges());
+    }
+
+    [Fact]
+    public void AccessRule_ValidRoleGrant_Saves()
+    {
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.RoleGrant,
+            SpaceId = space.Id,
+            Role = SpaceRole.Editor,
+            ExpressionJson = """{ "everyone": true }""",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = Guid.NewGuid(),
+        });
+
+        Assert.Null(Record.Exception(() => context.SaveChanges()));
+    }
+
+    [Fact]
+    public void AccessRuleSelector_RowsSaveAgainstAnAccessGrant_AndTwoValuesInOneCategoryAreAllowed()
+    {
+        // The grant-side PK includes the value (design.md §21.15): a grant may confer
+        // APPLE and BANANA both, unlike a page's marking.
+        var space = TestData.NewSpace();
+        var rule = new AccessRule
+        {
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = space.Id,
+            ExpressionJson = """{ "everyone": true }""",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = Guid.NewGuid(),
+        };
+        rule.Selectors.Add(new AccessRuleSelector { AccessRuleId = rule.Id, Category = "FRUIT", Value = "APPLE" });
+        rule.Selectors.Add(new AccessRuleSelector { AccessRuleId = rule.Id, Category = "FRUIT", Value = "BANANA" });
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.AccessRules.Add(rule);
+
+        Assert.Null(Record.Exception(() => context.SaveChanges()));
+        Assert.Equal(2, context.AccessRuleSelectors.Count(s => s.AccessRuleId == rule.Id));
     }
 
     [Fact]
@@ -121,6 +219,28 @@ public class CheckConstraintTests : SqliteTestBase
 
         var exception = Record.Exception(() => context.SaveChanges());
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public void PageMarkingSelector_TwoValuesForOneCategory_ViolatesPrimaryKey()
+    {
+        // design.md §21.15: "at most one value per category on a page" is the PRIMARY KEY
+        // (PageId, Category), not application discipline - a second value for FRUIT is a
+        // key violation whatever code path tried to write it.
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.PageMarkings.Add(TestData.NewMarking(page, ClassificationLevel.Official).WithSelectors(TestCatalogs.Apple));
+        context.SaveChanges();
+
+        // A second context, so EF's own identity map is not what refuses the row.
+        using var second = CreateContext();
+        second.PageMarkingSelectors.Add(new PageMarkingSelector { PageId = page.Id, Category = "FRUIT", Value = "BANANA" });
+
+        Assert.ThrowsAny<DbUpdateException>(() => second.SaveChanges());
     }
 
     [Fact]

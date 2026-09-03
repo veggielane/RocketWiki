@@ -55,9 +55,9 @@ public sealed class AttachmentSizeLimitTests : IClassFixture<RocketWikiApiFactor
             CreatedByUserId = creator.Id,
         };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
@@ -65,7 +65,7 @@ public sealed class AttachmentSizeLimitTests : IClassFixture<RocketWikiApiFactor
             CreatedByUserId = creator.Id,
             UpdatedAtUtc = DateTime.UtcNow,
             UpdatedByUserId = creator.Id,
-        });
+        }));
         var page = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "p", Title = "Size Limit Page", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
         db.Pages.Add(page);
         await db.SaveChangesAsync();

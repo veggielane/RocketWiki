@@ -17,5 +17,8 @@ public sealed class AccessRuleType : ObjectType<AccessRule>
     {
         descriptor.Ignore(r => r.Space);
         descriptor.Ignore(r => r.Page);
+        // The selector rows are an entity collection with a back-navigation; the API
+        // publishes them as `selectorValues` (a projection) rather than the rows.
+        descriptor.Ignore(r => r.Selectors);
     }
 }

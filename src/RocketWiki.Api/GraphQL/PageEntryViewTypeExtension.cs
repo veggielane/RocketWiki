@@ -1,4 +1,5 @@
 using HotChocolate.Types;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Services;
 
 namespace RocketWiki.Api.GraphQL;
@@ -29,6 +30,7 @@ public sealed class PageEntryViewTypeExtension : ObjectTypeExtension<PageEntryVi
         // removes the name, and a field added back under it does not reappear.
         descriptor.Field(e => e.Marking)
             .Type<NonNullType<ObjectType<PageMarkingView>>>()
-            .Resolve(context => PageMarkingView.From(context.Parent<PageEntryView>().Marking));
+            .Resolve(context => PageMarkingView.From(
+                context.Parent<PageEntryView>().Marking, context.Service<SelectorCatalog>()));
     }
 }

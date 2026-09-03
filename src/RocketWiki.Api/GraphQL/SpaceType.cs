@@ -1,4 +1,5 @@
 using HotChocolate.Types;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 
 namespace RocketWiki.Api.GraphQL;
@@ -63,6 +64,18 @@ public sealed class SpaceType : ObjectType<Space>
         descriptor.Field("canManageAccess")
             .Type<NonNullType<BooleanType>>()
             .ResolveWith<SpaceFieldResolvers>(r => r.GetCanManageAccessAsync(default!, default!, default!, default));
+
+        // §6.4/§21.8: the caller's own standing in this space, from the same batched
+        // grants read as canManageAccess. `viewerHasAccess` is the S gate (an access
+        // grant matched); `viewerSelectorGrants` the union of selector values those
+        // grants confer (§21.15). Both are affordance data about nobody but the caller.
+        descriptor.Field("viewerHasAccess")
+            .Type<NonNullType<BooleanType>>()
+            .ResolveWith<SpaceFieldResolvers>(r => r.GetViewerHasAccessAsync(default!, default!, default));
+
+        descriptor.Field("viewerSelectorGrants")
+            .Type<NonNullType<ListType<NonNullType<ObjectType<SelectorValue>>>>>()
+            .ResolveWith<SpaceFieldResolvers>(r => r.GetViewerSelectorGrantsAsync(default!, default!, default));
 
         // The designated owner, resolved to a display-safe UserRef through the batched
         // loader so a space list costs one Users query rather than one per row.

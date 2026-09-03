@@ -37,7 +37,7 @@ public class SyncOutboxTests : SqliteTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -49,7 +49,7 @@ public class SyncOutboxTests : SqliteTestBase
 
     private static AccessRule SpaceAdminGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.SpaceAdmin,
         ExpressionJson = """{ "everyone": true }""",
@@ -70,7 +70,7 @@ public class SyncOutboxTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -101,7 +101,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PageRevisions.Add(TestData.NewRevision(page, actor, 1));
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -128,7 +128,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.AddRange(oldParent, newParent, page);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -154,7 +154,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.AddRange(root, child);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -178,7 +178,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -232,7 +232,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(admin);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(SpaceAdminGrant(space.Id)), SpaceAdminGrant(space.Id));
         context.SaveChanges();
 
         var service = new AccessRuleService(context);
@@ -258,12 +258,12 @@ public class SyncOutboxTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(admin);
         context.Spaces.Add(space);
-        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(SpaceAdminGrant(space.Id)), SpaceAdminGrant(space.Id));
         context.SaveChanges();
 
         var service = new AccessRuleService(context);
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, space.Id, null, SpaceRole.Viewer, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, space.Id, null, null, null, """{ "everyone": true }"""),
             EditorPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
         Assert.True(result.IsSuccess);
 
@@ -282,7 +282,7 @@ public class SyncOutboxTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -312,7 +312,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(admin);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(SpaceAdminGrant(space.Id)), SpaceAdminGrant(space.Id));
         context.SaveChanges();
 
         var service = new AccessRuleService(context);
@@ -347,7 +347,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(admin);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(SpaceAdminGrant(space.Id)), SpaceAdminGrant(space.Id));
         context.SaveChanges();
 
         var service = new AccessRuleService(context);
@@ -377,7 +377,7 @@ public class SyncOutboxTests : SqliteTestBase
         {
             seedContext.Users.Add(actor);
             seedContext.Spaces.Add(space);
-            seedContext.AccessRules.Add(EditorGrant(space.Id));
+            seedContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             seedContext.SaveChanges();
         }
 
@@ -427,7 +427,7 @@ public class SyncOutboxTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -458,7 +458,7 @@ public class SyncOutboxTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -499,7 +499,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(author);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var commentService = new CommentService(context, LocalInstanceId);
@@ -529,7 +529,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(admin);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var labelService = new LabelService(context, LocalInstanceId);
@@ -561,7 +561,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(admin);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -608,7 +608,7 @@ public class SyncOutboxTests : SqliteTestBase
         context.Users.Add(admin);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PagePropertyService(context, LocalInstanceId);
@@ -638,7 +638,7 @@ public class SyncOutboxTests : SqliteTestBase
             context.Users.Add(actor);
             context.Spaces.Add(space);
             context.Pages.Add(page);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var attachmentService = new AttachmentService(context, storage, LocalInstanceId);

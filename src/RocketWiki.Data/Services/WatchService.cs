@@ -108,14 +108,15 @@ public class WatchService : IWatchService
             return PageMutationResult<Watch>.Failure(new NotFoundError(request.SpaceId));
         }
 
-        // A space's own view gate is "holds any SpaceGrant role" (Query.Spaces) - the
+        // A space's own view gate is space access (Query.Spaces, design.md §6.4) - the
         // same gate governs watching it.
         var grants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
+            .Include(r => r.Selectors)
+            .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant) && r.SpaceId == space.Id)
             .ToListAsync(cancellationToken);
-        if (EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is null)
+        if (!EffectivePermissionCalculator.HasSpaceAccess(grants, principal))
         {
-            return PageMutationResult<Watch>.Failure(new ForbiddenError("no-space-role"));
+            return PageMutationResult<Watch>.Failure(new ForbiddenError(EffectivePermissionCalculator.NoSpaceAccessReason));
         }
 
         var existing = await _db.Watches.FirstOrDefaultAsync(

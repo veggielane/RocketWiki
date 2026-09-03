@@ -107,7 +107,7 @@ public static class ImporterCli
                     Principal.Create(options.ImporterPrincipalUserId!, ["confluence-importer"]),
                     options.ActingUserId!.Value,
                     new AuditContext(AuditChannel.System, $"confluence-import:{export.Space.Key}:{DateTimeOffset.UtcNow:yyyyMMddTHHmmssZ}", "127.0.0.1"),
-                    new InitialSpaceGrant(options.InitialGrantRole!.Value, options.InitialGrantExpressionJson!));
+                    new InitialGrant(AccessRuleKind.RoleGrant, options.InitialGrantRole!.Value, options.InitialGrantExpressionJson!));
 
                 var result = await importer.ImportAsync(export.Space, importOptions, cancellationToken);
                 report = result.Report;

@@ -119,8 +119,259 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260830055858_CanonicalizeSpaceKeysAndPageSlugs", applied);
         Assert.Contains("20260830073044_AddEmbeddingFailedRevisionNumber", applied);
         Assert.Contains("20260831072347_AddSpaceOwner", applied);
-        Assert.Equal(17, applied.Count);
+        Assert.Contains("20260902222520_AddMarkingSelectorsAndFixedCaveat", applied);
+        Assert.Contains("20260902224034_SplitSpaceGrantsIntoAccessAndRole", applied);
+        Assert.Equal(19, applied.Count);
         Assert.Empty(pending);
+    }
+
+    /// <summary>
+    /// <b>The grant split is behaviour-preserving on existing rows</b> (design.md §6.4):
+    /// migrated to the migration BEFORE it, three pre-split grants written the old way — a
+    /// Viewer, an Editor and a SpaceAdmin — then migrated up. The Viewer row must become an
+    /// access grant IN PLACE (same id); each of the other two must gain a MIRROR access
+    /// grant with the same expression and audit columns; and the new check constraint must
+    /// refuse the retired Viewer role and accept the new kind. Raw SQL for the seed because
+    /// the live model's constraint would refuse a Viewer row.
+    /// </summary>
+    [SqlServerFact]
+    public async Task SplitSpaceGrants_ConvertsViewerRowsToAccess_MirrorsEditorAndAdminGrants_AndLandsTheNewCheckConstraint()
+    {
+        var connectionString = _fixture.CreateConnectionString(SqlServerContainerFixture.NewDatabaseName());
+        var options = new DbContextOptionsBuilder<RocketWikiDbContext>()
+            .UseSqlServer(connectionString)
+            .UseLocalInstanceId("local-instance")
+            .Options;
+
+        // Every query in this test targets the fresh database above, not the base class's.
+        Task NonQuery(string sql) => ExecuteNonQueryAsync(sql, connectionString);
+        Task<T?> Scalar<T>(string sql) => ExecuteScalarAsync<T>(sql, connectionString);
+        Task<List<string>> Column(string sql) => ExecuteColumnAsync(sql, connectionString);
+
+        var userId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var viewerRule = Guid.CreateVersion7();
+        var editorRule = Guid.CreateVersion7();
+        var adminRule = Guid.CreateVersion7();
+
+        using (var context = new RocketWikiDbContext(options))
+        {
+            var migrator = context.GetService<IMigrator>();
+            migrator.Migrate("20260902222520_AddMarkingSelectorsAndFixedCaveat");
+
+            await NonQuery($$"""
+                INSERT INTO Users (Id, Subject, DisplayName, AttributesJson, IsExternal, CreatedAtUtc, LastSeenAtUtc)
+                VALUES ('{{userId}}', 'split-sub', 'Split', '{}', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+                INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, IsDeleted, LastOutboxSequence, CreatedAtUtc, CreatedByUserId, OwnerUserId)
+                VALUES ('{{spaceId}}', 'SPL', 'Split Space', 'local-instance', 0, 0, 0, SYSUTCDATETIME(), '{{userId}}', '{{userId}}');
+
+                INSERT INTO AccessRules (Id, Kind, SpaceId, PageId, Role, Action, ExpressionJson, CreatedAtUtc, CreatedByUserId, UpdatedAtUtc, UpdatedByUserId)
+                VALUES
+                    ('{{viewerRule}}', 1, '{{spaceId}}', NULL, 1, NULL, '{ "everyone": true }', '2026-01-01T00:00:00', '{{userId}}', '2026-01-01T00:00:00', '{{userId}}'),
+                    ('{{editorRule}}', 1, '{{spaceId}}', NULL, 2, NULL, '{ "group": "engineering" }', '2026-01-02T00:00:00', '{{userId}}', '2026-01-02T00:00:00', '{{userId}}'),
+                    ('{{adminRule}}', 1, '{{spaceId}}', NULL, 3, NULL, '{ "group": "space-admins" }', '2026-01-03T00:00:00', '{{userId}}', '2026-01-03T00:00:00', '{{userId}}');
+                """);
+
+            migrator.Migrate();
+        }
+
+        // The Viewer row: same id, now an access grant, no role.
+        Assert.Equal(3, await Scalar<byte>($"SELECT Kind FROM AccessRules WHERE Id = '{viewerRule}'"));
+        Assert.Null(await Scalar<byte?>($"SELECT Role FROM AccessRules WHERE Id = '{viewerRule}'"));
+
+        // The Editor and SpaceAdmin rows: untouched, and each mirrored by an access grant
+        // with the same expression and audit columns (the review query's key).
+        Assert.Equal(2, await Scalar<byte>($"SELECT Role FROM AccessRules WHERE Id = '{editorRule}'"));
+        Assert.Equal(3, await Scalar<byte>($"SELECT Role FROM AccessRules WHERE Id = '{adminRule}'"));
+        foreach (var (expression, createdAt) in new[]
+        {
+            ("{ \"group\": \"engineering\" }", "2026-01-02T00:00:00"),
+            ("{ \"group\": \"space-admins\" }", "2026-01-03T00:00:00"),
+        })
+        {
+            Assert.Equal(1, await Scalar<int>($"""
+                SELECT COUNT(*) FROM AccessRules
+                WHERE Kind = 3 AND SpaceId = '{spaceId}' AND Role IS NULL AND PageId IS NULL AND Action IS NULL
+                  AND ExpressionJson = '{expression}' AND CreatedAtUtc = '{createdAt}' AND CreatedByUserId = '{userId}'
+                """));
+        }
+
+        // Five rows in all: three originals (one converted) plus two mirrors — nothing lost,
+        // nothing invented beyond the mirrors.
+        Assert.Equal(5, await Scalar<int>($"SELECT COUNT(*) FROM AccessRules WHERE SpaceId = '{spaceId}'"));
+        Assert.Equal(3, await Scalar<int>($"SELECT COUNT(*) FROM AccessRules WHERE SpaceId = '{spaceId}' AND Kind = 3"));
+
+        // The NEW constraint landed: a Viewer-valued role grant is refused, a role grant
+        // with NO role is refused (a CHECK passes on NULL unless the clause says
+        // otherwise - the defect the SQLite tier caught in the design's original text),
+        // an access grant with a role is refused, a plain access grant is accepted.
+        await Assert.ThrowsAsync<SqlException>(() => NonQuery($$"""
+            INSERT INTO AccessRules (Id, Kind, SpaceId, PageId, Role, Action, ExpressionJson, CreatedAtUtc, CreatedByUserId, UpdatedAtUtc, UpdatedByUserId)
+            VALUES (NEWID(), 1, '{{spaceId}}', NULL, 1, NULL, '{ "everyone": true }', SYSUTCDATETIME(), '{{userId}}', SYSUTCDATETIME(), '{{userId}}');
+            """));
+        await Assert.ThrowsAsync<SqlException>(() => NonQuery($$"""
+            INSERT INTO AccessRules (Id, Kind, SpaceId, PageId, Role, Action, ExpressionJson, CreatedAtUtc, CreatedByUserId, UpdatedAtUtc, UpdatedByUserId)
+            VALUES (NEWID(), 1, '{{spaceId}}', NULL, NULL, NULL, '{ "everyone": true }', SYSUTCDATETIME(), '{{userId}}', SYSUTCDATETIME(), '{{userId}}');
+            """));
+        await Assert.ThrowsAsync<SqlException>(() => NonQuery($$"""
+            INSERT INTO AccessRules (Id, Kind, SpaceId, PageId, Role, Action, ExpressionJson, CreatedAtUtc, CreatedByUserId, UpdatedAtUtc, UpdatedByUserId)
+            VALUES (NEWID(), 3, '{{spaceId}}', NULL, 2, NULL, '{ "everyone": true }', SYSUTCDATETIME(), '{{userId}}', SYSUTCDATETIME(), '{{userId}}');
+            """));
+        await NonQuery($$"""
+            INSERT INTO AccessRules (Id, Kind, SpaceId, PageId, Role, Action, ExpressionJson, CreatedAtUtc, CreatedByUserId, UpdatedAtUtc, UpdatedByUserId)
+            VALUES (NEWID(), 3, '{{spaceId}}', NULL, NULL, NULL, '{ "group": "late" }', SYSUTCDATETIME(), '{{userId}}', SYSUTCDATETIME(), '{{userId}}');
+            """);
+
+        // And the selector child table is there with its PK and NO ACTION FK.
+        Assert.Equal(
+            new List<string> { "AccessRuleId", "Category", "Value" },
+            await Column("""
+                SELECT c.name
+                FROM sys.indexes i
+                JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE i.object_id = OBJECT_ID('dbo.AccessRuleSelectors') AND i.is_primary_key = 1
+                ORDER BY ic.key_ordinal
+                """));
+        Assert.Equal(1, await Scalar<int>("""
+            SELECT COUNT(*)
+            FROM sys.foreign_keys
+            WHERE parent_object_id = OBJECT_ID('dbo.AccessRuleSelectors')
+              AND delete_referential_action_desc = 'NO_ACTION'
+            """));
+    }
+
+    /// <summary>
+    /// <b>The data steps of <c>AddMarkingSelectorsAndFixedCaveat</c> actually run over
+    /// existing rows</b> (design.md §21.4/§21.12): migrated to the migration BEFORE it,
+    /// rows written the old way — a free-text prefix on a page and on an entry, a legacy
+    /// <c>GB</c> caveat alone, a <c>GB</c> beside a <c>UK</c> (the de-duplication case
+    /// the primary key forces), and a token outside the fixed set that must be LEFT
+    /// ALONE — then migrated up. Every other test in this class starts from a
+    /// fully-migrated empty database, where these UPDATEs run over zero rows.
+    ///
+    /// <para>Raw SQL rather than the live model, because at that point the
+    /// <c>PageMarkingSelectors</c> table does not exist and the entity would try to write
+    /// its navigation.</para>
+    /// </summary>
+    [SqlServerFact]
+    public async Task AddMarkingSelectors_NullsNonUkPrefixes_AndRemapsGbToUk()
+    {
+        var connectionString = _fixture.CreateConnectionString(SqlServerContainerFixture.NewDatabaseName());
+        var options = new DbContextOptionsBuilder<RocketWikiDbContext>()
+            .UseSqlServer(connectionString)
+            .UseLocalInstanceId("local-instance")
+            .Options;
+
+        // Every query in this test targets the fresh database above, not the base class's.
+        Task NonQuery(string sql) => ExecuteNonQueryAsync(sql, connectionString);
+        Task<T?> Scalar<T>(string sql) => ExecuteScalarAsync<T>(sql, connectionString);
+        Task<List<string>> Column(string sql) => ExecuteColumnAsync(sql, connectionString);
+
+        var userId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var natoPage = Guid.CreateVersion7();     // NATO prefix, GB caveat -> UK prefix cleared, UK caveat
+        var ukPage = Guid.CreateVersion7();       // UK prefix, GB + UK caveat -> one UK row
+        var bareFrPage = Guid.CreateVersion7();   // no prefix, FR caveat -> untouched (fails closed, review query)
+        var entryId = Guid.CreateVersion7();      // entry with a free-text prefix and a GB caveat
+
+        using (var context = new RocketWikiDbContext(options))
+        {
+            var migrator = context.GetService<IMigrator>();
+            migrator.Migrate("20260831072347_AddSpaceOwner");
+
+            await NonQuery($$"""
+                INSERT INTO Users (Id, Subject, DisplayName, AttributesJson, IsExternal, CreatedAtUtc, LastSeenAtUtc)
+                VALUES ('{{userId}}', 'caveat-sub', 'Caveat', '{}', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+                INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, IsDeleted, LastOutboxSequence, CreatedAtUtc, CreatedByUserId, OwnerUserId)
+                VALUES ('{{spaceId}}', 'CAV', 'Caveat Space', 'local-instance', 0, 0, 0, SYSUTCDATETIME(), '{{userId}}', '{{userId}}');
+
+                INSERT INTO Pages (Id, SpaceId, AncestorPath, Slug, Title, SortOrder, CurrentRevisionNumber, CurrentContent, IsDeleted, CreatedAtUtc, UpdatedAtUtc)
+                VALUES
+                    ('{{natoPage}}', '{{spaceId}}', '/', 'nato', 'Nato', 0, 1, '# Nato', 0, SYSUTCDATETIME(), SYSUTCDATETIME()),
+                    ('{{ukPage}}', '{{spaceId}}', '/', 'uk', 'Uk', 1, 1, '# Uk', 0, SYSUTCDATETIME(), SYSUTCDATETIME()),
+                    ('{{bareFrPage}}', '{{spaceId}}', '/', 'fr', 'Fr', 2, 1, '# Fr', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+                INSERT INTO PageMarkings (PageId, Level, Prefix, SetAtUtc, SetByUserId)
+                VALUES
+                    ('{{natoPage}}', 3, 'NATO', SYSUTCDATETIME(), NULL),
+                    ('{{ukPage}}', 3, 'UK', SYSUTCDATETIME(), NULL),
+                    ('{{bareFrPage}}', 3, NULL, SYSUTCDATETIME(), NULL);
+
+                INSERT INTO PageMarkingCountries (PageId, CountryValue)
+                VALUES
+                    ('{{natoPage}}', 'GB'),
+                    ('{{ukPage}}', 'GB'),
+                    ('{{ukPage}}', 'UK'),
+                    ('{{bareFrPage}}', 'FR');
+
+                INSERT INTO PageEntries (Id, PageId, Collection, Data, Version, Level, Prefix, CreatedAtUtc, UpdatedAtUtc, UpdatedByUserId, IsDeleted)
+                VALUES ('{{entryId}}', '{{natoPage}}', 'incident', '{}', 1, 1, 'UK/US', SYSUTCDATETIME(), SYSUTCDATETIME(), NULL, 0);
+
+                INSERT INTO PageEntryCountries (PageEntryId, CountryValue)
+                VALUES ('{{entryId}}', 'GB');
+                """);
+
+            migrator.Migrate();
+        }
+
+        // Prefixes: the toggle has two states, so everything but UK is cleared.
+        Assert.Null(await Scalar<string>($"SELECT Prefix FROM PageMarkings WHERE PageId = '{natoPage}'"));
+        Assert.Equal("UK", await Scalar<string>($"SELECT Prefix FROM PageMarkings WHERE PageId = '{ukPage}'"));
+        Assert.Null(await Scalar<string>($"SELECT Prefix FROM PageEntries WHERE Id = '{entryId}'"));
+
+        // GB -> UK, and the (GB, UK) pair collapses to one UK row rather than violating
+        // the primary key.
+        Assert.Equal(["UK"], await Column($"SELECT CountryValue FROM PageMarkingCountries WHERE PageId = '{natoPage}'"));
+        Assert.Equal(["UK"], await Column($"SELECT CountryValue FROM PageMarkingCountries WHERE PageId = '{ukPage}'"));
+        Assert.Equal(["UK"], await Column($"SELECT CountryValue FROM PageEntryCountries WHERE PageEntryId = '{entryId}'"));
+
+        // A token outside the fixed set is left in place — it fails closed rather than
+        // being guessed at — and the migration's review query finds it.
+        Assert.Equal(["FR"], await Column($"SELECT CountryValue FROM PageMarkingCountries WHERE PageId = '{bareFrPage}'"));
+        Assert.Equal(["FR"], await Column(
+            "SELECT CountryValue FROM PageMarkingCountries WHERE CountryValue NOT IN ('AUS','CAN','NZ','UK','US')"));
+        Assert.Equal(0, await Scalar<int>("SELECT COUNT(*) FROM PageMarkingCountries WHERE CountryValue = 'GB'"));
+    }
+
+    [SqlServerFact]
+    public async Task PageMarkingSelectors_KeysIndexesAndForeignKeys_LandAsDeclared()
+    {
+        // PK (PageId, Category) — the category, NOT the value — is what makes "one value
+        // per category on a page" a database fact (design.md §21.15).
+        Assert.Equal(
+            new List<string> { "PageId", "Category" },
+            await ExecuteColumnAsync("""
+                SELECT c.name
+                FROM sys.indexes i
+                JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE i.object_id = OBJECT_ID('dbo.PageMarkingSelectors') AND i.is_primary_key = 1
+                ORDER BY ic.key_ordinal
+                """));
+
+        Assert.Equal(1, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_PageMarkingSelectors_Category_Value_PageId'"));
+
+        // nvarchar(32) on both tokens: 32 UTF-16 code units is 64 bytes of max_length.
+        foreach (var column in new[] { "Category", "Value" })
+        {
+            Assert.Equal(64, await ExecuteScalarAsync<short>($"""
+                SELECT c.max_length
+                FROM sys.columns c
+                WHERE c.object_id = OBJECT_ID('dbo.PageMarkingSelectors') AND c.name = '{column}'
+                """));
+        }
+
+        // NO ACTION, like every other FK here.
+        Assert.Equal(1, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.foreign_keys
+            WHERE parent_object_id = OBJECT_ID('dbo.PageMarkingSelectors')
+              AND delete_referential_action_desc = 'NO_ACTION'
+            """));
     }
 
     /// <summary>
@@ -470,7 +721,10 @@ public sealed class MigrationTests : SqlServerTestBase
 
         var space = (await new SpaceService(context, "local-instance").CreateAsync(
             new CreateSpaceRequest("mIxEd", "Mixed", null),
-            new InitialSpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }"""),
+            [
+                new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "everyone": true }"""),
+                new InitialGrant(AccessRuleKind.AccessGrant, null, """{ "everyone": true }"""),
+            ],
             isInstanceAdmin: true, actor.Id, AuditCtx)).Value;
         Assert.Equal("MIXED", space.Key);
 
@@ -630,26 +884,31 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Equal(["TimestampUtc", "Id"], primaryKeyColumns);
     }
 
-    private async Task ExecuteNonQueryAsync(string sql)
+    /// <summary>The helpers below default to the base class's fully-migrated database;
+    /// a test that migrates its own fresh database to an older step and back passes that
+    /// database's connection string, so its seed and its assertions look at the same
+    /// rows. Plain SqlCommand rather than <c>ExecuteSqlRaw</c>, because the latter runs
+    /// the text through <c>string.Format</c> and a JSON literal's braces break it.</summary>
+    private async Task ExecuteNonQueryAsync(string sql, string? connectionString = null)
     {
-        await using var connection = new SqlConnection(ConnectionString);
+        await using var connection = new SqlConnection(connectionString ?? ConnectionString);
         await connection.OpenAsync();
         await using var command = new SqlCommand(sql, connection);
         await command.ExecuteNonQueryAsync();
     }
 
-    private async Task<T?> ExecuteScalarAsync<T>(string sql)
+    private async Task<T?> ExecuteScalarAsync<T>(string sql, string? connectionString = null)
     {
-        await using var connection = new SqlConnection(ConnectionString);
+        await using var connection = new SqlConnection(connectionString ?? ConnectionString);
         await connection.OpenAsync();
         await using var command = new SqlCommand(sql, connection);
         var result = await command.ExecuteScalarAsync();
         return result is null or DBNull ? default : (T)result;
     }
 
-    private async Task<List<string>> ExecuteColumnAsync(string sql)
+    private async Task<List<string>> ExecuteColumnAsync(string sql, string? connectionString = null)
     {
-        await using var connection = new SqlConnection(ConnectionString);
+        await using var connection = new SqlConnection(connectionString ?? ConnectionString);
         await connection.OpenAsync();
         await using var command = new SqlCommand(sql, connection);
         await using var reader = await command.ExecuteReaderAsync();

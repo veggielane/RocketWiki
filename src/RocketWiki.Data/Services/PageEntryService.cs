@@ -15,8 +15,11 @@ namespace RocketWiki.Data.Services;
 /// <para>The gate order is page-then-entry on every path, and both gates are real. The
 /// page gate is the existing one, loaded through <see cref="PermissionContextLoader"/> so
 /// space grants, the restriction chain and the page's own clearance check are inherited
-/// rather than re-derived. The entry gate is <see cref="ClearanceGate.Check"/> against the
-/// entry's own marking — the same function pages use, called once more per entry.</para>
+/// rather than re-derived. The entry gate is <see cref="MarkingGate.Check"/> against the
+/// entry's own marking — the same composition pages use (§21.2), called once more per
+/// entry with the caller's granted selectors for the page's space. Entry markings carry no
+/// selectors this round (§21.14), so the selector gates pass trivially today; going
+/// through the full gate anyway is what makes adding them a storage change only.</para>
 /// </summary>
 public sealed class PageEntryService(RocketWikiDbContext db, string localInstanceId) : IPageEntryService
 {
@@ -46,7 +49,7 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
         // about the rest: no total, no "n hidden", and the empty list a fully-pruned
         // collection returns is byte-identical to the one an empty collection returns.
         var visible = entries
-            .Where(e => ClearanceGate.Check(e.ToMarking(), principal).IsAllowed)
+            .Where(e => MarkingGate.Check(e.ToMarking(), principal, db.SelectorCatalog, gate.Access!.GrantedSelectors).IsAllowed)
             .Select(ToView)
             .ToList();
 
@@ -72,7 +75,7 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
                 : new ReadResult<PageEntryView>.Denied(failure.Reason!);
         }
 
-        var clearance = ClearanceGate.Check(entry.ToMarking(), principal);
+        var clearance = MarkingGate.Check(entry.ToMarking(), principal, db.SelectorCatalog, gate.Access!.GrantedSelectors);
         return clearance.IsAllowed
             ? new ReadResult<PageEntryView>.Found(ToView(entry))
             : new ReadResult<PageEntryView>.Denied(clearance.DenialReason!);
@@ -82,7 +85,7 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
         CreatePageEntryRequest request, Principal principal, Guid actingUserId, AuditContext auditContext,
         CancellationToken cancellationToken = default)
     {
-        var (page, space, error) = await LoadForWriteAsync(request.PageId, principal, cancellationToken);
+        var (page, space, access, error) = await LoadForWriteAsync(request.PageId, principal, cancellationToken);
         if (error is not null)
         {
             return PageMutationResult<PageEntryView>.Failure(error);
@@ -97,7 +100,7 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
         // Inheriting the page's marking is the ordinary case: a form submitter should not
         // have to reason about classification to file a record.
         var marking = request.Marking ?? pageMarking;
-        if (CheckMarking(marking, pageMarking, principal) is { } refused)
+        if (CheckMarking(marking, pageMarking, principal, access!) is { } refused)
         {
             return PageMutationResult<PageEntryView>.Failure(refused);
         }
@@ -147,7 +150,7 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
         if (request.Marking is { } newMarking)
         {
             var pageMarking = await _permissions.LoadMarkingAsync(entry.PageId, cancellationToken);
-            if (CheckMarking(newMarking, pageMarking, principal) is { } refused)
+            if (CheckMarking(newMarking, pageMarking, principal, loaded.Access!) is { } refused)
             {
                 return PageMutationResult<PageEntryView>.Failure(refused);
             }
@@ -211,8 +214,8 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
     /// is no different — it would also let someone write a record and then be unable to
     /// correct it.</para>
     /// </summary>
-    private static PageMutationError? CheckMarking(
-        ProtectiveMarking marking, ProtectiveMarking pageMarking, Principal principal)
+    private PageMutationError? CheckMarking(
+        ProtectiveMarking marking, ProtectiveMarking pageMarking, Principal principal, SpaceAccess access)
     {
         if (marking.Level < pageMarking.Level)
         {
@@ -220,7 +223,15 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
                 $"An entry cannot be marked below its page ({ProtectiveMarking.LevelToken(pageMarking.Level)}).");
         }
 
-        var readable = ClearanceGate.Check(marking, principal);
+        if (marking.HasSelectors)
+        {
+            // design.md §21.14: entries have no selector storage this round. Refused rather
+            // than silently dropped - a caller who asked for a compartment and got a row
+            // without one has been handed a widening with no error to notice.
+            return new ValidationError("An entry marking cannot carry selectors yet; entries store a level, a caveat and a prefix (design.md §21.14).");
+        }
+
+        var readable = MarkingGate.Check(marking, principal, db.SelectorCatalog, access.GrantedSelectors);
         return readable.IsAllowed ? null : new ForbiddenError(readable.DenialReason!);
     }
 
@@ -262,56 +273,60 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
     private static string NormalizeCollection(string collection) =>
         collection.Trim().ToLowerInvariant();
 
-    private async Task<(GateFailure? Failure, Page? Page, Space? Space)> GateAsync(
+    /// <summary>The page gate, plus the caller's space access when it passed: the granted
+    /// selector union the entry gate needs is a fact about the same grants canView was
+    /// just computed from, so it is read out here rather than re-derived per entry.
+    /// canView implies access, so a passing gate always carries a non-null one.</summary>
+    private async Task<(GateFailure? Failure, Page? Page, Space? Space, SpaceAccess? Access)> GateAsync(
         Guid pageId, Principal principal, CancellationToken cancellationToken)
     {
         var page = await db.Pages.FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);
         if (page is null)
         {
-            return (new GateFailure(true, null), null, null);
+            return (new GateFailure(true, null), null, null, null);
         }
 
         var space = await db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         if (space is null)
         {
-            return (new GateFailure(true, null), null, null);
+            return (new GateFailure(true, null), null, null, null);
         }
 
         var context = await _permissions.LoadAsync(page, space.IsReplicaOf(localInstanceId), cancellationToken);
         var permission = context.Compute(principal);
         return permission.CanView
-            ? (null, page, space)
-            : (new GateFailure(false, permission.ViewDenialReason ?? "forbidden"), null, null);
+            ? (null, page, space, EffectivePermissionCalculator.ComputeSpaceAccess(context.SpaceGrants, principal))
+            : (new GateFailure(false, permission.ViewDenialReason ?? "forbidden"), null, null, null);
     }
 
-    private async Task<(Page? Page, Space? Space, PageMutationError? Error)> LoadForWriteAsync(
+    private async Task<(Page? Page, Space? Space, SpaceAccess? Access, PageMutationError? Error)> LoadForWriteAsync(
         Guid pageId, Principal principal, CancellationToken cancellationToken)
     {
         var page = await db.Pages.FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);
         if (page is null)
         {
-            return (null, null, new NotFoundError(pageId));
+            return (null, null, null, new NotFoundError(pageId));
         }
 
         var space = await db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         if (space is null)
         {
-            return (null, null, new NotFoundError(page.SpaceId));
+            return (null, null, null, new NotFoundError(page.SpaceId));
         }
 
         if (space.IsReplicaOf(localInstanceId))
         {
-            return (null, null, new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
+            return (null, null, null, new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
         var context = await _permissions.LoadAsync(page, isReplicaSpace: false, cancellationToken);
         var permission = context.Compute(principal);
         return permission.CanEdit
-            ? (page, space, null)
-            : (null, null, new ForbiddenError(permission.EditDenialReason ?? "forbidden"));
+            ? (page, space, EffectivePermissionCalculator.ComputeSpaceAccess(context.SpaceGrants, principal), null)
+            : (null, null, null, new ForbiddenError(permission.EditDenialReason ?? "forbidden"));
     }
 
-    private async Task<(PageEntry? Entry, Space? Space, PageMutationError? Error)> LoadEntryForWriteAsync(
+    private async Task<(PageEntry? Entry, Space? Space, SpaceAccess? Access, PageMutationError? Error)> LoadEntryForWriteAsync(
         Guid entryId, int expectedVersion, Principal principal, CancellationToken cancellationToken)
     {
         // A tombstoned entry is never found here, and that is load-bearing rather than
@@ -325,30 +340,30 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
             .FirstOrDefaultAsync(e => e.Id == entryId, cancellationToken);
         if (entry is null)
         {
-            return (null, null, new NotFoundError(entryId));
+            return (null, null, null, new NotFoundError(entryId));
         }
 
-        var (page, space, error) = await LoadForWriteAsync(entry.PageId, principal, cancellationToken);
+        var (page, space, access, error) = await LoadForWriteAsync(entry.PageId, principal, cancellationToken);
         if (error is not null)
         {
-            return (null, null, error);
+            return (null, null, null, error);
         }
 
-        // Clearance BEFORE the version check, so a caller who may not read this entry
-        // cannot learn its version by comparing which refusal they get.
-        var clearance = ClearanceGate.Check(entry.ToMarking(), principal);
+        // The marking gate BEFORE the version check, so a caller who may not read this
+        // entry cannot learn its version by comparing which refusal they get.
+        var clearance = MarkingGate.Check(entry.ToMarking(), principal, db.SelectorCatalog, access!.GrantedSelectors);
         if (!clearance.IsAllowed)
         {
-            return (null, null, new NotFoundError(entryId));
+            return (null, null, null, new NotFoundError(entryId));
         }
 
         if (entry.Version != expectedVersion)
         {
-            return (null, null, new StaleRevisionError(expectedVersion, entry.Version, null, null));
+            return (null, null, null, new StaleRevisionError(expectedVersion, entry.Version, null, null));
         }
 
         _ = page;
-        return (entry, space, null);
+        return (entry, space, access, null);
     }
 
     private static PageEntryView ToView(PageEntry entry) => new(

@@ -149,6 +149,13 @@ public static class DomainEventAuditMapper
             {
                 level = ProtectiveMarking.LevelWireName(e.After.Level),
                 eyesOnly = e.After.EyesOnly,
+                // design.md §21.7/§21.15: the selectors as an object keyed by category -
+                // "one value per category" is structural in the shape, and it is the same
+                // shape the sync payload crosses in, so a reviewer and the importer read
+                // one form. Values are written out in full here for the reason the
+                // country set is: the audit row IS the record, and §15 keeps both out of
+                // every telemetry tag (a reason token carries a category name at most).
+                selectors = e.After.Selectors.ToDictionary(s => s.Category, s => s.Value, StringComparer.Ordinal),
                 // The national prefix is recorded even though it gates nothing
                 // (design.md §21.12): a prefix change IS a change to the marking, and an
                 // audit row that omitted it would leave a reviewer unable to explain why
@@ -158,6 +165,7 @@ public static class DomainEventAuditMapper
                 prefix = e.After.Prefix,
                 previousLevel = ProtectiveMarking.LevelWireName(e.Before.Level),
                 previousEyesOnly = e.Before.EyesOnly,
+                previousSelectors = e.Before.Selectors.ToDictionary(s => s.Category, s => s.Value, StringComparer.Ordinal),
                 previousPrefix = e.Before.Prefix,
             })),
 

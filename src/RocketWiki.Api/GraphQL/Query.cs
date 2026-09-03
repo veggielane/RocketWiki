@@ -10,7 +10,8 @@ namespace RocketWiki.Api.GraphQL;
 
 /// <summary>
 /// Root query fields (design.md §8); see Query.Spaces.cs, Query.AuditEvents.cs,
-/// Query.Search.cs, and Query.Labels.cs for the rest of this partial class.
+/// Query.Search.cs, Query.PageAccess.cs and Query.Labels.cs for the rest of this
+/// partial class.
 /// </summary>
 public partial class Query
 {
@@ -24,6 +25,11 @@ public partial class Query
     /// so there is nothing an anonymous Principal could pass) — and without an audit
     /// row, since no access decision was made and DbAuditSink refuses rows with no
     /// resolvable acting user anyway.
+    ///
+    /// <para><b>Unchanged by the disclosed read</b> (§21.8): <c>pageAccess</c> is the
+    /// field that renders a denied page as a placeholder; this one stays byte-identical
+    /// for denied and missing, and its tests are the pin that the plain read stays
+    /// leak-free.</para>
     /// </summary>
     [AuditAction("page.view")]
     [UseAuditDispatch]
@@ -95,14 +101,23 @@ public partial class Query
     }
 
     /// <summary>
-    /// design.md §6.7/§8: the space's page tree, already pruned to what the caller
-    /// can view — a restricted subtree is simply absent, not flagged. Stands in for
-    /// design.md's `Space.tree` field until a space read service exists to resolve
-    /// `Space` itself with the same care <see cref="PageType"/> gives `Page`.
+    /// design.md §6.7/§8/§21.8: the space's page tree, decided node by node. A page the
+    /// caller may view is a <c>PageTreeNode</c>; one they may not is a
+    /// <c>ProtectedTreeNode</c> placeholder at its sibling position, carrying its marking
+    /// and the gates they failed, with nothing beneath it. Stands in for design.md's
+    /// `Space.tree` field until a space read service exists to resolve `Space` itself
+    /// with the same care <see cref="PageType"/> gives `Page`.
+    ///
+    /// <para>A caller no ACCESS grant admits to the space gets an empty list — byte-
+    /// identical to a space that does not exist, roles notwithstanding (§6.4: roles never
+    /// supersede access) — and the refused browse is audited. A space the caller can
+    /// enter discloses its placeholders; a space they cannot discloses nothing at all,
+    /// not even that it has pages.</para>
     /// </summary>
     [AuditAction("space.browse")]
     [UseAuditDispatch]
-    public async Task<IReadOnlyList<PageTreeNode>> PageTree(
+    [GraphQLType(typeof(NonNullType<ListType<NonNullType<PageTreeEntryType>>>))]
+    public async Task<IReadOnlyList<PageTreeEntry>> PageTree(
         Guid spaceId,
         [Service] IPageReadService readService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
@@ -115,14 +130,14 @@ public partial class Query
             return [];
         }
 
-        // Found may itself carry an empty list (everything pruned), so Denied and
+        // Found may itself carry an empty list (a space with no pages), so Denied and
         // NotFound collapsing to [] leaves all three caller-indistinguishable
         // (design.md §6.7) - only the audit log learns which one happened (§7).
         // DbAuditSink suppresses AuditFieldMiddleware's would-be Success row for a
         // subject already recorded as Denied this request, so a refused browse never
         // also claims success.
         var result = await readService.GetPageTreeAsync(spaceId, principal, cancellationToken);
-        if (result is ReadResult<IReadOnlyList<PageTreeNode>>.Denied denied)
+        if (result is ReadResult<IReadOnlyList<PageTreeEntry>>.Denied denied)
         {
             await ReadDenialAudit.RecordAsync(
                 auditSink, "space.browse", AuditSubjectType.Space, spaceId, denied.Reason, cancellationToken);
@@ -132,7 +147,7 @@ public partial class Query
     }
 
     /// <summary>
-    /// The children of one page, as tree nodes — what the SPA fetches when someone
+    /// The children of one page, as tree entries — what the SPA fetches when someone
     /// expands a node whose children the original query did not reach.
     ///
     /// <para>A GraphQL document has to pick a nesting depth, so a tree query always
@@ -141,20 +156,22 @@ public partial class Query
     /// and would still truncate — just further down, where the bug is rarer and
     /// therefore harder to notice.</para>
     ///
-    /// <para>Runs the SAME pruned walk <see cref="PageTree"/> does and then picks the
+    /// <para>Runs the SAME decided walk <see cref="PageTree"/> does and then picks the
     /// node out of the result, rather than a second query rooted at the page. That is
     /// what makes a subtree fetch inherit space grants, the accumulated restriction
-    /// chain and the §21 clearance gate exactly as the first fetch did — a walk written
+    /// chain and the §21 marking gates exactly as the first fetch did — a walk written
     /// separately for this path would be a second implementation of the rule engine
     /// with nothing keeping the two in step.</para>
     ///
-    /// <para>An empty list for a page that does not exist, one the caller cannot view,
-    /// and one that genuinely has no visible children — all three, indistinguishably
-    /// (§6.7). No audit row of its own: this is a continuation of the browse already
-    /// recorded by <see cref="PageTree"/>, not a distinct action.</para>
+    /// <para>An empty list for a page that does not exist, one the caller cannot view
+    /// (a placeholder has no id to be found by and nothing beneath it), and one that
+    /// genuinely has no children — all three, indistinguishably (§6.7). No audit row of
+    /// its own: this is a continuation of the browse already recorded by
+    /// <see cref="PageTree"/>, not a distinct action.</para>
     /// </summary>
     [NoAudit("A continuation of the space.browse already recorded when the tree was first read; §7 audits actions, not each expansion of one.")]
-    public async Task<IReadOnlyList<PageTreeNode>> PageSubtree(
+    [GraphQLType(typeof(NonNullType<ListType<NonNullType<PageTreeEntryType>>>))]
+    public async Task<IReadOnlyList<PageTreeEntry>> PageSubtree(
         Guid spaceId,
         Guid pageId,
         [Service] IPageReadService readService,
@@ -172,9 +189,12 @@ public partial class Query
         return tree is null ? [] : FindChildren(tree, pageId) ?? [];
     }
 
-    private static IReadOnlyList<PageTreeNode>? FindChildren(IReadOnlyList<PageTreeNode> nodes, Guid pageId)
+    /// <summary>The child entries of the visible node with this id; a protected entry
+    /// is neither searched into nor matched (it has no id and nothing beneath it), so
+    /// the subtree of a placeholder's page is empty.</summary>
+    private static IReadOnlyList<PageTreeEntry>? FindChildren(IReadOnlyList<PageTreeEntry> entries, Guid pageId)
     {
-        foreach (var node in nodes)
+        foreach (var node in entries.OfType<PageTreeNode>())
         {
             if (node.Id == pageId)
             {
@@ -215,6 +235,7 @@ public partial class Query
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] IUserAvatarService avatarService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] SelectorCatalog catalog,
         CancellationToken cancellationToken)
     {
         if (claimsPrincipal.Identity?.IsAuthenticated != true)
@@ -242,38 +263,51 @@ public partial class Query
         var hasAvatar = localUserId is not null
             && await avatarService.HasAvatarAsync(localUserId.Value, cancellationToken);
 
-        // §21: the caller's OWN clearance and nationality, resolved through the same
-        // ClearanceGate/attribute-registry path enforcement uses — not the raw claim —
-        // so what the SPA greys out matches what the server would refuse. Echoing the
-        // caller's own token back to them leaks nothing (it is the same category as
-        // `groups` above), and it is the difference between offering a marking that
-        // will be rejected and explaining up-front why it is unavailable. Authorization
-        // still happens server-side: this is affordance data, never a decision (§6.1).
+        // §21: the caller's OWN clearance, nationality and selector eligibility, resolved
+        // through the same ClearanceGate/SelectorGate path enforcement uses — not the raw
+        // claims — so what the SPA greys out matches what the server would refuse.
+        // Echoing the caller's own token back to them leaks nothing (it is the same
+        // category as `groups` above), and it is the difference between offering a
+        // marking that will be rejected and explaining up-front why it is unavailable.
+        // Authorization still happens server-side: this is affordance data, never a
+        // decision (§6.1).
         //
-        // Both go through ClearanceGate rather than reading Attributes directly, and for
+        // All three go through the gates rather than reading Attributes directly, and for
         // nationality that is load-bearing rather than tidiness: ResolveNationalities
         // CANONICALIZES (upper-cases, trims, drops blanks) exactly as a marking's country
-        // set is canonicalized on write, and the raw claim does not. A token saying `gb`
-        // against a marking storing `GB` passes the server's gate and would have failed a
+        // set is canonicalized on write, and the raw claim does not. A token saying `uk`
+        // against a marking storing `UK` passes the server's gate and would have failed a
         // client-side comparison against the raw value — so the UI would have warned that
         // a marking locks you out when it does not, which is precisely the "what the UI
         // greys out matches what the server refuses" property this field exists for. It
         // is the §21.4 case-mismatch trap reappearing one layer up, and it is closed the
-        // same way: one canonicalizer, both sides.
+        // same way: one canonicalizer, both sides. Eligibility likewise: the `yes` test
+        // (trimmed, case-insensitive, §21.15) is SelectorGate's, stated once.
         var principal = principalAccessor.Current;
         var clearance = principal is null
-            ? ClassificationLevel.Official
+            ? ClearanceGate.DefaultClearance
             : ClearanceGate.ResolveClearance(principal);
         // Ordinal-sorted so the list is stable between requests and matches the order a
         // marking's EyesOnly set renders in — a diff of the two reads cleanly.
         var nationality = principal is null
             ? []
             : ClearanceGate.ResolveNationalities(principal).OrderBy(n => n, StringComparer.Ordinal).ToList();
+        // In the catalog's configured order - the order the pickers list categories in
+        // (§21.15) - so the two agree without a client-side sort.
+        var eligibility = principal is null
+            ? []
+            : EligibleCategoriesInCatalogOrder(principal, catalog);
 
         return new CurrentUser(
             userId, email, name, groups, IsAuthenticated: true,
             instanceRoleAccessor.IsInstanceAdmin, localUserId, hasAvatar,
-            clearance, nationality);
+            clearance, nationality, eligibility);
+    }
+
+    private static IReadOnlyList<string> EligibleCategoriesInCatalogOrder(Principal principal, SelectorCatalog catalog)
+    {
+        var eligible = SelectorGate.ResolveEligibleCategories(principal, catalog);
+        return catalog.Categories.Where(c => eligible.Contains(c.Name)).Select(c => c.Name).ToList();
     }
 }
 
@@ -284,6 +318,11 @@ public partial class Query
 /// <see cref="LocalUserId"/> is the one bridge to that JIT row — the caller's OWN
 /// mirror id, exposed so the SPA can match author ids; see Me's doc.
 /// </summary>
+/// <param name="SelectorEligibility">The selector categories the caller is eligible for
+/// (design.md §21.15): every claim-less category plus every gated category whose claim
+/// answers <c>yes</c>, in the catalog's configured order — the categories a marking
+/// picker may offer at all. Whether a VALUE may then be chosen is the space's grant
+/// (<c>Space.viewerSelectorGrants</c>), not the caller's.</param>
 public sealed record CurrentUser(
     string? Id,
     string? Email,
@@ -294,8 +333,14 @@ public sealed record CurrentUser(
     Guid? LocalUserId,
     bool HasAvatar,
     ClassificationLevel Clearance,
-    IReadOnlyList<string> Nationality)
+    IReadOnlyList<string> Nationality,
+    IReadOnlyList<string> SelectorEligibility)
 {
+    // The clearance floor is ClearanceGate's, not a literal: an anonymous caller is worth
+    // exactly what an absent clearance claim is worth (design.md §21.3), and stating it
+    // twice is how the affordance and the gate drift. Eligible for nothing: an anonymous
+    // caller has no token to answer `yes` with, and the claim-less categories admit
+    // principals, not the absence of one.
     public static readonly CurrentUser Anonymous =
-        new(null, null, null, [], false, false, null, false, ClassificationLevel.Official, []);
+        new(null, null, null, [], false, false, null, false, ClearanceGate.DefaultClearance, [], []);
 }

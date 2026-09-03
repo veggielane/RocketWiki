@@ -176,6 +176,17 @@ public class PageService : IPageService
             marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = country });
         }
 
+        // Selectors inherit exactly like the level and the caveat (design.md §21.15): the
+        // permission computation above already gated the creator on the parent's
+        // selectors, so the creator holds every one the child now carries.
+        foreach (var selector in inherited.Selectors)
+        {
+            marking.Selectors.Add(new PageMarkingSelector
+            {
+                PageId = page.Id, Category = selector.Category, Value = selector.Value,
+            });
+        }
+
         _db.PageMarkings.Add(marking);
         _db.PageRevisions.Add(new PageRevision
         {

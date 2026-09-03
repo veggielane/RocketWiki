@@ -141,9 +141,21 @@ public sealed class SyncCliTests : IDisposable
         var context = CreateContext("low");
         context.Users.Add(actor);
         context.Spaces.Add(space);
+        // Access beside the role (design.md 6.4: roles never supersede access) - the
+        // editor who writes the pages below must be able to see the space at all.
         context.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = space.Id,
+            ExpressionJson = """{ "everyone": true }""",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = Guid.NewGuid(),
+        });
+        context.AccessRules.Add(new AccessRule
+        {
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = SpaceRole.Editor,
             ExpressionJson = """{ "everyone": true }""",

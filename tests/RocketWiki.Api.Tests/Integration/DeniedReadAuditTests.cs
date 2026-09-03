@@ -49,9 +49,8 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = creator.Id,
@@ -243,7 +242,7 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
     public async Task DeniedTreeBrowse_NoSpaceRole_AuditsDenied_AndNeverAlsoSuccess()
     {
         // A space with no grants at all: ComputeSpaceRole is null, so the browse itself
-        // is refused (Denied "no-space-role") - unlike pruning above, the *request* was
+        // is refused (Denied "no-space-access") - unlike pruning above, the *request* was
         // denied. The caller still sees the same empty list as a nonexistent space; the
         // audit log gets exactly one Denied row and - the DbAuditSink asymmetry -
         // AuditFieldMiddleware's would-be Success row for the same subject is
@@ -267,8 +266,8 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
             var client = factory.CreateClient();
             client.SetTestUser(sub: $"roleless-{Guid.NewGuid()}");
 
-            var deniedResponse = await client.PostAsJsonAsync("/graphql", new { query = $$"""{ pageTree(spaceId: "{{space.Id}}") { id } }""" });
-            var missingResponse = await client.PostAsJsonAsync("/graphql", new { query = $$"""{ pageTree(spaceId: "{{Guid.NewGuid()}}") { id } }""" });
+            var deniedResponse = await client.PostAsJsonAsync("/graphql", new { query = $$"""{ pageTree(spaceId: "{{space.Id}}") { ... on PageTreeNode { id } } }""" });
+            var missingResponse = await client.PostAsJsonAsync("/graphql", new { query = $$"""{ pageTree(spaceId: "{{Guid.NewGuid()}}") { ... on PageTreeNode { id } } }""" });
 
             // Caller-indistinguishable from a space that doesn't exist, byte for byte.
             Assert.Equal(HttpStatusCode.OK, deniedResponse.StatusCode);
@@ -280,7 +279,7 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
             Assert.Equal(AuditOutcome.Denied, denial.Outcome);
             Assert.Equal(AuditSubjectType.Space, denial.SubjectType);
             Assert.NotNull(denial.DetailsJson);
-            Assert.Equal("no-space-role", JsonDocument.Parse(denial.DetailsJson).RootElement.GetProperty("reason").GetString());
+            Assert.Equal("no-space-access", JsonDocument.Parse(denial.DetailsJson).RootElement.GetProperty("reason").GetString());
         }
     }
 
@@ -343,7 +342,7 @@ public sealed class DeniedReadAuditTests(RocketWikiApiFactory factory) : IClassF
         Assert.Equal(AuditSubjectType.Space, denial.SubjectType);
         Assert.Equal(AuditChannel.GraphQl, denial.Channel);
         Assert.NotNull(denial.DetailsJson);
-        Assert.Equal("no-space-role", JsonDocument.Parse(denial.DetailsJson).RootElement.GetProperty("reason").GetString());
+        Assert.Equal("no-space-access", JsonDocument.Parse(denial.DetailsJson).RootElement.GetProperty("reason").GetString());
     }
 
     [Fact]

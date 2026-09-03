@@ -25,6 +25,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The one selector vocabulary every test tier shares (design.md §21.15), linked
+         rather than copied so the tiers cannot drift apart. -->
+    <Compile Include="..\RocketWiki.Core.Tests\Access\TestCatalogs.cs" Link="TestCatalogs.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\RocketWiki.Data\RocketWiki.Data.csproj" />
     <!-- AttachmentService tests use the real FileSystemFileStorage against a temp
          directory, per design.md §14's own prescribed testing approach, rather than a

@@ -55,7 +55,7 @@ public sealed class AnalyticsService(RocketWikiDbContext db, IPageReadService pa
         foreach (var space in spaces)
         {
             if (await pageReads.GetPageTreeAsync(space.Id, principal, cancellationToken)
-                is ReadResult<IReadOnlyList<PageTreeNode>>.Found tree)
+                is ReadResult<IReadOnlyList<PageTreeEntry>>.Found tree)
             {
                 Flatten(tree.Value, space.Key, visiblePages);
             }
@@ -140,7 +140,7 @@ public sealed class AnalyticsService(RocketWikiDbContext db, IPageReadService pa
         // Space-admin scope. Evaluated through the same rule expressions the mutation
         // gates use, so "administers this space" means one thing in the product.
         var adminGrants = await db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.Role == SpaceRole.SpaceAdmin)
+            .Where(r => r.Kind == AccessRuleKind.RoleGrant && r.Role == SpaceRole.SpaceAdmin)
             .ToListAsync(cancellationToken);
 
         var administered = candidates
@@ -151,9 +151,11 @@ public sealed class AnalyticsService(RocketWikiDbContext db, IPageReadService pa
         return administered.Count == 0 ? null : administered;
     }
 
-    private static void Flatten(IReadOnlyList<PageTreeNode> nodes, string spaceKey, Dictionary<Guid, PageIdentity> into)
+    /// <summary>Visible nodes only: a protected entry (design.md §6.7) has no identity to
+    /// report and nothing beneath it to walk.</summary>
+    private static void Flatten(IReadOnlyList<PageTreeEntry> entries, string spaceKey, Dictionary<Guid, PageIdentity> into)
     {
-        foreach (var node in nodes)
+        foreach (var node in entries.OfType<PageTreeNode>())
         {
             into[node.Id] = new PageIdentity(node.Title, node.Slug, spaceKey);
             Flatten(node.Children, spaceKey, into);

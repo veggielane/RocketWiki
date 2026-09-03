@@ -39,7 +39,7 @@ public class DataTelemetryTests : SqliteTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -77,7 +77,7 @@ public class DataTelemetryTests : SqliteTestBase
 
         var child = TestData.NewPage(space, "child", root);
         context.Pages.Add(child);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -115,7 +115,7 @@ public class DataTelemetryTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.PageRevisions.Add(TestData.NewRevision(page, actor, 1));
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageService(context, LocalInstanceId);
@@ -150,7 +150,7 @@ public class DataTelemetryTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         using var outbox = new MetricCollector<long>(DataTelemetry.Meter, "rocketwiki.sync.outbox_entries_appended");
@@ -185,10 +185,10 @@ public class DataTelemetryTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.AddRange(nativeSpace, replicaSpace);
         context.Pages.Add(replicaPage);
-        context.AccessRules.Add(EditorGrant(nativeSpace.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(nativeSpace.Id)), EditorGrant(nativeSpace.Id));
         context.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = replicaSpace.Id,
             Role = SpaceRole.SpaceAdmin, // rule management needs SpaceAdmin
             ExpressionJson = """{ "everyone": true }""",
@@ -267,7 +267,7 @@ public class DataTelemetryTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var pageService = new PageService(context, LocalInstanceId);
@@ -317,7 +317,7 @@ public class DataTelemetryTests : SqliteTestBase
         var space = NewExportedSpace();
         using var context = CreateContext();
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
 
         var visible = TestData.NewPage(space, "visible");
         var secret = TestData.NewPage(space, "secret");
@@ -328,7 +328,7 @@ public class DataTelemetryTests : SqliteTestBase
 
         // No clearance claim, so the caller is OFFICIAL (§21.3) and the SECRET page prunes.
         var tree = await new PageReadService(context).GetPageTreeAsync(space.Id, EditorPrincipal());
-        Assert.Single(Assert.IsType<ReadResult<IReadOnlyList<PageTreeNode>>.Found>(tree).Value);
+        Assert.Single(Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Found>(tree).Value.OfType<PageTreeNode>());
 
         var measurements = checks.GetMeasurementSnapshot();
         Assert.Equal(2, measurements.Count); // one per node considered, pruned or not

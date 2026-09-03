@@ -162,7 +162,7 @@ public sealed class AuditPipelineTests(RocketWikiApiFactory factory) : IClassFix
     /// </summary>
     [Theory]
     [InlineData("{ spaces { key } }", "spaces")]
-    [InlineData("{ pageTree(spaceId: \"00000000-0000-0000-0000-000000000000\") { id } }", "pageTree")]
+    [InlineData("{ pageTree(spaceId: \"00000000-0000-0000-0000-000000000000\") { ... on PageTreeNode { id } } }", "pageTree")]
     [InlineData("{ archivedSpaces { key } }", "archivedSpaces")]
     [InlineData("{ labels }", "labels")]
     [InlineData("{ labelDetails { id name } }", "labelDetails")]

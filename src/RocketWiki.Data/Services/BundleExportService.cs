@@ -127,6 +127,7 @@ public class BundleExportService : IBundleExportService
         // One query for the whole space, countries included.
         var markingsByPage = (await _db.PageMarkings
                 .Include(m => m.Countries)
+                .Include(m => m.Selectors)
                 .Where(m => livePageIds.Contains(m.PageId))
                 .ToListAsync(cancellationToken))
             .ToDictionary(m => m.PageId, m => m.ToMarking());
@@ -643,6 +644,7 @@ public class BundleExportService : IBundleExportService
         var pageIds = pageIdsByEvent.Values.Distinct().ToList();
         var markingsByPage = (await _db.PageMarkings
                 .Include(m => m.Countries)
+                .Include(m => m.Selectors)
                 .Where(m => pageIds.Contains(m.PageId))
                 .ToListAsync(cancellationToken))
             .ToDictionary(m => m.PageId, m => m.ToMarking());
@@ -826,6 +828,11 @@ public class BundleExportService : IBundleExportService
     {
         level = ProtectiveMarking.LevelWireName(marking.Level),
         eyesOnly = marking.EyesOnly,
+        // design.md §21.10: an object keyed by category, so "one value per category" is
+        // structural on the wire, and ALWAYS present ({} when none) so that a missing key
+        // is unambiguously a pre-selector bundle rather than a cleared set. Crosses
+        // verbatim; a category the high side has not configured matches nobody (§12).
+        selectors = marking.Selectors.ToDictionary(s => s.Category, s => s.Value, StringComparer.Ordinal),
         // Presentational, but it crosses: a replica must render the same marking string
         // as its origin (design.md §21.12). Null is a legal value and stays null.
         prefix = marking.Prefix,

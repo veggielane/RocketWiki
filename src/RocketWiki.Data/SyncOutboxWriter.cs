@@ -368,6 +368,11 @@ internal static class SyncOutboxWriter
                 pageId = e.PageId,
                 level = ProtectiveMarking.LevelWireName(e.After.Level),
                 eyesOnly = e.After.EyesOnly,
+                // design.md §21.10: selectors cross as an object keyed by category, ALWAYS
+                // present ({} when none) so that a missing key is unambiguously a bundle
+                // from before selectors existed rather than a cleared set. Unknown on the
+                // high side matches nobody (§12); nothing is translated here.
+                selectors = e.After.Selectors.ToDictionary(s => s.Category, s => s.Value, StringComparer.Ordinal),
                 prefix = e.After.Prefix,
             },
             PayloadOptions),

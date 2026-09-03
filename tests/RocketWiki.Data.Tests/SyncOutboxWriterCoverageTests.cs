@@ -93,7 +93,7 @@ public class SyncOutboxWriterCoverageTests
         var restriction = new AccessRuleChangedEvent(
             Guid.NewGuid(), "ENG", Guid.NewGuid(), null, SnapshotOfKind(AccessRuleKind.PageRestriction));
         var grant = new AccessRuleChangedEvent(
-            Guid.NewGuid(), "ENG", Guid.NewGuid(), null, SnapshotOfKind(AccessRuleKind.SpaceGrant));
+            Guid.NewGuid(), "ENG", Guid.NewGuid(), null, SnapshotOfKind(AccessRuleKind.RoleGrant));
 
         Assert.Equal(SyncEventType.Restrictions, SyncOutboxWriter.ClassifyCore(restriction));
         Assert.Null(SyncOutboxWriter.ClassifyCore(grant));

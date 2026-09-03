@@ -10,15 +10,15 @@ public sealed class FakeSpaceService : ISpaceService
 {
     public List<CreateSpaceRequest> CreateCalls { get; } = [];
 
-    public List<InitialSpaceGrant> InitialGrants { get; } = [];
+    public List<IReadOnlyList<InitialGrant>> InitialGrants { get; } = [];
 
     public Func<CreateSpaceRequest, PageMutationError?>? FailCreateWhen { get; set; }
 
     public Task<PageMutationResult<Space>> CreateAsync(
-        CreateSpaceRequest request, InitialSpaceGrant initialGrant, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+        CreateSpaceRequest request, IReadOnlyList<InitialGrant> initialGrants, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {
         CreateCalls.Add(request);
-        InitialGrants.Add(initialGrant);
+        InitialGrants.Add(initialGrants);
 
         var failure = FailCreateWhen?.Invoke(request);
         if (failure is not null)

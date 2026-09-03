@@ -47,7 +47,7 @@ public sealed class HomeFeedQueryTests(RocketWikiApiFactory factory) : IClassFix
     /// markings.graphql), spelled out because the paging test below must exercise the
     /// selection the frontend actually sends, not a lighter stand-in.
     /// </summary>
-    private const string MarkingFragment = "level levelName eyesOnly prefix label";
+    private const string MarkingFragment = "level levelName eyesOnly ukPrefix label";
 
     /// <summary>
     /// Seeds a space plus one page, optionally restricted to a nationality the caller
@@ -79,13 +79,13 @@ public sealed class HomeFeedQueryTests(RocketWikiApiFactory factory) : IClassFix
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = author.Id,
         };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
+            Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = author.Id,
             UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = author.Id,
-        });
+        }));
 
         var page = new Page
         {

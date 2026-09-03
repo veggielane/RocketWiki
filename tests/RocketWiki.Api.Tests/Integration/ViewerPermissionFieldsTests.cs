@@ -46,9 +46,9 @@ public sealed class ViewerPermissionFieldsTests(RocketWikiApiFactory factory) : 
         };
         db.Spaces.Add(space);
 
-        AccessRule Grant(Guid spaceId, SpaceRole role, RuleNode expression) => new()
+        AccessRule Grant(Guid spaceId, SpaceRole? role, RuleNode expression) => new()
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant,
             SpaceId = spaceId,
             Role = role,
             ExpressionJson = RuleExpressionSerializer.Serialize(expression),
@@ -58,7 +58,7 @@ public sealed class ViewerPermissionFieldsTests(RocketWikiApiFactory factory) : 
             UpdatedByUserId = creator.Id,
         };
 
-        db.AccessRules.Add(Grant(space.Id, SpaceRole.Viewer, new EveryoneCondition()));
+        db.AccessRules.Add(Grant(space.Id, null, new EveryoneCondition()));
         db.AccessRules.Add(Grant(space.Id, SpaceRole.Editor, new GroupCondition("editors")));
         db.AccessRules.Add(Grant(space.Id, SpaceRole.SpaceAdmin, new GroupCondition("space-admins")));
 
@@ -98,6 +98,10 @@ public sealed class ViewerPermissionFieldsTests(RocketWikiApiFactory factory) : 
             CreatedByUserId = creator.Id,
         };
         db.Spaces.Add(replica);
+        // Access beside the role (design.md §6.4): the replica's readers are its access
+        // grant's subjects; the editor:everyone role grant is what the read-only invariant
+        // must beat.
+        db.AccessRules.Add(Grant(replica.Id, null, new EveryoneCondition()));
         db.AccessRules.Add(Grant(replica.Id, SpaceRole.Editor, new EveryoneCondition()));
 
         var pageR = new Page { SpaceId = replica.Id, AncestorPath = "/", Slug = "r", Title = "Replica Page", CreatedAtUtc = now, UpdatedAtUtc = now };

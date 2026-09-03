@@ -72,12 +72,12 @@ public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClass
 
         var space = new Space { Key = $"NF{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Notification Flow Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
+            Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-        });
+        }));
         var page = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "p", Title = "Watched Page", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
         db.Pages.Add(page);
         await db.SaveChangesAsync();
@@ -626,7 +626,7 @@ public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClass
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Viewer,
+            Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
         });

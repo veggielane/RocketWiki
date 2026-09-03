@@ -55,9 +55,8 @@ public sealed class PageQueryTests(RocketWikiApiFactory factory) : IClassFixture
 
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = grantExpressionJson ?? RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = creator.Id,

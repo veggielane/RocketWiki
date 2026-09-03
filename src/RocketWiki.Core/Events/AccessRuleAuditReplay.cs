@@ -10,6 +10,16 @@ namespace RocketWiki.Core.Events;
 /// `permission.change` audit rows in order. This is that replay: a reusable, pure,
 /// independently-testable function - not inline test logic - since its correctness is
 /// the actual compliance property design.md §7 asks for ("enforced by test").
+///
+/// <para><b>One documented discontinuity.</b> The <c>SplitSpaceGrantsIntoAccessAndRole</c>
+/// migration converted every viewer grant into an access grant in place, and INSERTED a
+/// mirror access grant beside every editor/admin grant so nobody's visibility changed.
+/// Those mirrored rows were written by SQL and have no <c>permission.change</c> row of
+/// their own (design.md §7): a replay as-of an instant before the migration reconstructs
+/// the pre-split model exactly, and a replay as-of an instant after it omits the mirrors —
+/// which are derivable 1:1 from the role grants that do have rows (same space, same
+/// expression). Their <c>CreatedAtUtc</c> equals the role grant's, so the migration's own
+/// review query finds them.</para>
 /// </summary>
 public static class AccessRuleAuditReplay
 {

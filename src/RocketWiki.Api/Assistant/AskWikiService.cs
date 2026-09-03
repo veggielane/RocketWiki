@@ -152,6 +152,7 @@ public sealed class AskWikiService(
     IPageReadService pageReadService,
     IPageMarkingReader markingReader,
     IAuditSink auditSink,
+    SelectorCatalog selectorCatalog,
     AssistantOptions? options = null,
     IChatClient? chatClient = null)
 {
@@ -285,7 +286,7 @@ public sealed class AskWikiService(
         // THE aggregate: the highest level among the contributors, every distinct caveat
         // listed. Retrieved, not merely cited — see the class doc.
         var aggregateMarking = AggregateMarkingLabel.Of(
-            retrievedPageIds.Select(id => MarkingFor(markings, id)));
+            retrievedPageIds.Select(id => MarkingFor(markings, id)), selectorCatalog);
         attempt.AggregateMarkingLabel = aggregateMarking?.Label;
 
         List<ChatMessage> messages =
@@ -322,7 +323,7 @@ public sealed class AskWikiService(
                 ApiTelemetry.AssistantDispositionUnreachable, retrievedPageIds));
         }
 
-        var (answer, citations) = ValidateCitations(text.Trim(), entries, markings);
+        var (answer, citations) = ValidateCitations(text.Trim(), entries, markings, selectorCatalog);
 
         return Finish(new AskWikiOutcome(
             answer,
@@ -465,7 +466,7 @@ public sealed class AskWikiService(
     /// first appearance, deduplicated per marker.
     /// </summary>
     private static (string Answer, IReadOnlyList<AskWikiCitation> Citations) ValidateCitations(
-        string text, List<ContextEntry> entries, IReadOnlyDictionary<Guid, ProtectiveMarking> markings)
+        string text, List<ContextEntry> entries, IReadOnlyDictionary<Guid, ProtectiveMarking> markings, SelectorCatalog catalog)
     {
         var citations = new List<AskWikiCitation>();
         var seen = new HashSet<int>();
@@ -485,7 +486,7 @@ public sealed class AskWikiService(
                     entry.PageId, entry.Title, entry.HeadingPath, entry.AnchorId,
                     // Per-result marking (§21.13): the source page's own, so a citation
                     // list reads as the marked bibliography it is.
-                    PageMarkingView.From(MarkingFor(markings, entry.PageId))));
+                    PageMarkingView.From(MarkingFor(markings, entry.PageId), catalog)));
             }
 
             return match.Value;

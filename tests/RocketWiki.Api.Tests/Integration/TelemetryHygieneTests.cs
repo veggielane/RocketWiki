@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using RocketWiki.Api.GraphQL;
 using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
@@ -33,6 +34,13 @@ namespace RocketWiki.Api.Tests.Integration;
 /// source in the process is in scope, including HotChocolate.Diagnostics,
 /// Microsoft.AspNetCore, and SqlClient.
 ///
+/// <para><b>The disclosing surfaces are swept too</b> (design.md §21.8): a page the
+/// caller cannot read carries a sentinel selector value and a sentinel caveat country,
+/// and its placeholder — through <c>pageAccess</c>, the tree and <c>Page.linkTargets</c>
+/// — genuinely renders both in its label (asserted, so the sweep is not vacuous), while
+/// the denial reason the gate emits names only the category. If a selector value, a
+/// country or a marking label ever reached a span or a metric tag, it lands here.</para>
+///
 /// <b>Known limit, stated rather than implied:</b> this covers traces and metrics. §15
 /// also covers logs, and .NET logging is not interceptable the same way from here — an
 /// ILogger message template with a page title in it would not be caught by this test.
@@ -48,13 +56,21 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
     private const string SentinelTitle = "ZZSENTINELPAGETITLEZZ";
     private const string SentinelSearchText = "ZZSENTINELSEARCHTEXTZZ";
     private const string SentinelAttachmentBytes = "ZZSENTINELATTACHMENTZZ";
+    private const string SentinelProtectedTitle = "ZZSENTINELPROTECTEDTITLEZZ";
+
+    /// <summary>design.md §21.15/§21.8: a selector VALUE is the marking's content; it
+    /// reaches the placeholder label and must reach nothing operational. The category
+    /// name (bounded configured vocabulary) is what the denial token carries, and even
+    /// that collapses to the single word <c>selector</c> in a metric (§15).</summary>
+    private const string SentinelSelector = RocketWikiApiFactory.SentinelSelectorValue;
 
     private static readonly string[] AllSentinels =
     [
         SentinelNationality, SentinelContent, SentinelTitle, SentinelSearchText, SentinelAttachmentBytes,
+        SentinelProtectedTitle, SentinelSelector,
     ];
 
-    private sealed record Fixture(Guid SpaceId, Guid PageId);
+    private sealed record Fixture(Guid SpaceId, string SpaceKey, Guid PageId, Guid ProtectedPageId);
 
     private async Task<Fixture> SeedAsync()
     {
@@ -81,9 +97,9 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         };
         db.Spaces.Add(space);
 
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
@@ -91,16 +107,35 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
             CreatedByUserId = creator.Id,
             UpdatedAtUtc = DateTime.UtcNow,
             UpdatedByUserId = creator.Id,
-        });
+        }));
 
         var now = DateTime.UtcNow;
+
+        // A page the caller CANNOT read (design.md §21.8): SECRET, so the clearance gate
+        // passes for the SECRET-cleared caller below, and carrying the sentinel selector
+        // value in the claim-less SENTINEL category, which no grant confers - so G is the
+        // one gate that fails, and the placeholder the caller is shown carries the
+        // sentinel selector AND the sentinel country in its label. The readable page
+        // below links to it, so Page.linkTargets renders the same placeholder.
+        var protectedPage = new Page
+        {
+            SpaceId = space.Id,
+            AncestorPath = "/",
+            Slug = "telemetry-protected",
+            Title = SentinelProtectedTitle,
+            CurrentContent = "Nobody reads this.",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        db.Pages.Add(protectedPage);
+
         var page = new Page
         {
             SpaceId = space.Id,
             AncestorPath = "/",
             Slug = "telemetry-hygiene",
             Title = SentinelTitle,
-            CurrentContent = SentinelContent,
+            CurrentContent = $"{SentinelContent} see page://{protectedPage.Id}",
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
@@ -109,12 +144,27 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         // design.md §21: a protective marking the caller *is* cleared for, so the
         // clearance gate genuinely evaluates a real level and a real country set on every
         // resolution of this page rather than short-circuiting on the OFFICIAL default.
-        // The eyes-only country is the sentinel nationality, which makes the marking's own
+        // The eyes-only set carries the sentinel nationality, which makes the marking's own
         // contents part of what this sweep is looking for: if a level, a country, or a
-        // marking-with-page-id ever reached a span or a metric tag, it lands here.
+        // marking-with-page-id ever reached a span or a metric tag, it lands here. The
+        // caveat vocabulary is the fixed five-eyes set (design.md §21.4), so the sentinel
+        // token is kept on the row but matches nobody; NZ is what admits the caller, and the
+        // sentinel still travels through every label and gate evaluation beside it.
         var marking = new PageMarking { PageId = page.Id, Level = ClassificationLevel.Secret, SetAtUtc = now };
         marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = SentinelNationality });
+        marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = "NZ" });
         db.PageMarkings.Add(marking);
+
+        var protectedMarking = new PageMarking { PageId = protectedPage.Id, Level = ClassificationLevel.Secret, SetAtUtc = now };
+        protectedMarking.Countries.Add(new PageMarkingCountry { PageId = protectedPage.Id, CountryValue = SentinelNationality });
+        protectedMarking.Countries.Add(new PageMarkingCountry { PageId = protectedPage.Id, CountryValue = "NZ" });
+        protectedMarking.Selectors.Add(new PageMarkingSelector
+        {
+            PageId = protectedPage.Id,
+            Category = RocketWikiApiFactory.SentinelSelectorCategory,
+            Value = SentinelSelector,
+        });
+        db.PageMarkings.Add(protectedMarking);
         await db.SaveChangesAsync();
 
         // A restriction the caller *satisfies*, so the rule engine actually evaluates the
@@ -133,7 +183,7 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         });
         await db.SaveChangesAsync();
 
-        return new Fixture(space.Id, page.Id);
+        return new Fixture(space.Id, space.Key, page.Id, protectedPage.Id);
     }
 
     [Fact]
@@ -146,8 +196,8 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
             sub: $"tel-{Guid.NewGuid()}",
             email: "telemetry@example.test",
             name: "Telemetry Tester",
-            nationality: [SentinelNationality],
-            // Cleared for the seeded page's SECRET marking (design.md §21), so the reads
+            nationality: [SentinelNationality, "NZ"],
+            // Cleared for the seeded pages' SECRET markings (design.md §21), so the reads
             // below still succeed and the clearance gate runs on real values.
             clearance: "SECRET");
 
@@ -211,6 +261,9 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         // this test would be worthless. Both listeners must have seen real traffic.
         Assert.NotEmpty(capturedSnapshot);
         Assert.NotEmpty(metricTagsSnapshot);
+        // ... including the permission-check histogram for the selector-denied read,
+        // which carries the bounded `selector` category and nothing more (§15).
+        Assert.Contains(metricTagsSnapshot, t => t == $"{Core.Telemetry.CoreTelemetry.DenialReasonTag}=selector");
 
         AssertNoSentinels(capturedSnapshot, metricTagsSnapshot);
     }
@@ -220,7 +273,9 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
     /// returns page content, a GraphQL mutation carrying content as an <b>inline
     /// literal</b> in the document (the case §15 calls out — a literal in the query text
     /// isn't covered by suppressing variables), an operation whose name and inline
-    /// argument stand in for a search string, and the plain-HTTP attachment routes.
+    /// argument stand in for a search string, the plain-HTTP attachment routes, and the
+    /// disclosing surfaces (§21.8) rendering a placeholder whose label carries the
+    /// sentinel selector and country.
     /// </summary>
     private static async Task ExerciseTheApiAsync(HttpClient client, Fixture fixture)
     {
@@ -229,7 +284,7 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         using var read = await client.PostGraphQLAsync($$"""
             query { page(id: "{{fixture.PageId}}") { id title content } }
             """);
-        Assert.Equal(SentinelContent, read.RootElement
+        Assert.Contains(SentinelContent, read.RootElement
             .GetProperty("data").GetProperty("page").GetProperty("content").GetString());
 
         // 2. Mutation with the content inline in the document, not as a variable.
@@ -290,12 +345,54 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         Assert.True(rqlParse.RootElement.GetProperty("data").GetProperty("parseRql")
             .GetProperty("isValid").GetBoolean());
 
-        using var searchish = await client.PostGraphQLAsync($$"""
-            query FindByTitle { pageTree(spaceId: "{{fixture.SpaceId}}") { id title } }
+        // 3d. The tree, which now DISCLOSES the protected page as a placeholder whose
+        //     label carries the sentinel selector and country (§21.8). The body must
+        //     carry them - that is the non-vacuity of this sweep - and no span may.
+        using var tree = await client.PostGraphQLAsync($$"""
+            query FindByTitle { pageTree(spaceId: "{{fixture.SpaceId}}") {
+              ... on PageTreeNode { id title }
+              ... on ProtectedTreeNode { title denial { marking { label } reasons { gate category value } } }
+            } }
             """);
-        Assert.Equal(JsonValueKind.Undefined, searchish.RootElement.TryGetProperty("errors", out var e) ? e.ValueKind : JsonValueKind.Undefined);
+        Assert.Equal(JsonValueKind.Undefined, tree.RootElement.TryGetProperty("errors", out var e) ? e.ValueKind : JsonValueKind.Undefined);
+        var treeBody = tree.RootElement.ToString();
+        Assert.Contains(SentinelSelector, treeBody, StringComparison.Ordinal);
+        Assert.Contains(SentinelNationality, treeBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(SentinelProtectedTitle, treeBody, StringComparison.Ordinal);
 
-        // 3b. A deliberately invalid document containing the search sentinel, so the
+        // 3e. The disclosed read of the protected page itself: denied on the selector
+        //     grant, so the placeholder carries the full label.
+        using var denied = await client.PostGraphQLAsync($$"""
+            query ProtectedRead { pageAccess(id: "{{fixture.ProtectedPageId}}") {
+              page { id }
+              denial { placeholderTitle noSpaceAccess marking { label } reasons { gate category value countries } }
+            } }
+            """);
+        var access = denied.RootElement.GetProperty("data").GetProperty("pageAccess");
+        Assert.Equal(JsonValueKind.Null, access.GetProperty("page").ValueKind);
+        var label = access.GetProperty("denial").GetProperty("marking").GetProperty("label").GetString()!;
+        Assert.Contains(SentinelSelector, label, StringComparison.Ordinal);
+        Assert.Contains(SentinelNationality, label, StringComparison.Ordinal);
+        Assert.Equal("SELECTOR_GRANT", access.GetProperty("denial").GetProperty("reasons")[0].GetProperty("gate").GetString());
+
+        // 3f. The readable page's link to the protected one: the same placeholder,
+        //     reached through Page.linkTargets.
+        using var links = await client.PostGraphQLAsync($$"""
+            query Links { pageAccess(id: "{{fixture.PageId}}") { page { id linkTargets { id page { id } denial { marking { label } } } } } }
+            """);
+        var target = Assert.Single(links.RootElement.GetProperty("data").GetProperty("pageAccess")
+            .GetProperty("page").GetProperty("linkTargets").EnumerateArray());
+        Assert.Contains(SentinelSelector, target.GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
+
+        // 3g. MCP get_page_tree: an OMITTING surface (§21.8) - the placeholder, its label
+        //     and the sentinel selector never reach the payload; the tool still runs the
+        //     same decided walk, so its spans are swept for the same values.
+        var mcpBody = await McpToolCallAsync(client, "get_page_tree", "{\"spaceKey\":\"" + fixture.SpaceKey + "\"}");
+        Assert.Contains(fixture.PageId.ToString(), mcpBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(SentinelSelector, mcpBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(AccessDenialView.ProtectedTitle, mcpBody, StringComparison.Ordinal);
+
+        // 3h. A deliberately invalid document containing the search sentinel, so the
         //     GraphQL *error* path is exercised too - a validation error quotes the
         //     offending field name back, and MaxErrorEvents = 0 is what keeps that off
         //     the span. Posted directly rather than through PostGraphQLAsync because Hot
@@ -323,6 +420,27 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         var download = await client.GetAsync($"/attachments/{attachmentId}");
         download.EnsureSuccessStatusCode();
         Assert.Equal(SentinelAttachmentBytes, await download.Content.ReadAsStringAsync());
+    }
+
+    /// <summary>One raw JSON-RPC tools/call against /mcp. The Accept header matters:
+    /// without it the server answers a "Not Acceptable" JSON-RPC error before any tool
+    /// runs, and the sweep would cover nothing.</summary>
+    private static async Task<string> McpToolCallAsync(HttpClient client, string toolName, string argumentsJson)
+    {
+        var payload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\""
+            + toolName + "\",\"arguments\":" + argumentsJson + "}}";
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Accept.ParseAdd("text/event-stream");
+        request.Headers.Add("MCP-Protocol-Version", "2025-06-18");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, $"MCP {toolName} answered {(int)response.StatusCode}: {body}");
+        return body;
     }
 
     private static void AssertNoSentinels(IReadOnlyList<Activity> captured, IReadOnlyList<string> metricTags)
@@ -366,7 +484,7 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         }
 
         Assert.True(violations.Count == 0,
-            "design.md §15 forbids page content, search text, and principal attribute values in telemetry. " +
+            "design.md §15 forbids page content, search text, principal attribute values and marking detail in telemetry. " +
             $"Found {violations.Count} violation(s) across {captured.Count} captured activities:\n  " +
             string.Join("\n  ", violations));
     }

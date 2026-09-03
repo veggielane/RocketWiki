@@ -49,9 +49,9 @@ public sealed class PageRestrictionsReadTests(RocketWikiApiFactory factory) : IC
         };
         db.Spaces.Add(space);
 
-        void Grant(SpaceRole role, RuleNode expression) => db.AccessRules.Add(new AccessRule
+        void Grant(SpaceRole? role, RuleNode expression) => db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = role,
             ExpressionJson = RuleExpressionSerializer.Serialize(expression),
@@ -59,9 +59,9 @@ public sealed class PageRestrictionsReadTests(RocketWikiApiFactory factory) : IC
             CreatedByUserId = creator.Id,
             UpdatedAtUtc = now,
             UpdatedByUserId = creator.Id,
-        });
+        }));
 
-        Grant(SpaceRole.Viewer, new EveryoneCondition());
+        Grant(null, new EveryoneCondition()); // access only: may see, holds no role
         Grant(SpaceRole.Editor, new GroupCondition("editors"));
         Grant(SpaceRole.SpaceAdmin, new GroupCondition("space-admins"));
 

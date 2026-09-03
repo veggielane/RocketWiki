@@ -4,12 +4,20 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 
 namespace RocketWiki.Data.Services;
 
 /// <summary>
 /// EF-backed implementation of IAccessRuleService. Lives in RocketWiki.Data for the
 /// same reason PageService/PageReadService do: it needs RocketWikiDbContext directly.
+///
+/// <para>Three kinds, one CRUD surface (design.md §6.4/§8): role grants, access grants
+/// (with their selector rows, §21.15) and page restrictions. The management gate is
+/// role-only — <see cref="RuleManagementGate"/> over this space's ROLE grants, or instance
+/// admin — so a space-admin who holds no access grant manages a space whose pages they
+/// cannot read (§6.5.2); managing the rules that decide who sees a space is not the same
+/// act as seeing it.</para>
 /// </summary>
 public class AccessRuleService : IAccessRuleService
 {
@@ -23,7 +31,8 @@ public class AccessRuleService : IAccessRuleService
     public async Task<PageMutationResult<AccessRule>> CreateAsync(
         CreateAccessRuleRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {
-        var shapeError = ValidateShape(request.Kind, request.SpaceId, request.PageId, request.Role, request.Action);
+        var shapeError = AccessRuleValidation.ValidateShape(
+            request.Kind, request.SpaceId, request.PageId, request.Role, request.Action, request.SelectorValues);
         if (shapeError is not null)
         {
             return PageMutationResult<AccessRule>.Failure(shapeError);
@@ -32,6 +41,12 @@ public class AccessRuleService : IAccessRuleService
         if (!RuleExpressionSerializer.TryParse(request.ExpressionJson, out _, out var parseError))
         {
             return PageMutationResult<AccessRule>.Failure(new ValidationError($"Invalid rule expression: {parseError}"));
+        }
+
+        var selectorError = AccessRuleValidation.ValidateSelectors(_db.SelectorCatalog, request.SelectorValues, out var selectors);
+        if (selectorError is not null)
+        {
+            return PageMutationResult<AccessRule>.Failure(selectorError);
         }
 
         var spaceLookup = await ResolveSpaceAsync(request.Kind, request.SpaceId, request.PageId, cancellationToken);
@@ -59,6 +74,11 @@ public class AccessRuleService : IAccessRuleService
             UpdatedAtUtc = now,
             UpdatedByUserId = actingUserId,
         };
+        foreach (var selector in selectors)
+        {
+            rule.Selectors.Add(new AccessRuleSelector { AccessRuleId = rule.Id, Category = selector.Category, Value = selector.Value });
+        }
+
         _db.AccessRules.Add(rule);
 
         // design.md §7: creation records Before as explicitly null, so a replay can
@@ -73,7 +93,9 @@ public class AccessRuleService : IAccessRuleService
     public async Task<PageMutationResult<AccessRule>> UpdateAsync(
         UpdateAccessRuleRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {
-        var rule = await _db.AccessRules.FirstOrDefaultAsync(r => r.Id == request.AccessRuleId, cancellationToken);
+        var rule = await _db.AccessRules
+            .Include(r => r.Selectors)
+            .FirstOrDefaultAsync(r => r.Id == request.AccessRuleId, cancellationToken);
         if (rule is null)
         {
             return PageMutationResult<AccessRule>.Failure(new NotFoundError(request.AccessRuleId));
@@ -81,7 +103,8 @@ public class AccessRuleService : IAccessRuleService
 
         var newRole = request.Role ?? rule.Role;
         var newAction = request.Action ?? rule.Action;
-        var shapeError = ValidateShape(rule.Kind, rule.SpaceId, rule.PageId, newRole, newAction);
+        var shapeError = AccessRuleValidation.ValidateShape(
+            rule.Kind, rule.SpaceId, rule.PageId, newRole, newAction, request.SelectorValues);
         if (shapeError is not null)
         {
             return PageMutationResult<AccessRule>.Failure(shapeError);
@@ -90,6 +113,12 @@ public class AccessRuleService : IAccessRuleService
         if (!RuleExpressionSerializer.TryParse(request.ExpressionJson, out _, out var parseError))
         {
             return PageMutationResult<AccessRule>.Failure(new ValidationError($"Invalid rule expression: {parseError}"));
+        }
+
+        var selectorError = AccessRuleValidation.ValidateSelectors(_db.SelectorCatalog, request.SelectorValues, out var selectors);
+        if (selectorError is not null)
+        {
+            return PageMutationResult<AccessRule>.Failure(selectorError);
         }
 
         var spaceLookup = await ResolveSpaceAsync(rule.Kind, rule.SpaceId, rule.PageId, cancellationToken);
@@ -113,6 +142,14 @@ public class AccessRuleService : IAccessRuleService
         rule.UpdatedAtUtc = DateTime.UtcNow;
         rule.UpdatedByUserId = actingUserId;
 
+        // Null means "leave the conferred selectors alone"; a list (empty included) is
+        // the full replacement set, applied as a diff so an unchanged row is not a
+        // pointless delete-and-insert pair inside the transaction.
+        if (request.SelectorValues is not null)
+        {
+            ReplaceSelectors(rule, selectors);
+        }
+
         _db.AuditContext = auditContext;
         _db.RaiseDomainEvent(new AccessRuleChangedEvent(rule.Id, spaceLookup.Key, actingUserId, before, After: rule.ToSnapshot()));
 
@@ -123,7 +160,9 @@ public class AccessRuleService : IAccessRuleService
     public async Task<PageMutationResult<Guid>> DeleteAsync(
         DeleteAccessRuleRequest request, Principal principal, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {
-        var rule = await _db.AccessRules.FirstOrDefaultAsync(r => r.Id == request.AccessRuleId, cancellationToken);
+        var rule = await _db.AccessRules
+            .Include(r => r.Selectors)
+            .FirstOrDefaultAsync(r => r.Id == request.AccessRuleId, cancellationToken);
         if (rule is null)
         {
             return PageMutationResult<Guid>.Failure(new NotFoundError(request.AccessRuleId));
@@ -141,6 +180,10 @@ public class AccessRuleService : IAccessRuleService
         }
 
         var before = rule.ToSnapshot();
+
+        // NO ACTION on the FK (data-model.md), so the selector rows go explicitly, in the
+        // same transaction - never as a side effect the database performed for us.
+        _db.AccessRuleSelectors.RemoveRange(rule.Selectors);
         _db.AccessRules.Remove(rule);
 
         // design.md §7: deletion records After as explicitly null, so a replay can
@@ -152,35 +195,28 @@ public class AccessRuleService : IAccessRuleService
         return PageMutationResult<Guid>.Success(rule.Id);
     }
 
-    private static ValidationError? ValidateShape(AccessRuleKind kind, Guid? spaceId, Guid? pageId, SpaceRole? role, PageAction? action)
+    /// <summary>Diffs the grant's selector rows against the wanted (canonical) set — the
+    /// same shape <c>PageMarkingService.ReplaceCountries</c> uses, for the same reason.</summary>
+    private void ReplaceSelectors(AccessRule rule, IReadOnlyList<SelectorValue> wanted)
     {
-        // Mirrors CK_AccessRules_KindColumnPairing (data-model.md) so a bad request is
-        // rejected here rather than surfacing as an opaque DbUpdateException.
-        if (kind == AccessRuleKind.SpaceGrant)
+        var wantedSet = wanted.ToHashSet();
+
+        foreach (var existing in rule.Selectors.Where(s => !wantedSet.Contains(SelectorValue.Canonical(s.Category, s.Value))).ToList())
         {
-            if (spaceId is null || pageId is not null || role is null || action is not null)
-            {
-                return new ValidationError("A SpaceGrant rule must set SpaceId and Role, and must not set PageId or Action.");
-            }
-        }
-        else if (kind == AccessRuleKind.PageRestriction)
-        {
-            if (pageId is null || spaceId is not null || action is null || role is not null)
-            {
-                return new ValidationError("A PageRestriction rule must set PageId and Action, and must not set SpaceId or Role.");
-            }
-        }
-        else
-        {
-            return new ValidationError($"Unknown AccessRuleKind: {kind}.");
+            rule.Selectors.Remove(existing);
+            _db.AccessRuleSelectors.Remove(existing);
         }
 
-        return null;
+        var held = rule.SelectorValues();
+        foreach (var selector in wanted.Where(s => !held.Contains(s)))
+        {
+            rule.Selectors.Add(new AccessRuleSelector { AccessRuleId = rule.Id, Category = selector.Category, Value = selector.Value });
+        }
     }
 
     private async Task<Space?> ResolveSpaceAsync(AccessRuleKind kind, Guid? spaceId, Guid? pageId, CancellationToken cancellationToken)
     {
-        if (kind == AccessRuleKind.SpaceGrant)
+        if (kind is AccessRuleKind.RoleGrant or AccessRuleKind.AccessGrant)
         {
             return spaceId is null ? null : await _db.Spaces.FirstOrDefaultAsync(s => s.Id == spaceId, cancellationToken);
         }
@@ -196,11 +232,12 @@ public class AccessRuleService : IAccessRuleService
 
     /// <summary>design.md §6.5.2's gate via <see cref="RuleManagementGate"/> — the one
     /// shared definition this service's mutations and the API's restriction/grant
-    /// read paths all call, so the write gate and the read gate cannot drift.</summary>
+    /// read paths all call, so the write gate and the read gate cannot drift. Loads ROLE
+    /// grants only: an access grant confers no say over the rules.</summary>
     private async Task<bool> CanManageRulesAsync(Guid spaceId, Principal principal, bool isInstanceAdmin, CancellationToken cancellationToken)
     {
         var grants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
+            .Where(r => r.Kind == AccessRuleKind.RoleGrant && r.SpaceId == spaceId)
             .ToListAsync(cancellationToken);
 
         return RuleManagementGate.CanManageRules(

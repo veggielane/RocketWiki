@@ -27,7 +27,7 @@ public abstract record ReadResult<T> where T : class
     /// The subject exists but the principal failed canView. <paramref name="Reason"/> is
     /// the specific failing-restriction reason the rule engine already computed —
     /// <c>restriction:{pageId}:{ruleId}</c> for a failed page restriction, or
-    /// <c>no-space-role</c> (see EffectivePermissionCalculator). Per design.md §15's
+    /// <c>no-space-access</c> (see EffectivePermissionCalculator). Per design.md §15's
     /// convention this specific form belongs in the audit row's details; telemetry only
     /// ever sees the bounded category (CoreTelemetry.CategorizeDenialReason), which the
     /// calculator already emits itself — nothing here feeds a metric tag.

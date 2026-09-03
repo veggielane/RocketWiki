@@ -47,7 +47,7 @@ public class SyncBundleNotificationTests : SqliteTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -111,7 +111,7 @@ public class SyncBundleNotificationTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -183,7 +183,7 @@ public class SyncBundleNotificationTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -253,7 +253,7 @@ public class SyncBundleNotificationTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -338,9 +338,8 @@ public class SyncBundleNotificationTests : SqliteTestBase
         // Viewer access requires the "eng" group - the pivot both assertions turn on.
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "group": "eng" }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = Guid.NewGuid(),

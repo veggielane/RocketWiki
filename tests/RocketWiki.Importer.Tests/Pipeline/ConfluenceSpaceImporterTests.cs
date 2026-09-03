@@ -32,7 +32,7 @@ public class ConfluenceSpaceImporterTests
         Principal.Create("importer-sub", ["importers"]),
         Guid.NewGuid(),
         new AuditContext(AuditChannel.System, "test-import", "127.0.0.1"),
-        new InitialSpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }"""));
+        new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "everyone": true }"""));
 
     private static ConfluenceExportPage Page(
         string id, string? parentId, string title, string body,
@@ -118,15 +118,21 @@ public class ConfluenceSpaceImporterTests
             Principal.Create("importer-sub", ["engineering"]),
             Guid.NewGuid(),
             new AuditContext(AuditChannel.System, "test-import", "127.0.0.1"),
-            new InitialSpaceGrant(SpaceRole.Editor, """{ "group": "engineering" }"""));
+            new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "group": "engineering" }"""));
 
         var export = new ConfluenceExportSpace("ENG", "Engineering", null, [Page("1", null, "Home", "<p>Hi</p>")]);
 
         await CreateImporter().ImportAsync(export, options);
 
-        var grant = Assert.Single(_spaceService.InitialGrants);
-        Assert.Equal(SpaceRole.Editor, grant.Role);
-        Assert.Equal("""{ "group": "engineering" }""", grant.ExpressionJson);
+        var grants = Assert.Single(_spaceService.InitialGrants);
+        var roleGrant = Assert.Single(grants, g => g.Kind == AccessRuleKind.RoleGrant);
+        Assert.Equal(SpaceRole.SpaceAdmin, roleGrant.Role);
+        Assert.Equal("""{ "group": "engineering" }""", roleGrant.ExpressionJson);
+        // The importer pairs the role grant with an access grant for the same subjects:
+        // a role confers no visibility (design.md §6.4), and an importer that could not
+        // see the space it created could not land a page in it.
+        var accessGrant = Assert.Single(grants, g => g.Kind == AccessRuleKind.AccessGrant);
+        Assert.Equal("""{ "group": "engineering" }""", accessGrant.ExpressionJson);
     }
 
     [Fact]

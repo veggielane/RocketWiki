@@ -36,7 +36,7 @@ public class AuditCoverageTests
     /// IsSpecialName filter that skips its accessors), and — should one ever
     /// appear — types extending a root via [ExtendObjectType(typeof(Query))] /
     /// [ExtendObjectType(typeof(Mutation))]. Type extensions of non-root types
-    /// (PageFieldResolvers, SpaceFieldResolvers, PageTreeNodeTypeExtension)
+    /// (PageFieldResolvers, SpaceFieldResolvers, PageTreeNodeType)
     /// stay deliberately out of scope: their fields are nested resolutions
     /// under an already-audited root read, not user actions of their own
     /// (design.md §8's nested-field rule).

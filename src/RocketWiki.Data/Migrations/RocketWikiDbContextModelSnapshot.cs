@@ -68,8 +68,29 @@ namespace RocketWiki.Data.Migrations
 
                     b.ToTable("AccessRules", null, t =>
                         {
-                            t.HasCheckConstraint("CK_AccessRules_KindColumnPairing", "([Kind] = 1 AND [SpaceId] IS NOT NULL AND [PageId] IS NULL AND [Role] IS NOT NULL AND [Action] IS NULL) OR ([Kind] = 2 AND [PageId] IS NOT NULL AND [SpaceId] IS NULL AND [Action] IS NOT NULL AND [Role] IS NULL)");
+                            t.HasCheckConstraint("CK_AccessRules_KindColumnPairing", "([Kind] = 1 AND [SpaceId] IS NOT NULL AND [PageId] IS NULL AND [Role] IS NOT NULL AND [Role] IN (2,3) AND [Action] IS NULL) OR ([Kind] = 2 AND [PageId] IS NOT NULL AND [SpaceId] IS NULL AND [Action] IS NOT NULL AND [Role] IS NULL) OR ([Kind] = 3 AND [SpaceId] IS NOT NULL AND [PageId] IS NULL AND [Role] IS NULL AND [Action] IS NULL)");
                         });
+                });
+
+            modelBuilder.Entity("RocketWiki.Core.Entities.AccessRuleSelector", b =>
+                {
+                    b.Property<Guid>("AccessRuleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Category")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("Value")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.HasKey("AccessRuleId", "Category", "Value");
+
+                    b.HasIndex("Category", "Value", "AccessRuleId")
+                        .HasDatabaseName("IX_AccessRuleSelectors_Category_Value_AccessRuleId");
+
+                    b.ToTable("AccessRuleSelectors", (string)null);
                 });
 
             modelBuilder.Entity("RocketWiki.Core.Entities.Attachment", b =>
@@ -710,6 +731,28 @@ namespace RocketWiki.Data.Migrations
                     b.ToTable("PageMarkingCountries", (string)null);
                 });
 
+            modelBuilder.Entity("RocketWiki.Core.Entities.PageMarkingSelector", b =>
+                {
+                    b.Property<Guid>("PageId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Category")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.HasKey("PageId", "Category");
+
+                    b.HasIndex("Category", "Value", "PageId")
+                        .HasDatabaseName("IX_PageMarkingSelectors_Category_Value_PageId");
+
+                    b.ToTable("PageMarkingSelectors", (string)null);
+                });
+
             modelBuilder.Entity("RocketWiki.Core.Entities.PageProperty", b =>
                 {
                     b.Property<Guid>("PageId")
@@ -1118,6 +1161,17 @@ namespace RocketWiki.Data.Migrations
                     b.Navigation("Space");
                 });
 
+            modelBuilder.Entity("RocketWiki.Core.Entities.AccessRuleSelector", b =>
+                {
+                    b.HasOne("RocketWiki.Core.Entities.AccessRule", "AccessRule")
+                        .WithMany("Selectors")
+                        .HasForeignKey("AccessRuleId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("AccessRule");
+                });
+
             modelBuilder.Entity("RocketWiki.Core.Entities.Attachment", b =>
                 {
                     b.HasOne("RocketWiki.Core.Entities.Page", "Page")
@@ -1355,6 +1409,17 @@ namespace RocketWiki.Data.Migrations
                     b.Navigation("Marking");
                 });
 
+            modelBuilder.Entity("RocketWiki.Core.Entities.PageMarkingSelector", b =>
+                {
+                    b.HasOne("RocketWiki.Core.Entities.PageMarking", "Marking")
+                        .WithMany("Selectors")
+                        .HasForeignKey("PageId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Marking");
+                });
+
             modelBuilder.Entity("RocketWiki.Core.Entities.PageProperty", b =>
                 {
                     b.HasOne("RocketWiki.Core.Entities.Page", "Page")
@@ -1486,6 +1551,11 @@ namespace RocketWiki.Data.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("RocketWiki.Core.Entities.AccessRule", b =>
+                {
+                    b.Navigation("Selectors");
+                });
+
             modelBuilder.Entity("RocketWiki.Core.Entities.Comment", b =>
                 {
                     b.Navigation("Replies");
@@ -1523,6 +1593,8 @@ namespace RocketWiki.Data.Migrations
             modelBuilder.Entity("RocketWiki.Core.Entities.PageMarking", b =>
                 {
                     b.Navigation("Countries");
+
+                    b.Navigation("Selectors");
                 });
 
             modelBuilder.Entity("RocketWiki.Core.Entities.PagePropertyKey", b =>

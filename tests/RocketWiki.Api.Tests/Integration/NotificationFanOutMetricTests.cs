@@ -77,12 +77,12 @@ public sealed class NotificationFanOutMetricTests(RocketWikiApiFactory factory) 
             await db.SaveChangesAsync();
             var space = new Space { Key = $"FM{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Fanout Metrics", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
             db.Spaces.Add(space);
-            db.AccessRules.Add(new AccessRule
+            db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
             {
-                Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
+                Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
                 ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
                 CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-            });
+            }));
             var page = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "metrics", Title = "Metrics Page", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
             db.Pages.Add(page);
             db.AccessRules.Add(new AccessRule

@@ -58,9 +58,8 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         db.Spaces.Add(space);
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = creator.Id,
@@ -124,7 +123,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
               askWiki(question: "{{question}}") {
                 answer
                 unavailable
-                aggregateMarking { label level levelName prefix eyesOnlySets }
+                aggregateMarking { label level levelName ukPrefix eyesOnlySets }
                 citations { pageId title marking { label level } }
               }
             }
@@ -135,7 +134,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
             query {
               search(query: "{{query}}", spaceKey: "{{spaceKey}}") {
                 totalCount
-                aggregateMarking { label level eyesOnlySets prefix }
+                aggregateMarking { label level eyesOnlySets ukPrefix }
                 edges { node { page { id marking { label levelName } } } }
               }
             }
@@ -203,7 +202,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         var aggregate = ask.GetProperty("aggregateMarking");
         Assert.Equal("UK OFFICIAL", aggregate.GetProperty("label").GetString());
         Assert.Equal("OFFICIAL", aggregate.GetProperty("levelName").GetString());
-        Assert.Equal("UK", aggregate.GetProperty("prefix").GetString());
+        Assert.True(aggregate.GetProperty("ukPrefix").GetBoolean());
         Assert.Empty(aggregate.GetProperty("eyesOnlySets").EnumerateArray());
     }
 
@@ -217,14 +216,14 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
 
         var space = await SeedSpaceAsync();
         await SeedPageAsync(space, "gb-only", "GB Notes", $"# GB\n\nThe {term} figures.",
-            ClassificationLevel.Secret, eyesOnly: ["GB"]);
+            ClassificationLevel.Secret, eyesOnly: ["UK"]);
         await SeedPageAsync(space, "us-only", "US Notes", $"# US\n\nThe {term} figures, again.",
             ClassificationLevel.Secret, eyesOnly: ["US"]);
 
-        using var response = await AskAsync(CreateClient(clearance: "SECRET", nationality: ["GB", "US"]), term);
+        using var response = await AskAsync(CreateClient(clearance: "SECRET", nationality: ["UK", "US"]), term);
         var ask = Field(response, "askWiki");
 
-        Assert.Equal("UK SECRET [GB EYES ONLY] [US EYES ONLY]", AggregateLabel(ask));
+        Assert.Equal("UK SECRET UK EYES ONLY, US EYES ONLY", AggregateLabel(ask));
         Assert.Equal(2, ask.GetProperty("aggregateMarking").GetProperty("eyesOnlySets").GetArrayLength());
     }
 
@@ -237,10 +236,10 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         var space = await SeedSpaceAsync();
         var open = await SeedPageAsync(space, "cit-open", "Open Source", $"# Open\n\nAbout {term}.");
         var closed = await SeedPageAsync(space, "cit-closed", "Closed Source", $"# Closed\n\nAlso about {term}.",
-            ClassificationLevel.Secret, eyesOnly: ["GB"]);
+            ClassificationLevel.Secret, eyesOnly: ["UK"]);
 
         // The fixture's default script cites every marker it was offered.
-        using var response = await AskAsync(CreateClient(clearance: "SECRET", nationality: ["GB"]), term);
+        using var response = await AskAsync(CreateClient(clearance: "SECRET", nationality: ["UK"]), term);
         var ask = Field(response, "askWiki");
 
         var byPageId = ask.GetProperty("citations").EnumerateArray()
@@ -248,7 +247,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
 
         Assert.Equal("UK OFFICIAL",
             byPageId[open.Id.ToString()].GetProperty("marking").GetProperty("label").GetString());
-        Assert.Equal("UK SECRET [GB EYES ONLY]",
+        Assert.Equal("UK SECRET UK EYES ONLY",
             byPageId[closed.Id.ToString()].GetProperty("marking").GetProperty("label").GetString());
     }
 
@@ -348,7 +347,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         await SeedPageAsync(space, "cav-closed", "Closed", $"# Closed\n\nMore {term}.",
             ClassificationLevel.Secret, eyesOnly: ["US"]);
 
-        using var response = await AskAsync(CreateClient(clearance: "TOP_SECRET", nationality: ["GB"]), term);
+        using var response = await AskAsync(CreateClient(clearance: "TOP_SECRET", nationality: ["UK"]), term);
         var ask = Field(response, "askWiki");
 
         Assert.Equal("UK OFFICIAL", AggregateLabel(ask));
@@ -420,16 +419,16 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         var term = $"zzsrch{Guid.NewGuid():N}"[..14];
         var space = await SeedSpaceAsync();
         await SeedPageAsync(space, "c-gb", "GB Result", $"# GB\n\nThe {term} figures.",
-            ClassificationLevel.Secret, eyesOnly: ["GB"]);
+            ClassificationLevel.Secret, eyesOnly: ["UK"]);
         await SeedPageAsync(space, "c-us", "US Result", $"# US\n\nThe {term} figures.",
             ClassificationLevel.OfficialSensitive, eyesOnly: ["US"]);
 
         using var response = await SearchAsync(
-            CreateClient(clearance: "SECRET", nationality: ["GB", "US"]), term, space.Key);
+            CreateClient(clearance: "SECRET", nationality: ["UK", "US"]), term, space.Key);
         var search = Field(response, "search");
 
         Assert.Equal(2, search.GetProperty("totalCount").GetInt32());
-        Assert.Equal("UK SECRET [GB EYES ONLY] [US EYES ONLY]", AggregateLabel(search));
+        Assert.Equal("UK SECRET UK EYES ONLY, US EYES ONLY", AggregateLabel(search));
     }
 
     [Fact]
@@ -454,17 +453,17 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         var term = $"zzsrch{Guid.NewGuid():N}"[..14];
         var space = await SeedSpaceAsync();
         var page = await SeedPageAsync(space, "hit-marking", "Marked Result", $"# Marked\n\nThe {term} routine.",
-            ClassificationLevel.OfficialSensitive, eyesOnly: ["GB"]);
+            ClassificationLevel.OfficialSensitive, eyesOnly: ["UK"]);
 
         using var response = await SearchAsync(
-            CreateClient(clearance: "OFFICIAL_SENSITIVE", nationality: ["GB"]), term, space.Key);
+            CreateClient(clearance: "OFFICIAL_SENSITIVE", nationality: ["UK"]), term, space.Key);
         var search = Field(response, "search");
 
         var node = Assert.Single(search.GetProperty("edges").EnumerateArray()).GetProperty("node");
         Assert.Equal(page.Id.ToString(), node.GetProperty("page").GetProperty("id").GetString());
 
         var marking = node.GetProperty("page").GetProperty("marking");
-        Assert.Equal("UK OFFICIAL-SENSITIVE [GB EYES ONLY]", marking.GetProperty("label").GetString());
+        Assert.Equal("UK OFFICIAL-SENSITIVE UK EYES ONLY", marking.GetProperty("label").GetString());
         Assert.Equal("OFFICIAL-SENSITIVE", marking.GetProperty("levelName").GetString());
     }
 }

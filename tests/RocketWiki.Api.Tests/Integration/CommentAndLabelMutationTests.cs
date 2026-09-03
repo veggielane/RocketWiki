@@ -28,12 +28,12 @@ public sealed class CommentAndLabelMutationTests(RocketWikiApiFactory factory) :
 
         var space = new Space { Key = $"CML{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Comment/Label Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
+            Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.Editor,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = creator.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = creator.Id,
-        });
+        }));
         var page = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "p", Title = "Page", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
         db.Pages.Add(page);
         await db.SaveChangesAsync();

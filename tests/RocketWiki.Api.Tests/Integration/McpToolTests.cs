@@ -72,9 +72,8 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
 
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = creator.Id,
@@ -453,9 +452,8 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
             db.Spaces.Add(hidden);
             db.AccessRules.Add(new AccessRule
             {
-                Kind = AccessRuleKind.SpaceGrant,
+                Kind = AccessRuleKind.AccessGrant,
                 SpaceId = hidden.Id,
-                Role = SpaceRole.Viewer,
                 ExpressionJson = RuleExpressionSerializer.Serialize(new AttrCondition("nationality", ["ZZ"])),
                 CreatedAtUtc = DateTime.UtcNow,
                 CreatedByUserId = creator.Id,
@@ -532,9 +530,8 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
             db.Spaces.Add(ungranted);
             db.AccessRules.Add(new AccessRule
             {
-                Kind = AccessRuleKind.SpaceGrant,
+                Kind = AccessRuleKind.AccessGrant,
                 SpaceId = ungranted.Id,
-                Role = SpaceRole.Viewer,
                 ExpressionJson = RuleExpressionSerializer.Serialize(new AttrCondition("nationality", ["ZZ"])),
                 CreatedAtUtc = DateTime.UtcNow,
                 CreatedByUserId = creator.Id,
@@ -606,7 +603,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         Assert.Equal(ungrantedSpaceId, denial.SubjectId);
         Assert.Equal(AuditChannel.Mcp, denial.Channel);
         Assert.NotNull(denial.DetailsJson);
-        Assert.Equal("no-space-role", JsonDocument.Parse(denial.DetailsJson).RootElement.GetProperty("reason").GetString());
+        Assert.Equal("no-space-access", JsonDocument.Parse(denial.DetailsJson).RootElement.GetProperty("reason").GetString());
 
         // Nonexistent-key control: same error to the caller, nothing in the log.
         var rowsBefore = await McpAuditRowCountAsync();
@@ -643,16 +640,16 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         // classified text gets summarised into an unclassified context. The marking rides
         // with the content, as the one server-rendered label string (§21.1).
         var f = await SeedAsync();
-        await MarkAsync(f.PageAId, ClassificationLevel.Secret, "GB");
+        await MarkAsync(f.PageAId, ClassificationLevel.Secret, "UK");
 
         await using var client = await CreateMcpClientAsync(
-            $"mcp-mark-{Guid.NewGuid()}", nationality: ["GB"], clearance: "SECRET");
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["UK"], clearance: "SECRET");
 
         var result = await client.CallToolAsync("get_page",
             new Dictionary<string, object?> { ["pageId"] = f.PageAId.ToString() });
 
         Assert.NotEqual(true, result.IsError);
-        Assert.Equal("UK SECRET [GB EYES ONLY]", SingleJson(result).GetProperty("marking").GetString());
+        Assert.Equal("UK SECRET UK EYES ONLY", SingleJson(result).GetProperty("marking").GetString());
     }
 
     [Fact]
@@ -716,7 +713,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         await MarkAsync(f.PageAId, ClassificationLevel.Secret);
 
         // No clearance claim at all — §21's fail-closed default admits OFFICIAL only.
-        await using var uncleared = await CreateMcpClientAsync($"mcp-uncleared-{Guid.NewGuid()}", nationality: ["GB"]);
+        await using var uncleared = await CreateMcpClientAsync($"mcp-uncleared-{Guid.NewGuid()}", nationality: ["UK"]);
 
         var search = await uncleared.CallToolAsync("search",
             new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
@@ -738,7 +735,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         // caller whose clearance admits it. Without this, the absences above could just
         // as easily mean the page was never seeded.
         await using var cleared = await CreateMcpClientAsync(
-            $"mcp-cleared-{Guid.NewGuid()}", nationality: ["GB"], clearance: "SECRET");
+            $"mcp-cleared-{Guid.NewGuid()}", nationality: ["UK"], clearance: "SECRET");
 
         var clearedSearch = await cleared.CallToolAsync("search",
             new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
@@ -753,10 +750,10 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         // The aggregate spans every depth of the payload, not just its top level: the
         // SECRET marking sits on a CHILD, and the tree as a whole must say so.
         var f = await SeedAsync();
-        await MarkAsync(f.PageDId, ClassificationLevel.Secret, "GB");
+        await MarkAsync(f.PageDId, ClassificationLevel.Secret, "UK");
 
         await using var client = await CreateMcpClientAsync(
-            $"mcp-mark-{Guid.NewGuid()}", nationality: ["GB"], clearance: "SECRET");
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["UK"], clearance: "SECRET");
 
         var result = await client.CallToolAsync("get_page_tree",
             new Dictionary<string, object?> { ["spaceKey"] = f.SpaceKey });
@@ -770,8 +767,8 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         var child = Assert.Single(
             root.GetProperty("children").EnumerateArray(),
             c => c.GetProperty("id").GetGuid() == f.PageDId);
-        Assert.Equal("UK SECRET [GB EYES ONLY]", child.GetProperty("marking").GetString());
+        Assert.Equal("UK SECRET UK EYES ONLY", child.GetProperty("marking").GetString());
 
-        Assert.Equal("UK SECRET [GB EYES ONLY]", tree.GetProperty("aggregateMarking").GetString());
+        Assert.Equal("UK SECRET UK EYES ONLY", tree.GetProperty("aggregateMarking").GetString());
     }
 }

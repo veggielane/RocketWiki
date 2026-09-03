@@ -67,7 +67,7 @@ public class PageReadService : IPageReadService
         }
 
         // Fail closed on an unresolvable space even though the permission computation
-        // below no longer needs the row: no space, no grants to hold a role under.
+        // below no longer needs the row: no space, no grants to hold access under.
         var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
         if (space is null)
         {
@@ -77,7 +77,74 @@ public class PageReadService : IPageReadService
         var permission = await ComputePermissionAsync(page, principal, cancellationToken);
         return permission.CanView
             ? new ReadResult<Page>.Found(page)
-            : new ReadResult<Page>.Denied(permission.ViewDenialReason ?? "no-space-role");
+            : new ReadResult<Page>.Denied(permission.ViewDenialReason ?? EffectivePermissionCalculator.NoSpaceAccessReason);
+    }
+
+    /// <inheritdoc />
+    public async Task<PageAccess> GetPageAccessAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default)
+    {
+        var page = await _db.Pages.FirstOrDefaultAsync(p => p.Id == pageId, cancellationToken);
+        if (page is null)
+        {
+            return new PageAccess.NotFound();
+        }
+
+        var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == page.SpaceId, cancellationToken);
+        if (space is null)
+        {
+            return new PageAccess.NotFound();
+        }
+
+        // Replica status is irrelevant to canView (design.md §6.4), exactly as on GetPageAsync.
+        var context = await _permissions.LoadAsync(page, isReplicaSpace: false, cancellationToken);
+        return Decide(page, context, principal);
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<Guid, PageAccess>> GetPageAccessBatchAsync(
+        IReadOnlyCollection<Guid> pageIds, Principal principal, CancellationToken cancellationToken = default)
+    {
+        var ids = pageIds.Distinct().ToArray();
+        var result = ids.ToDictionary(id => id, _ => (PageAccess)new PageAccess.NotFound());
+        if (ids.Length == 0)
+        {
+            return result;
+        }
+
+        // Four queries for the whole batch regardless of its size, the same shape as
+        // GetPagesAsync: the pages, then the loader's three.
+        var pages = await _db.Pages.Where(p => ids.Contains(p.Id)).ToListAsync(cancellationToken);
+        if (pages.Count == 0)
+        {
+            return result;
+        }
+
+        var batch = await _permissions.LoadBatchAsync(
+            pages.Select(PermissionSubject.For).ToList(), cancellationToken);
+        foreach (var page in pages)
+        {
+            result[page.Id] = Decide(page, batch.For(PermissionSubject.For(page), isReplicaSpace: false), principal);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The disclosed verdict for one page. The enforcement form decides — it IS the gate,
+    /// and it feeds the permission-check histogram for this read like any other (§15) —
+    /// and only a denial runs the inspector form on top, so the placeholder can name every
+    /// failing gate rather than the first (§6.7). The two agree by construction (one
+    /// ladder); the withholding rule for a caller without space access is applied inside
+    /// <see cref="PageDenial.From"/>, never here.
+    /// </summary>
+    private static PageAccess Decide(Page page, PagePermissionContext context, Principal principal)
+    {
+        if (context.Compute(principal).CanView)
+        {
+            return new PageAccess.Found(page);
+        }
+
+        return new PageAccess.Denied(PageDenial.From(context.Explain(principal), context.Marking));
     }
 
     public async Task<ReadResult<IReadOnlyList<PageRevision>>> GetRevisionHistoryAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default)
@@ -99,33 +166,34 @@ public class PageReadService : IPageReadService
         return new ReadResult<IReadOnlyList<PageRevision>>.Found(revisions);
     }
 
-    public async Task<ReadResult<IReadOnlyList<PageTreeNode>>> GetPageTreeAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken = default)
+    public async Task<ReadResult<IReadOnlyList<PageTreeEntry>>> GetPageTreeAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken = default)
     {
         var space = await _db.Spaces.FirstOrDefaultAsync(s => s.Id == spaceId, cancellationToken);
         if (space is null)
         {
-            return new ReadResult<IReadOnlyList<PageTreeNode>>.NotFound();
+            return new ReadResult<IReadOnlyList<PageTreeEntry>>.NotFound();
         }
 
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
-            .ToListAsync(cancellationToken);
+        var spaceGrants = await _permissions.LoadSpaceGrantsAsync(spaceId, cancellationToken);
 
-        // No space role at all means no view of anything in it - to the caller an empty
-        // tree, not an error, matching "invisible, not merely unopenable" (design.md
-        // §6.7); internally a Denied so §7 can record the refused browse. This is the
-        // only Denied this method produces: a node pruned during the walk below is not
-        // a denied request - the browse succeeded and simply shows less (see the
-        // interface doc) - so pruning stays unreported on purpose.
-        if (EffectivePermissionCalculator.ComputeSpaceRole(spaceGrants, principal) is null)
+        // No space access at all means no view of anything in it - to the caller an
+        // empty tree, not an error, matching "invisible, not merely unopenable"
+        // (design.md §6.7); internally a Denied so §7 can record the refused browse.
+        // Access grants only: a role grant confers no visibility (§6.4), so a Space-admin
+        // with no access grant is refused here exactly like a stranger. This is the only
+        // Denied this method produces: a node the caller fails during the walk below is
+        // not a denied request - the browse succeeded and shows that node as a protected
+        // placeholder (see the interface doc) - and is neither reported nor audited here.
+        var access = EffectivePermissionCalculator.ComputeSpaceAccess(spaceGrants, principal);
+        if (access is null)
         {
-            return new ReadResult<IReadOnlyList<PageTreeNode>>.Denied("no-space-role");
+            return new ReadResult<IReadOnlyList<PageTreeEntry>>.Denied(EffectivePermissionCalculator.NoSpaceAccessReason);
         }
 
         // Two queries total regardless of tree depth or size: every live page in the
         // space, and every restriction attached to any of them. The walk below is
         // then pure in-memory recursion - exactly what AncestorPath exists to make cheap.
-        // Both actions are loaded (not just View, which pruning alone would need):
+        // Both actions are loaded (not just View, which gating alone would need):
         // the same rows also feed each node's HasRestrictions marker and
         // OwnViewRestrictions list (see PageTreeNode's doc for the leak posture),
         // still without a per-node query.
@@ -139,22 +207,27 @@ public class PageReadService : IPageReadService
 
         // design.md §21: the tree is the one read path that does NOT go through
         // PermissionContextLoader - it walks the whole space in memory precisely to avoid
-        // per-node work, so it hand-rolls the restriction evaluation the loader would
-        // otherwise order for it. That made it the place a new view gate is easiest to
-        // forget, so the marking is loaded here in the same shape and on the same
-        // constant-query budget: ONE more query for every marking in the space, countries
-        // included, never one per node.
+        // per-node work, so it assembles the calculator's inputs itself. That made it the
+        // place a new view gate was easiest to forget, so the marking is loaded here in
+        // the same shape and on the same constant-query budget: ONE more query for every
+        // marking in the space, countries and selectors included, never one per node - and
+        // the gates themselves are the calculator's own (BuildEntry), never a hand-rolled
+        // subset.
         var markingsByPageId = pageIds.Length == 0
             ? new Dictionary<Guid, ProtectiveMarking>()
             : (await _db.PageMarkings
                     .Include(m => m.Countries)
+                    .Include(m => m.Selectors)
                     .Where(m => pageIds.Contains(m.PageId))
                     .ToListAsync(cancellationToken))
                 .ToDictionary(m => m.PageId, m => m.ToMarking());
 
+        // Own rules in the loader's contractual order (CreatedAtUtc then Id), so the
+        // first failing restriction a node reports is the same one every other read path
+        // would name for the same page.
         var restrictionsByPageId = restrictions
             .GroupBy(r => r.PageId!.Value)
-            .ToDictionary(g => g.Key, g => g.ToList());
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<AccessRule>)g.OrderBy(r => r.CreatedAtUtc).ThenBy(r => r.Id).ToList());
         // SortOrder then Id, matching GetVisibleChildIdsAsync: siblings sharing a
         // SortOrder (every bulk import produces plenty) must not reshuffle between
         // requests, and the tree and the `children` field must agree about sibling order
@@ -165,17 +238,13 @@ public class PageReadService : IPageReadService
             .ToDictionary(g => g.Key, g => g.OrderBy(p => p.SortOrder).ThenBy(p => p.Id).ToList());
         var rootPages = pages.Where(p => p.ParentPageId is null).OrderBy(p => p.SortOrder).ThenBy(p => p.Id);
 
-        var result = new List<PageTreeNode>();
+        var result = new List<PageTreeEntry>();
         foreach (var root in rootPages)
         {
-            var node = BuildNodeIfVisible(root, childrenByParentId, restrictionsByPageId, markingsByPageId, principal);
-            if (node is not null)
-            {
-                result.Add(node);
-            }
+            result.Add(BuildEntry(root, childrenByParentId, restrictionsByPageId, markingsByPageId, access, principal, _db.SelectorCatalog));
         }
 
-        return new ReadResult<IReadOnlyList<PageTreeNode>>.Found(result);
+        return new ReadResult<IReadOnlyList<PageTreeEntry>>.Found(result);
     }
 
     /// <inheritdoc />
@@ -270,108 +339,99 @@ public class PageReadService : IPageReadService
     }
 
     /// <summary>
-    /// Returns null - pruning this page and its entire subtree - the moment this page's
-    /// own view restrictions fail. Never re-checks ancestor restrictions: a child is
-    /// only ever visited after its parent already passed, so "carried down the
-    /// recursion" (design.md §6.7) means each node costs one restriction-list lookup,
-    /// not a walk back up the tree.
+    /// One node's entry: a <see cref="PageTreeNode"/> with its children when the page's
+    /// own view gates pass, otherwise a <see cref="ProtectedTreeNode"/> leaf carrying every
+    /// failed gate - and its subtree is never walked. Never re-checks ancestor
+    /// restrictions: a child is only ever visited after its parent already passed, so
+    /// "carried down the recursion" (design.md §6.7) means each node costs one
+    /// restriction-list lookup, not a walk back up the tree. The gates themselves are the
+    /// calculator's own view ladder after S (<see cref="EffectivePermissionCalculator.EvaluateViewGates"/>
+    /// - C, E, G, N, then the node's own view restrictions), in the non-short-circuiting
+    /// form so a denied node's reasons are complete (§6.7's disclosed denial), and a
+    /// parity test pins each node's verdict to <c>GetPageAsync</c>'s.
     ///
     /// <para>The protective marking (design.md §21) is checked per node, NOT carried down
     /// - a marking is a page's own value and a child may legitimately sit below its
-    /// parent's level. The consequence is that failing clearance for a page still prunes
-    /// its subtree, even a child the caller is cleared for: a tree cannot render a node
-    /// whose parent is absent, and the more-hidden direction is the safe one. Such a
+    /// parent's level. The consequence is that failing the marking for a page still hides
+    /// its subtree, even a child the caller could read: a tree cannot render a node whose
+    /// parent is a placeholder, and the more-hidden direction is the safe one. Such a
     /// child stays reachable by id and through search, both of which check it on its
     /// own.</para>
     /// </summary>
-    private static PageTreeNode? BuildNodeIfVisible(
+    private static PageTreeEntry BuildEntry(
         Page page,
         IReadOnlyDictionary<Guid, List<Page>> childrenByParentId,
-        IReadOnlyDictionary<Guid, List<AccessRule>> restrictionsByPageId,
+        IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> restrictionsByPageId,
         IReadOnlyDictionary<Guid, ProtectiveMarking> markingsByPageId,
-        Principal principal)
+        SpaceAccess access,
+        Principal principal,
+        SelectorCatalog catalog)
     {
-        // design.md §15: this walk hand-rolls the evaluation EffectivePermissionCalculator
-        // would otherwise do, so it has to hand-roll that calculator's TELEMETRY too or
-        // the rule-engine metrics silently exclude the busiest read path in the product.
-        // They did: `rocketwiki.access.rule_evaluations` and
-        // `rocketwiki.access.permission_checks` counted every page fetch, search
-        // post-filter and label listing but not one node of a tree browse - so a
-        // "denials by category" dashboard showed none of the classification pruning
-        // happening here, which is exactly the signal an operator would look for.
-        // Duration is measured over the same span the calculator measures: one node's
-        // decision, not the whole walk.
+        // design.md §15: this walk decides each node itself rather than through Compute,
+        // so it has to record that calculator's TELEMETRY too or the rule-engine metrics
+        // silently exclude the busiest read path in the product. They did once:
+        // `rocketwiki.access.rule_evaluations` and `rocketwiki.access.permission_checks`
+        // counted every page fetch, search post-filter and label listing but not one node
+        // of a tree browse - so a "denials by category" dashboard showed none of the
+        // classification pruning happening here, which is exactly the signal an operator
+        // would look for. Duration is measured over the same span the calculator
+        // measures: one node's decision, not the whole walk.
         var startTimestamp = Stopwatch.GetTimestamp();
 
         // Fail closed on a page with no marking row, the same substitution
         // PermissionContextBatch.MarkingFor makes (design.md §21).
         var marking = markingsByPageId.GetValueOrDefault(page.Id) ?? ProtectiveMarking.FailClosed;
-        var clearance = ClearanceGate.Check(marking, principal);
-        if (!clearance.IsAllowed)
+        var ownRestrictions = restrictionsByPageId.GetValueOrDefault(page.Id) ?? [];
+
+        // Edit restrictions in the list mark the node as restricted but never gate
+        // visibility and never expose their contents here (PageTreeNode doc); the view
+        // ladder ignores them by construction.
+        var gates = EffectivePermissionCalculator.EvaluateViewGates(
+            access, marking, ownRestrictions, catalog, principal, shortCircuit: false);
+        var failed = gates.Where(g => !g.Passed).ToList();
+        if (failed.Count > 0)
         {
-            RecordNodeCheck(false, clearance.DenialReason, startTimestamp);
-            return null;
+            RecordNodeCheck(false, failed[0].Reason, startTimestamp);
+            // S passed for the whole space (or this walk would not be running), so the
+            // marking travels with the denial (§21.8) and every failed gate is listed.
+            return new ProtectedTreeNode(page.SortOrder, PageDenial.AfterSpaceAccess(failed, marking));
         }
 
-        var ownViewRestrictions = new List<PageTreeRestriction>();
-        var hasRestrictions = false;
-        if (restrictionsByPageId.TryGetValue(page.Id, out var ownRestrictions))
-        {
-            hasRestrictions = ownRestrictions.Count > 0;
-            foreach (var rule in ownRestrictions)
-            {
-                if (rule.Action != PageAction.View)
-                {
-                    // Edit restrictions mark the node as restricted but never gate
-                    // visibility and never expose their contents here (PageTreeNode doc).
-                    continue;
-                }
-
-                var evaluation = AccessRuleExpression.Evaluate(rule.ExpressionJson, principal);
-                CoreTelemetry.RecordRuleEvaluation(AccessRuleKind.PageRestriction, evaluation);
-                if (!evaluation.IsMatch)
-                {
-                    RecordNodeCheck(false, $"restriction:{rule.PageId}:{rule.Id}", startTimestamp);
-                    return null;
-                }
-
-                // Only reached for rules the caller passed - an unpassed view rule
-                // pruned the node above, so OwnViewRestrictions can never carry an
-                // expression the caller doesn't already satisfy.
-                ownViewRestrictions.Add(new PageTreeRestriction(rule.Id, rule.ExpressionJson));
-            }
-        }
+        // Only reached for rules the caller passed - an unpassed view rule made the node
+        // a placeholder above, so OwnViewRestrictions can never carry an expression the
+        // caller doesn't already satisfy.
+        var ownViewRestrictions = gates
+            .Where(g => g.Kind == GateKind.ViewRestriction)
+            .Select(g => new PageTreeRestriction(g.RuleId!.Value, g.ExpressionJson!))
+            .ToList();
+        var hasRestrictions = ownRestrictions.Count > 0;
 
         // The node survived: recorded before recursing, so the duration is this node's
         // own decision rather than its whole subtree's.
         RecordNodeCheck(true, null, startTimestamp);
 
-        var children = new List<PageTreeNode>();
+        var children = new List<PageTreeEntry>();
         if (childrenByParentId.TryGetValue(page.Id, out var childPages))
         {
             foreach (var child in childPages)
             {
-                var childNode = BuildNodeIfVisible(child, childrenByParentId, restrictionsByPageId, markingsByPageId, principal);
-                if (childNode is not null)
-                {
-                    children.Add(childNode);
-                }
+                children.Add(BuildEntry(child, childrenByParentId, restrictionsByPageId, markingsByPageId, access, principal, catalog));
             }
         }
 
         // The marking carried out is the one resolved at the top of this method - the
-        // very value the clearance gate just passed on. Not re-loaded downstream: see
+        // very value the gates just passed on. Not re-loaded downstream: see
         // PageTreeNode's doc for why a tree that displayed a different marking from the
         // one it enforced would be the wrong kind of wrong.
         return new PageTreeNode(
             page.Id, page.Title, page.Icon, page.Slug, page.SortOrder, hasRestrictions, ownViewRestrictions,
-            PageMarkingView.From(marking), children);
+            PageMarkingView.From(marking, catalog), children);
     }
 
     /// <summary>
     /// One tree node's view decision, in the shape
     /// <see cref="EffectivePermissionCalculator.Compute"/> would have recorded it. canEdit
-    /// is reported false throughout: the walk never computes it (pruning is a view
+    /// is reported false throughout: the walk never computes it (a placeholder is a view
     /// question), and claiming otherwise would put a fabricated edit verdict into a
     /// metric operators read as fact. The denial reason is passed through
     /// <c>CategorizeDenialReason</c> inside RecordPermissionCheck, so only the bounded

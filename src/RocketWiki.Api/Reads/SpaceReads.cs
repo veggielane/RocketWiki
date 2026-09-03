@@ -16,9 +16,13 @@ namespace RocketWiki.Api.Reads;
 /// pages), so until one exists this class is that single path — extracted from
 /// Query.Spaces.cs rather than duplicated into the MCP tools.
 ///
-/// A space's own view gate is just "holds any SpaceGrant role" — no
-/// restriction-accumulation the way a Page has (design.md §6.4) — computed via
-/// <see cref="EffectivePermissionCalculator"/> per space. Archived spaces are excluded
+/// A space is LISTED, and resolvable by key, for a principal who matches an access grant
+/// OR any role grant in it (<see cref="EffectivePermissionCalculator.IsSpaceVisible"/>,
+/// design.md §6.4/§6.5.2): a Space-admin holding no access grant manages a space whose
+/// pages they cannot read, and must still be able to reach it. Visibility of the space
+/// is therefore deliberately wider than visibility of its content - every content field
+/// (tree, pages, labels, trash) still requires an access grant, and a page still runs the
+/// full ladder. There is no restriction-accumulation the way a Page has. Archived spaces are excluded
 /// by the normal EF query filter; whether their previous viewers should still see them
 /// is design.md §6.5.1's stated open question, so exclusion is the conservative default.
 /// </summary>
@@ -37,12 +41,13 @@ internal static class SpaceReads
     {
         var spaces = await db.Spaces.ToListAsync(cancellationToken);
         var allGrants = await db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant)
+            .Include(r => r.Selectors)
+            .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant))
             .ToListAsync(cancellationToken);
 
         return spaces
-            .Where(s => EffectivePermissionCalculator.ComputeSpaceRole(
-                allGrants.Where(g => g.SpaceId == s.Id), principal) is not null)
+            .Where(s => EffectivePermissionCalculator.IsSpaceVisible(
+                allGrants.Where(g => g.SpaceId == s.Id), principal))
             .ToList();
     }
 
@@ -73,11 +78,12 @@ internal static class SpaceReads
         }
 
         var grants = await db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
+            .Include(r => r.Selectors)
+            .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant) && r.SpaceId == space.Id)
             .ToListAsync(cancellationToken);
-        return EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is null
-            ? new SpaceReadResult.Denied(space.Id, "no-space-role")
-            : new SpaceReadResult.Found(space);
+        return EffectivePermissionCalculator.IsSpaceVisible(grants, principal)
+            ? new SpaceReadResult.Found(space)
+            : new SpaceReadResult.Denied(space.Id, EffectivePermissionCalculator.NoSpaceAccessReason);
     }
 }
 
@@ -100,8 +106,8 @@ internal abstract record SpaceReadResult
     /// <summary>No such (unarchived) space. No access decision was made — nothing existed to decide about.</summary>
     internal sealed record NotFound : SpaceReadResult;
 
-    /// <summary>The space exists but the principal holds no role in it.
-    /// <paramref name="Reason"/> is always <c>no-space-role</c> today; kept explicit
+    /// <summary>The space exists but no grant of either kind admits the principal.
+    /// <paramref name="Reason"/> is always <c>no-space-access</c> today; kept explicit
     /// so the audit row records what the rule engine computed, not what a caller
     /// assumed (design.md §7).</summary>
     internal sealed record Denied(Guid SpaceId, string Reason) : SpaceReadResult;

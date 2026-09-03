@@ -22,20 +22,22 @@ public partial class Query
 {
     /// <summary>
     /// The listing that feeds <c>restoreSpace</c> (design.md §6.5.1). Scope: instance
-    /// admin sees every archived space; otherwise only spaces whose grants compute the
-    /// caller as that space's own <c>space-admin</c> — exactly the set of spaces
-    /// <c>SpaceService.RestoreAsync</c> would let them restore, so the listing offers
-    /// nothing the mutation would refuse. This is the conservative reading of §6.5.1's
-    /// open question ("read-only-but-visible to their existing viewers, or hidden from
-    /// everyone except admins?"): viewers and editors see nothing here, matching
-    /// <c>SpaceReads</c>' existing exclusion of archived spaces from browse — widening
-    /// archived visibility to viewers stays a deliberate future decision, not a side
-    /// effect of adding a restore listing.
+    /// admin sees every archived space; otherwise the same rule as every other SPACE
+    /// listing (<see cref="EffectivePermissionCalculator.IsSpaceVisible"/>, the rule
+    /// <c>SpaceReads</c> applies to live spaces): an archived space is listed for a caller
+    /// who matches an access grant OR any role grant in it. That is the §6.4/§6.5.2
+    /// split applied consistently — being told a space exists (and was archived) is
+    /// space visibility, which access and roles both confer; whether the caller may then
+    /// restore it is <c>SpaceService.RestoreAsync</c>'s own manage gate, which refuses
+    /// anyone but that space's space-admin or an instance admin. A listing wider than the
+    /// mutation is fine; a listing that hid a space from its own former readers would be
+    /// the one thing archiving should not silently do to them.
     ///
-    /// Absent-not-forbidden (design.md §6.7): a caller with nothing to restore gets an
-    /// empty list, indistinguishable from "nothing is archived". A listing the caller
-    /// was allowed to make is not a denial of each absent item (see SpaceReads' doc),
-    /// so no per-space denial rows are written.
+    /// Absent-not-forbidden (design.md §6.7): a caller no grant admits gets an empty
+    /// list, indistinguishable from "nothing is archived". A listing the caller was
+    /// allowed to make is not a denial of each absent item (see SpaceReads' doc), so no
+    /// per-space denial rows are written. No content field hangs off this projection, so
+    /// nothing here shows a page to a caller whose access grant is absent.
     /// </summary>
     [AuditAction("space.browse")]
     [UseAuditDispatch]
@@ -62,14 +64,17 @@ public partial class Query
 
         if (!instanceRoleAccessor.IsInstanceAdmin)
         {
+            // Both grant kinds, like SpaceReads: an access grant or any role grant lists
+            // the space (design.md §6.4/§6.5.2).
             var archivedIds = archived.Select(s => s.Id).ToList();
             var grants = await db.AccessRules
-                .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId != null && archivedIds.Contains(r.SpaceId.Value))
+                .Include(r => r.Selectors)
+                .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant)
+                    && r.SpaceId != null && archivedIds.Contains(r.SpaceId.Value))
                 .ToListAsync(cancellationToken);
 
             archived = archived
-                .Where(s => EffectivePermissionCalculator.ComputeSpaceRole(
-                    grants.Where(g => g.SpaceId == s.Id), principal) == SpaceRole.SpaceAdmin)
+                .Where(s => EffectivePermissionCalculator.IsSpaceVisible(grants.Where(g => g.SpaceId == s.Id), principal))
                 .ToList();
         }
 

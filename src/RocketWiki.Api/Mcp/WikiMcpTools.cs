@@ -89,6 +89,7 @@ public sealed class WikiMcpTools
         [Description("The text to search for in page titles and content.")] string query,
         ISearchService searchService,
         IPageMarkingReader markingReader,
+        SelectorCatalog selectorCatalog,
         ICurrentPrincipalAccessor principalAccessor,
         McpAuditState auditState,
         CancellationToken cancellationToken,
@@ -128,9 +129,9 @@ public sealed class WikiMcpTools
             hits.Select(h => h.PageId).Distinct().ToArray(), cancellationToken);
 
         return new McpSearchResult(
-            AggregateMarkingLabel.Of(hits.Select(h => MarkingFor(markings, h.PageId)))?.Label,
+            AggregateMarkingLabel.Of(hits.Select(h => MarkingFor(markings, h.PageId)), selectorCatalog)?.Label,
             hits.Select(h => new McpSearchHit(
-                h.PageId, h.Title, h.SpaceKey, MarkingFor(markings, h.PageId).Format(), h.Snippet)).ToList());
+                h.PageId, h.Title, h.SpaceKey, MarkingFor(markings, h.PageId).Format(selectorCatalog), h.Snippet)).ToList());
     }
 
     [McpServerTool(Name = "get_page", Title = "Read a wiki page", ReadOnly = true, Idempotent = true, OpenWorld = false)]
@@ -141,6 +142,7 @@ public sealed class WikiMcpTools
         [Description("The page id (a GUID, as returned by search, get_page_tree, or list_spaces).")] string pageId,
         IPageReadService readService,
         IPageMarkingReader markingReader,
+        SelectorCatalog selectorCatalog,
         ICurrentPrincipalAccessor principalAccessor,
         IAuditSink auditSink,
         McpAuditState auditState,
@@ -179,7 +181,7 @@ public sealed class WikiMcpTools
         var markings = await markingReader.LoadAsync([page.Id], cancellationToken);
 
         return new McpPage(
-            page.Id, page.Title, MarkingFor(markings, page.Id).Format(), page.Slug, page.SpaceId,
+            page.Id, page.Title, MarkingFor(markings, page.Id).Format(selectorCatalog), page.Slug, page.SpaceId,
             page.CurrentRevisionNumber, page.UpdatedAtUtc, page.CurrentContent);
     }
 
@@ -207,6 +209,7 @@ public sealed class WikiMcpTools
         [Description("The space key, as returned by list_spaces.")] string spaceKey,
         RocketWikiDbContext db,
         IPageReadService readService,
+        SelectorCatalog selectorCatalog,
         ICurrentPrincipalAccessor principalAccessor,
         IAuditSink auditSink,
         McpAuditState auditState,
@@ -230,19 +233,22 @@ public sealed class WikiMcpTools
             throw new McpException(SpaceNotFoundMessage);
         }
 
-        // The tree arrives pre-pruned (design.md §6.7): a node failing canView is
-        // dropped with its whole subtree inside IPageReadService, never filtered here.
-        // A Denied here is a refused browse (no-space-role), audited like
-        // Query.PageTree; pruning inside a permitted browse is deliberately not a
-        // denial. Both collapse to the same empty tree the caller can't tell apart.
+        // The tree arrives decided (design.md §6.7): a node failing canView is a
+        // protected entry inside IPageReadService's result, with its whole subtree
+        // unwalked. MCP is an OMITTING surface (§21.8) - it maps the visible nodes only,
+        // so a placeholder is neither listed nor counted here, and the payload is the
+        // pruned tree it always was. A Denied here is a refused browse
+        // (no-space-access), audited like Query.PageTree; a protected entry inside a
+        // permitted browse is deliberately not a denial. Both collapse to the same empty
+        // tree the caller can't tell apart.
         var treeResult = await readService.GetPageTreeAsync(space.Id, principal, cancellationToken);
-        if (treeResult is ReadResult<IReadOnlyList<PageTreeNode>>.Denied denied)
+        if (treeResult is ReadResult<IReadOnlyList<PageTreeEntry>>.Denied denied)
         {
             await ReadDenialAudit.RecordAsync(
                 auditSink, "space.browse", AuditSubjectType.Space, space.Id, denied.Reason, cancellationToken);
         }
 
-        var tree = treeResult.ValueOrNull() ?? [];
+        var tree = (treeResult.ValueOrNull() ?? []).OfType<PageTreeNode>().ToList();
 
         auditState.SetSubject(AuditSubjectType.Space, space.Id, space.Key);
 
@@ -253,7 +259,7 @@ public sealed class WikiMcpTools
         return new McpPageTree(
             space.Key,
             space.Name,
-            AggregateMarkingLabel.Of(Flatten(tree).Select(n => n.Marking.ToMarking()))?.Label,
+            AggregateMarkingLabel.Of(Flatten(tree).Select(n => n.Marking.ToMarking()), selectorCatalog)?.Label,
             tree.Select(ToNode).ToList());
     }
 
@@ -266,14 +272,17 @@ public sealed class WikiMcpTools
     private static Principal RequirePrincipal(ICurrentPrincipalAccessor accessor) =>
         accessor.Current ?? throw new McpException(AuthenticationRequiredMessage);
 
+    /// <summary>Visible children only (<c>OfType&lt;PageTreeNode&gt;()</c>): the omission
+    /// the whole MCP surface makes, stated at the one place a child list is mapped.</summary>
     private static McpPageTreeNode ToNode(PageTreeNode node) =>
-        new(node.Id, node.Title, node.Marking.Label, node.Slug, node.Children.Select(ToNode).ToList());
+        new(node.Id, node.Title, node.Marking.Label, node.Slug, node.Children.OfType<PageTreeNode>().Select(ToNode).ToList());
 
-    /// <summary>Every node in the pruned tree, at every depth — the aggregate covers what
-    /// the payload actually contains, not just its top level.</summary>
-    private static IEnumerable<PageTreeNode> Flatten(IEnumerable<PageTreeNode> nodes)
+    /// <summary>Every visible node in the tree, at every depth — the aggregate covers what
+    /// the payload actually contains, not just its top level, and never a protected
+    /// entry's marking, which the payload does not carry.</summary>
+    private static IEnumerable<PageTreeNode> Flatten(IEnumerable<PageTreeEntry> entries)
     {
-        foreach (var node in nodes)
+        foreach (var node in entries.OfType<PageTreeNode>())
         {
             yield return node;
             foreach (var child in Flatten(node.Children))

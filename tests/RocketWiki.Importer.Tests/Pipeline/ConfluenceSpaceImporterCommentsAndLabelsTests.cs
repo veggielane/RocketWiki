@@ -23,7 +23,7 @@ public class ConfluenceSpaceImporterCommentsAndLabelsTests
         Principal.Create("importer-sub", ["importers"]),
         Guid.NewGuid(),
         new AuditContext(AuditChannel.System, "test-import", "127.0.0.1"),
-        new InitialSpaceGrant(SpaceRole.SpaceAdmin, """{ "everyone": true }"""));
+        new InitialGrant(AccessRuleKind.RoleGrant, SpaceRole.SpaceAdmin, """{ "everyone": true }"""));
 
     private static ConfluenceExportPage Page(
         string id, string? parentId, string title, string body,

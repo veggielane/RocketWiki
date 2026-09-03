@@ -11,7 +11,7 @@ namespace RocketWiki.Api.GraphQL;
 
 /// <summary>
 /// design.md §6.4/§8: a Space's own authorization model is simpler than a Page's — no
-/// restriction/ancestor-accumulation, just "does this principal hold a SpaceGrant role
+/// restriction/ancestor-accumulation, just "does this principal hold a role grant
 /// for this space" — so, unlike Page, calling <see cref="EffectivePermissionCalculator"/>
 /// directly from this resolver layer (rather than needing a dedicated space read
 /// service) is exactly what the calculator's own doc comment names as an expected
@@ -57,20 +57,56 @@ public sealed class SpaceFieldResolvers
     /// write gate must give the same answer, which is the whole point of sharing one
     /// definition.</para>
     ///
-    /// <para>Batched (<see cref="SpaceRoleBySpaceIdDataLoader"/>) because this is
+    /// <para>Batched (<see cref="SpaceAccessFactsBySpaceIdDataLoader"/>) because this is
     /// rendered per row in a space list. No audit: a viewer-relative "what can I do
     /// here" about a space the caller has already resolved discloses no new subject,
     /// matching the stance stated for Page's three boolean fields (§7).</para>
+    ///
+    /// <para><b>Needs no access</b> (design.md §6.5.2): the gate reads the ROLE grants
+    /// only, so a Space-admin holding no access grant manages a space whose pages they
+    /// cannot read — <c>viewerHasAccess</c> beside this field is how the client says so.</para>
     /// </summary>
     public async Task<bool> GetCanManageAccessAsync(
         [Parent] Space space,
         [Service] IInstanceRoleAccessor instanceRoleAccessor,
-        SpaceRoleBySpaceIdDataLoader roleLoader,
+        SpaceAccessFactsBySpaceIdDataLoader factsLoader,
         CancellationToken cancellationToken)
     {
-        var role = await roleLoader.LoadAsync(space.Id, cancellationToken);
-        return RuleManagementGate.CanManageRules(role, instanceRoleAccessor.IsInstanceAdmin);
+        var facts = await factsLoader.LoadAsync(space.Id, cancellationToken) ?? SpaceAccessFacts.None;
+        return RuleManagementGate.CanManageRules(facts.Role, instanceRoleAccessor.IsInstanceAdmin);
     }
+
+    /// <summary>
+    /// design.md §6.4 / §21.8: whether the caller matches at least one ACCESS grant here
+    /// — the page-level S gate, answered once for the space. False for a caller who
+    /// reaches the space through a role grant alone (the space is listed for them so
+    /// they can administer it, §6.5.2), which is exactly the state the SPA's space-wide
+    /// "you have no access to this space's content" note renders from: every content
+    /// field answers such a caller with an empty list or a no-space-access placeholder,
+    /// and this field is the one that says why. Same loader, no audit, same reasoning
+    /// as <c>canManageAccess</c>.
+    /// </summary>
+    public async Task<bool> GetViewerHasAccessAsync(
+        [Parent] Space space,
+        SpaceAccessFactsBySpaceIdDataLoader factsLoader,
+        CancellationToken cancellationToken) =>
+        (await factsLoader.LoadAsync(space.Id, cancellationToken) ?? SpaceAccessFacts.None).HasAccess;
+
+    /// <summary>
+    /// design.md §21.15: the selector values the caller is granted in this space — the
+    /// UNION over every access grant they match, in canonical order. Affordance data for
+    /// the marking picker (a value not granted here is offered disabled, because
+    /// <c>setPageMarking</c> would refuse it as self-lockout) and for the grants screen.
+    /// Empty when the caller has no access here, or access that confers no selector.
+    /// The same computation the G gate runs
+    /// (<see cref="EffectivePermissionCalculator.ComputeSpaceAccess"/>), so what the UI
+    /// greys out is what the server refuses. Same loader, no audit.
+    /// </summary>
+    public async Task<IReadOnlyList<SelectorValue>> GetViewerSelectorGrantsAsync(
+        [Parent] Space space,
+        SpaceAccessFactsBySpaceIdDataLoader factsLoader,
+        CancellationToken cancellationToken) =>
+        (await factsLoader.LoadAsync(space.Id, cancellationToken) ?? SpaceAccessFacts.None).GrantedSelectors;
 
     /// <summary>
     /// design.md §12: replica-ness is "origin instance != this instance", computed
@@ -144,8 +180,12 @@ public sealed class SpaceFieldResolvers
             return [];
         }
 
+        // Both grant kinds (design.md §6.4): the listing is the space's whole rule set,
+        // discriminated by `kind`, with each access grant's conferred selectors. The
+        // manage gate below reads only the role grants out of the same list.
         var grants = await db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
+            .Include(r => r.Selectors)
+            .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant) && r.SpaceId == space.Id)
             .ToListAsync(cancellationToken);
 
         var isSpaceAdmin = EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) == SpaceRole.SpaceAdmin;
@@ -159,9 +199,11 @@ public sealed class SpaceFieldResolvers
 
     /// <summary>
     /// Space-scoped trash listing — no query for this exists in design.md's abbreviated
-    /// schema sketch, so this shape is this round's own call, gated on space-role
-    /// Editor+ (the same minimum <c>RestorePageAsync</c> itself requires — canEdit needs
-    /// Editor+, design.md §6.4), not a full per-page canView/canEdit computation.
+    /// schema sketch, so this shape is this round's own call, gated on space access AND a
+    /// role of Editor or above (the same minimum <c>RestorePageAsync</c> itself requires —
+    /// canEdit needs access and Editor+, design.md §6.4), not a full per-page
+    /// canView/canEdit computation. Roles never supersede access: an Editor with no access
+    /// grant sees an empty trash, like everyone else who cannot see the space's content.
     ///
     /// Known, documented limitation: a page-level <c>PageRestriction</c> attached
     /// directly to a trashed page is NOT filtered out here, unlike every other
@@ -188,10 +230,11 @@ public sealed class SpaceFieldResolvers
         }
 
         var grants = await db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
+            .Include(r => r.Selectors)
+            .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant) && r.SpaceId == space.Id)
             .ToListAsync(cancellationToken);
-        var role = EffectivePermissionCalculator.ComputeSpaceRole(grants, principal);
-        if (!instanceRoleAccessor.IsInstanceAdmin && (role is null || role.Value < SpaceRole.Editor))
+        if (!EffectivePermissionCalculator.HasSpaceAccess(grants, principal)
+            || EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) is null)
         {
             return [];
         }

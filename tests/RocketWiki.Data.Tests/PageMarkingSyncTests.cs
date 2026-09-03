@@ -9,6 +9,7 @@ using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Core.Sync;
+using RocketWiki.Core.Tests.Access;
 using RocketWiki.Data.Services;
 using RocketWiki.Storage;
 using Xunit;
@@ -35,12 +36,12 @@ public class PageMarkingSyncTests : SqliteTestBase
             [],
             [
                 new("clearance", new[] { clearance }),
-                new("nationality", nationality.Length == 0 ? ["GB"] : nationality),
+                new("nationality", nationality.Length == 0 ? ["UK"] : nationality),
             ]);
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -58,15 +59,6 @@ public class PageMarkingSyncTests : SqliteTestBase
         IsExported = true,
         CreatedAtUtc = DateTime.UtcNow,
         CreatedByUserId = Guid.NewGuid(),
-    };
-
-    private static AttributeDefinition NationalityRegistry() => new()
-    {
-        Key = "nationality",
-        ClaimName = "nationality",
-        DisplayName = "Nationality",
-        Type = AttributeValueType.StringArray,
-        AllowedValuesJson = """["GB","US","NZ"]""",
     };
 
     private static (SqliteConnection Connection, RocketWikiDbContext Context) CreateSecondaryDatabase()
@@ -108,13 +100,12 @@ public class PageMarkingSyncTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(EditorGrant(space.Id));
-        context.AttributeDefinitions.Add(NationalityRegistry());
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageMarkingService(context, LowInstanceId);
         Assert.True((await service.SetAsync(
-            new SetPageMarkingRequest(page.Id, ClassificationLevel.Secret, ["US", "gb"]),
+            new SetPageMarkingRequest(page.Id, ClassificationLevel.Secret, ["US", "uk"], [], UkPrefix: true),
             EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
 
         var outboxEvent = Assert.Single(context.SyncOutboxEvents.Where(e => e.EventType == SyncEventType.PageMarking));
@@ -124,24 +115,29 @@ public class PageMarkingSyncTests : SqliteTestBase
         // a bundle already sitting on a transfer disk.
         Assert.Equal("SECRET", payload.RootElement.GetProperty("level").GetString());
         Assert.Equal(
-            ["GB", "US"],
+            ["UK", "US"],
             payload.RootElement.GetProperty("eyesOnly").EnumerateArray().Select(e => e.GetString()));
+        // design.md §21.10: the selectors object is ALWAYS present - {} here - so a missing
+        // key on the import side is unambiguously a pre-selector bundle.
+        Assert.Equal(JsonValueKind.Object, payload.RootElement.GetProperty("selectors").ValueKind);
+        Assert.Empty(payload.RootElement.GetProperty("selectors").EnumerateObject());
     }
 
     [Fact]
-    public async Task MarkingChange_JournalsTheNationalPrefix_AndItRoundTripsToTheHighSide()
+    public async Task MarkingChange_JournalsThePrefixToggle_AndItRoundTripsToTheHighSide()
     {
         // design.md §21.12: the prefix is presentational, and that is precisely why it has
         // to cross - a replica must render the same marking string as its origin, or a
         // reader comparing the two sides sees two different markings on identical content.
+        // Toggled OFF here, so the payload carries an explicit null and the high side
+        // renders the bare level rather than inventing the UK default.
         var actor = TestData.NewUser();
         var space = NewExportedSpace();
 
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
-        lowContext.AttributeDefinitions.Add(NationalityRegistry());
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var created = await new PageService(lowContext, LowInstanceId).CreatePageAsync(
@@ -149,13 +145,13 @@ public class PageMarkingSyncTests : SqliteTestBase
         Assert.True(created.IsSuccess);
 
         Assert.True((await new PageMarkingService(lowContext, LowInstanceId).SetAsync(
-            new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, ["GB"], "nato"),
+            new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, ["UK"], [], UkPrefix: false),
             EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
 
         var outboxEvent = Assert.Single(lowContext.SyncOutboxEvents.Where(e => e.EventType == SyncEventType.PageMarking));
         using (var payload = JsonDocument.Parse(outboxEvent.PayloadJson))
         {
-            Assert.Equal("NATO", payload.RootElement.GetProperty("prefix").GetString());
+            Assert.Equal(JsonValueKind.Null, payload.RootElement.GetProperty("prefix").ValueKind);
         }
 
         var storage = CreateFileStorage(out var storageDir);
@@ -175,9 +171,9 @@ public class PageMarkingSyncTests : SqliteTestBase
 
                 var marking = highContext.PageMarkings.Include(m => m.Countries)
                     .Single(m => m.PageId == created.Value.Id);
-                Assert.Equal("NATO", marking.Prefix);
+                Assert.Null(marking.Prefix);
                 // The whole point: the replica renders the identical string.
-                Assert.Equal("NATO SECRET [GB EYES ONLY]", marking.ToMarking().Format());
+                Assert.Equal("SECRET UK EYES ONLY", marking.ToMarking().Format(SelectorCatalog.Empty));
             }
         }
         finally
@@ -237,7 +233,7 @@ public class PageMarkingSyncTests : SqliteTestBase
                 var marking = highContext.PageMarkings.Single(m => m.PageId == pageId);
                 Assert.Equal(ClassificationLevel.Secret, marking.Level);
                 Assert.Null(marking.Prefix);
-                Assert.Equal("SECRET", marking.ToMarking().Format());
+                Assert.Equal("SECRET", marking.ToMarking().Format(SelectorCatalog.Empty));
             }
         }
         finally
@@ -259,12 +255,12 @@ public class PageMarkingSyncTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new PageMarkingService(context, LowInstanceId);
         Assert.True((await service.SetAsync(
-            new SetPageMarkingRequest(page.Id, ClassificationLevel.Secret, []),
+            new SetPageMarkingRequest(page.Id, ClassificationLevel.Secret, [], [], UkPrefix: true),
             EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
 
         Assert.Empty(context.SyncOutboxEvents);
@@ -281,8 +277,7 @@ public class PageMarkingSyncTests : SqliteTestBase
         using var lowContext = CreateContext();
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
-        lowContext.AccessRules.Add(EditorGrant(space.Id));
-        lowContext.AttributeDefinitions.Add(NationalityRegistry());
+        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         lowContext.SaveChanges();
 
         var pageService = new PageService(lowContext, LowInstanceId);
@@ -292,7 +287,7 @@ public class PageMarkingSyncTests : SqliteTestBase
 
         var markingService = new PageMarkingService(lowContext, LowInstanceId);
         Assert.True((await markingService.SetAsync(
-            new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, ["GB", "US"]),
+            new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, ["UK", "US"], [], UkPrefix: true),
             EditorPrincipal(), actor.Id, AuditCtx)).IsSuccess);
 
         var storage = CreateFileStorage(out var storageDir);
@@ -315,14 +310,14 @@ public class PageMarkingSyncTests : SqliteTestBase
                     .Single(m => m.PageId == created.Value.Id);
                 Assert.Equal(ClassificationLevel.Secret, marking.Level);
                 Assert.Equal(
-                    ["GB", "US"],
+                    ["UK", "US"],
                     marking.Countries.Select(c => c.CountryValue).OrderBy(c => c, StringComparer.Ordinal));
                 // Applied by sync, so no local actor (§21, same shape as a page property).
                 Assert.Null(marking.SetByUserId);
 
                 // And the high side really enforces it: an OFFICIAL-cleared reader with a
                 // space grant still cannot see the page.
-                highContext.AccessRules.Add(EditorGrant(space.Id));
+                highContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
                 highContext.SaveChanges();
                 var readService = new PageReadService(highContext);
                 Assert.IsType<ReadResult<Page>.Denied>(await readService.GetPageAsync(
@@ -349,7 +344,7 @@ public class PageMarkingSyncTests : SqliteTestBase
         lowContext.Users.Add(actor);
         lowContext.Spaces.Add(space);
         lowContext.Pages.Add(page);
-        lowContext.PageMarkings.Add(TestData.NewMarking(page, ClassificationLevel.TopSecret, "GB"));
+        lowContext.PageMarkings.Add(TestData.NewMarking(page, ClassificationLevel.TopSecret, "UK"));
         lowContext.SaveChanges();
 
         var storage = CreateFileStorage(out var storageDir);
@@ -368,7 +363,7 @@ public class PageMarkingSyncTests : SqliteTestBase
 
                 var marking = highContext.PageMarkings.Include(m => m.Countries).Single(m => m.PageId == page.Id);
                 Assert.Equal(ClassificationLevel.TopSecret, marking.Level);
-                Assert.Equal(["GB"], marking.Countries.Select(c => c.CountryValue));
+                Assert.Equal(["UK"], marking.Countries.Select(c => c.CountryValue));
             }
         }
         finally
@@ -479,7 +474,7 @@ public class PageMarkingSyncTests : SqliteTestBase
                 existing.Id = pageId;
                 highContext.Spaces.Add(space);
                 highContext.Pages.Add(existing);
-                highContext.PageMarkings.Add(TestData.NewMarking(existing, ClassificationLevel.Secret, "GB"));
+                highContext.PageMarkings.Add(TestData.NewMarking(existing, ClassificationLevel.Secret, "UK"));
                 highContext.SaveChanges();
 
                 Assert.True((await new BundleImportService(highContext, storage)
@@ -487,7 +482,7 @@ public class PageMarkingSyncTests : SqliteTestBase
 
                 var marking = highContext.PageMarkings.Include(m => m.Countries).Single(m => m.PageId == pageId);
                 Assert.Equal(ClassificationLevel.Secret, marking.Level);
-                Assert.Equal(["GB"], marking.Countries.Select(c => c.CountryValue));
+                Assert.Equal(["UK"], marking.Countries.Select(c => c.CountryValue));
                 Assert.Equal("Legacy (updated)", highContext.Pages.Single(p => p.Id == pageId).Title);
             }
         }
@@ -530,5 +525,314 @@ public class PageMarkingSyncTests : SqliteTestBase
         var entry = archive.CreateEntry(entryName);
         using var entryStream = entry.Open();
         entryStream.Write(bytes);
+    }
+
+    // --- Selectors cross with the marking (design.md §21.10, format 3) ---------------------
+
+    private static AccessRule AccessGrantWith(Guid spaceId, params SelectorValue[] selectors)
+    {
+        var grant = TestData.AccessGrantMirroring(EditorGrant(spaceId));
+        foreach (var selector in selectors)
+        {
+            grant.Selectors.Add(new AccessRuleSelector { AccessRuleId = grant.Id, Category = selector.Category, Value = selector.Value });
+        }
+
+        return grant;
+    }
+
+    private static Principal EligibleEditor() =>
+        Principal.Create("editor-sub", [], [new("clearance", ["TOP_SECRET"]), new("nationality", ["UK"]), new(TestCatalogs.FruitClaim, ["yes"])]);
+
+    [Fact]
+    public async Task Incremental_MarkingWithSelectors_RoundTrips_AndTheHighSideEnforcesThem()
+    {
+        var actor = TestData.NewUser();
+        var space = NewExportedSpace();
+
+        using var lowContext = CreateContext();
+        lowContext.Users.Add(actor);
+        lowContext.Spaces.Add(space);
+        lowContext.AccessRules.AddRange(AccessGrantWith(space.Id, TestCatalogs.Apple, TestCatalogs.North), EditorGrant(space.Id));
+        lowContext.SaveChanges();
+
+        var created = await new PageService(lowContext, LowInstanceId).CreatePageAsync(
+            new CreatePageRequest(space.Id, null, "home", "Home", "# Welcome"), EligibleEditor(), actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess);
+        var set = await new PageMarkingService(lowContext, LowInstanceId).SetAsync(
+            new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, [], [TestCatalogs.Apple, TestCatalogs.North], UkPrefix: true),
+            EligibleEditor(), actor.Id, AuditCtx);
+        Assert.True(set.IsSuccess, set.Error?.ToString());
+
+        var outboxEvent = Assert.Single(lowContext.SyncOutboxEvents.Where(e => e.EventType == SyncEventType.PageMarking));
+        using (var payload = JsonDocument.Parse(outboxEvent.PayloadJson))
+        {
+            var selectors = payload.RootElement.GetProperty("selectors");
+            Assert.Equal("APPLE", selectors.GetProperty("FRUIT").GetString());
+            Assert.Equal("NORTH", selectors.GetProperty("REGION").GetString());
+        }
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundleInfo = await new BundleExportService(lowContext, storage).ExportIncrementalAsync(outputDir, LowInstanceId);
+            Assert.NotNull(bundleInfo);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                Assert.True((await new BundleImportService(highContext, storage)
+                    .ImportAsync(bundleInfo!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var marking = highContext.PageMarkings.Include(m => m.Selectors).Single(m => m.PageId == created.Value.Id);
+                Assert.Equal([TestCatalogs.Apple, TestCatalogs.North], marking.ToMarking().Selectors);
+
+                // The high side enforces what crossed: a reader with access and clearance but
+                // no APPLE grant is refused by the grant gate, exactly as on the low side.
+                highContext.AccessRules.Add(TestData.AccessGrantMirroring(EditorGrant(space.Id)));
+                highContext.SaveChanges();
+                var denied = Assert.IsType<ReadResult<Page>.Denied>(await new PageReadService(highContext)
+                    .GetPageAsync(created.Value.Id, Principal.Create("high-user", [], [new("clearance", ["TOP_SECRET"]), new("fruit", ["yes"])])));
+                Assert.Equal("selector:unknown:FRUIT", denied.Reason); // the secondary database stamps no catalog: unknown, fail closed
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Baseline_CarriesEveryPagesSelectors()
+    {
+        var space = NewExportedSpace();
+        var page = TestData.NewPage(space, "compartmented");
+
+        using var lowContext = CreateContext();
+        lowContext.Spaces.Add(space);
+        lowContext.Pages.Add(page);
+        lowContext.PageMarkings.Add(TestData.NewMarking(page, ClassificationLevel.Secret).WithSelectors(TestCatalogs.Banana));
+        lowContext.SaveChanges();
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundleInfo = await new BundleExportService(lowContext, storage).ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                Assert.True((await new BundleImportService(highContext, storage)
+                    .ImportAsync(bundleInfo.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+                var marking = highContext.PageMarkings.Include(m => m.Selectors).Single(m => m.PageId == page.Id);
+                Assert.Equal([TestCatalogs.Banana], marking.ToMarking().Selectors);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Bundle_IsWrittenAsFormat3_UnderEventsV3()
+    {
+        // design.md §21.10: the format bump is what makes a not-yet-upgraded high side
+        // refuse a selector-bearing bundle loudly (its missing-entry guard) rather than
+        // absorb it with every compartment dropped.
+        var space = NewExportedSpace();
+        var page = TestData.NewPage(space);
+
+        using var lowContext = CreateContext();
+        lowContext.Spaces.Add(space);
+        lowContext.Pages.Add(page);
+        lowContext.SaveChanges();
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundleInfo = await new BundleExportService(lowContext, storage).ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
+
+            using var archive = System.IO.Compression.ZipFile.OpenRead(bundleInfo.BundleFilePath);
+            Assert.Equal(3, BundleFormat.CurrentVersion);
+            Assert.NotNull(archive.GetEntry("events.v3.ndjson"));
+            Assert.Null(archive.GetEntry("events.v2.ndjson"));
+            Assert.Null(archive.GetEntry("events.ndjson"));
+            using var manifestStream = archive.GetEntry("manifest.json")!.Open();
+            using var manifestJson = JsonDocument.Parse(manifestStream);
+            Assert.Equal(3, manifestJson.RootElement.GetProperty("formatVersion").GetInt32());
+
+            // And every marking payload carries the selectors key, even when empty.
+            using var events = new StreamReader(archive.GetEntry("events.v3.ndjson")!.Open());
+            var line = events.ReadLine();
+            Assert.NotNull(line);
+            using var record = JsonDocument.Parse(line);
+            using var payload = JsonDocument.Parse(record.RootElement.GetProperty("payloadJson").GetString()!);
+            Assert.Equal(JsonValueKind.Object, payload.RootElement.GetProperty("marking").GetProperty("selectors").ValueKind);
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    private static string UpsertPayload(Guid pageId, Guid spaceId, object marking) => JsonSerializer.Serialize(new
+    {
+        pageId,
+        spaceId,
+        parentPageId = (Guid?)null,
+        ancestorPath = "/",
+        slug = "crossing",
+        title = "Crossing",
+        sortOrder = 0,
+        content = "# Crossing",
+        revisionNumber = 1,
+        marking,
+    });
+
+    private static Space HighSideSpace(Guid spaceId) => new()
+    {
+        Id = spaceId,
+        Key = "LEG",
+        Name = "Legacy",
+        OriginInstanceId = LowInstanceId,
+        CreatedAtUtc = DateTime.UtcNow,
+        CreatedByUserId = Guid.NewGuid(),
+    };
+
+    [Fact]
+    public async Task Import_AnUnknownSelectorCategory_IsKeptAndMatchesNobody()
+    {
+        // design.md §12: a category the high side has not configured crosses verbatim and
+        // is stored as it arrived - and the E gate names it unknown for every reader, so
+        // the page is visible to nobody until a high-side admin configures and grants it.
+        var pageId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var payload = UpsertPayload(pageId, spaceId, new
+        {
+            level = "OFFICIAL", eyesOnly = Array.Empty<string>(), prefix = "UK",
+            selectors = new Dictionary<string, string> { ["CODEWORD"] = "zebra" },
+        });
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundlePath = WriteLegacyBundle(outputDir, spaceId, payload);
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                highContext.Spaces.Add(HighSideSpace(spaceId));
+                highContext.AccessRules.Add(TestData.AccessGrantMirroring(EditorGrant(spaceId)));
+                highContext.SaveChanges();
+
+                Assert.True((await new BundleImportService(highContext, storage).ImportAsync(bundlePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var marking = highContext.PageMarkings.Include(m => m.Selectors).Single(m => m.PageId == pageId);
+                Assert.Equal([new SelectorValue("CODEWORD", "ZEBRA")], marking.ToMarking().Selectors); // canonicalized, kept verbatim otherwise
+
+                var denied = Assert.IsType<ReadResult<Page>.Denied>(await new PageReadService(highContext)
+                    .GetPageAsync(pageId, Principal.Create("high-user", [], [new("clearance", ["TOP_SECRET"])])));
+                Assert.Equal("selector:unknown:CODEWORD", denied.Reason);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_AMalformedSelectorsObject_LandsANewPageAtTopSecret_AndLeavesAnExistingRowAlone()
+    {
+        // design.md §21.10: anything malformed in selectors makes the WHOLE marking
+        // unparseable - dropping only the bad selector would widen - so a new page fails
+        // closed to TOP SECRET and an existing row is not re-classified from silence.
+        var newPageId = Guid.CreateVersion7();
+        var existingPageId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var malformed = new { level = "OFFICIAL", eyesOnly = Array.Empty<string>(), prefix = "UK", selectors = new[] { "APPLE" } };
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                var space = HighSideSpace(spaceId);
+                var existing = TestData.NewPage(space, "existing");
+                existing.Id = existingPageId;
+                highContext.Spaces.Add(space);
+                highContext.Pages.Add(existing);
+                highContext.PageMarkings.Add(TestData.NewMarking(existing, ClassificationLevel.Secret, "UK").WithSelectors(TestCatalogs.Apple));
+                highContext.SaveChanges();
+
+                var newBundle = WriteLegacyBundle(Path.Combine(outputDir, "new"), spaceId, UpsertPayload(newPageId, spaceId, malformed));
+                Assert.True((await new BundleImportService(highContext, storage).ImportAsync(newBundle, LowInstanceId, AuditCtx)).IsSuccess);
+                var landed = highContext.PageMarkings.Include(m => m.Selectors).Single(m => m.PageId == newPageId);
+                Assert.Equal(ClassificationLevel.TopSecret, landed.Level);
+                Assert.Empty(landed.Selectors);
+
+                var existingBundle = WriteLegacyBundle(Path.Combine(outputDir, "existing"), spaceId, UpsertPayload(existingPageId, spaceId, malformed));
+                Assert.True((await new BundleImportService(highContext, storage).ImportAsync(existingBundle, LowInstanceId, AuditCtx)).IsSuccess);
+                var untouched = highContext.PageMarkings.Include(m => m.Selectors).Include(m => m.Countries).Single(m => m.PageId == existingPageId);
+                Assert.Equal(ClassificationLevel.Secret, untouched.Level);
+                Assert.Equal([TestCatalogs.Apple], untouched.ToMarking().Selectors);
+                Assert.Equal(["UK"], untouched.Countries.Select(c => c.CountryValue));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_APreSelectorPayload_LandsWithNoSelectors()
+    {
+        // A format-2 marking: level, caveat, prefix, and no selectors key at all. It said
+        // nothing about compartments, so it lands with none - never an invented one, and
+        // never a refusal of a bundle already sitting on a transfer disk.
+        var pageId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var payload = UpsertPayload(pageId, spaceId, new { level = "SECRET", eyesOnly = new[] { "UK" }, prefix = "UK" });
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundlePath = WriteLegacyBundle(outputDir, spaceId, payload);
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                highContext.Spaces.Add(HighSideSpace(spaceId));
+                highContext.SaveChanges();
+
+                Assert.True((await new BundleImportService(highContext, storage).ImportAsync(bundlePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                var marking = highContext.PageMarkings.Include(m => m.Selectors).Include(m => m.Countries).Single(m => m.PageId == pageId);
+                Assert.Equal(ClassificationLevel.Secret, marking.Level);
+                Assert.Empty(marking.Selectors);
+                Assert.Equal("UK SECRET UK EYES ONLY", marking.ToMarking().Format(SelectorCatalog.Empty));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
     }
 }

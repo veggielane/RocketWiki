@@ -82,7 +82,8 @@ public class PagePermissionReadService : IPagePermissionReadService
             result[page.Id] = new PagePermissionFacts(
                 explanation.Permission,
                 explanation.SpaceRole,
-                explanation.IsReplicaSpace);
+                explanation.IsReplicaSpace,
+                explanation.HasSpaceAccess);
         }
 
         return result;
@@ -104,7 +105,6 @@ public class PagePermissionReadService : IPagePermissionReadService
         }
 
         var context = await _permissions.LoadAsync(page, space.IsReplicaOf(_localInstanceId), cancellationToken);
-        var titlesByPageId = await LoadChainTitlesAsync(page, caller, cancellationToken);
 
         // The CALLER's gate first, via the enforcement path (Compute, not Explain):
         // an inspector the caller can point at a page they cannot view would be the
@@ -115,9 +115,10 @@ public class PagePermissionReadService : IPagePermissionReadService
         var callerPermission = context.Compute(caller);
         if (!callerPermission.CanView)
         {
-            return new ReadResult<PagePermissionExplanation>.Denied(callerPermission.ViewDenialReason ?? "no-space-role");
+            return new ReadResult<PagePermissionExplanation>.Denied(callerPermission.ViewDenialReason ?? EffectivePermissionCalculator.NoSpaceAccessReason);
         }
 
+        var titlesByPageId = await LoadChainTitlesAsync(page, caller, context.SpaceGrants, context.ChainRestrictions, cancellationToken);
         var explanation = context.Explain(subject);
 
         // Display only, never a decision input (design.md §6.1): the local mirror row
@@ -131,9 +132,13 @@ public class PagePermissionReadService : IPagePermissionReadService
         return new ReadResult<PagePermissionExplanation>.Found(new PagePermissionExplanation(
             subject.UserId,
             subjectDisplayName,
+            explanation.HasSpaceAccess,
+            explanation.GrantedSelectors,
             explanation.SpaceRole,
             explanation.IsReplicaSpace,
             explanation.Permission,
+            explanation.ViewGates,
+            explanation.EditGates,
             WithTitles(explanation.ViewRestrictions, titlesByPageId),
             WithTitles(explanation.EditRestrictions, titlesByPageId)));
     }
@@ -152,7 +157,10 @@ public class PagePermissionReadService : IPagePermissionReadService
         // design.md §6.5.2 via the shared gate — the exact check AccessRuleService's
         // create/update/delete enforce, not a re-derivation. Non-managers get the
         // same empty list a page with no restrictions yields (see the interface doc
-        // for why that's a pruned listing, not an auditable denial).
+        // for why that's a pruned listing, not an auditable denial). A manager needs
+        // no access grant to manage (§6.5.2), which is exactly why the chain titles
+        // below are gated separately: the rules are theirs to see, the titles of pages
+        // they cannot read are not.
         var role = EffectivePermissionCalculator.ComputeSpaceRole(grants, caller);
         if (!RuleManagementGate.CanManageRules(role, callerIsInstanceAdmin))
         {
@@ -161,7 +169,7 @@ public class PagePermissionReadService : IPagePermissionReadService
 
         var rules = await _permissions.LoadOrderedRestrictionsAsync(
             PermissionSubject.For(page).ChainPageIds(), cancellationToken);
-        var titlesByPageId = await LoadChainTitlesAsync(page, caller, cancellationToken);
+        var titlesByPageId = await LoadChainTitlesAsync(page, caller, grants, rules, cancellationToken);
 
         var editorIds = rules.Select(r => r.UpdatedByUserId).Distinct().ToArray();
         var editorNames = await _db.Users
@@ -196,35 +204,69 @@ public class PagePermissionReadService : IPagePermissionReadService
     /// because its page is in the trash — restriction accumulation itself only ever runs
     /// over live pages.
     ///
-    /// <para><b>A chain page the caller fails clearance for contributes an EMPTY title</b>
-    /// (design.md §21.8/§6.4.1). Restrictions accumulate down the tree but markings do
-    /// not (§21.5 — "a child may legitimately sit above or below its parent", and
-    /// re-marking a parent does not re-mark the subtree), so passing canView on the
-    /// subject page says nothing about its ancestors' classifications. Without this, a
+    /// <para><b>A chain page the caller could not view contributes an EMPTY title</b>
+    /// (design.md §21.8/§6.4.1), decided by the FULL view gate for that page — space
+    /// access, then the calculator's own ladder (<see cref="EffectivePermissionCalculator.EvaluateViewGates"/>:
+    /// level, selector eligibility, selector grant, caveat, and the restrictions
+    /// accumulated down to that page) — never a subset. Restrictions accumulate down the
+    /// tree but markings do not (§21.5 — "a child may legitimately sit above or below its
+    /// parent", and re-marking a parent does not re-mark the subtree), so passing canView
+    /// on the subject page says nothing about its ancestors' markings. Without this, a
     /// caller viewing an OFFICIAL child could read a SECRET parent's title straight off
     /// the inspector or the restriction listing — a page the tree prunes and every other
     /// read path treats as absent. §6.4.1 already treats titles as the sensitive part
     /// ("the refusal says how many pages blocked it, not which ones, since their titles
     /// may themselves be restricted"); this is that rule, applied to the one surface that
-    /// names an ancestor.</para>
+    /// names an ancestor. A caller with no access grant at all — a manager listing the
+    /// rules of a space they cannot read (§6.5.2) — gets every title withheld.</para>
     ///
     /// <para>Only the TITLE is withheld. The rule id, page id, action, expression and
     /// pass/fail all still travel: they are what the inspector exists to explain, the
     /// caller is already subject to that rule, and a rule the caller cannot see the
     /// reasoning for is exactly the "least useful answer" §6.6 set out to avoid.</para>
     /// </summary>
+    /// <param name="orderedChainRestrictions">The chain's restrictions root-most first
+    /// (the loader's contract); the prefix up to each chain page is what that page's own
+    /// canView would have evaluated.</param>
     private async Task<IReadOnlyDictionary<Guid, string>> LoadChainTitlesAsync(
-        Page page, Principal caller, CancellationToken cancellationToken)
+        Page page,
+        Principal caller,
+        IReadOnlyList<AccessRule> spaceGrants,
+        IReadOnlyList<AccessRule> orderedChainRestrictions,
+        CancellationToken cancellationToken)
     {
         var chainIds = PermissionSubject.For(page).ChainPageIds().ToArray();
         var titles = await _db.Pages.IgnoreQueryFilters()
             .Where(p => chainIds.Contains(p.Id))
             .ToDictionaryAsync(p => p.Id, p => p.Title, cancellationToken);
 
+        var access = EffectivePermissionCalculator.ComputeSpaceAccess(spaceGrants, caller);
+        if (access is null)
+        {
+            foreach (var chainId in chainIds)
+            {
+                if (titles.ContainsKey(chainId))
+                {
+                    titles[chainId] = string.Empty;
+                }
+            }
+
+            return titles;
+        }
+
         var markings = await _permissions.LoadMarkingsForAsync(chainIds, cancellationToken);
+        var accumulated = new List<AccessRule>();
         foreach (var chainId in chainIds)
         {
-            if (titles.ContainsKey(chainId) && !ClearanceGate.Check(markings[chainId], caller).IsAllowed)
+            accumulated.AddRange(orderedChainRestrictions.Where(r => r.PageId == chainId));
+            if (!titles.ContainsKey(chainId))
+            {
+                continue;
+            }
+
+            var gates = EffectivePermissionCalculator.EvaluateViewGates(
+                access, markings[chainId], accumulated, _db.SelectorCatalog, caller, shortCircuit: true);
+            if (gates.Any(g => !g.Passed))
             {
                 titles[chainId] = string.Empty;
             }

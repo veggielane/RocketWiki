@@ -1,5 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
+using RocketWiki.Core.Enums;
+using RocketWiki.Core.Tests.Access;
 using Xunit;
 
 namespace RocketWiki.Data.Tests;
@@ -87,6 +90,33 @@ public class NoCascadeDeleteTests : SqliteTestBase
         using var deleteContext = CreateContext();
         deleteContext.Users.Remove(new User { Id = user.Id });
         Assert.ThrowsAny<DbUpdateException>(() => deleteContext.SaveChanges());
+    }
+
+    [Fact]
+    public void DeletingPageMarking_WithASelectorRow_ThrowsRatherThanCascading()
+    {
+        // PageMarkingSelectors is NO ACTION like every other FK (design.md §21.15): a
+        // marking row cannot vanish and take an enforcement-critical selector with it.
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+
+        using (var writeContext = CreateContext())
+        {
+            writeContext.Spaces.Add(space);
+            writeContext.Pages.Add(page);
+            writeContext.PageMarkings.Add(
+                TestData.NewMarking(page, ClassificationLevel.Official).WithSelectors(TestCatalogs.Apple));
+            writeContext.SaveChanges();
+        }
+
+        using (var deleteContext = CreateContext())
+        {
+            deleteContext.PageMarkings.Remove(new PageMarking { PageId = page.Id });
+            Assert.ThrowsAny<DbUpdateException>(() => deleteContext.SaveChanges());
+        }
+
+        using var readContext = CreateContext();
+        Assert.Single(readContext.PageMarkingSelectors.Where(s => s.PageId == page.Id));
     }
 
     [Fact]

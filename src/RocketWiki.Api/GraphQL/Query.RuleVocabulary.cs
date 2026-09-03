@@ -171,7 +171,7 @@ public partial class Query
         }
 
         var grants = await db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant)
+            .Where(r => r.Kind == AccessRuleKind.RoleGrant)
             .ToListAsync(cancellationToken);
 
         return grants

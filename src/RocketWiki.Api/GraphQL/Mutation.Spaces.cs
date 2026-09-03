@@ -15,17 +15,17 @@ namespace RocketWiki.Api.GraphQL;
 /// §6.5.1: create is instance-admin only; rename/archive/restore accept instance-admin
 /// OR that space's own space-admin), this layer only resolves and forwards it.
 ///
-/// <c>createSpace</c> takes <c>initialGrant</c> as a second, separate input alongside
+/// <c>createSpace</c> takes <c>initialGrants</c> as a second, separate input alongside
 /// <c>CreateSpaceRequest</c> (design.md §6.5.1: creation is atomic with its first
-/// grant, a required input with no default) — landed in <c>ISpaceService</c> mid-flight
-/// during this same round, exactly as flagged.
+/// grants — at least one space-admin role grant, access grants optional — a required
+/// input with no default).
 /// </summary>
 public partial class Mutation
 {
     [AuditAction("space.create")]
     public async Task<CreateSpacePayload> CreateSpace(
         CreateSpaceRequest input,
-        InitialSpaceGrant initialGrant,
+        IReadOnlyList<InitialGrant> initialGrants,
         [Service] ISpaceService spaceService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
         [Service] IActingUserAccessor actingUserAccessor,
@@ -42,7 +42,7 @@ public partial class Mutation
         }
 
         var result = await spaceService.CreateAsync(
-            input, initialGrant, instanceRoleAccessor.IsInstanceAdmin, actingUserId!.Value, auditContext!, cancellationToken);
+            input, initialGrants, instanceRoleAccessor.IsInstanceAdmin, actingUserId!.Value, auditContext!, cancellationToken);
         if (!result.IsSuccess)
         {
             await MutationAuthHelper.AuditDenialIfApplicableAsync(auditSink, "space.create", result.Error, AuditSubjectType.Space, subjectId: null, cancellationToken);

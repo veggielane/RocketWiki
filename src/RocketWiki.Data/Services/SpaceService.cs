@@ -4,6 +4,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Data.Access;
 using RocketWiki.Data.Configurations;
 
 namespace RocketWiki.Data.Services;
@@ -24,16 +25,55 @@ public class SpaceService : ISpaceService
     }
 
     public async Task<PageMutationResult<Space>> CreateAsync(
-        CreateSpaceRequest request, InitialSpaceGrant initialGrant, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
+        CreateSpaceRequest request, IReadOnlyList<InitialGrant> initialGrants, bool isInstanceAdmin, Guid actingUserId, AuditContext auditContext, CancellationToken cancellationToken = default)
     {
         if (!isInstanceAdmin)
         {
             return PageMutationResult<Space>.Failure(new ForbiddenError("instance admin required"));
         }
 
-        if (!RuleExpressionSerializer.TryParse(initialGrant.ExpressionJson, out _, out var parseError))
+        // design.md §6.5.1: born administrable. Without a space-admin role grant the new
+        // space could only ever be administered through the instance-admin recovery arm,
+        // which exists for damage, not for routine creation.
+        if (!initialGrants.Any(g => g.Kind == AccessRuleKind.RoleGrant && g.Role == SpaceRole.SpaceAdmin))
         {
-            return PageMutationResult<Space>.Failure(new ValidationError($"Invalid initial grant expression: {parseError}"));
+            return PageMutationResult<Space>.Failure(new ValidationError(
+                "A new space must be created with at least one space-admin role grant (design.md §6.5.1); " +
+                "access grants, which decide who can see the space, are optional."));
+        }
+
+        // Every grant validated up front - shape, expression, selectors - before the
+        // key is consumed: one bad grant refuses the whole creation rather than leaving
+        // a space behind with half its rules.
+        var validatedGrants = new List<(InitialGrant Grant, IReadOnlyList<SelectorValue> Selectors)>(initialGrants.Count);
+        var placeholderSpaceId = Guid.NewGuid();
+        foreach (var grant in initialGrants)
+        {
+            if (grant.Kind is not (AccessRuleKind.RoleGrant or AccessRuleKind.AccessGrant))
+            {
+                return PageMutationResult<Space>.Failure(new ValidationError(
+                    "An initial grant must be a role grant or an access grant; a page restriction has no page yet."));
+            }
+
+            var shapeError = AccessRuleValidation.ValidateShape(
+                grant.Kind, placeholderSpaceId, pageId: null, grant.Role, action: null, grant.SelectorValues);
+            if (shapeError is not null)
+            {
+                return PageMutationResult<Space>.Failure(shapeError);
+            }
+
+            if (!RuleExpressionSerializer.TryParse(grant.ExpressionJson, out _, out var parseError))
+            {
+                return PageMutationResult<Space>.Failure(new ValidationError($"Invalid initial grant expression: {parseError}"));
+            }
+
+            var selectorError = AccessRuleValidation.ValidateSelectors(_db.SelectorCatalog, grant.SelectorValues, out var selectors);
+            if (selectorError is not null)
+            {
+                return PageMutationResult<Space>.Failure(selectorError);
+            }
+
+            validatedGrants.Add((grant, selectors));
         }
 
         // URLs are case-insensitive, so a key is canonicalized (trimmed, upper-cased)
@@ -90,30 +130,39 @@ public class SpaceService : ISpaceService
         };
         _db.Spaces.Add(space);
 
+        _db.AuditContext = auditContext;
+        _db.RaiseDomainEvent(new SpaceCreatedEvent(space.Id, space.Key, actingUserId));
+
         // design.md §6.5.1: committed in the SAME transaction as the Space row (one
         // SaveChangesAsync below) - a space never exists, even momentarily, in a state
         // nobody can administer. Built directly against the in-memory `space` rather
         // than through IAccessRuleService, which would need to re-query it - `space`
-        // isn't persisted yet, so that query would find nothing.
-        var grant = new AccessRule
+        // isn't persisted yet, so that query would find nothing. Each row raises its
+        // own AccessRuleChangedEvent (design.md §7: every AccessRule change is audited
+        // with full before/after state) - Before is explicitly null, exactly like a rule
+        // created through IAccessRuleService.CreateAsync, so a replay sees the same shape
+        // either way.
+        foreach (var (grant, selectors) in validatedGrants)
         {
-            Kind = AccessRuleKind.SpaceGrant,
-            SpaceId = space.Id,
-            Role = initialGrant.Role,
-            ExpressionJson = initialGrant.ExpressionJson,
-            CreatedAtUtc = now,
-            CreatedByUserId = actingUserId,
-            UpdatedAtUtc = now,
-            UpdatedByUserId = actingUserId,
-        };
-        _db.AccessRules.Add(grant);
+            var rule = new AccessRule
+            {
+                Kind = grant.Kind,
+                SpaceId = space.Id,
+                Role = grant.Role,
+                ExpressionJson = grant.ExpressionJson,
+                CreatedAtUtc = now,
+                CreatedByUserId = actingUserId,
+                UpdatedAtUtc = now,
+                UpdatedByUserId = actingUserId,
+            };
+            foreach (var selector in selectors)
+            {
+                rule.Selectors.Add(new AccessRuleSelector { AccessRuleId = rule.Id, Category = selector.Category, Value = selector.Value });
+            }
 
-        _db.AuditContext = auditContext;
-        _db.RaiseDomainEvent(new SpaceCreatedEvent(space.Id, space.Key, actingUserId));
-        // design.md §7: every AccessRule change is audited with full before/after state,
-        // including this one - Before is explicitly null, exactly like a rule created
-        // through IAccessRuleService.CreateAsync, so a replay sees the same shape either way.
-        _db.RaiseDomainEvent(new AccessRuleChangedEvent(grant.Id, space.Key, actingUserId, Before: null, After: grant.ToSnapshot()));
+            _db.AccessRules.Add(rule);
+            _db.RaiseDomainEvent(new AccessRuleChangedEvent(rule.Id, space.Key, actingUserId, Before: null, After: rule.ToSnapshot()));
+        }
 
         await _db.SaveChangesAsync(cancellationToken);
         return PageMutationResult<Space>.Success(space);
@@ -346,7 +395,7 @@ public class SpaceService : ISpaceService
     private async Task<bool> IsSpaceAdminAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken)
     {
         var grants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
+            .Where(r => r.Kind == AccessRuleKind.RoleGrant && r.SpaceId == spaceId)
             .ToListAsync(cancellationToken);
 
         return EffectivePermissionCalculator.ComputeSpaceRole(grants, principal) == SpaceRole.SpaceAdmin;

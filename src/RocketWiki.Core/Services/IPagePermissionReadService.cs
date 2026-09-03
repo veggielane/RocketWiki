@@ -66,11 +66,14 @@ public interface IPagePermissionReadService
 /// exposed so the API layer can apply §6.5.2's admin arm for canManageAccess via
 /// <see cref="RuleManagementGate"/> — the instance-admin bool itself never enters
 /// this layer's computation (design.md §6.5: no admin flag in the rule engine).
+/// <see cref="HasSpaceAccess"/> is the S gate on its own (§6.4): a role without it
+/// manages a space it cannot read, and the API renders that difference.
 /// </summary>
 public sealed record PagePermissionFacts(
     EffectivePermission Permission,
     SpaceRole? SpaceRole,
-    bool IsReplicaSpace)
+    bool IsReplicaSpace,
+    bool HasSpaceAccess)
 {
     /// <summary>design.md §6.4.2: commenting requires canView (it is not editing) —
     /// and, like every mutation, is blocked on a replica space (§12).</summary>
@@ -92,13 +95,24 @@ public sealed record ExplainedRestriction(
 /// display-only, resolved from the local User mirror when one exists for the
 /// subject's user id and falling back to the id itself (a hypothetical/what-if
 /// principal an admin is testing has no mirror row).
+///
+/// <para><see cref="ViewGates"/> and <see cref="EditGates"/> are the complete ladder
+/// (S, C, E, G, N, R; replica, role, edit-R — design.md §21.2), every gate evaluated;
+/// <see cref="ViewRestrictions"/> and <see cref="EditRestrictions"/> are the restriction
+/// entries of the same lists with chain-page titles attached — kept because the
+/// restriction listing renders them, and a projection rather than a second
+/// evaluation so the two can never disagree.</para>
 /// </summary>
 public sealed record PagePermissionExplanation(
     string SubjectUserId,
     string SubjectDisplayName,
+    bool HasSpaceAccess,
+    IReadOnlySet<SelectorValue> GrantedSelectors,
     SpaceRole? SpaceRole,
     bool IsReplicaSpace,
     EffectivePermission Permission,
+    IReadOnlyList<GateCheck> ViewGates,
+    IReadOnlyList<GateCheck> EditGates,
     IReadOnlyList<ExplainedRestriction> ViewRestrictions,
     IReadOnlyList<ExplainedRestriction> EditRestrictions);
 

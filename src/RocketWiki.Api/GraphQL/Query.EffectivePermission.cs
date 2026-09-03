@@ -11,28 +11,34 @@ public partial class Query
 {
     /// <summary>
     /// design.md §6.6's permission inspector: "why can / can't user X see this page" —
-    /// the space-role computation and every restriction with pass/fail, computed by
-    /// the calculator's non-short-circuiting Explain path (never a relaxation of the
-    /// enforcement gate; a Core test pins the two to identical verdicts).
+    /// the space access and role computations and every gate with pass/fail (S, C, E,
+    /// G, N and each view restriction; replica, role and each edit restriction),
+    /// computed by the calculator's non-short-circuiting Explain path (never a
+    /// relaxation of the enforcement gate; a Core test pins the two to identical
+    /// verdicts).
     ///
     /// Two modes, one field:
     /// <list type="bullet">
     /// <item><b>Self</b> (no <paramref name="subject"/>): any authenticated caller,
     /// gated on their own canView of the page — an inspector aimed at a page you
     /// cannot view would itself be the §6.7 leak (confirming existence AND handing
-    /// over the failing rule), so a non-viewable page is null exactly like a
-    /// nonexistent one, with the denial audited first.</item>
+    /// over the failing rule with its expression), so a non-viewable page is null
+    /// exactly like a nonexistent one, with the denial audited first. The
+    /// self-explanation surface for a page you cannot view is <c>pageAccess.denial</c>
+    /// (§21.8), which discloses the gates and never an expression or an ancestor
+    /// title.</item>
     /// <item><b>Foreign</b> (a principal-shaped <paramref name="subject"/>): instance
     /// admins only — inspecting someone else's access is an admin diagnostic. The
     /// subject is supplied as groups/attributes rather than looked up, because
     /// authorization only ever evaluates token-shaped principals (design.md §6.1) and
     /// no other user's token is available here; this doubles as the what-if tester
-    /// §6.6's tooling needs. The ADMIN must also pass canView on the page: §6.5's
-    /// no-read-around is absolute, and an inspector that showed a non-viewing admin a
-    /// page's rules and ancestor titles would be exactly the silent read-around it
-    /// forbids (§6.4.1 hides even titles from admins in delete refusals). The
-    /// sanctioned path for an admin locked out of a page is unchanged: change the
-    /// rules — which is audited — then inspect.</item>
+    /// §6.6's tooling needs, and a subject's selector eligibility (§21.15) is stated
+    /// through the same <c>attributes</c> input as any other claim. The ADMIN must also
+    /// pass canView on the page: §6.5's no-read-around is absolute, and an inspector
+    /// that showed a non-viewing admin a page's rules and ancestor titles would be
+    /// exactly the silent read-around it forbids (§6.4.1 hides even titles from admins
+    /// in delete refusals). The sanctioned path for an admin locked out of a page is
+    /// unchanged: change the rules — which is audited — then inspect.</item>
     /// </list>
     ///
     /// Audit (§7): every inspection is a distinct <c>permission.inspect</c> event —
@@ -111,7 +117,7 @@ public partial class Query
             case ReadResult<PagePermissionExplanation>.Found found:
                 await RecordInspectionAsync(
                     auditSink, AuditOutcome.Success, pageId, inspectedUserId, self, reason: null, cancellationToken);
-                return EffectivePermissionDetail.From(found.Value);
+                return EffectivePermissionDetail.From(found.Value, pageId);
 
             default:
                 throw new InvalidOperationException($"Unexpected ReadResult case: {result.GetType().Name}.");
@@ -141,33 +147,56 @@ public partial class Query
 
 /// <summary>
 /// The §6.6 inspector's answer, shaped to the SPA's
-/// <c>web/src/access/permission/effectivePermissionTypes.ts</c> contract: role
-/// computation, verdict with the calculator's exact denial-reason vocabulary
-/// (<c>no-space-role</c> / <c>replica-read-only</c> / <c>insufficient-space-role</c> /
-/// <c>restriction:{pageId}:{ruleId}</c> — what describeDenialReason.ts parses), and
-/// every restriction's individual pass/fail.
+/// <c>web/src/access/permission/effectivePermissionTypes.ts</c> contract: the space
+/// access and role computations, the verdict with the calculator's exact denial-reason
+/// vocabulary (<c>no-space-access</c> / <c>classification:{level}</c> /
+/// <c>selector:{not_eligible|unknown|not_granted}:{CATEGORY}</c> /
+/// <c>caveat:eyes_only</c> / <c>restriction:{pageId}:{ruleId}</c> /
+/// <c>replica-read-only</c> / <c>insufficient-space-role</c> — what
+/// describeDenialReason.ts parses), every gate's individual pass/fail, and every
+/// restriction's with its chain page and expression.
+///
+/// <para><see cref="ViewGates"/> and <see cref="EditGates"/> are the same
+/// <c>GateResult</c> shape a denied page's placeholder lists (§21.8) — one gate
+/// vocabulary for both — while <see cref="ViewRestrictions"/> and
+/// <see cref="EditRestrictions"/> keep the expression and chain-page title the
+/// placeholder withholds: this surface is reachable only for a page the caller can
+/// view, where those are the effective rules §6.6's banner already shows.
+/// <see cref="SpaceRole"/> is ROLE grants only (§6.4); <see cref="HasSpaceAccess"/> the
+/// ACCESS grants only, and the two are reported independently because a role without
+/// access is a real, meaningful state (§6.5.2).</para>
 /// </summary>
 public sealed record EffectivePermissionDetail(
     string UserId,
     string UserDisplayName,
+    bool HasSpaceAccess,
     SpaceRole? SpaceRole,
     bool IsReplicaSpace,
     bool CanView,
     bool CanEdit,
     string? ViewDenialReason,
     string? EditDenialReason,
+    IReadOnlyList<GateResultView> ViewGates,
+    IReadOnlyList<GateResultView> EditGates,
     IReadOnlyList<RestrictionCheckView> ViewRestrictions,
     IReadOnlyList<RestrictionCheckView> EditRestrictions)
 {
-    internal static EffectivePermissionDetail From(PagePermissionExplanation explanation) => new(
+    /// <summary>The marking is not in the explanation, so the gate rows carry no level or
+    /// country set here; the page's own <c>marking</c> field sits beside this one and is
+    /// the honest source for both. <paramref name="pageId"/> lets a restriction row say
+    /// whether its rule is inherited from an ancestor.</summary>
+    internal static EffectivePermissionDetail From(PagePermissionExplanation explanation, Guid pageId) => new(
         explanation.SubjectUserId,
         explanation.SubjectDisplayName,
+        explanation.HasSpaceAccess,
         explanation.SpaceRole,
         explanation.IsReplicaSpace,
         explanation.Permission.CanView,
         explanation.Permission.CanEdit,
         explanation.Permission.ViewDenialReason,
         explanation.Permission.EditDenialReason,
+        explanation.ViewGates.Select(g => GateResultView.From(g, marking: null, pageId)).ToList(),
+        explanation.EditGates.Select(g => GateResultView.From(g, marking: null, pageId)).ToList(),
         explanation.ViewRestrictions.Select(RestrictionCheckView.From).ToList(),
         explanation.EditRestrictions.Select(RestrictionCheckView.From).ToList());
 }
@@ -201,5 +230,6 @@ public sealed record InspectedPrincipalInput(
     IReadOnlyList<InspectedAttributeInput>? Attributes);
 
 /// <summary>One registered attribute (design.md §6.2) on the inspected subject, e.g.
-/// key "nationality", values ["NZ","US"] for a dual national.</summary>
+/// key "nationality", values ["NZ","US"] for a dual national — or a selector claim
+/// (§21.15), key "fruit", values ["yes"], to state eligibility for a what-if.</summary>
 public sealed record InspectedAttributeInput(string Key, IReadOnlyList<string>? Values);

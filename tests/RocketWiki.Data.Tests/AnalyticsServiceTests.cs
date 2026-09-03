@@ -30,13 +30,22 @@ public class AnalyticsServiceTests : SqliteTestBase
     private static Principal Caller(params string[] groups) => Principal.Create("caller-sub", groups);
 
     private static async Task GrantAsync(
-        RocketWikiDbContext context, Guid spaceId, SpaceRole role, Guid actingUserId, string expression = """{ "everyone": true }""")
+        RocketWikiDbContext context, Guid spaceId, SpaceRole? role, Guid actingUserId, string expression = """{ "everyone": true }""")
     {
         await context.SaveChangesAsync();
         var result = await new AccessRuleService(context).CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, spaceId, null, role, null, expression),
+            new CreateAccessRuleRequest(role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant, spaceId, null, role, null, expression),
             Principal.Create("bootstrap", []), isInstanceAdmin: true, actingUserId, AuditCtx);
         Assert.True(result.IsSuccess, $"grant failed: {result.Error}");
+
+        // A role confers no visibility (design.md §6.4); the access grant sits beside it.
+        if (role is not null)
+        {
+            var access = await new AccessRuleService(context).CreateAsync(
+                new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, spaceId, null, null, null, expression),
+                Principal.Create("bootstrap", []), isInstanceAdmin: true, actingUserId, AuditCtx);
+            Assert.True(access.IsSuccess, $"access grant failed: {access.Error}");
+        }
     }
 
     private static void RecordView(RocketWikiDbContext context, Guid pageId, Guid userId, DateTime at, string action = "page.view") =>
@@ -151,7 +160,7 @@ public class AnalyticsServiceTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         // A viewer, not an admin: they can read the space and still get no report.
-        await GrantAsync(context, space.Id, SpaceRole.Viewer, actor.Id);
+        await GrantAsync(context, space.Id, null, actor.Id);
         context.SaveChanges();
 
         var result = await NewService(context).GetReportAsync(
@@ -202,7 +211,7 @@ public class AnalyticsServiceTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.AddRange(eng, ops);
         await GrantAsync(context, eng.Id, SpaceRole.SpaceAdmin, actor.Id);
-        await GrantAsync(context, ops.Id, SpaceRole.Viewer, actor.Id);
+        await GrantAsync(context, ops.Id, null, actor.Id);
 
         foreach (var (space, slug) in new[] { (eng, "eng-page"), (ops, "ops-page") })
         {

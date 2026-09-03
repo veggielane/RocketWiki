@@ -51,9 +51,22 @@ public sealed class PageType : ObjectType<Page>
             .Type<PageType>()
             .ResolveWith<PageFieldResolvers>(r => r.GetParentAsync(default!, default!, default!, default!, default));
 
+        // design.md §6.7/§21.8: the placeholder for a parent the caller cannot view,
+        // beside the unchanged `parent` (null on denied). Shares the loader with it.
+        descriptor.Field("parentDenial")
+            .Type<ObjectType<AccessDenialView>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetParentDenialAsync(default!, default!, default!, default!, default!, default));
+
         descriptor.Field("children")
             .Type<NonNullType<ListType<NonNullType<PageType>>>>()
             .ResolveWith<PageFieldResolvers>(r => r.GetChildrenAsync(default!, default!, default!, default!, default));
+
+        // design.md §6.7/§21.8: the targets of this page's own page:// links, each a
+        // Page, a placeholder, or missing. Derived from the content, never from an
+        // argument - see the resolver for why that is load-bearing.
+        descriptor.Field("linkTargets")
+            .Type<NonNullType<ListType<NonNullType<ObjectType<PageLinkTarget>>>>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetLinkTargetsAsync(default!, default!, default!, default!, default));
 
         descriptor.Field(p => p.Revisions)
             .Type<NonNullType<ListType<NonNullType<PageRevisionType>>>>()
@@ -98,7 +111,7 @@ public sealed class PageType : ObjectType<Page>
         // server-built display string, so the SPA and an MCP client render identical text.
         descriptor.Field(p => p.Marking)
             .Type<NonNullType<ObjectType<PageMarkingView>>>()
-            .ResolveWith<PageFieldResolvers>(r => r.GetMarkingAsync(default!, default!, default));
+            .ResolveWith<PageFieldResolvers>(r => r.GetMarkingAsync(default!, default!, default!, default));
 
         // Viewer-relative watch state (design.md §8's known-deltas list); display of
         // the caller's own Watch row, no audit of its own - see the resolver's doc.

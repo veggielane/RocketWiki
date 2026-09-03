@@ -4,6 +4,7 @@ using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Data.Services;
+using RocketWiki.Core.Tests.Access;
 using Xunit;
 
 namespace RocketWiki.Data.Tests;
@@ -28,7 +29,7 @@ public class AccessRuleServiceTests : SqliteTestBase
 
     private static AccessRule SpaceAdminGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.SpaceAdmin,
         ExpressionJson = """{ "group": "space-admins" }""",
@@ -40,7 +41,7 @@ public class AccessRuleServiceTests : SqliteTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "group": "engineering" }""",
@@ -53,7 +54,7 @@ public class AccessRuleServiceTests : SqliteTestBase
     // --- Create -------------------------------------------------------------------
 
     [Fact]
-    public async Task Create_SpaceGrant_Succeeds_AuditRecordsNullBeforeAndFullAfter()
+    public async Task Create_AccessGrant_Succeeds_AuditRecordsNullBeforeAndFullAfter()
     {
         var admin = TestData.NewUser();
         var space = TestData.NewSpace();
@@ -66,11 +67,12 @@ public class AccessRuleServiceTests : SqliteTestBase
 
         var service = new AccessRuleService(context);
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, space.Id, null, SpaceRole.Viewer, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, space.Id, null, null, null, """{ "everyone": true }"""),
             AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(SpaceRole.Viewer, result.Value.Role);
+        Assert.Equal(AccessRuleKind.AccessGrant, result.Value.Kind);
+        Assert.Null(result.Value.Role);
 
         var auditEvent = context.AuditEvents.Single(e => e.Action == "permission.change");
         Assert.Contains("\"before\":null", auditEvent.DetailsJson);
@@ -114,9 +116,9 @@ public class AccessRuleServiceTests : SqliteTestBase
         context.SaveChanges();
 
         var service = new AccessRuleService(context);
-        // SpaceGrant but with PageId set instead of SpaceId - invalid shape.
+        // Role grant but with PageId set instead of SpaceId - invalid shape.
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, null, Guid.NewGuid(), SpaceRole.Viewer, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, null, Guid.NewGuid(), SpaceRole.Editor, null, """{ "everyone": true }"""),
             AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
@@ -137,7 +139,7 @@ public class AccessRuleServiceTests : SqliteTestBase
 
         var service = new AccessRuleService(context);
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, space.Id, null, SpaceRole.Viewer, null, """{ "not": "a valid shape" }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, space.Id, null, SpaceRole.Editor, null, """{ "not": "a valid shape" }"""),
             AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
@@ -161,7 +163,7 @@ public class AccessRuleServiceTests : SqliteTestBase
 
         var service = new AccessRuleService(context);
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, space.Id, null, SpaceRole.Viewer, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, space.Id, null, SpaceRole.Editor, null, """{ "everyone": true }"""),
             EditorOnlyPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
@@ -175,7 +177,7 @@ public class AccessRuleServiceTests : SqliteTestBase
         var service = new AccessRuleService(context);
 
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, Guid.NewGuid(), null, SpaceRole.Viewer, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, Guid.NewGuid(), null, SpaceRole.Editor, null, """{ "everyone": true }"""),
             AdminPrincipal(), isInstanceAdmin: false, Guid.NewGuid(), AuditCtx);
 
         Assert.False(result.IsSuccess);
@@ -204,7 +206,7 @@ public class AccessRuleServiceTests : SqliteTestBase
 
         var service = new AccessRuleService(context);
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, space.Id, null, SpaceRole.SpaceAdmin, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, space.Id, null, SpaceRole.SpaceAdmin, null, """{ "everyone": true }"""),
             AdminPrincipal(), isInstanceAdmin: true, admin.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
@@ -224,7 +226,7 @@ public class AccessRuleServiceTests : SqliteTestBase
 
         var service = new AccessRuleService(context);
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, space.Id, null, SpaceRole.SpaceAdmin, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, space.Id, null, SpaceRole.SpaceAdmin, null, """{ "everyone": true }"""),
             AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
@@ -238,9 +240,9 @@ public class AccessRuleServiceTests : SqliteTestBase
         var space = TestData.NewSpace();
         var existingRule = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
+            Role = SpaceRole.Editor,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = admin.Id,
@@ -256,7 +258,7 @@ public class AccessRuleServiceTests : SqliteTestBase
 
         var service = new AccessRuleService(context);
         var result = await service.UpdateAsync(
-            new UpdateAccessRuleRequest(existingRule.Id, """{ "group": "engineering" }""", SpaceRole.Editor, null),
+            new UpdateAccessRuleRequest(existingRule.Id, """{ "group": "engineering" }""", SpaceRole.SpaceAdmin, null),
             EditorOnlyPrincipal(), isInstanceAdmin: true, admin.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
@@ -269,9 +271,8 @@ public class AccessRuleServiceTests : SqliteTestBase
         var space = TestData.NewSpace();
         var existingRule = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = admin.Id,
@@ -301,9 +302,9 @@ public class AccessRuleServiceTests : SqliteTestBase
         var space = TestData.NewSpace();
         var existingRule = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
+            Role = SpaceRole.Editor,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = admin.Id,
@@ -320,11 +321,11 @@ public class AccessRuleServiceTests : SqliteTestBase
 
         var service = new AccessRuleService(context);
         var result = await service.UpdateAsync(
-            new UpdateAccessRuleRequest(existingRule.Id, """{ "group": "engineering" }""", SpaceRole.Editor, null),
+            new UpdateAccessRuleRequest(existingRule.Id, """{ "group": "engineering" }""", SpaceRole.SpaceAdmin, null),
             AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(SpaceRole.Editor, result.Value.Role);
+        Assert.Equal(SpaceRole.SpaceAdmin, result.Value.Role);
         Assert.Equal("""{ "group": "engineering" }""", result.Value.ExpressionJson);
 
         var auditEvent = context.AuditEvents.Single(e => e.Action == "permission.change");
@@ -340,9 +341,9 @@ public class AccessRuleServiceTests : SqliteTestBase
         var space = TestData.NewSpace();
         var existingRule = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
+            Role = SpaceRole.Editor,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = admin.Id,
@@ -359,7 +360,7 @@ public class AccessRuleServiceTests : SqliteTestBase
 
         var service = new AccessRuleService(context);
         var result = await service.UpdateAsync(
-            new UpdateAccessRuleRequest(existingRule.Id, """{ "group": "engineering" }""", SpaceRole.Editor, null),
+            new UpdateAccessRuleRequest(existingRule.Id, """{ "group": "engineering" }""", SpaceRole.SpaceAdmin, null),
             EditorOnlyPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
@@ -375,9 +376,8 @@ public class AccessRuleServiceTests : SqliteTestBase
         var space = TestData.NewSpace();
         var existingRule = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = admin.Id,
@@ -410,9 +410,8 @@ public class AccessRuleServiceTests : SqliteTestBase
         var space = TestData.NewSpace();
         var existingRule = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = """{ "everyone": true }""",
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = admin.Id,
@@ -433,6 +432,254 @@ public class AccessRuleServiceTests : SqliteTestBase
         Assert.False(result.IsSuccess);
         Assert.IsType<ForbiddenError>(result.Error);
         Assert.True(context.AccessRules.Any(r => r.Id == existingRule.Id));
+    }
+
+    // --- Access grants and their selectors (design.md §6.4 / §21.15) ------------------
+
+    private static AccessRule SeededAccessGrant(Guid spaceId, params SelectorValue[] selectors)
+    {
+        var rule = new AccessRule
+        {
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = spaceId,
+            ExpressionJson = """{ "everyone": true }""",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = Guid.NewGuid(),
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = Guid.NewGuid(),
+        };
+        foreach (var selector in selectors)
+        {
+            rule.Selectors.Add(new AccessRuleSelector { AccessRuleId = rule.Id, Category = selector.Category, Value = selector.Value });
+        }
+
+        return rule;
+    }
+
+    [Fact]
+    public async Task Create_AccessGrant_WithSelectors_PersistsRows_AndSnapshotsThem()
+    {
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new AccessRuleService(context);
+        var result = await service.CreateAsync(
+            new CreateAccessRuleRequest(
+                AccessRuleKind.AccessGrant, space.Id, null, null, null, """{ "group": "engineering" }""",
+                [new SelectorValue("region", "north"), TestCatalogs.Apple, new SelectorValue("FRUIT", "apple")]),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess, $"{result.Error}");
+        // Canonical, de-duplicated, one row per (category, value).
+        using var readContext = CreateContext();
+        var rows = readContext.AccessRuleSelectors.Where(s => s.AccessRuleId == result.Value.Id).ToList();
+        Assert.Equal(2, rows.Count);
+        Assert.Equal([TestCatalogs.Apple, TestCatalogs.North],
+            rows.Select(s => new SelectorValue(s.Category, s.Value)).OrderBy(s => s, SelectorValue.CanonicalOrder));
+
+        // And the audit snapshot carries them (design.md §7: the audit row is the only
+        // record of rule history, so a grant's selectors must be in it).
+        var replayed = ReplayNow(context)[result.Value.Id];
+        Assert.Equal(AccessRuleKind.AccessGrant, replayed.Kind);
+        Assert.Equal([TestCatalogs.Apple, TestCatalogs.North], replayed.Selectors);
+    }
+
+    [Fact]
+    public async Task Create_AccessGrant_UnknownSelectorValue_ReturnsValidationError()
+    {
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new AccessRuleService(context);
+        foreach (var unknown in new[] { new SelectorValue("FRUIT", "PEAR"), new SelectorValue("COLOUR", "RED") })
+        {
+            var result = await service.CreateAsync(
+                new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, space.Id, null, null, null, """{ "everyone": true }""", [unknown]),
+                AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+
+            Assert.False(result.IsSuccess);
+            var error = Assert.IsType<ValidationError>(result.Error);
+            Assert.Contains(unknown.Value, error.Message, StringComparison.Ordinal);
+            Assert.Contains("FRUIT", error.Message, StringComparison.Ordinal); // the configured vocabulary is named
+        }
+
+        Assert.Equal(1, context.AccessRules.Count()); // only the seeded admin grant
+    }
+
+    [Fact]
+    public async Task Create_RoleGrant_WithSelectors_ReturnsValidationError()
+    {
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var result = await new AccessRuleService(context).CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, space.Id, null, SpaceRole.Editor, null, """{ "everyone": true }""", [TestCatalogs.Apple]),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ValidationError>(result.Error);
+    }
+
+    [Fact]
+    public async Task Create_RoleGrant_ViewerValue_ReturnsValidationError()
+    {
+        // The retired value cannot come back in through the service any more than
+        // through the check constraint.
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var result = await new AccessRuleService(context).CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, space.Id, null, (SpaceRole)1, null, """{ "everyone": true }"""),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ValidationError>(result.Error);
+        Assert.Equal(1, context.AccessRules.Count());
+    }
+
+    [Fact]
+    public async Task Create_AccessGrant_WithARoleOrAnAction_ReturnsValidationError()
+    {
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.SaveChanges();
+
+        var service = new AccessRuleService(context);
+        var withRole = await service.CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, space.Id, null, SpaceRole.Editor, null, """{ "everyone": true }"""),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+        var withAction = await service.CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, space.Id, null, null, PageAction.View, """{ "everyone": true }"""),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+
+        Assert.IsType<ValidationError>(withRole.Error);
+        Assert.IsType<ValidationError>(withAction.Error);
+    }
+
+    [Fact]
+    public async Task Update_AccessGrant_ReplacesSelectorSet()
+    {
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+        var grant = SeededAccessGrant(space.Id, TestCatalogs.Apple, TestCatalogs.North);
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.AccessRules.Add(grant);
+        context.SaveChanges();
+
+        var service = new AccessRuleService(context);
+
+        // Null leaves the conferred selectors alone...
+        var untouched = await service.UpdateAsync(
+            new UpdateAccessRuleRequest(grant.Id, """{ "group": "engineering" }""", null, null),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+        Assert.True(untouched.IsSuccess, $"{untouched.Error}");
+        Assert.Equal(2, context.AccessRuleSelectors.Count(s => s.AccessRuleId == grant.Id));
+
+        // ...a list is the full replacement set: APPLE stays, NORTH goes, BANANA arrives.
+        var replaced = await service.UpdateAsync(
+            new UpdateAccessRuleRequest(grant.Id, """{ "group": "engineering" }""", null, null, [TestCatalogs.Banana, TestCatalogs.Apple]),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+        Assert.True(replaced.IsSuccess, $"{replaced.Error}");
+
+        using var readContext = CreateContext();
+        Assert.Equal(
+            [TestCatalogs.Apple, TestCatalogs.Banana],
+            readContext.AccessRuleSelectors.Where(s => s.AccessRuleId == grant.Id).ToList()
+                .Select(s => new SelectorValue(s.Category, s.Value)).OrderBy(s => s, SelectorValue.CanonicalOrder));
+
+        // The replay sees the same before/after (§7).
+        Assert.Equal([TestCatalogs.Apple, TestCatalogs.Banana], ReplayNow(context)[grant.Id].Selectors);
+
+        // ...and an empty list clears them.
+        var cleared = await service.UpdateAsync(
+            new UpdateAccessRuleRequest(grant.Id, """{ "group": "engineering" }""", null, null, []),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+        Assert.True(cleared.IsSuccess, $"{cleared.Error}");
+        Assert.Equal(0, context.AccessRuleSelectors.Count(s => s.AccessRuleId == grant.Id));
+    }
+
+    [Fact]
+    public async Task Delete_AccessGrant_RemovesSelectorRows()
+    {
+        // NO ACTION on the FK (data-model.md): the rows go explicitly, in the same
+        // transaction, or the delete would fail on the constraint.
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+        var grant = SeededAccessGrant(space.Id, TestCatalogs.Apple, TestCatalogs.Banana);
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SpaceAdminGrant(space.Id));
+        context.AccessRules.Add(grant);
+        context.SaveChanges();
+
+        var result = await new AccessRuleService(context).DeleteAsync(
+            new DeleteAccessRuleRequest(grant.Id), AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+
+        Assert.True(result.IsSuccess, $"{result.Error}");
+        using var readContext = CreateContext();
+        Assert.False(readContext.AccessRules.Any(r => r.Id == grant.Id));
+        Assert.Equal(0, readContext.AccessRuleSelectors.Count(s => s.AccessRuleId == grant.Id));
+        // The deletion's before-state still carries what was conferred.
+        var audit = context.AuditEvents.Where(e => e.Action == "permission.change").OrderBy(e => e.Id).Last();
+        Assert.Contains("APPLE", audit.DetailsJson);
+        Assert.Contains("\"after\":null", audit.DetailsJson);
+    }
+
+    [Fact]
+    public async Task ManagingRules_NeedsARoleGrant_AnAccessGrantAloneDoesNot()
+    {
+        // design.md §6.5.2: the management gate is roles-only. Seeing a space says nothing
+        // about who may change its rules.
+        var admin = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(admin);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(SeededAccessGrant(space.Id)); // everyone may SEE the space
+        context.SaveChanges();
+
+        var result = await new AccessRuleService(context).CreateAsync(
+            new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, space.Id, null, null, null, """{ "group": "engineering" }"""),
+            AdminPrincipal(), isInstanceAdmin: false, admin.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        Assert.IsType<ForbiddenError>(result.Error);
     }
 
     // --- The compliance property: replay through the REAL service and database -----
@@ -458,32 +705,32 @@ public class AccessRuleServiceTests : SqliteTestBase
         var service = new AccessRuleService(context);
         var principal = AdminPrincipal();
 
-        // Step 1: create a Viewer grant.
+        // Step 1: create an Editor role grant.
         var createResult = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, space.Id, null, SpaceRole.Viewer, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(AccessRuleKind.RoleGrant, space.Id, null, SpaceRole.Editor, null, """{ "everyone": true }"""),
             principal, isInstanceAdmin: false, admin.Id, AuditCtx);
         Assert.True(createResult.IsSuccess);
         var ruleId = createResult.Value.Id;
 
         var afterCreate = ReplayNow(context);
         Assert.True(afterCreate.ContainsKey(ruleId));
-        Assert.Equal(SpaceRole.Viewer, afterCreate[ruleId].Role);
+        Assert.Equal(SpaceRole.Editor, afterCreate[ruleId].Role);
         Assert.Equal("""{ "everyone": true }""", afterCreate[ruleId].ExpressionJson);
 
-        // Step 2: promote it to Editor with a narrower expression.
+        // Step 2: promote it to SpaceAdmin with a narrower expression.
         var updateResult = await service.UpdateAsync(
-            new UpdateAccessRuleRequest(ruleId, """{ "group": "engineering" }""", SpaceRole.Editor, null),
+            new UpdateAccessRuleRequest(ruleId, """{ "group": "engineering" }""", SpaceRole.SpaceAdmin, null),
             principal, isInstanceAdmin: false, admin.Id, AuditCtx);
         Assert.True(updateResult.IsSuccess);
 
         var afterUpdate = ReplayNow(context);
         Assert.True(afterUpdate.ContainsKey(ruleId));
-        Assert.Equal(SpaceRole.Editor, afterUpdate[ruleId].Role);
+        Assert.Equal(SpaceRole.SpaceAdmin, afterUpdate[ruleId].Role);
         Assert.Equal("""{ "group": "engineering" }""", afterUpdate[ruleId].ExpressionJson);
 
         // The EARLIER snapshot must remain exactly what it was - replaying more events
         // now must never retroactively change what "as of after step 1" reconstructs to.
-        Assert.Equal(SpaceRole.Viewer, afterCreate[ruleId].Role);
+        Assert.Equal(SpaceRole.Editor, afterCreate[ruleId].Role);
 
         // Step 3: delete it.
         var deleteResult = await service.DeleteAsync(new DeleteAccessRuleRequest(ruleId), principal, isInstanceAdmin: false, admin.Id, AuditCtx);
@@ -495,7 +742,7 @@ public class AccessRuleServiceTests : SqliteTestBase
         // And the two earlier snapshots are still exactly as they were - a later
         // deletion must not be visible to a reconstruction of an earlier instant.
         Assert.True(afterUpdate.ContainsKey(ruleId));
-        Assert.Equal(SpaceRole.Editor, afterUpdate[ruleId].Role);
+        Assert.Equal(SpaceRole.SpaceAdmin, afterUpdate[ruleId].Role);
     }
 
     private static IReadOnlyDictionary<Guid, AccessRuleSnapshot> ReplayNow(RocketWikiDbContext context)

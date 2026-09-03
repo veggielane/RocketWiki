@@ -45,7 +45,14 @@ public sealed class AskWikiAbandonedAuditTests
         public Task<Guid?> FindPageIdBySlugAsync(string spaceKey, string slug, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<ReadResult<IReadOnlyList<PageTreeNode>>> GetPageTreeAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken = default) =>
+        public Task<PageAccess> GetPageAccessAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyDictionary<Guid, PageAccess>> GetPageAccessBatchAsync(
+            IReadOnlyCollection<Guid> pageIds, Principal principal, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<ReadResult<IReadOnlyList<PageTreeEntry>>> GetPageTreeAsync(Guid spaceId, Principal principal, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public Task<ReadResult<IReadOnlyList<PageRevision>>> GetRevisionHistoryAsync(Guid pageId, Principal principal, CancellationToken cancellationToken = default) =>
@@ -93,6 +100,7 @@ public sealed class AskWikiAbandonedAuditTests
             new UnusedPageReadService(),
             new UnusedMarkingReader(),
             sink,
+            SelectorCatalog.Empty,
             new AssistantOptions("fake-model", TimeSpan.FromSeconds(5), MaxContextChars: 24_000, MaxRetrievedPages: 8),
             new UnusedChatClient());
 
@@ -156,7 +164,8 @@ public sealed class AskWikiAbandonedAuditTests
             new ThrowingSearchService(new InvalidOperationException("never reached")),
             new UnusedPageReadService(),
             new UnusedMarkingReader(),
-            sink);
+            sink,
+            SelectorCatalog.Empty);
 
         var payload = await query.AskWiki(
             "anything",

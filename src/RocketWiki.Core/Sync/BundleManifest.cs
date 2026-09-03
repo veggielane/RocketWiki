@@ -21,11 +21,19 @@ namespace RocketWiki.Core.Sync;
 ///    <c>sync.import.refused</c> (reason: unreadable). Old importers refuse new bundles
 ///    by construction; they cannot be taught to, since they're already deployed.
 ///
-/// A format-2 importer accepts BOTH eras: format-1 bundles (already on disk, or produced
-/// by a not-yet-upgraded low side) import exactly as before — current-state-only, no
-/// history materialized, documented — and anything ABOVE <see cref="CurrentVersion"/> is
-/// refused with a typed <c>BundleFormatUnsupportedError</c> before a single byte of
-/// events is parsed.
+/// The same rule carried format 3 (design.md §21.10): a marking payload — the
+/// <c>marking</c> object on a PageUpsert line and the PageMarking event itself — now
+/// carries <c>selectors</c>, and the events entry is <c>events.v3.ndjson</c>, so a
+/// format-2 importer refuses a format-3 bundle by the same missing-entry guard rather
+/// than absorbing it with every compartment silently dropped (which would land
+/// compartmented content visible to the whole space — the exact widening §21.15 exists
+/// to prevent).
+///
+/// A format-3 importer accepts EVERY earlier era: format-1 and format-2 bundles (already
+/// on disk, or produced by a not-yet-upgraded low side) import exactly as before — a
+/// marking without a <c>selectors</c> key carries none, documented — and anything ABOVE
+/// <see cref="CurrentVersion"/> is refused with a typed <c>BundleFormatUnsupportedError</c>
+/// before a single byte of events is parsed.
 /// </summary>
 public static class BundleFormat
 {
@@ -33,10 +41,15 @@ public static class BundleFormat
     public const int LegacyVersion = 1;
 
     /// <summary>Format 2: manifest declares formatVersion, events under "events.v2.ndjson", PageUpsert payloads carry revision history.</summary>
-    public const int CurrentVersion = 2;
+    public const int RevisionHistoryVersion = 2;
+
+    /// <summary>Format 3: events under "events.v3.ndjson", every marking payload carries a <c>selectors</c> object (design.md §21.10).</summary>
+    public const int CurrentVersion = 3;
 
     public static string EventsEntryName(int formatVersion) =>
-        formatVersion >= CurrentVersion ? "events.v2.ndjson" : "events.ndjson";
+        formatVersion >= CurrentVersion ? "events.v3.ndjson"
+        : formatVersion == RevisionHistoryVersion ? "events.v2.ndjson"
+        : "events.ndjson";
 }
 
 /// <summary>

@@ -22,8 +22,9 @@ namespace RocketWiki.Importer.Pipeline;
 /// yet applied to <c>AuthorUserId</c>.
 /// </param>
 /// <param name="InitialSpaceGrant">
-/// The grant the space is created with (design.md §6.5.1: atomic with space creation, and
-/// deliberately not defaulted here either — see <see cref="RocketWiki.Core.Services.InitialSpaceGrant"/>'s
+/// The role grant the space is created with (design.md §6.5.1: atomic with space creation,
+/// paired by the importer with an access grant for the same subjects, and
+/// deliberately not defaulted here either — see <see cref="RocketWiki.Core.Services.InitialGrant"/>'s
 /// own doc comment). An imported space starting open to "everyone" by accident, for
 /// content that may have been export-controlled under Confluence's own permissions, is
 /// exactly the kind of silent default this project's ABAC model exists to prevent.
@@ -36,4 +37,4 @@ public sealed record ImportOptions(
     Principal ImporterPrincipal,
     Guid ActingUserId,
     AuditContext AuditContext,
-    InitialSpaceGrant InitialSpaceGrant);
+    InitialGrant InitialSpaceGrant);

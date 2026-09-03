@@ -5,10 +5,11 @@ using Xunit;
 namespace RocketWiki.Core.Tests.Access;
 
 /// <summary>
-/// design.md §21: the classification decision itself, in isolation from the permission
-/// computation that AND-s it onto canView. These are the tests that pin the fail-closed
-/// choices — what an absent, garbage, or multi-valued clearance claim is worth, and what
-/// an eyes-only caveat does with a principal who has no nationality.
+/// design.md §21: the classification and caveat decisions themselves, in isolation from
+/// the permission computation that AND-s them onto canView. These are the tests that pin
+/// the fail-closed choices — what an absent, garbage, or multi-valued clearance claim is
+/// worth, what a nationality outside the fixed set is worth, and what an eyes-only caveat
+/// does with a principal who has no nationality.
 /// </summary>
 public class ClearanceGateTests
 {
@@ -64,11 +65,20 @@ public class ClearanceGateTests
     }
 
     [Fact]
-    public void ResolveClearance_AbsentAttribute_IsOfficial_NotNothingAndNotEverything()
+    public void DefaultClearance_IsOfficialSensitive()
     {
-        // §21's deliberate middle. Not "see everything" (obviously wrong) and not "see
+        // The one constant the resolver and the `me` query's anonymous floor both read.
+        Assert.Equal(ClassificationLevel.OfficialSensitive, ClearanceGate.DefaultClearance);
+    }
+
+    [Fact]
+    public void ResolveClearance_AbsentAttribute_IsOfficialSensitive_NotNothingAndNotEverything()
+    {
+        // §21.3's deliberate middle. Not "see everything" (obviously wrong) and not "see
         // nothing" (an outage that pressures someone into disabling the control).
-        Assert.Equal(ClassificationLevel.Official, ClearanceGate.ResolveClearance(PrincipalWith()));
+        // OFFICIAL-SENSITIVE is the everyday working tier, so it is what "nothing" is
+        // worth; SECRET and above stay denied.
+        Assert.Equal(ClassificationLevel.OfficialSensitive, ClearanceGate.ResolveClearance(PrincipalWith()));
     }
 
     [Theory]
@@ -79,19 +89,34 @@ public class ClearanceGateTests
     [InlineData("TOP SECRET")]     // the human marking is not the machine name either
     [InlineData("4")]              // Enum.TryParse would have accepted this as TopSecret
     [InlineData("SUPER_SECRET")]
-    public void ResolveClearance_UnrecognisedValue_IsOfficial(string value)
+    public void ResolveClearance_UnrecognisedValue_IsOfficialSensitive(string value)
     {
-        Assert.Equal(ClassificationLevel.Official, ClearanceGate.ResolveClearance(PrincipalWith(("clearance", [value]))));
+        Assert.Equal(ClassificationLevel.OfficialSensitive, ClearanceGate.ResolveClearance(PrincipalWith(("clearance", [value]))));
     }
 
     [Fact]
-    public void ResolveClearance_GarbageClearance_StillSeesOfficial_ButNothingAbove()
+    public void ResolveClearance_AnExplicitOfficialClaim_IsBelowTheFloor_AndIsHonoured()
+    {
+        // The floor is what an ABSENT or GARBAGE claim is worth. A realm that says
+        // OFFICIAL means OFFICIAL, and the gate must not silently promote it: a stated
+        // clearance is a fact the token asserted.
+        var principal = PrincipalWith(("clearance", ["OFFICIAL"]));
+
+        Assert.Equal(ClassificationLevel.Official, ClearanceGate.ResolveClearance(principal));
+        Assert.False(ClearanceGate.Check(
+            ProtectiveMarking.Create(ClassificationLevel.OfficialSensitive, null), principal).IsAllowed);
+    }
+
+    [Fact]
+    public void ResolveClearance_GarbageClearance_StillSeesOfficialSensitive_ButNothingAbove()
     {
         var principal = PrincipalWith(("clearance", ["nonsense"]));
 
         Assert.True(ClearanceGate.Check(ProtectiveMarking.Baseline, principal).IsAllowed);
-        Assert.False(ClearanceGate.Check(
+        Assert.True(ClearanceGate.Check(
             ProtectiveMarking.Create(ClassificationLevel.OfficialSensitive, null), principal).IsAllowed);
+        Assert.False(ClearanceGate.Check(
+            ProtectiveMarking.Create(ClassificationLevel.Secret, null), principal).IsAllowed);
     }
 
     [Fact]
@@ -104,23 +129,46 @@ public class ClearanceGateTests
         Assert.Equal(ClassificationLevel.Secret, ClearanceGate.ResolveClearance(principal));
     }
 
+    [Fact]
+    public void ResolveClearance_MultiValuedGarbageOnly_IsTheFloor()
+    {
+        Assert.Equal(
+            ClassificationLevel.OfficialSensitive,
+            ClearanceGate.ResolveClearance(PrincipalWith(("clearance", ["nonsense", "17"]))));
+    }
+
+    // --- Nationality resolution (design.md §21.4) ------------------------------------------
+
+    [Fact]
+    public void ResolveNationalities_IgnoresValuesOutsideTheFixedSet_SoAMapperEmittingGbHoldsNothing()
+    {
+        // The reversed §21.4: one hard-coded vocabulary on both sides, so the only failure
+        // left is a mapper emitting a foreign token - and that becomes an EMPTY nationality
+        // (visible in me.nationality), never a silent partial match.
+        var held = ClearanceGate.ResolveNationalities(PrincipalWith(("nationality", ["GB", "gbr", " nz ", "FR"])));
+
+        Assert.Equal(["NZ"], held);
+        Assert.Empty(ClearanceGate.ResolveNationalities(PrincipalWith(("nationality", ["GB"]))));
+        Assert.Empty(ClearanceGate.ResolveNationalities(PrincipalWith()));
+    }
+
     // --- Eyes-only caveat ---------------------------------------------------------------
 
     [Fact]
     public void EyesOnly_SingleCountry_AdmitsAMatchingNationality()
     {
-        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"]);
+        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"]);
 
-        Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, "GB")).IsAllowed);
+        Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, "UK")).IsAllowed);
     }
 
     [Fact]
     public void EyesOnly_MultipleCountries_AdmitAnyOneOfThem()
     {
-        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB", "US"]);
+        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK", "US"]);
 
         Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, "US")).IsAllowed);
-        Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, "GB")).IsAllowed);
+        Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, "UK")).IsAllowed);
     }
 
     [Fact]
@@ -128,13 +176,13 @@ public class ClearanceGateTests
     {
         var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["US"]);
 
-        Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, "GB", "US")).IsAllowed);
+        Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, "UK", "US")).IsAllowed);
     }
 
     [Fact]
     public void EyesOnly_NoOverlap_IsDenied_WithTheCaveatReason_NamingNoCountry()
     {
-        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB", "US"]);
+        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK", "US"]);
 
         var result = ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, "NZ"));
 
@@ -143,13 +191,13 @@ public class ClearanceGateTests
         // a reason string that named them would be one careless tag away from a metric
         // dimension carrying the marking's contents.
         Assert.Equal("caveat:eyes_only", result.DenialReason);
-        Assert.DoesNotContain("GB", result.DenialReason!, StringComparison.Ordinal);
+        Assert.DoesNotContain("UK", result.DenialReason!, StringComparison.Ordinal);
     }
 
     [Fact]
     public void EyesOnly_AbsentNationalityAttribute_IsDenied_FailingClosedLikeAttrCondition()
     {
-        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"]);
+        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"]);
         var noNationality = PrincipalWith(("clearance", ["SECRET"]));
 
         var result = ClearanceGate.Check(marking, noNationality);
@@ -161,10 +209,24 @@ public class ClearanceGateTests
     [Fact]
     public void EyesOnly_EmptyNationalityValues_IsDenied()
     {
-        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"]);
+        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"]);
         var blank = PrincipalWith(("clearance", ["SECRET"]), ("nationality", ["", "  "]));
 
         Assert.False(ClearanceGate.Check(marking, blank).IsAllowed);
+    }
+
+    [Fact]
+    public void EyesOnly_ALegacyGbToken_OnEitherSide_MatchesNobody()
+    {
+        // A GB row (pre-migration data, or an older bundle) is kept verbatim on the
+        // marking and dropped on the principal side, so it can never match - fail closed
+        // rather than a display-only alias to UK that enforces something else.
+        var legacyRow = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"]);
+
+        Assert.False(ClearanceGate.Check(legacyRow, Cleared(ClassificationLevel.Secret, "GB")).IsAllowed);
+        Assert.False(ClearanceGate.Check(legacyRow, Cleared(ClassificationLevel.Secret, "UK")).IsAllowed);
+        Assert.False(ClearanceGate.Check(
+            ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"]), Cleared(ClassificationLevel.Secret, "GB")).IsAllowed);
     }
 
     [Fact]
@@ -176,17 +238,17 @@ public class ClearanceGateTests
     }
 
     [Theory]
-    [InlineData("gb")]
-    [InlineData("Gb")]
-    [InlineData(" GB ")]
+    [InlineData("uk")]
+    [InlineData("Uk")]
+    [InlineData(" UK ")]
     public void EyesOnly_ComparisonIsNormalizedOnBothSides(string heldNationality)
     {
         // §21's documented, deliberate departure from §6.3's ordinal-no-folding rule,
-        // confined to this comparison: the two sides come from different systems (an
-        // admin-registered vocabulary and an OIDC claim mapper) that were never
-        // guaranteed to agree on case, and a casing mismatch here would deny every
-        // legitimate reader while looking correct.
-        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["gb"]);
+        // confined to this comparison: the two sides come from different systems (a
+        // fixed vocabulary and an OIDC claim mapper) that were never guaranteed to agree
+        // on case, and a casing mismatch here would deny every legitimate reader while
+        // looking correct.
+        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["uk"]);
 
         Assert.True(ClearanceGate.Check(marking, Cleared(ClassificationLevel.Secret, heldNationality)).IsAllowed);
     }
@@ -197,26 +259,27 @@ public class ClearanceGateTests
 
     [Theory]
     [MemberData(nameof(Prefixes))]
-    public void Check_IgnoresTheNationalPrefixEntirely_ForEveryLevelAndCaveatCombination(string? prefix)
+    public void Check_IgnoresTheNationalPrefixEntirely_ForEveryLevelCaveatAndSelectorCombination(string? prefix)
     {
         // THE test that pins "the prefix has no access-control considerations
-        // whatsoever". Every level, with and without a caveat, against a principal who
-        // passes and one who does not - and the verdict AND the denial reason must be
-        // identical to the no-prefix marking in every single cell. If someone ever
-        // threads the prefix into ClearanceGate "for completeness", this fails.
+        // whatsoever". Every level, with and without a caveat, with and without a
+        // selector, against a principal who passes and one who does not - and the verdict
+        // AND the denial reason must be identical to the no-prefix marking in every single
+        // cell. If someone ever threads the prefix into the gate "for completeness", this fails.
         foreach (var level in Enum.GetValues<ClassificationLevel>())
         {
-            foreach (string[] countries in new[] { Array.Empty<string>(), ["GB"], ["GB", "US"] })
+            foreach (string[] countries in new[] { Array.Empty<string>(), ["UK"], ["UK", "US"] })
+            foreach (SelectorValue[] selectors in new[] { Array.Empty<SelectorValue>(), [TestCatalogs.Apple] })
             {
-                var baseline = ProtectiveMarking.Create(level, countries, prefix: null);
-                var prefixed = ProtectiveMarking.Create(level, countries, prefix);
+                var baseline = ProtectiveMarking.Create(level, countries, selectors, prefix: null);
+                var prefixed = ProtectiveMarking.Create(level, countries, selectors, prefix);
 
                 foreach (var principal in new[]
                 {
                     PrincipalWith(),
-                    Cleared(ClassificationLevel.Official, "GB"),
+                    Cleared(ClassificationLevel.Official, "UK"),
                     Cleared(ClassificationLevel.Secret, "NZ"),
-                    Cleared(ClassificationLevel.TopSecret, "GB", "US"),
+                    Cleared(ClassificationLevel.TopSecret, "UK", "US"),
                 })
                 {
                     var without = ClearanceGate.Check(baseline, principal);
@@ -234,11 +297,11 @@ public class ClearanceGateTests
     [Fact]
     public void ADenialReason_NeverMentionsThePrefix()
     {
-        var marking = ProtectiveMarking.Create(ClassificationLevel.TopSecret, ["GB"], "ZZPREFIXSENTINELZZ");
+        var marking = ProtectiveMarking.Create(ClassificationLevel.TopSecret, ["UK"], prefix: "ZZPREFIXSENTINELZZ");
 
-        var levelFailure = ClearanceGate.Check(marking, Cleared(ClassificationLevel.Official, "GB"));
+        var levelFailure = ClearanceGate.Check(marking, Cleared(ClassificationLevel.Official, "UK"));
         var caveatFailure = ClearanceGate.Check(
-            ProtectiveMarking.Create(ClassificationLevel.Official, ["GB"], "ZZPREFIXSENTINELZZ"),
+            ProtectiveMarking.Create(ClassificationLevel.Official, ["UK"], prefix: "ZZPREFIXSENTINELZZ"),
             Cleared(ClassificationLevel.Official, "NZ"));
 
         Assert.DoesNotContain("ZZPREFIXSENTINELZZ", levelFailure.DenialReason!, StringComparison.OrdinalIgnoreCase);
@@ -252,10 +315,35 @@ public class ClearanceGateTests
     {
         // Failing both must report the coarser fact. Stable reasons are what make §7's
         // audit rows and the §6.6 inspector agree.
-        var marking = ProtectiveMarking.Create(ClassificationLevel.TopSecret, ["GB"]);
+        var marking = ProtectiveMarking.Create(ClassificationLevel.TopSecret, ["UK"]);
 
         var result = ClearanceGate.Check(marking, Cleared(ClassificationLevel.Official, "NZ"));
 
         Assert.Equal("classification:top_secret", result.DenialReason);
+    }
+
+    [Fact]
+    public void CheckClassificationAndCheckCaveat_AreTheTwoHalvesOfCheck()
+    {
+        // The split exists so MarkingGate can interleave the selector gates; the whole
+        // must remain exactly the two halves in order, or the composed gate and this one
+        // would disagree for a selector-free marking.
+        var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"]);
+        foreach (var principal in new[]
+        {
+            Cleared(ClassificationLevel.Official, "NZ"),
+            Cleared(ClassificationLevel.Secret, "NZ"),
+            Cleared(ClassificationLevel.Secret, "UK"),
+            PrincipalWith(),
+        })
+        {
+            var classification = ClearanceGate.CheckClassification(marking, principal);
+            var caveat = ClearanceGate.CheckCaveat(marking, principal);
+            var whole = ClearanceGate.Check(marking, principal);
+
+            var expected = classification.IsAllowed ? caveat : classification;
+            Assert.Equal(expected.IsAllowed, whole.IsAllowed);
+            Assert.Equal(expected.DenialReason, whole.DenialReason);
+        }
     }
 }

@@ -108,7 +108,7 @@ public class AttachmentReadService : IAttachmentReadService
             // Internally Denied so the route can audit the failing restriction (§7)
             // before returning that identical 404.
             return new AttachmentAccessResult.Denied(
-                attachment.Id, permission.ViewDenialReason ?? "no-space-role");
+                attachment.Id, permission.ViewDenialReason ?? EffectivePermissionCalculator.NoSpaceAccessReason);
         }
 
         return new AttachmentAccessResult.Allowed(attachment);

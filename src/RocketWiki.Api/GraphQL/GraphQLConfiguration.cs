@@ -35,11 +35,17 @@ public static class GraphQLConfiguration
             .AddType<SearchConnectionType>()
             .AddType<PageQueryRowType>()
             .AddType<PageQueryConnectionType>()
-            // Extension rather than a PageTreeNode ObjectType: Core's record stays
-            // shared with MCP get_page_tree unchanged (see the extension's doc).
-            .AddTypeExtension<PageTreeNodeTypeExtension>()
+            // The page tree (design.md §6.7/§21.8): a union of the visible node and the
+            // protected placeholder, each an explicit type so inference never runs over
+            // Core's records (see each type's doc). Core's records stay shared with MCP,
+            // which maps the visible nodes only.
+            .AddType<PageTreeEntryType>()
+            .AddType<PageTreeNodeType>()
+            .AddType<ProtectedTreeNodeType>()
             // An entry's marking is published as the same PageMarkingView every other
             // marking uses, so one badge component reads them all — see the extension.
-            .AddTypeExtension<PageEntryViewTypeExtension>();
+            .AddTypeExtension<PageEntryViewTypeExtension>()
+            // Binds the discovered ProtectiveMarking type explicitly, keeping the formatter off it — see the type.
+            .AddType<ProtectiveMarkingType>();
     }
 }

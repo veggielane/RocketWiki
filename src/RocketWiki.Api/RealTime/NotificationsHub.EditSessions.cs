@@ -72,7 +72,7 @@ public sealed partial class NotificationsHub
     [AuditAction(EditSessionAudit.JoinedAction)]
     public async Task<EditSessionJoinResult?> JoinEditSession(Guid pageId)
     {
-        var principal = PrincipalBuilder.Build(Context.User);
+        var principal = principalBuilder.Build(Context.User);
         if (principal is null)
         {
             ApiTelemetry.RecordCoEditJoin(ApiTelemetry.CoEditJoinNoPrincipal);

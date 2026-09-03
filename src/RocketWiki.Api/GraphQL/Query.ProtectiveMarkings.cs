@@ -51,6 +51,40 @@ public partial class Query
             .Select(level => new ClassificationLevelInfo(level, ProtectiveMarking.LevelName(level)))
             .ToList();
     }
+
+    /// <summary>
+    /// The instance's selector vocabulary (design.md §21.15): every configured category
+    /// with its values, in configured order — the other half of the marking picker's
+    /// data source beside <see cref="ClassificationScheme"/>, and the grant editor's.
+    /// Identical for every authenticated caller; <c>[]</c> for anonymous, like every
+    /// other read.
+    ///
+    /// <para><b>Claim names are not exposed.</b> Which token attribute gates a category
+    /// is deployment plumbing with no client use — <c>requiresAttribute</c> is the whole
+    /// affordance ("you may or may not be eligible; see <c>me.selectorEligibility</c>")
+    /// — and publishing it would tell anyone exactly which claim to forge.</para>
+    ///
+    /// <para>Whether the CALLER may pick a value is a different question with two
+    /// answers, neither of them here: <c>me.selectorEligibility</c> (the categories the
+    /// caller's token admits them to) and <c>Space.viewerSelectorGrants</c> (the values
+    /// the space's access grants confer on them).</para>
+    /// </summary>
+    [NoAudit("Deployment configuration (the configured selector categories and values, design.md §21.15), " +
+        "identical for every authenticated caller; no wiki content, no page, and no per-subject access decision " +
+        "to record - the same reasoning as classificationScheme (design.md §7/§21).")]
+    public IReadOnlyList<SelectorCategoryView> SelectorCategories(
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] SelectorCatalog catalog)
+    {
+        if (principalAccessor.Current is null)
+        {
+            return [];
+        }
+
+        return catalog.Categories
+            .Select(c => new SelectorCategoryView(c.Name, c.Description, c.RequiresClaim, c.Values))
+            .ToList();
+    }
 }
 
 /// <summary>
@@ -60,3 +94,16 @@ public partial class Query
 /// so there is exactly one place any level's display spelling comes from (§21.1).
 /// </summary>
 public sealed record ClassificationLevelInfo(ClassificationLevel Level, string Name);
+
+/// <summary>
+/// One configured selector category (design.md §21.15) as a client sees it. A view
+/// record rather than Core's <c>SelectorCategory</c>, which carries the claim name this
+/// type deliberately withholds; <see cref="RequiresAttribute"/> says only that some
+/// token attribute gates eligibility.
+/// </summary>
+[GraphQLName("SelectorCategory")]
+public sealed record SelectorCategoryView(
+    string Name,
+    string? Description,
+    bool RequiresAttribute,
+    IReadOnlyList<string> Values);

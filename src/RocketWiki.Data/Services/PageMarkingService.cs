@@ -5,7 +5,6 @@ using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Data.Access;
-using RocketWiki.Data.Configurations;
 
 namespace RocketWiki.Data.Services;
 
@@ -16,9 +15,11 @@ namespace RocketWiki.Data.Services;
 ///
 /// <para>Gate order matches every other page mutation and is not arbitrary: replica
 /// first (it refuses beneath every grant, §12, so the answer must not depend on whether
-/// this caller happened to hold canEdit), then canEdit, then the clearance constraint,
-/// then input validation. A caller who may not edit this page gets a refusal, never
-/// validation feedback about the payload they sent.</para>
+/// this caller happened to hold canEdit), then canEdit, then input validation (level,
+/// caveat, selectors), then the self-lockout constraint. A caller who may not edit this
+/// page gets a refusal, never validation feedback about the payload they sent; a caller
+/// whose payload is malformed is told so before the gate decides whether they could read
+/// the result, because a marking that cannot exist has no readability to decide.</para>
 /// </summary>
 public class PageMarkingService : IPageMarkingService
 {
@@ -55,9 +56,9 @@ public class PageMarkingService : IPageMarkingService
         }
 
         // canEdit is computed through the one loader (design.md §6.7/§21), so it already
-        // includes the caller's clearance against the page's CURRENT marking: a page you
-        // cannot see is a page you cannot re-mark. The constraint below is the separate
-        // question of the marking you are asking for.
+        // includes the caller's full marking gate against the page's CURRENT marking: a
+        // page you cannot see is a page you cannot re-mark. The constraint further down
+        // is the separate question of the marking you are asking for.
         var context = await _permissions.LoadAsync(page, isReplicaSpace: false, cancellationToken);
         if (!context.Compute(principal).CanEdit)
         {
@@ -73,41 +74,21 @@ public class PageMarkingService : IPageMarkingService
                 $"'{request.Level}' is not a classification level."));
         }
 
-        var vocabularyResult = await ValidateEyesOnlyAsync(request.EyesOnly, cancellationToken);
+        var vocabularyResult = ValidateEyesOnly(request.EyesOnly);
         if (vocabularyResult.Error is { } vocabularyError)
         {
             return PageMutationResult<PageMarkingView>.Failure(vocabularyError);
         }
 
-        if (request.Prefix is { Length: > 0 } && request.Prefix.Trim().Length > PageMarkingConfiguration.MaxPrefixLength)
+        var selectorResult = ValidateSelectors(_db.SelectorCatalog, request.Selectors);
+        if (selectorResult.Error is { } selectorError)
         {
-            // Checked in the service, not left to the column, for the same tier-parity
-            // reason PagePropertyService checks its value length: SQLite does not enforce
-            // declared string lengths, so an over-long prefix would store silently in the
-            // test tier and fail in production.
-            return PageMutationResult<PageMarkingView>.Failure(new ValidationError(
-                $"A marking prefix may be at most {PageMarkingConfiguration.MaxPrefixLength} characters."));
-        }
-
-        // The prefix rides along into the marking but gets no validation beyond length
-        // and no clearance constraint: it is presentational (design.md §21.12), so there
-        // is nothing to validate it against and nothing for it to be refused for.
-        var after = ProtectiveMarking.Create(request.Level, vocabularyResult.Countries, request.Prefix);
-
-        // design.md §21: you may not set a marking you could not then read. Enforced as
-        // the resulting marking as a WHOLE, not just its level, because the caveat loses
-        // you the page just as completely - a GB editor marking a page [US EYES ONLY] has
-        // classified it out of their own reach exactly as surely as over-classifying it.
-        // Deliberately a Forbidden and not a Validation: the input is well-formed, the
-        // caller is simply not entitled to the result.
-        var wouldBeReadable = ClearanceGate.Check(after, principal);
-        if (!wouldBeReadable.IsAllowed)
-        {
-            return PageMutationResult<PageMarkingView>.Failure(new ForbiddenError(wouldBeReadable.DenialReason!));
+            return PageMutationResult<PageMarkingView>.Failure(selectorError);
         }
 
         var marking = await _db.PageMarkings
             .Include(m => m.Countries)
+            .Include(m => m.Selectors)
             .FirstOrDefaultAsync(m => m.PageId == page.Id, cancellationToken);
 
         // The before-state for the audit row. A page with no marking row reads as
@@ -116,6 +97,35 @@ public class PageMarkingService : IPageMarkingService
         // whole point of the before/after pair is that a reviewer can trust it.
         var before = marking?.ToMarking() ?? ProtectiveMarking.FailClosed;
 
+        // The prefix is a toggle (design.md §21.12): UK or nothing. It rides along into the
+        // marking and gets no clearance constraint, because it is presentational - there
+        // is nothing to validate it against and nothing for it to be refused for. The
+        // selectors are the FULL replacement set, like the caveat: a marking is one value,
+        // and a partial update would let a caller change the level without ever stating
+        // which compartments they meant (§21.15).
+        var after = ProtectiveMarking.Create(
+            request.Level, vocabularyResult.Countries, selectorResult.Selectors,
+            request.UkPrefix ? ProtectiveMarking.UkPrefix : null);
+
+        // design.md §21.6: you may not set a marking you could not then read. Enforced on
+        // the resulting marking as a WHOLE through the one composition every read path
+        // uses (MarkingGate: level, selector eligibility, selector grant, caveat), because
+        // each of them loses you the page just as completely - a UK editor marking a page
+        // US EYES ONLY, or asserting a selector this space never granted them, has
+        // classified it out of their own reach exactly as surely as over-classifying it.
+        // The granted union is the caller's own in THIS space, from the same grants
+        // canEdit was just computed from; canEdit implies access, so the null arm below is
+        // unreachable and, if it were reached, an empty union would refuse every selector
+        // rather than admit one. Deliberately a Forbidden and not a Validation: the input
+        // is well-formed, the caller is simply not entitled to the result.
+        var access = EffectivePermissionCalculator.ComputeSpaceAccess(context.SpaceGrants, principal);
+        var wouldBeReadable = MarkingGate.Check(
+            after, principal, _db.SelectorCatalog, access?.GrantedSelectors ?? SpaceAccess.WithoutSelectors.GrantedSelectors);
+        if (!wouldBeReadable.IsAllowed)
+        {
+            return PageMutationResult<PageMarkingView>.Failure(new ForbiddenError(wouldBeReadable.DenialReason!));
+        }
+
         if (marking is null)
         {
             marking = new PageMarking { PageId = page.Id };
@@ -123,16 +133,20 @@ public class PageMarkingService : IPageMarkingService
         }
 
         marking.Level = after.Level;
-        marking.Prefix = after.Prefix; // already canonical (upper-cased/trimmed, null when blank)
+        marking.Prefix = after.Prefix; // already canonical: "UK" or null
         marking.SetAtUtc = DateTime.UtcNow;
         marking.SetByUserId = actingUserId;
         ReplaceCountries(marking, after.EyesOnly);
+        ReplaceSelectors(marking, after.Selectors);
 
+        // The event carries the whole before/after pair, so IsDowngrade sees a removed or
+        // swapped selector exactly as it sees a lowered level or a cleared caveat (§21.6),
+        // and the audit row records both selector sets in full (§21.7).
         _db.AuditContext = auditContext;
         _db.RaiseDomainEvent(new PageMarkingSetEvent(page.Id, space.Id, space.Key, actingUserId, before, after));
 
         await _db.SaveChangesAsync(cancellationToken);
-        return PageMutationResult<PageMarkingView>.Success(PageMarkingView.From(after));
+        return PageMutationResult<PageMarkingView>.Success(PageMarkingView.From(after, _db.SelectorCatalog));
     }
 
     /// <summary>
@@ -159,46 +173,89 @@ public class PageMarkingService : IPageMarkingService
     }
 
     /// <summary>
-    /// Validates every requested country against the registered <c>nationality</c>
-    /// attribute's allowed values — see <see cref="NationalityVocabulary"/> for why the
-    /// vocabulary must be that registry and not an ISO list, and why getting this wrong
-    /// produces a control that denies everyone while looking correct.
+    /// Replaces the selector set, keyed by category (design.md §21.15): a category no
+    /// longer wanted loses its row, a category whose value changed has its row updated in
+    /// place, a new category gets a row. Keyed by category rather than by (category,
+    /// value) because the PK is <c>(PageId, Category)</c> - one value per category is a
+    /// database fact - and a swap expressed as delete-plus-insert of the same key in one
+    /// unit of work is exactly the ordering hazard the country diff above avoids.
     /// </summary>
-    private async Task<(IReadOnlyList<string> Countries, PageMutationError? Error)> ValidateEyesOnlyAsync(
-        IReadOnlyList<string>? requested, CancellationToken cancellationToken)
+    private void ReplaceSelectors(PageMarking marking, IReadOnlyList<SelectorValue> wanted)
+    {
+        var wantedByCategory = wanted.ToDictionary(s => s.Category, s => s.Value, StringComparer.Ordinal);
+
+        foreach (var stale in marking.Selectors.Where(s => !wantedByCategory.ContainsKey(s.Category)).ToList())
+        {
+            marking.Selectors.Remove(stale);
+            _db.PageMarkingSelectors.Remove(stale);
+        }
+
+        foreach (var row in marking.Selectors)
+        {
+            row.Value = wantedByCategory[row.Category];
+        }
+
+        var held = marking.Selectors.Select(s => s.Category).ToHashSet(StringComparer.Ordinal);
+        foreach (var (category, value) in wantedByCategory.Where(kv => !held.Contains(kv.Key)))
+        {
+            marking.Selectors.Add(new PageMarkingSelector { PageId = marking.PageId, Category = category, Value = value });
+        }
+    }
+
+    /// <summary>
+    /// Validates every requested country against the fixed
+    /// <see cref="NationalCaveatVocabulary"/> (design.md §21.4). A token outside the
+    /// five is refused rather than stored: the principal side drops unknown tokens, so
+    /// a caveat naming one would be released to nobody while reading as perfectly
+    /// correct — the failure §21.4 exists to make unrepresentable. Nothing is consulted
+    /// in the database; the vocabulary is the same constant on both sides.
+    /// </summary>
+    private static (IReadOnlyList<string> Countries, PageMutationError? Error) ValidateEyesOnly(
+        IReadOnlyList<string>? requested)
     {
         var wanted = ProtectiveMarking.Create(ClassificationLevel.Official, requested).EyesOnly;
-        if (wanted.Count == 0)
-        {
-            // No caveat asked for: the registry is irrelevant, and requiring one here
-            // would make markings unusable on an instance that has no nationality
-            // attribute at all - which is a perfectly reasonable instance to be.
-            return ([], null);
-        }
-
-        var definition = await _db.AttributeDefinitions
-            .FirstOrDefaultAsync(a => a.Key == ClearanceGate.NationalityAttributeKey, cancellationToken);
-        var allowed = NationalityVocabulary.Parse(definition?.AllowedValuesJson);
-        if (allowed.Count == 0)
-        {
-            return ([], new ValidationError(
-                $"No '{ClearanceGate.NationalityAttributeKey}' attribute with allowed values is registered, so an " +
-                "eyes-only caveat cannot be set: there is no country vocabulary to draw from, and a caveat naming " +
-                "values the instance does not recognise would match nobody."));
-        }
-
-        var unknown = wanted.Where(c => !allowed.Contains(c)).ToList();
+        var unknown = wanted.Where(c => !NationalCaveatVocabulary.IsKnown(c)).ToList();
         if (unknown.Count > 0)
         {
             // Echoing the values back leaks nothing - the caller supplied them - and it
             // is the only way the message is actionable.
             return ([], new ValidationError(
-                $"'{string.Join("', '", unknown)}' is not an allowed value of the " +
-                $"'{ClearanceGate.NationalityAttributeKey}' attribute. An eyes-only caveat may only name countries " +
-                "from that attribute's registered values, because that is what a principal's nationality claim is " +
-                "compared against."));
+                $"'{string.Join("', '", unknown)}' is not a national caveat country. An eyes-only caveat may only " +
+                $"name {string.Join(", ", NationalCaveatVocabulary.Values)}, because those are the nationality " +
+                "tokens a principal's claim is compared against (design.md §21.4)."));
         }
 
         return (wanted, null);
+    }
+
+    /// <summary>
+    /// Validates the requested selectors against the configured catalog (design.md
+    /// §21.15) with the same rule the grant writers use — a category or value this
+    /// instance has not configured is refused with both named — plus the one rule a
+    /// marking adds on top of a grant: <b>at most one value per category</b>. A grant may
+    /// confer APPLE and BANANA; a page is one or the other. Refused here, as a
+    /// <c>ValidationError</c> that names the category, rather than left to
+    /// <see cref="ProtectiveMarking.Create"/>'s exception or the primary key.
+    /// </summary>
+    private static (IReadOnlyList<SelectorValue> Selectors, PageMutationError? Error) ValidateSelectors(
+        SelectorCatalog catalog, IReadOnlyList<SelectorValue>? requested)
+    {
+        var unknown = AccessRuleValidation.ValidateSelectors(catalog, requested, out var canonical);
+        if (unknown is not null)
+        {
+            return ([], unknown);
+        }
+
+        var doubled = canonical
+            .GroupBy(s => s.Category, StringComparer.Ordinal)
+            .FirstOrDefault(g => g.Count() > 1);
+        if (doubled is not null)
+        {
+            return ([], new ValidationError(
+                $"Category {doubled.Key} may carry at most one value on a page; " +
+                $"'{string.Join("', '", doubled.Select(s => s.Value))}' were requested (design.md §21.15)."));
+        }
+
+        return (canonical, null);
     }
 }

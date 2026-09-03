@@ -27,7 +27,19 @@ public class RocketWikiDbContext : DbContext
         : base(options)
     {
         LocalInstanceId = options.FindExtension<LocalInstanceDbContextOptionsExtension>()?.LocalInstanceId;
+        SelectorCatalog = options.FindExtension<SelectorCatalogDbContextOptionsExtension>()?.Catalog
+            ?? SelectorCatalog.Empty;
     }
+
+    /// <summary>
+    /// The instance's configured selector categories (design.md §21.15), from
+    /// <c>UseSelectorCatalog</c> on the context options — get-only and pool-safe like
+    /// <see cref="LocalInstanceId"/>. Every marking gate, validator and formatter in the
+    /// data layer reads this one instance. <b>Never null: absent is
+    /// <see cref="SelectorCatalog.Empty"/></b>, under which any selector-bearing page is
+    /// readable by nobody — the fail-closed default, never a bypass.
+    /// </summary>
+    public SelectorCatalog SelectorCatalog { get; }
 
     /// <summary>
     /// This instance's id (design.md §12), from <c>UseLocalInstanceId</c> on the
@@ -69,8 +81,10 @@ public class RocketWikiDbContext : DbContext
     public DbSet<PageEntry> PageEntries => Set<PageEntry>();
     public DbSet<PageEntryCountry> PageEntryCountries => Set<PageEntryCountry>();
     public DbSet<PageMarkingCountry> PageMarkingCountries => Set<PageMarkingCountry>();
+    public DbSet<PageMarkingSelector> PageMarkingSelectors => Set<PageMarkingSelector>();
     public DbSet<User> Users => Set<User>();
     public DbSet<AccessRule> AccessRules => Set<AccessRule>();
+    public DbSet<AccessRuleSelector> AccessRuleSelectors => Set<AccessRuleSelector>();
     public DbSet<AttributeDefinition> AttributeDefinitions => Set<AttributeDefinition>();
     public DbSet<KnownGroup> KnownGroups => Set<KnownGroup>();
     public DbSet<Watch> Watches => Set<Watch>();
@@ -316,6 +330,18 @@ public class RocketWikiDbContext : DbContext
             foreach (var country in inherited.EyesOnly)
             {
                 marking.Countries.Add(new PageMarkingCountry { PageId = page.Id, CountryValue = country });
+            }
+
+            // Selectors inherit exactly like the level and the caveat (design.md §21.15):
+            // a child created under an APPLE page is an APPLE page until an editor says
+            // otherwise, and a child that silently dropped its parent's selector would be
+            // the one widening this seam exists to make impossible.
+            foreach (var selector in inherited.Selectors)
+            {
+                marking.Selectors.Add(new PageMarkingSelector
+                {
+                    PageId = page.Id, Category = selector.Category, Value = selector.Value,
+                });
             }
 
             PageMarkings.Add(marking);

@@ -18,7 +18,7 @@ public class LabelServiceTests : SqliteTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -30,9 +30,8 @@ public class LabelServiceTests : SqliteTestBase
 
     private static AccessRule ViewerGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.AccessGrant,
         SpaceId = spaceId,
-        Role = SpaceRole.Viewer,
         ExpressionJson = """{ "everyone": true }""",
         CreatedAtUtc = DateTime.UtcNow,
         CreatedByUserId = Guid.NewGuid(),
@@ -61,7 +60,7 @@ public class LabelServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -88,7 +87,7 @@ public class LabelServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -130,7 +129,7 @@ public class LabelServiceTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Labels.Add(existing);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -153,7 +152,7 @@ public class LabelServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.Labels.Add(label);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -177,7 +176,7 @@ public class LabelServiceTests : SqliteTestBase
         context.Pages.Add(page);
         context.Labels.Add(label);
         context.PageLabels.Add(new PageLabel { PageId = page.Id, LabelId = label.Id });
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -201,7 +200,7 @@ public class LabelServiceTests : SqliteTestBase
         context.Spaces.AddRange(spaceA, spaceB);
         context.Pages.Add(page);
         context.Labels.Add(labelFromB);
-        context.AccessRules.Add(EditorGrant(spaceA.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(spaceA.Id)), EditorGrant(spaceA.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -225,7 +224,7 @@ public class LabelServiceTests : SqliteTestBase
         context.Pages.Add(page);
         context.Labels.Add(label);
         context.PageLabels.Add(new PageLabel { PageId = page.Id, LabelId = label.Id });
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -325,7 +324,7 @@ public class LabelServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -353,7 +352,7 @@ public class LabelServiceTests : SqliteTestBase
         // Already attached (as a sync import would leave it), so the detach path gets
         // past its own not-attached check and the replica invariant is what refuses it.
         context.PageLabels.Add(new PageLabel { PageId = page.Id, LabelId = label.Id });
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new LabelService(context, LocalInstanceId);
@@ -365,5 +364,29 @@ public class LabelServiceTests : SqliteTestBase
         var detach = await service.DetachLabelAsync(new DetachLabelRequest(page.Id, label.Id), EditorPrincipal(), actor.Id, AuditCtx);
         Assert.False(detach.IsSuccess);
         Assert.IsType<ReadOnlyReplicaError>(detach.Error);
+    }
+
+    [Fact]
+    public async Task CreateLabel_ByAnEditorWithoutAccess_IsForbidden_NamingTheOuterBoundary()
+    {
+        // design.md §6.4: roles never supersede access. An Editor role grant with no
+        // access grant beside it may not tag content it cannot see, and the refusal names
+        // the outer boundary (no-space-access), not the role it does hold.
+        var actor = TestData.NewUser();
+        var space = TestData.NewSpace();
+
+        using var context = CreateContext();
+        context.Users.Add(actor);
+        context.Spaces.Add(space);
+        context.AccessRules.Add(EditorGrant(space.Id)); // deliberately no mirror access grant
+        context.SaveChanges();
+
+        var service = new LabelService(context, LocalInstanceId);
+        var result = await service.CreateLabelAsync(new CreateLabelRequest(space.Id, "how-to"), EditorPrincipal(), actor.Id, AuditCtx);
+
+        Assert.False(result.IsSuccess);
+        var forbidden = Assert.IsType<ForbiddenError>(result.Error);
+        Assert.Equal("no-space-access", forbidden.Reason);
+        Assert.Empty(context.Labels);
     }
 }

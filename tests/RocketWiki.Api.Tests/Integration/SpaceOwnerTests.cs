@@ -140,8 +140,8 @@ public sealed class SpaceOwnerTests(RocketWikiApiFactory factory) : IClassFixtur
     [Theory]
     [InlineData(SpaceRole.SpaceAdmin, true)]
     [InlineData(SpaceRole.Editor, false)]
-    [InlineData(SpaceRole.Viewer, false)]
-    public async Task CanManageAccess_IsTrueOnlyForSpaceAdmins(SpaceRole role, bool expected)
+    [InlineData(null, false)] // access only: may see, holds no role
+    public async Task CanManageAccess_IsTrueOnlyForSpaceAdmins(SpaceRole? role, bool expected)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
@@ -164,13 +164,13 @@ public sealed class SpaceOwnerTests(RocketWikiApiFactory factory) : IClassFixtur
             OwnerUserId = seeder.Id,
         };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = role,
+            Kind = role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = role,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id,
             UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-        });
+        }));
         await db.SaveChangesAsync();
 
         var client = factory.CreateClient();
@@ -187,7 +187,7 @@ public sealed class SpaceOwnerTests(RocketWikiApiFactory factory) : IClassFixtur
 
     /// <summary>
     /// The field is rendered per row in a space list, which is the N+1 shape — so it
-    /// resolves through <c>SpaceRoleBySpaceIdDataLoader</c> rather than querying per
+    /// resolves through <c>SpaceAccessFactsBySpaceIdDataLoader</c> rather than querying per
     /// space. This exercises it across the <c>spaces</c> list, where a per-space resolver
     /// would still be correct but would scale with the caller's space count, and where a
     /// batched loader that mixed up its keys would return the wrong row's answer.
@@ -213,7 +213,7 @@ public sealed class SpaceOwnerTests(RocketWikiApiFactory factory) : IClassFixtur
         db.Spaces.AddRange(adminSpace, viewerSpace);
         db.AccessRules.AddRange(
             Grant(adminSpace.Id, SpaceRole.SpaceAdmin, seeder.Id),
-            Grant(viewerSpace.Id, SpaceRole.Viewer, seeder.Id));
+            Grant(viewerSpace.Id, null, seeder.Id));
         await db.SaveChangesAsync();
 
         var client = factory.CreateClient();
@@ -241,9 +241,9 @@ public sealed class SpaceOwnerTests(RocketWikiApiFactory factory) : IClassFixtur
         OwnerUserId = seederId,
     };
 
-    private static AccessRule Grant(Guid spaceId, SpaceRole role, Guid seederId) => new()
+    private static AccessRule Grant(Guid spaceId, SpaceRole? role, Guid seederId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant, SpaceId = spaceId, Role = role,
+        Kind = role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant, SpaceId = spaceId, Role = role,
         ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
         CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seederId,
         UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seederId,
@@ -280,7 +280,7 @@ public sealed class SpaceOwnerTests(RocketWikiApiFactory factory) : IClassFixtur
         // Viewer, so the space resolves at all — but not space-admin.
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.Viewer,
+            Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = ownerUserId,
             UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = ownerUserId,
@@ -327,7 +327,7 @@ public sealed class SpaceOwnerTests(RocketWikiApiFactory factory) : IClassFixtur
         db.Spaces.Add(replica);
         db.AccessRules.Add(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = replica.Id, Role = SpaceRole.Viewer,
+            Kind = AccessRuleKind.AccessGrant, SpaceId = replica.Id,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id,
             UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,

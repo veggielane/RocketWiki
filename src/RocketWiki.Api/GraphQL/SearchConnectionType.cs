@@ -1,3 +1,4 @@
+using HotChocolate;
 using HotChocolate.Types;
 using RocketWiki.Api.Markings;
 using RocketWiki.Core.Access;
@@ -29,7 +30,7 @@ public sealed class SearchConnectionType : ObjectType<SearchConnection>
         // See AggregateMarkingLabel's doc.
         descriptor.Field("aggregateMarking")
             .Type<ObjectType<AggregateMarkingLabel>>()
-            .ResolveWith<SearchConnectionFieldResolvers>(r => r.GetAggregateMarkingAsync(default!, default!, default));
+            .ResolveWith<SearchConnectionFieldResolvers>(r => r.GetAggregateMarkingAsync(default!, default!, default!, default));
     }
 }
 
@@ -68,6 +69,7 @@ public sealed class SearchConnectionFieldResolvers
     public async Task<AggregateMarkingLabel?> GetAggregateMarkingAsync(
         [Parent] SearchConnection connection,
         PageMarkingByPageIdDataLoader markingLoader,
+        [Service] SelectorCatalog catalog,
         CancellationToken cancellationToken)
     {
         if (connection.HitPageIds.Count == 0)
@@ -76,6 +78,6 @@ public sealed class SearchConnectionFieldResolvers
         }
 
         var markings = await markingLoader.LoadAsync(connection.HitPageIds, cancellationToken);
-        return AggregateMarkingLabel.Of(markings.Select(m => m ?? ProtectiveMarking.FailClosed));
+        return AggregateMarkingLabel.Of(markings.Select(m => m ?? ProtectiveMarking.FailClosed), catalog);
     }
 }

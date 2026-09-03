@@ -40,11 +40,17 @@ public class LabelService : ILabelService
             return PageMutationResult<Label>.Failure(new ReadOnlyReplicaError(space.Id, space.OriginInstanceId));
         }
 
-        var spaceGrants = await _db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == space.Id)
-            .ToListAsync(cancellationToken);
-        var role = EffectivePermissionCalculator.ComputeSpaceRole(spaceGrants, principal);
-        if (role is null || role.Value < SpaceRole.Editor)
+        // design.md §6.4: access AND a role, in that order - roles never supersede access,
+        // so an Editor who holds no access grant may not tag content they cannot see, and
+        // is told the outer boundary first. Editor is the floor of SpaceRole, so any role
+        // is enough for the second gate.
+        var spaceGrants = await _permissions.LoadSpaceGrantsAsync(space.Id, cancellationToken);
+        if (!EffectivePermissionCalculator.HasSpaceAccess(spaceGrants, principal))
+        {
+            return PageMutationResult<Label>.Failure(new ForbiddenError(EffectivePermissionCalculator.NoSpaceAccessReason));
+        }
+
+        if (EffectivePermissionCalculator.ComputeSpaceRole(spaceGrants, principal) is null)
         {
             return PageMutationResult<Label>.Failure(new ForbiddenError("editor role required"));
         }
@@ -187,9 +193,9 @@ public class LabelService : ILabelService
         }
 
         var spaceGrants = await _permissions.LoadSpaceGrantsAsync(spaceId, cancellationToken);
-        if (EffectivePermissionCalculator.ComputeSpaceRole(spaceGrants, principal) is null)
+        if (!EffectivePermissionCalculator.HasSpaceAccess(spaceGrants, principal))
         {
-            return Array.Empty<Page>(); // no space role at all - nothing is visible (design.md §6.7)
+            return Array.Empty<Page>(); // no access grant admits the caller - nothing is visible (design.md §6.7)
         }
 
         var candidatePages = await _db.Pages

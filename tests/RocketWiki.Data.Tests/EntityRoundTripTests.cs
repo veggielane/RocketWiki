@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
+using RocketWiki.Core.Tests.Access;
 using Xunit;
 
 namespace RocketWiki.Data.Tests;
@@ -142,9 +144,8 @@ public class EntityRoundTripTests : SqliteTestBase
         const string json = """{ "allOf": [ { "group": "engineering" }, { "everyone": true } ] }""";
         var rule = new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.AccessGrant,
             SpaceId = space.Id,
-            Role = SpaceRole.Viewer,
             ExpressionJson = json,
             CreatedAtUtc = DateTime.UtcNow,
             CreatedByUserId = Guid.NewGuid(),
@@ -163,10 +164,39 @@ public class EntityRoundTripTests : SqliteTestBase
         var reloaded = readContext.AccessRules.Single(r => r.Id == rule.Id);
 
         Assert.Equal(json, reloaded.ExpressionJson);
-        Assert.Equal(AccessRuleKind.SpaceGrant, reloaded.Kind);
-        Assert.Equal(SpaceRole.Viewer, reloaded.Role);
+        Assert.Equal(AccessRuleKind.AccessGrant, reloaded.Kind);
+        Assert.Null(reloaded.Role);
         Assert.Null(reloaded.Action);
         Assert.Null(reloaded.PageId);
+    }
+
+    [Fact]
+    public void PageMarking_CountriesAndSelectors_RoundTrip()
+    {
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+        var marking = TestData.NewMarking(page, ClassificationLevel.Secret, "uk", "US")
+            .WithSelectors(new SelectorValue("region", "north"), TestCatalogs.Apple);
+
+        using (var writeContext = CreateContext())
+        {
+            writeContext.Spaces.Add(space);
+            writeContext.Pages.Add(page);
+            writeContext.PageMarkings.Add(marking);
+            writeContext.SaveChanges();
+        }
+
+        using var readContext = CreateContext();
+        var reloaded = readContext.PageMarkings
+            .Include(m => m.Countries)
+            .Include(m => m.Selectors)
+            .Single(m => m.PageId == page.Id);
+
+        // Canonical on the way in (SelectorValue and the country canonicalizer), ordinal
+        // on the way out - the stored rows and the value object agree byte-for-byte.
+        Assert.Equal(["UK", "US"], reloaded.ToMarking().EyesOnly);
+        Assert.Equal([TestCatalogs.Apple, TestCatalogs.North], reloaded.ToMarking().Selectors);
+        Assert.Equal(2, readContext.PageMarkingSelectors.Count(s => s.PageId == page.Id));
     }
 
     [Fact]

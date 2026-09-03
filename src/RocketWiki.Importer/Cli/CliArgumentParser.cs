@@ -36,7 +36,7 @@ internal static class CliArgumentParser
                                --attachments-root <directory>
                                --acting-user-id <existing-user-guid>
                                --importer-principal-id <sub-claim-value>
-                               --grant-role <editor|space-admin>
+                               --grant-role <space-admin>
                                --grant-expression <access-rule-expression-json>
                                --local-instance-id <id>
                                [--report <path>]
@@ -49,13 +49,15 @@ internal static class CliArgumentParser
         that are permanently READ-ONLY replicas of an instance that does not exist.
         A dry run needs none — it writes nothing.
 
-        --grant-role must be editor or space-admin: the grant is also the importer's
-        own write permission for the run, so a viewer grant would create the space and
-        then refuse every page. --grant-expression must be a rule the importer
-        principal itself satisfies, for the same reason; the importer runs in the
-        "confluence-importer" group and carries no attributes, so an attr-based rule
-        needs a principal that has that attribute. Both are checked before the space
-        is created, and refused with an explanation rather than half-importing.
+        --grant-role must be space-admin: a space is born with a space-admin role grant
+        (design.md §6.5.1), and the grant is also the importer's own write permission
+        for the run. The importer pairs it with an access grant for the same subjects,
+        since a role confers no visibility (§6.4). --grant-expression must be a rule
+        the importer principal itself satisfies, for the same reason; the importer
+        runs in the "confluence-importer" group and carries no attributes, so an
+        attr-based rule needs a principal that has that attribute. Both are checked
+        before the space is created, and refused with an explanation rather than
+        half-importing.
 
         --space-key must match the export's own space key exactly — a safety check
         against pointing the tool at the wrong export file.

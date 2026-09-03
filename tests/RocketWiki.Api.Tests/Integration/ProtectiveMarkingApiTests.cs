@@ -57,9 +57,9 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
         // SpaceAdmin for everyone, deliberately: the strongest grant the model has, so
         // every denial below is provably the marking and nothing else.
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant,
+            Kind = AccessRuleKind.RoleGrant,
             SpaceId = space.Id,
             Role = SpaceRole.SpaceAdmin,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
@@ -67,7 +67,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
             CreatedByUserId = creator.Id,
             UpdatedAtUtc = DateTime.UtcNow,
             UpdatedByUserId = creator.Id,
-        });
+        }));
 
         if (!await db.AttributeDefinitions.AnyAsync(a => a.Key == "nationality"))
         {
@@ -77,7 +77,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
                 ClaimName = "nationality",
                 DisplayName = "Nationality",
                 Type = AttributeValueType.StringArray,
-                AllowedValuesJson = """["GB","US","NZ"]""",
+                AllowedValuesJson = """["UK","US","NZ"]""",
             });
         }
 
@@ -99,7 +99,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         };
         db.Pages.AddRange(open, secret, eyesOnly);
         db.PageMarkings.Add(NewMarking(secret.Id, ClassificationLevel.Secret));
-        db.PageMarkings.Add(NewMarking(eyesOnly.Id, ClassificationLevel.Official, "GB"));
+        db.PageMarkings.Add(NewMarking(eyesOnly.Id, ClassificationLevel.Official, "UK"));
         await db.SaveChangesAsync();
 
         // A comment and an attachment on the SECRET page: both inherit its marking, and
@@ -181,33 +181,33 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         // design.md §21.12: `marking.label` is the single server-built display string, so
         // this is the contract the SPA renders from. Prefix, space, level, then caveat.
         var f = await SeedAsync();
-        var client = ClientFor("SECRET", nationality: ["GB"]);
+        var client = ClientFor("SECRET", nationality: ["UK"]);
 
         using var set = await client.PostGraphQLAsync($$"""
             mutation {
-              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: SECRET, eyesOnly: ["GB"], prefix: "uk" }) {
-                marking { prefix label }
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: SECRET, eyesOnly: [UK], selectors: [], ukPrefix: true }) {
+                marking { ukPrefix label }
                 error { kind message }
               }
             }
             """);
 
         var marking = set.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("marking");
-        Assert.Equal("UK", marking.GetProperty("prefix").GetString());
-        Assert.Equal("UK SECRET [GB EYES ONLY]", marking.GetProperty("label").GetString());
+        Assert.True(marking.GetProperty("ukPrefix").GetBoolean());
+        Assert.Equal("UK SECRET UK EYES ONLY", marking.GetProperty("label").GetString());
 
         // ... and clearing it renders the bare level, with no leading space.
         using var cleared = await client.PostGraphQLAsync($$"""
             mutation {
-              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: SECRET, eyesOnly: ["GB"], prefix: null }) {
-                marking { prefix label }
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: SECRET, eyesOnly: [UK], selectors: [], ukPrefix: false }) {
+                marking { ukPrefix label }
               }
             }
             """);
 
         var bare = cleared.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("marking");
-        Assert.Equal(JsonValueKind.Null, bare.GetProperty("prefix").ValueKind);
-        Assert.Equal("SECRET [GB EYES ONLY]", bare.GetProperty("label").GetString());
+        Assert.False(bare.GetProperty("ukPrefix").GetBoolean());
+        Assert.Equal("SECRET UK EYES ONLY", bare.GetProperty("label").GetString());
     }
 
     [Fact]
@@ -220,11 +220,11 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         var editor = ClientFor("SECRET");
         var uncleared = ClientFor(clearance: null);
 
-        foreach (var prefix in new[] { "\"UK\"", "null", "\"ZZNONSENSEZZ\"" })
+        foreach (var prefix in new[] { "true", "false" })
         {
             using var set = await editor.PostGraphQLAsync($$"""
                 mutation {
-                  setPageMarking(input: { pageId: "{{f.SecretPageId}}", level: SECRET, eyesOnly: [], prefix: {{prefix}} }) {
+                  setPageMarking(input: { pageId: "{{f.SecretPageId}}", level: SECRET, eyesOnly: [], selectors: [], ukPrefix: {{prefix}} }) {
                     error { kind }
                   }
                 }
@@ -248,11 +248,11 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     {
         var f = await SeedAsync();
 
-        var gb = ClientFor("OFFICIAL", nationality: ["GB"]);
+        var gb = ClientFor("OFFICIAL", nationality: ["UK"]);
         using var allowed = await gb.PostGraphQLAsync($$"""{ page(id: "{{f.EyesOnlyPageId}}") { id marking { label eyesOnly } } }""");
         var marking = allowed.RootElement.GetProperty("data").GetProperty("page").GetProperty("marking");
-        Assert.Equal("UK OFFICIAL [GB EYES ONLY]", marking.GetProperty("label").GetString());
-        Assert.Equal(["GB"], marking.GetProperty("eyesOnly").EnumerateArray().Select(e => e.GetString()));
+        Assert.Equal("UK OFFICIAL UK EYES ONLY", marking.GetProperty("label").GetString());
+        Assert.Equal(["UK"], marking.GetProperty("eyesOnly").EnumerateArray().Select(e => e.GetString()));
 
         var nz = ClientFor("TOP_SECRET", nationality: ["NZ"]);
         using var denied = await nz.PostGraphQLAsync($$"""{ page(id: "{{f.EyesOnlyPageId}}") { id } }""");
@@ -334,26 +334,49 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     }
 
     [Fact]
-    public async Task PageTree_OmitsAnOverClassifiedPage_WithNoGapOrPlaceholder()
+    public async Task PageTree_ShowsAnOverClassifiedPage_AsAProtectedLeaf_WithItsLabel()
     {
+        // design.md §6.7/§21.8: the tree DISCLOSES a page above the caller's clearance -
+        // a placeholder at its position carrying the marking label and the failed gate -
+        // and withholds everything that identifies it: no id, no title, nothing beneath.
         var f = await SeedAsync();
-        var client = ClientFor(clearance: null, nationality: ["GB"]);
+        var client = ClientFor(clearance: null, nationality: ["UK"]);
 
-        using var result = await client.PostGraphQLAsync(
-            $$"""{ pageTree(spaceId: "{{f.SpaceId}}") { id title marking { level eyesOnly prefix label } } }""");
+        using var result = await client.PostGraphQLAsync($$"""
+            { pageTree(spaceId: "{{f.SpaceId}}") {
+                ... on PageTreeNode { id title marking { level eyesOnly ukPrefix label } }
+                ... on ProtectedTreeNode { title sortOrder denial { placeholderTitle noSpaceAccess marking { level label } reasons { gate requiredLevel requiredLevelName } } }
+              } }
+            """);
 
-        var nodes = result.RootElement.GetProperty("data").GetProperty("pageTree").EnumerateArray().ToList();
+        var entries = result.RootElement.GetProperty("data").GetProperty("pageTree").EnumerateArray().ToList();
+        var nodes = entries.Where(e => e.TryGetProperty("id", out _)).ToList();
         var ids = nodes.Select(n => n.GetProperty("id").GetString()).ToList();
+        var body = result.RootElement.ToString();
 
         Assert.Contains(f.OpenPageId.ToString(), ids);
-        Assert.Contains(f.EyesOnlyPageId.ToString(), ids); // GB national, UK OFFICIAL [GB EYES ONLY]
+        Assert.Contains(f.EyesOnlyPageId.ToString(), ids); // UK national, UK OFFICIAL UK EYES ONLY
         Assert.DoesNotContain(f.SecretPageId.ToString(), ids);
-        Assert.DoesNotContain(SecretSentinelTitle, result.RootElement.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(f.SecretPageId.ToString(), body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(SecretSentinelTitle, body, StringComparison.Ordinal);
+
+        // The placeholder: the constant title, the label the reader lacks clearance for,
+        // and the one gate that refused them.
+        var placeholder = Assert.Single(entries, e => e.TryGetProperty("denial", out _));
+        Assert.Equal("(protected)", placeholder.GetProperty("title").GetString());
+        var denial = placeholder.GetProperty("denial");
+        Assert.Equal("(protected)", denial.GetProperty("placeholderTitle").GetString());
+        Assert.False(denial.GetProperty("noSpaceAccess").GetBoolean());
+        Assert.Equal("UK SECRET", denial.GetProperty("marking").GetProperty("label").GetString());
+        var reason = Assert.Single(denial.GetProperty("reasons").EnumerateArray());
+        Assert.Equal("CLASSIFICATION", reason.GetProperty("gate").GetString());
+        Assert.Equal("SECRET", reason.GetProperty("requiredLevel").GetString());
+        Assert.Equal("SECRET", reason.GetProperty("requiredLevelName").GetString());
 
         // Every visible node carries its marking, so the tree badge has a data source
         // without a second query per node (design.md §21.9).
         var eyesOnlyNode = nodes.Single(n => n.GetProperty("id").GetString() == f.EyesOnlyPageId.ToString());
-        Assert.Equal("UK OFFICIAL [GB EYES ONLY]", eyesOnlyNode.GetProperty("marking").GetProperty("label").GetString());
+        Assert.Equal("UK OFFICIAL UK EYES ONLY", eyesOnlyNode.GetProperty("marking").GetProperty("label").GetString());
         Assert.All(nodes, n => Assert.NotEqual(
             JsonValueKind.Null, n.GetProperty("marking").GetProperty("label").ValueKind));
     }
@@ -408,21 +431,40 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         var f = await SeedAsync();
         var client = ClientFor(clearance: null);
 
-        var response = await client.PostAsync(
-            "/mcp", McpToolCall("get_page", "{\"pageId\":\"" + f.SecretPageId + "\"}"));
-        var body = await response.Content.ReadAsStringAsync();
+        var body = await McpToolCallAsync(client, "get_page", "{\"pageId\":\"" + f.SecretPageId + "\"}");
 
+        // The tool really ran and really refused (not a transport error that happens
+        // to omit the sentinels): the constant not-found text is in the body.
+        Assert.Contains(RocketWiki.Api.Mcp.WikiMcpTools.PageNotFoundMessage, body, StringComparison.Ordinal);
         Assert.DoesNotContain(SecretSentinelTitle, body, StringComparison.Ordinal);
         Assert.DoesNotContain(SecretSentinelBody, body, StringComparison.Ordinal);
+
+        // ... and a cleared caller reads it through the same call.
+        var clearedBody = await McpToolCallAsync(ClientFor("SECRET"), "get_page", "{\"pageId\":\"" + f.SecretPageId + "\"}");
+        Assert.Contains(SecretSentinelBody, clearedBody, StringComparison.Ordinal);
     }
 
-    private static HttpContent McpToolCall(string toolName, string argumentsJson)
+    /// <summary>One raw JSON-RPC tools/call against /mcp. The Accept header is what makes
+    /// the server run the tool at all: without it the answer is a JSON-RPC "Not
+    /// Acceptable" error, which contains no sentinel and once let this test pass for
+    /// the wrong reason.</summary>
+    private static async Task<string> McpToolCallAsync(HttpClient client, string toolName, string argumentsJson)
     {
         var payload = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\""
             + toolName + "\",\"arguments\":" + argumentsJson + "}}";
-        var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-        content.Headers.Add("MCP-Protocol-Version", "2025-06-18");
-        return content;
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Accept.ParseAdd("application/json");
+        request.Headers.Accept.ParseAdd("text/event-stream");
+        request.Headers.Add("MCP-Protocol-Version", "2025-06-18");
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.True(response.IsSuccessStatusCode, $"MCP {toolName} answered {(int)response.StatusCode}: {body}");
+        Assert.DoesNotContain("Not Acceptable", body, StringComparison.Ordinal);
+        return body;
     }
 
     // --- Level display spellings (design.md §21.1) ---------------------------------------
@@ -472,7 +514,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
         using var set = await editor.PostGraphQLAsync($$"""
             mutation {
-              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: OFFICIAL_SENSITIVE, eyesOnly: [] }) {
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: OFFICIAL_SENSITIVE, eyesOnly: [], selectors: [], ukPrefix: true }) {
                 marking { levelName label }
               }
             }
@@ -500,7 +542,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
         using var result = await client.PostGraphQLAsync($$"""
             mutation {
-              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: SECRET, eyesOnly: [] }) {
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: SECRET, eyesOnly: [], selectors: [], ukPrefix: true }) {
                 marking { level label }
                 error { kind message }
               }
@@ -527,7 +569,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
         using var result = await client.PostGraphQLAsync($$"""
             mutation {
-              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: TOP_SECRET, eyesOnly: [] }) {
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: TOP_SECRET, eyesOnly: [], selectors: [], ukPrefix: true }) {
                 marking { level }
                 error { kind message }
               }
@@ -546,22 +588,27 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     }
 
     [Fact]
-    public async Task SetPageMarking_ACountryOutsideTheRegisteredNationalityVocabulary_IsAValidationError()
+    public async Task SetPageMarking_ACountryOutsideTheFixedCaveatSet_IsRejectedBySchemaValidation()
     {
+        // design.md §21.4: the caveat vocabulary is the fixed five, published as the
+        // NationalCaveatCountry input enum - so a token outside it never reaches the
+        // service. Hot Chocolate answers a document that fails validation with 400.
         var f = await SeedAsync();
-        var client = ClientFor("SECRET", nationality: ["GB"]);
+        var client = ClientFor("SECRET", nationality: ["UK"]);
 
-        using var result = await client.PostGraphQLAsync($$"""
-            mutation {
-              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: OFFICIAL, eyesOnly: ["ZZ"] }) {
-                error { kind message }
-              }
-            }
-            """);
+        var response = await client.PostAsJsonAsync("/graphql", new
+        {
+            query = $$"""
+                mutation {
+                  setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: OFFICIAL, eyesOnly: [ZZ], selectors: [], ukPrefix: true }) {
+                    error { kind message }
+                  }
+                }
+                """,
+        });
 
-        var error = result.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("error");
-        Assert.Equal("Validation", error.GetProperty("kind").GetString());
-        Assert.Contains("nationality", error.GetProperty("message").GetString()!, StringComparison.Ordinal);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("\"errors\"", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     // --- Ancestor titles (§21.5 + §21.8 + §6.4.1) --------------------------------------
@@ -608,12 +655,12 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
             // SpaceAdmin for everyone: the caller is a rule manager, so the manage-gated
             // `restrictions` listing is reachable too and both surfaces get asserted.
-            db.AccessRules.Add(new AccessRule
+            db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
             {
-                Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = SpaceRole.SpaceAdmin,
+                Kind = AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = SpaceRole.SpaceAdmin,
                 ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
                 CreatedAtUtc = now, CreatedByUserId = creator.Id, UpdatedAtUtc = now, UpdatedByUserId = creator.Id,
-            });
+            }));
 
             var parent = new Page
             {

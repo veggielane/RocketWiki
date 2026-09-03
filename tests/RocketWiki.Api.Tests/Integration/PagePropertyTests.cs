@@ -19,7 +19,7 @@ namespace RocketWiki.Api.Tests.Integration;
 /// </summary>
 public sealed class PagePropertyTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
 {
-    private async Task<(Space Space, Page Root, Page ChildA, Page ChildB)> SeedSpaceAsync(SpaceRole everyoneRole)
+    private async Task<(Space Space, Page Root, Page ChildA, Page ChildB)> SeedSpaceAsync(SpaceRole? everyoneRole)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
@@ -29,12 +29,12 @@ public sealed class PagePropertyTests(RocketWikiApiFactory factory) : IClassFixt
 
         var space = new Space { Key = $"PP{Guid.NewGuid():N}"[..8].ToUpperInvariant(), Name = "Property Space", OriginInstanceId = "standalone", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id };
         db.Spaces.Add(space);
-        db.AccessRules.Add(new AccessRule
+        db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(new AccessRule
         {
-            Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = everyoneRole,
+            Kind = everyoneRole is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = everyoneRole,
             ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
             CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-        });
+        }));
 
         var root = new Page { SpaceId = space.Id, AncestorPath = "/", Slug = "root", Title = "Root", CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow };
         db.Pages.Add(root);
@@ -199,7 +199,7 @@ public sealed class PagePropertyTests(RocketWikiApiFactory factory) : IClassFixt
     [Fact]
     public async Task SetPageProperty_ByViewerOnly_IsForbidden_AndAuditedAgainstThePage()
     {
-        var (_, root, _, _) = await SeedSpaceAsync(SpaceRole.Viewer);
+        var (_, root, _, _) = await SeedSpaceAsync(null);
         var key = await SeedKeyAsync($"Viewer-{Guid.NewGuid():N}"[..16]);
 
         var client = factory.CreateClient();
@@ -227,7 +227,7 @@ public sealed class PagePropertyTests(RocketWikiApiFactory factory) : IClassFixt
     [Fact]
     public async Task PageProperties_AcrossSeveralPages_ResolveWithOnePagePropertiesQuery()
     {
-        var (_, root, childA, childB) = await SeedSpaceAsync(SpaceRole.Viewer);
+        var (_, root, childA, childB) = await SeedSpaceAsync(null);
         // Two keys with deliberately reversed sort order vs. alphabetical order, so the
         // assertion below proves sortOrder wins rather than accidentally agreeing.
         var second = await SeedKeyAsync($"Alpha-{Guid.NewGuid():N}"[..14], sortOrder: 20);

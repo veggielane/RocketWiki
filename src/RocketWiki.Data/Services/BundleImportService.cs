@@ -491,7 +491,7 @@ public class BundleImportService : IBundleImportService
         var declared = ParseMarking(payload);
 
         var marking = FindLocal<PageMarking>(m => m.PageId == pageId)
-            ?? await _db.PageMarkings.Include(m => m.Countries).FirstOrDefaultAsync(m => m.PageId == pageId, cancellationToken);
+            ?? await _db.PageMarkings.Include(m => m.Countries).Include(m => m.Selectors).FirstOrDefaultAsync(m => m.PageId == pageId, cancellationToken);
 
         if (declared is null && marking is not null)
         {
@@ -526,10 +526,38 @@ public class BundleImportService : IBundleImportService
         {
             marking.Countries.Add(new PageMarkingCountry { PageId = pageId, CountryValue = country });
         }
+
+        // Selectors replaced wholesale too (design.md §21.10), keyed by category because the
+        // PK is (PageId, Category): a swapped value updates the row in place, a category
+        // the payload no longer carries loses its row, a new one gets a row. An unknown
+        // category or value is stored as it arrived and matches nobody (§12).
+        var wantedSelectors = applied.Selectors.ToDictionary(s => s.Category, s => s.Value, StringComparer.Ordinal);
+        var existingSelectors = FindLocalAll<PageMarkingSelector>(s => s.PageId == pageId)
+            .Concat(marking.Selectors)
+            .Distinct()
+            .ToList();
+        foreach (var stale in existingSelectors.Where(s => !wantedSelectors.ContainsKey(s.Category)))
+        {
+            marking.Selectors.Remove(stale);
+            _db.PageMarkingSelectors.Remove(stale);
+        }
+
+        var heldSelectors = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in existingSelectors.Where(s => wantedSelectors.ContainsKey(s.Category)))
+        {
+            row.Value = wantedSelectors[row.Category];
+            heldSelectors.Add(row.Category);
+        }
+
+        foreach (var (category, value) in wantedSelectors.Where(kv => !heldSelectors.Contains(kv.Key)))
+        {
+            marking.Selectors.Add(new PageMarkingSelector { PageId = pageId, Category = category, Value = value });
+        }
     }
 
     /// <summary>The <c>marking</c> object as exported by BundleExportService, or null when
-    /// the payload carries none (or carries one this instance cannot make sense of).</summary>
+    /// the payload carries none (or carries one this instance cannot make sense of —
+    /// including one whose <c>selectors</c> is malformed, see <see cref="TryParseSelectors"/>).</summary>
     private static ProtectiveMarking? ParseMarking(JsonElement payload)
     {
         var element = payload;
@@ -570,7 +598,56 @@ public class BundleImportService : IBundleImportService
             ? prefixElement.GetString()
             : null;
 
-        return ProtectiveMarking.Create(level, countries, prefix);
+        // An ABSENT selectors key is a pre-selector bundle (format 1 or 2): no selectors,
+        // exactly what its origin meant. A PRESENT key must parse in full or the whole
+        // marking is unparseable (design.md §21.10) - dropping only the bad selector
+        // would widen, and widening is the one thing an import must never do.
+        IReadOnlyList<SelectorValue> selectors = [];
+        if (element.TryGetProperty("selectors", out var selectorsElement) && !TryParseSelectors(selectorsElement, out selectors))
+        {
+            return null;
+        }
+
+        return ProtectiveMarking.Create(level, countries, selectors, prefix);
+    }
+
+    /// <summary>
+    /// The <c>selectors</c> object of a marking payload (design.md §21.10): an object whose
+    /// property names are categories and whose values are strings, each canonicalized
+    /// (trimmed, upper-cased) and held to the catalog's token grammar and lengths —
+    /// checked here, before a column, because SQLite does not enforce declared lengths and
+    /// a hostile bundle must be a refusal, never a <c>DbUpdateException</c>. Two properties
+    /// naming one category after canonicalization are malformed, not "last wins". Nothing
+    /// here consults this instance's catalog: unknown is kept verbatim and matches nobody.
+    /// </summary>
+    private static bool TryParseSelectors(JsonElement element, out IReadOnlyList<SelectorValue> selectors)
+    {
+        selectors = [];
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var parsed = new Dictionary<string, SelectorValue>(StringComparer.Ordinal);
+        foreach (var property in element.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var category = SelectorValue.Canonicalize(property.Name);
+            var value = SelectorValue.Canonicalize(property.Value.GetString() ?? string.Empty);
+            if (!SelectorCatalog.IsWellFormedToken(category, SelectorCatalog.MaxNameLength)
+                || !SelectorCatalog.IsWellFormedToken(value, SelectorCatalog.MaxValueLength)
+                || !parsed.TryAdd(category, new SelectorValue(category, value)))
+            {
+                return false;
+            }
+        }
+
+        selectors = parsed.Values.OrderBy(s => s, SelectorValue.CanonicalOrder).ToList();
+        return true;
     }
 
     /// <summary>

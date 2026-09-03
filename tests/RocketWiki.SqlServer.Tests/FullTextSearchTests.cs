@@ -41,7 +41,7 @@ public sealed class FullTextSearchTests : SqlServerTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -71,7 +71,7 @@ public sealed class FullTextSearchTests : SqlServerTestBase
         var space = TestData.NewSpace();
         context.Users.Add(user);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var pageService = new PageService(context, DefaultLocalInstanceId);
@@ -121,7 +121,7 @@ public sealed class FullTextSearchTests : SqlServerTestBase
         var space = TestData.NewSpace();
         context.Users.Add(user);
         context.Spaces.Add(space);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var pageService = new PageService(context, DefaultLocalInstanceId);

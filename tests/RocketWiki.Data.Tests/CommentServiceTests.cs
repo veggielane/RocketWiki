@@ -22,9 +22,8 @@ public class CommentServiceTests : SqliteTestBase
 
     private static AccessRule ViewerGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.AccessGrant,
         SpaceId = spaceId,
-        Role = SpaceRole.Viewer,
         ExpressionJson = """{ "everyone": true }""",
         CreatedAtUtc = DateTime.UtcNow,
         CreatedByUserId = Guid.NewGuid(),
@@ -34,7 +33,7 @@ public class CommentServiceTests : SqliteTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "group": "editors" }""",
@@ -266,7 +265,7 @@ public class CommentServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.Comments.Add(comment);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new CommentService(context, LocalInstanceId);
@@ -316,7 +315,7 @@ public class CommentServiceTests : SqliteTestBase
         context.Spaces.Add(space);
         context.Pages.Add(page);
         context.Comments.Add(comment);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         context.SaveChanges();
 
         var service = new CommentService(context, LocalInstanceId);

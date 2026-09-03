@@ -29,7 +29,7 @@ public class AttachmentServiceTests : SqliteTestBase
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.RoleGrant,
         SpaceId = spaceId,
         Role = SpaceRole.Editor,
         ExpressionJson = """{ "everyone": true }""",
@@ -41,9 +41,8 @@ public class AttachmentServiceTests : SqliteTestBase
 
     private static AccessRule ViewerGrant(Guid spaceId) => new()
     {
-        Kind = AccessRuleKind.SpaceGrant,
+        Kind = AccessRuleKind.AccessGrant,
         SpaceId = spaceId,
-        Role = SpaceRole.Viewer,
         ExpressionJson = """{ "everyone": true }""",
         CreatedAtUtc = DateTime.UtcNow,
         CreatedByUserId = Guid.NewGuid(),
@@ -87,7 +86,7 @@ public class AttachmentServiceTests : SqliteTestBase
             context.Users.Add(actor);
             context.Spaces.Add(space);
             context.Pages.Add(page);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var service = new AttachmentService(context, storage, LocalInstanceId);
@@ -160,7 +159,7 @@ public class AttachmentServiceTests : SqliteTestBase
             context.Users.Add(actor);
             context.Spaces.Add(space);
             context.Pages.Add(page);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var service = new AttachmentService(context, storage, LocalInstanceId);
@@ -195,7 +194,7 @@ public class AttachmentServiceTests : SqliteTestBase
             context.Users.Add(actor);
             context.Spaces.Add(space);
             context.Pages.Add(page);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var service = new AttachmentService(context, storage, LocalInstanceId);
@@ -258,7 +257,7 @@ public class AttachmentServiceTests : SqliteTestBase
         context.Users.Add(actor);
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.Add(EditorGrant(space.Id));
+        context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
         var attachment = new Attachment
         {
             PageId = page.Id,
@@ -305,7 +304,7 @@ public class AttachmentServiceTests : SqliteTestBase
             context.Users.Add(actor);
             context.Spaces.Add(space);
             context.Pages.Add(page);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var writeService = new AttachmentService(context, storage, LocalInstanceId);
@@ -344,7 +343,7 @@ public class AttachmentServiceTests : SqliteTestBase
             context.Users.Add(actor);
             context.Spaces.Add(space);
             context.Pages.Add(page);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var writeService = new AttachmentService(context, storage, LocalInstanceId);
@@ -426,7 +425,7 @@ public class AttachmentServiceTests : SqliteTestBase
             context.Users.Add(actor);
             context.Spaces.Add(space);
             context.Pages.Add(page);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var uploaded = await new AttachmentService(context, storage, LocalInstanceId).UploadAsync(
@@ -481,7 +480,7 @@ public class AttachmentServiceTests : SqliteTestBase
             context.Users.Add(actor);
             context.Spaces.Add(space);
             context.Pages.Add(page);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var writeService = new AttachmentService(context, storage, LocalInstanceId);
@@ -536,7 +535,7 @@ public class AttachmentServiceTests : SqliteTestBase
             context.Spaces.Add(space);
             context.Pages.Add(page);
             context.Attachments.Add(attachment);
-            context.AccessRules.Add(EditorGrant(space.Id));
+            context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
             context.SaveChanges();
 
             var service = new AttachmentService(context, storage, LocalInstanceId);

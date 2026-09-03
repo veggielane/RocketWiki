@@ -57,6 +57,12 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
         // clearance. Admin-display only; the rule engine and the clearance gate both
         // build their Principal straight from the token (design.md §6.1/§21), never from
         // this JSON blob, so a stale mirror can never widen anyone's access.
+        //
+        // Selector claims (design.md §21.15) are deliberately NOT mirrored: they are
+        // eligibility flags, not display data, they are not registered attributes, and
+        // the only consumer of them is the gate, which reads the token. Mirroring them
+        // would put a per-user list of compartment eligibilities into a table the §6.2
+        // registry never declared.
         var nationality = principal.FindAll(ClearanceGate.NationalityAttributeKey).Select(c => c.Value).ToArray();
         var clearance = principal.FindAll(ClearanceGate.ClearanceAttributeKey).Select(c => c.Value).ToArray();
         var attributesJson = JsonSerializer.Serialize(new Dictionary<string, string[]>

@@ -75,8 +75,8 @@ internal readonly record struct PermissionSubject(Guid PageId, Guid SpaceId, str
 /// ignore.</para>
 ///
 /// <para>Fail closed (design.md §6.3): a space with no grant rows yields an empty grant
-/// list, which <see cref="EffectivePermissionCalculator.ComputeSpaceRole"/> turns into
-/// no role, which denies. A page id with no restriction rows contributes nothing to the
+/// list, which <see cref="EffectivePermissionCalculator.ComputeSpaceAccess"/> turns into
+/// no access, which denies. A page id with no restriction rows contributes nothing to the
 /// chain, which is the correct "unrestricted at that level" reading, never a bypass —
 /// the space role still has to hold.</para>
 /// </summary>
@@ -134,18 +134,20 @@ internal sealed class PermissionContextLoader
         var marking = chainPageIds.Count == 0
             ? ProtectiveMarking.Baseline
             : await LoadMarkingAsync(chainPageIds[^1], cancellationToken);
-        return new PagePermissionContext(grants, restrictions, isReplicaSpace, marking);
+        return new PagePermissionContext(grants, restrictions, isReplicaSpace, marking, _db.SelectorCatalog);
     }
 
     /// <summary>
     /// One page's marking, or <see cref="ProtectiveMarking.FailClosed"/> when the row is
-    /// missing (design.md §21). One query — the country rows ride along through the
-    /// navigation include, which for a single page is the cheapest correct shape.
+    /// missing (design.md §21). One query — the country and selector rows ride along
+    /// through the navigation includes, which for a single page is the cheapest correct
+    /// shape.
     /// </summary>
     public async Task<ProtectiveMarking> LoadMarkingAsync(Guid pageId, CancellationToken cancellationToken)
     {
         var marking = await Markings
             .Include(m => m.Countries)
+            .Include(m => m.Selectors)
             .FirstOrDefaultAsync(m => m.PageId == pageId, cancellationToken);
         return marking?.ToMarking() ?? ProtectiveMarking.FailClosed;
     }
@@ -168,10 +170,14 @@ internal sealed class PermissionContextLoader
         return pageIds.ToDictionary(id => id, id => byPageId.GetValueOrDefault(id) ?? ProtectiveMarking.FailClosed);
     }
 
-    /// <summary>Every SpaceGrant rule for one space — one query.</summary>
+    /// <summary>Every space-scoped grant for one space — access grants (with their
+    /// selector rows, §21.15) and role grants alike, one query: the calculator reads both
+    /// kinds from the one list. The include is a join that duplicates a grant row per
+    /// selector, which EF de-duplicates; acceptable at grant cardinality.</summary>
     public async Task<IReadOnlyList<AccessRule>> LoadSpaceGrantsAsync(Guid spaceId, CancellationToken cancellationToken) =>
         await Rules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId == spaceId)
+            .Include(r => r.Selectors)
+            .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant) && r.SpaceId == spaceId)
             .ToListAsync(cancellationToken);
 
     /// <summary>
@@ -209,13 +215,15 @@ internal sealed class PermissionContextLoader
         var grants = spaceIds.Length == 0
             ? new List<AccessRule>()
             : await Rules
-                .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId != null && spaceIds.Contains(r.SpaceId.Value))
+                .Include(r => r.Selectors)
+                .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant) && r.SpaceId != null && spaceIds.Contains(r.SpaceId.Value))
                 .ToListAsync(cancellationToken);
 
         return new PermissionContextBatch(
             grants.GroupBy(r => r.SpaceId!.Value).ToDictionary(g => g.Key, g => (IReadOnlyList<AccessRule>)g.ToList()),
             await LoadRestrictionsAsync(chainIds, cancellationToken),
-            await LoadMarkingsAsync(SubjectPageIds(subjects), cancellationToken));
+            await LoadMarkingsAsync(SubjectPageIds(subjects), cancellationToken),
+            _db.SelectorCatalog);
     }
 
     /// <summary>
@@ -234,7 +242,8 @@ internal sealed class PermissionContextLoader
         return new PermissionContextBatch(
             new Dictionary<Guid, IReadOnlyList<AccessRule>> { [spaceId] = spaceGrants },
             await LoadRestrictionsAsync(chainIds, cancellationToken),
-            await LoadMarkingsAsync(SubjectPageIds(subjects), cancellationToken));
+            await LoadMarkingsAsync(SubjectPageIds(subjects), cancellationToken),
+            _db.SelectorCatalog);
     }
 
     /// <summary>The pages a marking is needed for: the subjects themselves, never their
@@ -283,6 +292,7 @@ internal sealed class PermissionContextLoader
 
         var markings = await Markings
             .Include(m => m.Countries)
+            .Include(m => m.Selectors)
             .Where(m => pageIds.Contains(m.PageId))
             .ToListAsync(cancellationToken);
         return markings.ToDictionary(m => m.PageId, m => m.ToMarking());
@@ -290,23 +300,28 @@ internal sealed class PermissionContextLoader
 }
 
 /// <summary>
-/// One batch's grants and restrictions, indexed for in-memory lookup. Every page in the
-/// batch is served from these rows; nothing here touches the database.
+/// One batch's grants, restrictions and markings, indexed for in-memory lookup, plus
+/// this instance's selector catalog (design.md §21.15) so every context built from the
+/// batch carries it. Every page in the batch is served from these rows; nothing here
+/// touches the database.
 /// </summary>
 internal sealed class PermissionContextBatch
 {
     private readonly IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> _grantsBySpaceId;
     private readonly IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> _restrictionsByPageId;
     private readonly IReadOnlyDictionary<Guid, ProtectiveMarking> _markingsByPageId;
+    private readonly SelectorCatalog _catalog;
 
     internal PermissionContextBatch(
         IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> grantsBySpaceId,
         IReadOnlyDictionary<Guid, IReadOnlyList<AccessRule>> restrictionsByPageId,
-        IReadOnlyDictionary<Guid, ProtectiveMarking> markingsByPageId)
+        IReadOnlyDictionary<Guid, ProtectiveMarking> markingsByPageId,
+        SelectorCatalog catalog)
     {
         _grantsBySpaceId = grantsBySpaceId;
         _restrictionsByPageId = restrictionsByPageId;
         _markingsByPageId = markingsByPageId;
+        _catalog = catalog;
     }
 
     /// <summary>A space with no grants yields an empty list, which denies (§6.3).</summary>
@@ -324,7 +339,7 @@ internal sealed class PermissionContextBatch
     /// <summary>The inputs for one page of the batch, chain ordered per the loader's doc.</summary>
     public PagePermissionContext For(PermissionSubject subject, bool isReplicaSpace) =>
         new(GrantsFor(subject.SpaceId), Order(subject.ChainPageIds(), _restrictionsByPageId), isReplicaSpace,
-            MarkingFor(subject.PageId));
+            MarkingFor(subject.PageId), _catalog);
 
     /// <summary>
     /// THE chain ordering (design.md §6.7, and the input contract on
@@ -349,17 +364,23 @@ internal sealed class PermissionContextBatch
 
 /// <summary>
 /// One page's authorization inputs, ready for the calculator. Construct only through
-/// <see cref="PermissionContextLoader"/> — the ordering contract lives there.
+/// <see cref="PermissionContextLoader"/> — the ordering contract lives there. The
+/// catalog rides along from <c>RocketWikiDbContext.SelectorCatalog</c> so a context can
+/// be turned into <see cref="PermissionInputs"/> without any caller supplying it — and
+/// therefore without any caller being able to supply the wrong one.
 /// </summary>
 internal sealed record PagePermissionContext(
     IReadOnlyList<AccessRule> SpaceGrants,
     IReadOnlyList<AccessRule> ChainRestrictions,
     bool IsReplicaSpace,
-    ProtectiveMarking Marking)
+    ProtectiveMarking Marking,
+    SelectorCatalog Catalog)
 {
+    public PermissionInputs ToInputs() => new(SpaceGrants, ChainRestrictions, IsReplicaSpace, Marking, Catalog);
+
     public EffectivePermission Compute(Principal principal) =>
-        EffectivePermissionCalculator.Compute(SpaceGrants, ChainRestrictions, IsReplicaSpace, Marking, principal);
+        EffectivePermissionCalculator.Compute(ToInputs(), principal);
 
     public EffectivePermissionExplanation Explain(Principal principal) =>
-        EffectivePermissionCalculator.Explain(SpaceGrants, ChainRestrictions, IsReplicaSpace, Marking, principal);
+        EffectivePermissionCalculator.Explain(ToInputs(), principal);
 }

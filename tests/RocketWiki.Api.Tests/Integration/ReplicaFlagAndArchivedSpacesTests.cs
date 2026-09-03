@@ -27,8 +27,12 @@ public sealed class ReplicaFlagAndArchivedSpacesTests(RocketWikiApiFactory facto
         return seeder;
     }
 
+    /// <summary>Seeds a space with its grants. A role grant normally gets its mirror access
+    /// grant beside it (design.md §6.4: an editor of a space can also see it);
+    /// <paramref name="roleOnly"/> seeds the bare role grant, for the tests about a role
+    /// holder who cannot see the space's content (§6.5.2).</summary>
     private async Task<Space> SeedSpaceAsync(
-        User seeder, string originInstanceId, bool archived = false, params (SpaceRole Role, RuleNode Expression)[] grants)
+        User seeder, string originInstanceId, bool archived = false, bool roleOnly = false, params (SpaceRole? Role, RuleNode Expression)[] grants)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
@@ -46,12 +50,20 @@ public sealed class ReplicaFlagAndArchivedSpacesTests(RocketWikiApiFactory facto
         db.Spaces.Add(space);
         foreach (var (role, expression) in grants)
         {
-            db.AccessRules.Add(new AccessRule
+            var rule = new AccessRule
             {
-                Kind = AccessRuleKind.SpaceGrant, SpaceId = space.Id, Role = role,
+                Kind = role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant, SpaceId = space.Id, Role = role,
                 ExpressionJson = RuleExpressionSerializer.Serialize(expression),
                 CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
-            });
+            };
+            if (roleOnly)
+            {
+                db.AccessRules.Add(rule);
+            }
+            else
+            {
+                db.AccessRules.AddRange(TestAccessRules.WithAccessBesideRole(rule));
+            }
         }
 
         await db.SaveChangesAsync();
@@ -63,8 +75,8 @@ public sealed class ReplicaFlagAndArchivedSpacesTests(RocketWikiApiFactory facto
     {
         var seeder = await SeedUserAsync();
         // "standalone" is the factory's configured local instance id.
-        var native = await SeedSpaceAsync(seeder, "standalone", grants: [(SpaceRole.Viewer, new EveryoneCondition())]);
-        var replica = await SeedSpaceAsync(seeder, "LOW", grants: [(SpaceRole.Viewer, new EveryoneCondition())]);
+        var native = await SeedSpaceAsync(seeder, "standalone", grants: [(null, new EveryoneCondition())]);
+        var replica = await SeedSpaceAsync(seeder, "LOW", grants: [(null, new EveryoneCondition())]);
 
         var client = factory.CreateClient();
         client.SetTestUser(sub: $"viewer-{Guid.NewGuid()}");
@@ -86,7 +98,7 @@ public sealed class ReplicaFlagAndArchivedSpacesTests(RocketWikiApiFactory facto
     {
         var seeder = await SeedUserAsync();
         var archived = await SeedSpaceAsync(seeder, "standalone", archived: true,
-            grants: [(SpaceRole.Viewer, new EveryoneCondition())]);
+            grants: [(null, new EveryoneCondition())]);
 
         var admin = factory.CreateClient();
         admin.SetTestUser(sub: $"admin-{Guid.NewGuid()}", roles: ["admin"]);
@@ -104,12 +116,16 @@ public sealed class ReplicaFlagAndArchivedSpacesTests(RocketWikiApiFactory facto
     [Fact]
     public async Task ArchivedSpaces_SpaceAdminOfThatSpace_SeesOnlyTheirs()
     {
+        // A role grant ALONE lists the space for its holder (design.md §6.4/§6.5.2's space
+        // visibility, the same rule the live listing uses): the Space-admin who holds no
+        // access grant must still find the space they administer. A space whose grants
+        // the caller matches in neither kind is absent.
         var seeder = await SeedUserAsync();
         var adminGroup = $"arch-admins-{Guid.NewGuid():N}";
-        var theirSpace = await SeedSpaceAsync(seeder, "standalone", archived: true,
+        var theirSpace = await SeedSpaceAsync(seeder, "standalone", archived: true, roleOnly: true,
             grants: [(SpaceRole.SpaceAdmin, new GroupCondition(adminGroup))]);
-        var someoneElses = await SeedSpaceAsync(seeder, "standalone", archived: true,
-            grants: [(SpaceRole.Viewer, new EveryoneCondition())]);
+        var someoneElses = await SeedSpaceAsync(seeder, "standalone", archived: true, roleOnly: true,
+            grants: [(SpaceRole.SpaceAdmin, new GroupCondition($"other-admins-{Guid.NewGuid():N}"))]);
 
         var client = factory.CreateClient();
         client.SetTestUser(sub: $"space-admin-{Guid.NewGuid()}", groups: [adminGroup]);
@@ -123,20 +139,40 @@ public sealed class ReplicaFlagAndArchivedSpacesTests(RocketWikiApiFactory facto
     }
 
     [Fact]
-    public async Task ArchivedSpaces_ViewerRole_GetsEmptyList_AbsentNotForbidden()
+    public async Task ArchivedSpaces_AccessGrantHolder_SeesTheSpace_LikeAnyListing()
     {
-        // The §6.7-shaped negative for §17's open question, read conservatively: a
-        // viewer-of-the-space-when-it-was-live gets an empty list — indistinguishable
-        // from "nothing is archived" — because the listing mirrors exactly who
-        // restoreSpace would accept (instance admin or that space's space-admin).
+        // Space visibility (design.md §6.4/§6.5.2): an access grant lists the space for
+        // its holder, archived or live - the same rule SpaceReads applies. Restoring it
+        // is a separate manage gate the mutation enforces on its own.
         var seeder = await SeedUserAsync();
         var archived = await SeedSpaceAsync(seeder, "standalone", archived: true,
-            grants: [(SpaceRole.Viewer, new EveryoneCondition())]);
+            grants: [(null, new EveryoneCondition())]);
 
-        var viewer = factory.CreateClient();
-        viewer.SetTestUser(sub: $"viewer-{Guid.NewGuid()}");
+        var reader = factory.CreateClient();
+        reader.SetTestUser(sub: $"reader-{Guid.NewGuid()}");
 
-        var result = await viewer.PostGraphQLAsync("{ archivedSpaces { key } }");
+        var result = await reader.PostGraphQLAsync("{ archivedSpaces { key } }");
+        var keys = result.RootElement.GetProperty("data").GetProperty("archivedSpaces")
+            .EnumerateArray().Select(e => e.GetProperty("key").GetString()).ToArray();
+
+        Assert.Contains(archived.Key, keys);
+    }
+
+    [Fact]
+    public async Task ArchivedSpaces_NoGrantAdmitsTheCaller_GetsEmptyList_AbsentNotForbidden()
+    {
+        // The §6.7-shaped negative: a caller matched by no grant of either kind gets an
+        // empty list, indistinguishable from "nothing is archived" - no error, no denial
+        // row, no hint that the space exists.
+        var seeder = await SeedUserAsync();
+        var archived = await SeedSpaceAsync(seeder, "standalone", archived: true,
+            grants: [(null, new GroupCondition($"insiders-{Guid.NewGuid():N}"))]);
+
+        var stranger = factory.CreateClient();
+        stranger.SetTestUser(sub: $"stranger-{Guid.NewGuid()}");
+
+        var result = await stranger.PostGraphQLAsync("{ archivedSpaces { key } }");
+        Assert.Equal(JsonValueKind.Undefined, result.RootElement.TryGetProperty("errors", out var errors) ? errors.ValueKind : JsonValueKind.Undefined);
         var keys = result.RootElement.GetProperty("data").GetProperty("archivedSpaces")
             .EnumerateArray().Select(e => e.GetProperty("key").GetString()).ToArray();
 

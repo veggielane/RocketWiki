@@ -108,12 +108,13 @@ public partial class Query
         }
 
         var grants = await db.AccessRules
-            .Where(r => r.Kind == AccessRuleKind.SpaceGrant && r.SpaceId != null && spaces.Contains(r.SpaceId.Value))
+            .Include(r => r.Selectors)
+            .Where(r => (r.Kind == AccessRuleKind.RoleGrant || r.Kind == AccessRuleKind.AccessGrant) && r.SpaceId != null && spaces.Contains(r.SpaceId.Value))
             .ToListAsync(cancellationToken);
 
         return spaces
-            .Where(id => EffectivePermissionCalculator.ComputeSpaceRole(
-                grants.Where(g => g.SpaceId == id), principal) is not null)
+            .Where(id => EffectivePermissionCalculator.HasSpaceAccess(
+                grants.Where(g => g.SpaceId == id), principal))
             .ToList();
     }
 }

@@ -43,16 +43,29 @@ public class PageServiceTests : SqliteTestBase
     /// landed. Flushes first so the Space/Pages this test already `Add()`-ed are visible
     /// to the service's own query for the space.
     /// </summary>
-    private static async Task GrantSpaceRoleAsync(RocketWikiDbContext context, Guid spaceId, SpaceRole role, Guid actingUserId)
+    private static async Task GrantSpaceRoleAsync(RocketWikiDbContext context, Guid spaceId, SpaceRole? role, Guid actingUserId)
     {
         await context.SaveChangesAsync();
         var service = new AccessRuleService(context);
         var result = await service.CreateAsync(
-            new CreateAccessRuleRequest(AccessRuleKind.SpaceGrant, spaceId, null, role, null, """{ "everyone": true }"""),
+            new CreateAccessRuleRequest(role is null ? AccessRuleKind.AccessGrant : AccessRuleKind.RoleGrant, spaceId, null, role, null, """{ "everyone": true }"""),
             Principal.Create("test-bootstrap", []), isInstanceAdmin: true, actingUserId, AuditCtx);
         if (!result.IsSuccess)
         {
             throw new InvalidOperationException($"Test setup grant failed: {result.Error}");
+        }
+
+        // A role confers no visibility (design.md §6.4): an "editor of this space" holds an
+        // access grant beside the role grant, exactly as the split migration leaves one.
+        if (role is not null)
+        {
+            var access = await service.CreateAsync(
+                new CreateAccessRuleRequest(AccessRuleKind.AccessGrant, spaceId, null, null, null, """{ "everyone": true }"""),
+                Principal.Create("test-bootstrap", []), isInstanceAdmin: true, actingUserId, AuditCtx);
+            if (!access.IsSuccess)
+            {
+                throw new InvalidOperationException($"Test setup access grant failed: {access.Error}");
+            }
         }
     }
 
@@ -136,7 +149,7 @@ public class PageServiceTests : SqliteTestBase
         using var context = CreateContext();
         context.Users.Add(actor);
         context.Spaces.Add(space);
-        await GrantSpaceRoleAsync(context, space.Id, SpaceRole.Viewer, actor.Id); // viewer only - cannot edit
+        await GrantSpaceRoleAsync(context, space.Id, null, actor.Id); // access only - can see, cannot edit
 
         context.SaveChanges();
 

@@ -21,7 +21,11 @@ public interface ICurrentPrincipalAccessor
     Principal? Current { get; }
 }
 
-public sealed class CurrentPrincipalAccessor(IHttpContextAccessor httpContextAccessor) : ICurrentPrincipalAccessor
+/// <summary>Builds through the one <see cref="PrincipalBuilder"/> the hub also uses, so
+/// the HTTP path maps exactly the claim list the catalog configured (§21.15) and nothing
+/// the hub path would not.</summary>
+public sealed class CurrentPrincipalAccessor(IHttpContextAccessor httpContextAccessor, PrincipalBuilder principalBuilder)
+    : ICurrentPrincipalAccessor
 {
     private Principal? _cached;
     private bool _computed;
@@ -32,7 +36,7 @@ public sealed class CurrentPrincipalAccessor(IHttpContextAccessor httpContextAcc
         {
             if (!_computed)
             {
-                _cached = PrincipalBuilder.Build(httpContextAccessor.HttpContext?.User);
+                _cached = principalBuilder.Build(httpContextAccessor.HttpContext?.User);
                 _computed = true;
             }
 

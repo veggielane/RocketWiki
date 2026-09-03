@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using RocketWiki.Core.Access;
 using RocketWiki.Core.Entities;
 
 namespace RocketWiki.Data.Configurations;
@@ -98,6 +99,49 @@ public class PageMarkingCountryConfiguration : IEntityTypeConfiguration<PageMark
         builder.HasOne(c => c.Marking)
             .WithMany(m => m.Countries)
             .HasForeignKey(c => c.PageId)
+            .OnDelete(DeleteBehavior.NoAction);
+    }
+}
+
+/// <summary>
+/// The additional selectors (design.md §21.15), one row per (page, category). A child
+/// table for the reason <see cref="PageMarkingCountry"/> is one — enforcement-critical
+/// data is queryable as data — with one difference that is the whole point of the shape:
+/// <b>the primary key is <c>(PageId, Category)</c></b>, so "at most one value per
+/// category on a page" is enforced by the database, not by application discipline. The
+/// sibling <c>AccessRuleSelectors</c> table keys on the value as well, because a grant may
+/// confer several values in one category.
+///
+/// <para>The <c>(Category, Value, PageId)</c> index is the "which pages carry APPLE" access
+/// path, the mirror image of the country index. No query surface for it exists yet; the
+/// shape is right now so adding one later is a resolver, not a migration.</para>
+///
+/// <para>Both tokens are <c>nvarchar(32)</c> — <c>SelectorCatalog.MaxNameLength</c> /
+/// <c>MaxValueLength</c>, validated at startup for configured tokens and in the services
+/// and the sync importer for incoming ones, because SQLite does not enforce declared
+/// lengths (design.md §14). Stored canonical and compared ordinally in memory, never in
+/// SQL, for the collation reason the country table's doc gives.</para>
+/// </summary>
+public class PageMarkingSelectorConfiguration : IEntityTypeConfiguration<PageMarkingSelector>
+{
+    public const int MaxCategoryLength = SelectorCatalog.MaxNameLength;
+
+    public const int MaxValueLength = SelectorCatalog.MaxValueLength;
+
+    public void Configure(EntityTypeBuilder<PageMarkingSelector> builder)
+    {
+        builder.ToTable("PageMarkingSelectors");
+        builder.HasKey(s => new { s.PageId, s.Category });
+
+        builder.Property(s => s.Category).HasMaxLength(MaxCategoryLength).IsRequired();
+        builder.Property(s => s.Value).HasMaxLength(MaxValueLength).IsRequired();
+
+        builder.HasIndex(s => new { s.Category, s.Value, s.PageId })
+            .HasDatabaseName("IX_PageMarkingSelectors_Category_Value_PageId");
+
+        builder.HasOne(s => s.Marking)
+            .WithMany(m => m.Selectors)
+            .HasForeignKey(s => s.PageId)
             .OnDelete(DeleteBehavior.NoAction);
     }
 }

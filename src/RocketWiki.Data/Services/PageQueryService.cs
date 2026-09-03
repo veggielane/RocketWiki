@@ -144,7 +144,7 @@ public sealed class PageQueryService : IPageQueryService
         var result = new Dictionary<string, Guid>(StringComparer.Ordinal);
         foreach (var space in spaces)
         {
-            if (EffectivePermissionCalculator.ComputeSpaceRole(grants.GrantsFor(space.Id), principal) is not null)
+            if (EffectivePermissionCalculator.HasSpaceAccess(grants.GrantsFor(space.Id), principal))
             {
                 result[space.Key] = space.Id;
             }
