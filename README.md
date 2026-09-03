@@ -331,12 +331,25 @@ opt-in toggle it proposed was rejected.)
   real API mutations, the placeholder introspection allowlist, the
   omitting-surface sweep, the telemetry-hygiene sweeps over the disclosing
   surfaces and the SPA's 1,798 tests; the mutation drills behind each gate went
-  red and were restored, four of them repeated by hand. **Not yet done**: the
-  live `aspire run` walk-through of the truth table against the dev realm, and
-  a low→high bundle round-trip of a selector-bearing page between two running
-  instances (the bundle path itself is pinned by the sync tests). Until those
-  run, treat the live-stack behaviour as design intent; the test-tier claims
-  above are what the suites actually pin.
+  red and were restored, four of them repeated by hand. **Also done, on
+  2026-09-03, against the live stack** (`aspire run`, Docker Desktop, a fresh
+  Keycloak volume so the realm's new `fruit` mapper imported, and the existing
+  SQL volume so both migrations ran on real dev rows — they did, converting
+  the TEST space's admin-everyone grant into a role grant plus a mirror access
+  grant): PKCE tokens for five dev users carried exactly the realm's claims;
+  `me` reported the OFFICIAL-SENSITIVE floor for the claim-less user and an
+  explicit OFFICIAL honoured; `selectorCategories` came back from the AppHost
+  environment; an access grant carrying `FRUIT/APPLE` plus a page marked
+  `UK OFFICIAL APPLE` gave the user granted but not eligible a `(protected)`
+  placeholder with that label and the single failing eligibility gate, the
+  eligible-and-granted users the page, the legacy `page(id)` null, the tree a
+  `ProtectedTreeNode`, and search nothing; a role-only administrator of a new
+  space saw it listed with `viewerHasAccess: false`, an empty tree, and a
+  denial carrying only the space gate with the marking withheld. **Not yet
+  done**: a low→high bundle round-trip of a selector-bearing page between two
+  running instances (the bundle path itself is pinned by the sync tests), and
+  the browser SPA against the live API (the walk-through drove GraphQL directly;
+  the SPA's 1,798 tests run against a mocked transport).
 
 **Verified:**
 - `dotnet build RocketWiki.sln` / `dotnet test RocketWiki.sln`, run solution-wide,
