@@ -90,7 +90,12 @@ public sealed class PageChildrenReadTests(RocketWikiApiFactory factory) : IClass
         // intermediate save would let the every-page-is-marked backstop materialize
         // markings that collide with the explicit ones below.
         db.Pages.AddRange(secretParent, child, grandchild, rootA, rootAChild, rootB, rootBChild);
-        db.PageMarkings.Add(Marking(secretParent.Id, ClassificationLevel.Secret));
+        // The parent is hidden by a selector no grant confers (the SECRET level on it
+        // gates nobody - §21.12); its children are explicitly plain, since a child
+        // inserted beside its parent would otherwise inherit the selector.
+        var secretMarking = Marking(secretParent.Id, ClassificationLevel.Secret);
+        secretMarking.Selectors.Add(new PageMarkingSelector { PageId = secretParent.Id, Category = "FRUIT", Value = "APPLE" });
+        db.PageMarkings.Add(secretMarking);
         foreach (var official in new[] { child, grandchild, rootA, rootAChild, rootB, rootBChild })
         {
             db.PageMarkings.Add(Marking(official.Id, ClassificationLevel.Official));
@@ -107,7 +112,7 @@ public sealed class PageChildrenReadTests(RocketWikiApiFactory factory) : IClass
     private HttpClient OfficialClient()
     {
         var client = factory.CreateClient();
-        client.SetTestUser(sub: $"kids-{Guid.NewGuid()}"); // no clearance claim -> OFFICIAL (§21.3)
+        client.SetTestUser(sub: $"kids-{Guid.NewGuid()}"); // no grant confers the parent's selector
         return client;
     }
 

@@ -37,12 +37,13 @@ query PagePermissions($id: UUID!) {
 # first is whether an ACCESS grant matched (may see), the second the highest
 # ROLE grant that matched (may edit / administer) — or null, since no role
 # is the ordinary state for a reader. `viewGates` and `editGates` are the
-# whole ladder (space access, classification, selector eligibility, selector
-# grant, national caveat, restriction; then replica and role for editing),
-# every gate evaluated with pass/fail rather than stopping at the first
-# failure — the inspector's job is to explain, and the enforcement path's
-# short-circuit is exactly what it must not inherit. The gate rows carry no
-# level or country detail here (the page's own `marking` sits beside them);
+# whole ladder (space access, marking present, selector grant, national
+# caveat, restriction; then replica and role for editing), every gate
+# evaluated with pass/fail rather than stopping at the first failure — the
+# inspector's job is to explain, and the enforcement path's short-circuit is
+# exactly what it must not inherit. The classification level is on no gate:
+# it is display, compared against nobody. The gate rows carry no country
+# detail here (the page's own `marking` sits beside them);
 # `viewDenialReason`/`editDenialReason` stay as the audit's first-failing
 # token.
 query EffectivePermission($pageId: UUID!, $subject: InspectedPrincipalInput) {

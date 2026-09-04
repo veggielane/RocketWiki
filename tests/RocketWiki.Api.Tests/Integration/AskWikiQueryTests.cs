@@ -122,6 +122,34 @@ public sealed class AskWikiQueryTests(AskWikiApiFixture fixture) : IClassFixture
         return client;
     }
 
+    /// <summary>Puts a selector on a page and adds an access grant, matching only
+    /// <paramref name="grantedToGroup"/>, that confers it - the pair a selector-gated
+    /// fixture needs (design.md §21.15).</summary>
+    private async Task AddSelectorAsync(Page page, string category, string value, string grantedToGroup)
+    {
+        using var scope = fixture.Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var marking = await db.PageMarkings.Include(m => m.Selectors).SingleAsync(m => m.PageId == page.Id);
+        marking.Selectors.Add(new PageMarkingSelector { PageId = page.Id, Category = category, Value = value });
+
+        var space = await db.Spaces.SingleAsync(s => s.Id == page.SpaceId);
+        var grant = new AccessRule
+        {
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = space.Id,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new GroupCondition(grantedToGroup)),
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = space.CreatedByUserId,
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = space.CreatedByUserId,
+        };
+        grant.Selectors.Add(new AccessRuleSelector { AccessRuleId = grant.Id, Category = category, Value = value });
+        db.AccessRules.Add(grant);
+
+        await db.SaveChangesAsync();
+    }
+
     private static async Task<JsonDocument> AskAsync(HttpClient client, string question) =>
         await client.PostGraphQLAsync($$"""
             query { askWiki(question: "{{question}}") { answer citations { pageId title headingPath anchorId } unavailable } }
@@ -185,12 +213,14 @@ public sealed class AskWikiQueryTests(AskWikiApiFixture fixture) : IClassFixture
     }
 
     [Fact]
-    public async Task AskWiki_OverClassifiedPage_NeverReachesTheModel_AndIsNeverCited()
+    public async Task AskWiki_UngrantedPage_NeverReachesTheModel_AndIsNeverCited()
     {
         // design.md §21: the same adversarial proof as the restriction case above, for a
-        // protective marking. Retrieval runs under the caller's principal, so a page above
-        // their clearance is not merely omitted from the citation list - its content never
-        // enters the prompt, which is the only place a summarizer could leak it from.
+        // protective marking. Retrieval runs under the caller's principal, so a page whose
+        // selector no grant confers on them is not merely omitted from the citation list -
+        // its content never enters the prompt, which is the only place a summarizer could
+        // leak it from. (The SECRET on the page gates nobody - §21.12 - and stays on it to
+        // prove that.)
         fixture.ChatClient.Reset();
         var term = $"zzterm{Guid.NewGuid():N}"[..16];
         var markedSentinel = $"ZZMARKED{Guid.NewGuid():N}ZZ";
@@ -202,9 +232,10 @@ public sealed class AskWikiQueryTests(AskWikiApiFixture fixture) : IClassFixture
         var classifiedPage = await SeedPageAsync(space, "classified", "Controlled Overrides (classified)",
             $"# Overrides\n\n{markedSentinel} override values for {term} operations.",
             markAs: ClassificationLevel.Secret);
+        await AddSelectorAsync(classifiedPage, "FRUIT", "APPLE", grantedToGroup: "apple-readers");
 
         var callsBefore = fixture.ChatClient.CallCount;
-        // No clearance claim at all: §21's fail-closed default admits OFFICIAL only.
+        // No groups: the asker matches the everyone grant, which confers no APPLE.
         using var response = await AskAsync(CreateUserClient(), term);
 
         var ask = response.RootElement.GetProperty("data").GetProperty("askWiki");
@@ -222,11 +253,11 @@ public sealed class AskWikiQueryTests(AskWikiApiFixture fixture) : IClassFixture
     }
 
     [Fact]
-    public async Task AskWiki_ClearedAsker_RetrievesAndCitesTheClassifiedPage()
+    public async Task AskWiki_GrantedAsker_RetrievesAndCitesTheClassifiedPage()
     {
-        // The other half: the same pipeline hands the page over once the asker's clearance
-        // admits it, proving the absence above was the clearance gate and not the
-        // assistant simply never loading the content.
+        // The other half: the same pipeline hands the page over once a grant the asker
+        // matches confers its selector, proving the absence above was the marking gate
+        // and not the assistant simply never loading the content.
         fixture.ChatClient.Reset();
         var term = $"zzterm{Guid.NewGuid():N}"[..16];
         var markedSentinel = $"ZZMARKED{Guid.NewGuid():N}ZZ";
@@ -235,9 +266,9 @@ public sealed class AskWikiQueryTests(AskWikiApiFixture fixture) : IClassFixture
         var classifiedPage = await SeedPageAsync(space, "classified-cleared", "Controlled Overrides",
             $"# Overrides\n\n{markedSentinel} override values for {term} operations.",
             markAs: ClassificationLevel.Secret);
+        await AddSelectorAsync(classifiedPage, "FRUIT", "APPLE", grantedToGroup: "apple-readers");
 
-        var client = fixture.Factory.CreateClient();
-        client.SetTestUser(sub: $"asker-{Guid.NewGuid():N}", clearance: "SECRET");
+        var client = CreateUserClient("apple-readers");
         using var response = await AskAsync(client, term);
 
         Assert.Contains(markedSentinel, fixture.ChatClient.Transcript);

@@ -8,7 +8,7 @@ namespace RocketWiki.Api.GraphQL;
 /// The id + display-name projection of a local <c>User</c> row, and the ONLY shape of
 /// that row this schema hands to a client outside the admin-only roster and audit
 /// viewer and the one-person-at-a-time profile page (<c>userProfile</c>, which carries
-/// the gate-resolved clearance and eligibility by the decision design.md §6.2 records,
+/// the mirrored group memberships by the decision design.md §6.2 records,
 /// and never nationality). Deliberately not the entity: <c>User.AttributesJson</c>
 /// mirrors registered attributes (nationality — sensitive personal data,
 /// instance-admin-visible only, design.md §6.2), and exposing the entity would leak it

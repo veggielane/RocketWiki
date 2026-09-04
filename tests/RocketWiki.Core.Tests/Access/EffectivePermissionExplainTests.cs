@@ -79,7 +79,7 @@ public class EffectivePermissionExplainTests
     {
         "no-access", "role-only", "view-restriction-fails", "replica", "access-only",
         "edit-restriction-fails", "full-allow", "malformed-restriction",
-        "two-failing-view-restrictions", "not-eligible", "unknown-category", "not-granted",
+        "two-failing-view-restrictions", "unknown-category", "not-granted",
         "caveat", "all-marking-gates-fail",
     };
 
@@ -94,7 +94,6 @@ public class EffectivePermissionExplainTests
         var everyoneAccess = AccessGrant("""{ "everyone": true }""");
         var everyoneEditor = RoleGrant(SpaceRole.Editor, """{ "everyone": true }""");
         var nzPrincipal = MakePrincipal(attributes: new() { ["nationality"] = ["NZ"] });
-        var eligibleNz = MakePrincipal(attributes: new() { ["nationality"] = ["NZ"], [TestCatalogs.FruitClaim] = ["yes"] });
         var apple = ProtectiveMarking.Create(ClassificationLevel.Official, null, [TestCatalogs.Apple]);
 
         return name switch
@@ -144,18 +143,14 @@ public class EffectivePermissionExplainTests
                     PageRestriction(PageId, PageAction.View, """{ "group": "export-cleared" }"""),
                 ],
                 false, ProtectiveMarking.Baseline, nzPrincipal),
-            "not-eligible" => new(
-                [AccessGrant("""{ "everyone": true }""", TestCatalogs.Apple), everyoneEditor],
-                [],
-                false, apple, nzPrincipal),
             "unknown-category" => new(
                 [everyoneAccess, everyoneEditor],
                 [],
-                false, ProtectiveMarking.Create(ClassificationLevel.Official, null, [new SelectorValue("CODEWORD", "ZEBRA")]), eligibleNz),
+                false, ProtectiveMarking.Create(ClassificationLevel.Official, null, [new SelectorValue("CODEWORD", "ZEBRA")]), nzPrincipal),
             "not-granted" => new(
                 [everyoneAccess, everyoneEditor],
                 [],
-                false, apple, eligibleNz),
+                false, apple, nzPrincipal),
             "caveat" => new(
                 [everyoneAccess, everyoneEditor],
                 [],
@@ -268,27 +263,23 @@ public class EffectivePermissionExplainTests
     [Fact]
     public void Explain_ListsEveryFailingGate_NotJustTheFirst()
     {
-        // Level, eligibility, grant, caveat AND a restriction all fail here; the gate
-        // names the level (the coarsest fact); the inspector shows all five.
+        // Grant, caveat AND a restriction all fail here; the gate names the grant (the
+        // coarsest fact); the inspector shows all three.
         var s = BuildScenario("all-marking-gates-fail");
 
         var explained = Explain(s.Grants, s.Restrictions, s.Replica, s.Marking, s.Principal);
 
-        Assert.Equal("classification:secret", explained.Permission.ViewDenialReason);
+        Assert.Equal("selector:not_granted:FRUIT", explained.Permission.ViewDenialReason);
         Assert.Equal(
-            new HashSet<GateKind>
-            {
-                GateKind.Classification, GateKind.SelectorEligibility, GateKind.SelectorGrant,
-                GateKind.NationalCaveat, GateKind.ViewRestriction,
-            },
+            new HashSet<GateKind> { GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction },
             explained.ViewGates.Where(g => !g.Passed).Select(g => g.Kind).ToHashSet());
         Assert.Contains(explained.ViewGates, g => g.Kind == GateKind.SpaceAccess && g.Passed);
-        // The selector entries carry the category and value in structured form, never in
+        // The selector entry carries the category and value in structured form, never in
         // the token (§15: the value is the marking's content).
-        var eligibility = Assert.Single(explained.ViewGates, g => g.Kind == GateKind.SelectorEligibility);
-        Assert.Equal("FRUIT", eligibility.SelectorCategory);
-        Assert.Equal("APPLE", eligibility.SelectorValue);
-        Assert.Equal("selector:not_eligible:FRUIT", eligibility.Reason);
+        var grant = Assert.Single(explained.ViewGates, g => g.Kind == GateKind.SelectorGrant);
+        Assert.Equal("FRUIT", grant.SelectorCategory);
+        Assert.Equal("APPLE", grant.SelectorValue);
+        Assert.Equal("selector:not_granted:FRUIT", grant.Reason);
     }
 
     [Fact]
@@ -307,7 +298,7 @@ public class EffectivePermissionExplainTests
         Assert.Empty(explained.GrantedSelectors);
         Assert.Equal("no-space-access", explained.Permission.ViewDenialReason);
         Assert.Equal(
-            [GateKind.SpaceAccess, GateKind.Classification, GateKind.SelectorEligibility, GateKind.SelectorGrant, GateKind.NationalCaveat],
+            [GateKind.SpaceAccess, GateKind.SelectorGrant, GateKind.NationalCaveat],
             explained.ViewGates.Select(g => g.Kind));
         // No access means no granted union: G fails regardless of what the grant carried.
         Assert.All(explained.ViewGates, g => Assert.False(g.Passed));
@@ -344,7 +335,7 @@ public class EffectivePermissionExplainTests
     {
         var s = BuildScenario("full-allow");
         var marking = ProtectiveMarking.Create(ClassificationLevel.Official, null, [TestCatalogs.Apple, TestCatalogs.North]);
-        var principal = MakePrincipal(attributes: new() { ["nationality"] = ["NZ"], [TestCatalogs.FruitClaim] = ["yes"] });
+        var principal = MakePrincipal(attributes: new() { ["nationality"] = ["NZ"] });
         var grants = new[] { AccessGrant("""{ "everyone": true }""", TestCatalogs.Apple, TestCatalogs.North), s.Grants[1] };
 
         var explained = Explain(grants, s.Restrictions, false, marking, principal);
@@ -352,8 +343,7 @@ public class EffectivePermissionExplainTests
         Assert.True(explained.Permission.CanEdit);
         Assert.Equal(
             [
-                GateKind.SpaceAccess, GateKind.Classification,
-                GateKind.SelectorEligibility, GateKind.SelectorEligibility,
+                GateKind.SpaceAccess,
                 GateKind.SelectorGrant, GateKind.SelectorGrant,
                 GateKind.NationalCaveat, GateKind.ViewRestriction,
             ],

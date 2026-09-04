@@ -36,6 +36,14 @@ public class PageMarkingConfiguration : IEntityTypeConfiguration<PageMarking>
 
         builder.Property(m => m.Level).HasColumnType("tinyint").IsRequired();
 
+        // "This page's marking is unknown" as a fact the database holds (design.md
+        // §21.10): NOT NULL, default false, so every row written by a path that never
+        // heard of the flag is a KNOWN marking, and only the sync importer's explicit
+        // write for a bundle carrying no marking flips it. Not indexed: the only reader
+        // is the per-page PK lookup, and the review sweep an operator runs to find
+        // unknown pages is a full scan of a table with one row per page.
+        builder.Property(m => m.IsUnavailable).IsRequired().HasDefaultValue(false);
+
         // Nullable on purpose: no prefix is a legal marking, and the column must be able
         // to represent "cleared" rather than forcing a sentinel. Deliberately NOT
         // indexed — the prefix gates nothing (design.md §21.12), so no enforcement or

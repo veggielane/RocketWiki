@@ -56,7 +56,7 @@ public sealed class SearchConnectionFieldResolvers
     ///
     /// <para><b>Nothing the caller was not shown contributes.</b> The hit set arrives
     /// already permission-filtered inside <c>ISearchService</c> (§6.7/§9.3) — a page above
-    /// the caller's clearance, or behind a restriction they fail, is absent from it, so it
+    /// the caller's grants, or behind a restriction they fail, is absent from it, so it
     /// cannot raise this label. That is verified by test rather than assumed. The cap at
     /// <c>MaxSearchResults</c> applies here too: this labels the result set the connection
     /// reports, no more and no less.</para>

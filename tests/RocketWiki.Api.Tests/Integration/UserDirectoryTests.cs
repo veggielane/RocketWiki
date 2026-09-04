@@ -17,7 +17,7 @@ namespace RocketWiki.Api.Tests.Integration;
 /// reachability tests catch the directory being <b>too closed</b> — an admin gate creeping
 /// back would break every picker. The exposure test catches it being <b>too open</b> — a
 /// field added to <c>UserRef</c> later would silently turn a name-and-avatar list into a
-/// census of email addresses or, far worse, of clearances. The second is the one that
+/// census of email addresses or, far worse, of caveats. The second is the one that
 /// would not announce itself.</para>
 /// </summary>
 public sealed class UserDirectoryTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
@@ -112,7 +112,7 @@ public sealed class UserDirectoryTests(RocketWikiApiFactory factory) : IClassFix
     /// <para>If you are here because this test failed after adding a field: that is the
     /// test working. Decide whether every authenticated user should be able to enumerate
     /// that fact about every colleague — email and last-seen were both deliberately
-    /// refused (§15), and any rule-engine attribute is a hard no (§6.2, a clearance
+    /// refused (§15), and any rule-engine attribute is a hard no (§6.2, a who-holds-what
     /// census) — then update this set if the answer is genuinely yes.</para>
     /// </summary>
     [Fact]

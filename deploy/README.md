@@ -199,9 +199,10 @@ Deliberately (design.md §15/§17 — external services stay external):
    values knob to make it.
 2. **Keycloak** with a production-configured `rocketwiki` realm (the dev
    realm's mappers documented in `src/RocketWiki.AppHost/keycloak/README.md`
-   are the spec to reproduce — including one `yes`-valued mapper per selector
-   category listed under `api.protectiveMarking.selectorCategories`, below).
-   Inside the network boundary, behind TLS.
+   are the spec to reproduce: `groups`, `nationality`, `roles` and the API
+   audience — nothing per selector category, and no clearance; see
+   "Protective-marking selector categories" below). Inside the network
+   boundary, behind TLS.
 3. **Somewhere for attachment bytes**, which is a real choice, not a default:
    an **S3-compatible object store** (MinIO/Ceph/…) with a bucket; or, for
    `api.fileStorage.provider=FileSystem`, a deliberately-created PVC the
@@ -280,14 +281,20 @@ Not in the Secret: they are policy, not credentials, and belong in the values
 file where a diff shows them. `api.protectiveMarking.selectorCategories` lists
 the categories this instance recognises (`values.yaml` documents the shape and
 the reasoning); each renders into the api container's environment as
-`ProtectiveMarking__SelectorCategories__<n>__*`. Empty — the default — means
-no categories: no pickers in the marking control, no selector values on access
-grants, and a page whose marking carries a selector for an unlisted category is
-visible to **nobody**. A low/high pair must list every category that travels
-between them, spelled identically, and each `claimName` needs a matching
-single-valued mapper in Keycloak emitting `yes` for eligible users
-(`src/RocketWiki.AppHost/keycloak/README.md`). The API validates the list at
-startup and refuses to start on an invalid one, naming the offending index.
+`ProtectiveMarking__SelectorCategories__<n>__*`. A category is the instance's
+**vocabulary** of compartment values and nothing more: a page carries at most
+one value per category, and a reader sees it only if a space **access grant**
+that matches them carries that exact value. There is no site-wide eligibility
+attribute — Keycloak needs no mapper per category, and the values schema
+refuses the retired `claimName` key (a values file from before 2026-09-04 that
+still carries it fails `helm lint` and `helm install`; delete the key). Empty —
+the default — means no categories: no pickers in the marking control, no
+selector values on access grants, and a page whose marking carries a selector
+for an unlisted category is visible to **nobody** (no grant can carry a value
+the catalog does not define, and the denial names the unknown category). A
+low/high pair must list every category that travels between them, spelled
+identically. The API validates the list at startup and refuses to start on an
+invalid one, naming the offending index.
 
 ```yaml
 api:
@@ -295,10 +302,9 @@ api:
     selectorCategories:
       - name: FRUIT
         description: Fruit programme compartments
-        claimName: fruit
         values: [APPLE, BANANA]
-      - name: REGION           # no claimName: everyone is eligible,
-        values: [NORTH, SOUTH] # the space grant alone decides
+      - name: REGION           # description is optional; a grant
+        values: [NORTH, SOUTH] # carrying NORTH is what confers NORTH
 ```
 
 ## Install / upgrade / rollback

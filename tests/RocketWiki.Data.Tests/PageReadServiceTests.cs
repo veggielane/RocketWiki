@@ -539,22 +539,23 @@ public class PageReadServiceTests : SqliteTestBase
         context.SaveChanges();
 
         var service = new PageReadService(context);
-        var eligible = MakePrincipal(attributes: new() { [TestCatalogs.FruitClaim] = ["yes"] });
+        var caller = MakePrincipal();
 
-        var pruned = FlattenIds(AssertFound(await service.GetPageTreeAsync(space.Id, eligible))).ToHashSet();
+        var pruned = FlattenIds(AssertFound(await service.GetPageTreeAsync(space.Id, caller))).ToHashSet();
         Assert.Contains(root.Id, pruned);
         Assert.DoesNotContain(compartment.Id, pruned);
         Assert.DoesNotContain(deep.Id, pruned); // inherited APPLE at insert; pruned with its parent either way
 
-        // The same caller, once a grant carries APPLE, sees the whole subtree.
+        // And the node's verdict is GetPageAsync's verdict, reason for reason.
+        var denied = Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(compartment.Id, caller));
+        Assert.Equal("selector:not_granted:FRUIT", denied.Reason);
+
+        // The same caller, once a grant carries APPLE, sees the whole subtree - the grant
+        // is the whole of what decides a selector.
         context.AccessRules.Add(AccessGrantWith(space.Id, TestCatalogs.Apple));
         context.SaveChanges();
-        var visible = FlattenIds(AssertFound(await new PageReadService(context).GetPageTreeAsync(space.Id, eligible))).ToHashSet();
+        var visible = FlattenIds(AssertFound(await new PageReadService(context).GetPageTreeAsync(space.Id, caller))).ToHashSet();
         Assert.Contains(compartment.Id, visible);
         Assert.Contains(deep.Id, visible);
-
-        // And the node's verdict is GetPageAsync's verdict, reason for reason.
-        var denied = Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(compartment.Id, MakePrincipal()));
-        Assert.Equal("selector:not_eligible:FRUIT", denied.Reason);
     }
 }

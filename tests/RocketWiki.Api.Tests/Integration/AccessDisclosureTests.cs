@@ -32,17 +32,19 @@ namespace RocketWiki.Api.Tests.Integration;
 ///        ROLE_GRANT EDITOR group editors
 /// P0  UK OFFICIAL                         (links page://P1, page://P4, page://missing)
 /// ├── P4  (PAGE_RESTRICTION view: group engineering)
-/// P1  UK SECRET
+/// P1  UK SECRET APPLE
 /// ├── P5  UK OFFICIAL
 /// P2  UK OFFICIAL-SENSITIVE APPLE
 /// P3  UK OFFICIAL NZ EYES ONLY
 /// P6  UK SECRET APPLE NORTH NZ/US EYES ONLY
 /// </code>
-/// <para>Personas: Alice [readers, apple-readers, editors] SECRET UK fruit=yes;
-/// Bob [readers] no clearance (⇒ OFFICIAL-SENSITIVE) NZ fruit=yes; Carol [readers,
-/// apple-readers] SECRET UK, no fruit; Dave no groups; Erin [editors] only (a role,
-/// no access). Every persona is also a Space-admin through the <c>everyone</c> role
-/// grant — which is the point of Dave and Erin: roles never supersede access (§6.4).</para>
+/// <para>Personas: Alice [readers, apple-readers, editors] UK; Bob [readers] NZ; Carol
+/// [readers, apple-readers] UK; Dave no groups; Erin [editors] only (a role, no access).
+/// Every persona is also a Space-admin through the <c>everyone</c> role grant — which is
+/// the point of Dave and Erin: roles never supersede access (§6.4). Nobody holds a
+/// clearance or a per-category claim, because this deployment has neither: the SECRET
+/// on P1 and P6 gates nobody, and what separates Bob from Alice on P1 is the APPLE grant
+/// alone.</para>
 ///
 /// <para>Runs on the ask-configured fixture so the <c>askWiki</c> omission sweep runs the
 /// real retrieval path against a fake model; everything else is the standard SQLite
@@ -94,19 +96,16 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
             case Persona.Admin:
                 client.SetTestUser(sub, name: "Fixture Admin",
                     groups: ["readers", "apple-readers", "editors", "north-readers"], roles: ["admin"],
-                    clearance: "TOP_SECRET", nationality: ["NZ", "UK"], selectorClaims: [RocketWikiApiFactory.FruitClaim]);
+                    nationality: ["NZ", "UK"]);
                 break;
             case Persona.Alice:
-                client.SetTestUser(sub, name: "Alice", groups: ["readers", "apple-readers", "editors"],
-                    clearance: "SECRET", nationality: ["UK"], selectorClaims: [RocketWikiApiFactory.FruitClaim]);
+                client.SetTestUser(sub, name: "Alice", groups: ["readers", "apple-readers", "editors"], nationality: ["UK"]);
                 break;
             case Persona.Bob:
-                client.SetTestUser(sub, name: "Bob", groups: ["readers"],
-                    nationality: ["NZ"], selectorClaims: [RocketWikiApiFactory.FruitClaim]);
+                client.SetTestUser(sub, name: "Bob", groups: ["readers"], nationality: ["NZ"]);
                 break;
             case Persona.Carol:
-                client.SetTestUser(sub, name: "Carol", groups: ["readers", "apple-readers"],
-                    clearance: "SECRET", nationality: ["UK"]);
+                client.SetTestUser(sub, name: "Carol", groups: ["readers", "apple-readers"], nationality: ["UK"]);
                 break;
             case Persona.Dave:
                 client.SetTestUser(sub, name: "Dave");
@@ -226,7 +225,7 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
     private const string DenialSelection = """
         placeholderTitle noSpaceAccess
         marking { level levelName ukPrefix eyesOnly label selectors { category value } }
-        reasons { gate passed requiredLevel requiredLevelName category value countries ruleId inherited requiredRole }
+        reasons { gate passed category value countries ruleId inherited requiredRole }
         """;
 
     private async Task<JsonDocument> PageAccessAsync(HttpClient client, Guid pageId) =>
@@ -319,7 +318,7 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
         await MoveAsync(admin, p6, 4);
 
         await SetMarkingOrFailAsync(admin, p0, "OFFICIAL", [], []);
-        await SetMarkingOrFailAsync(admin, p1, "SECRET", [], []);
+        await SetMarkingOrFailAsync(admin, p1, "SECRET", [], [("FRUIT", "APPLE")]);
         await SetMarkingOrFailAsync(admin, p2, "OFFICIAL_SENSITIVE", [], [("FRUIT", "APPLE")]);
         await SetMarkingOrFailAsync(admin, p3, "OFFICIAL", ["NZ"], []);
         await SetMarkingOrFailAsync(admin, p5, "OFFICIAL", [], []);
@@ -361,14 +360,15 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
         var denial = access.GetProperty("denial");
         Assert.Equal("(protected)", denial.GetProperty("placeholderTitle").GetString());
         Assert.False(denial.GetProperty("noSpaceAccess").GetBoolean());
-        Assert.Equal("UK SECRET", denial.GetProperty("marking").GetProperty("label").GetString());
+        // The marking is shown whole - level included, though the level gated nothing.
+        Assert.Equal("UK SECRET APPLE", denial.GetProperty("marking").GetProperty("label").GetString());
         Assert.Equal("SECRET", denial.GetProperty("marking").GetProperty("level").GetString());
 
         var reason = Assert.Single(denial.GetProperty("reasons").EnumerateArray());
-        Assert.Equal("CLASSIFICATION", reason.GetProperty("gate").GetString());
+        Assert.Equal("SELECTOR_GRANT", reason.GetProperty("gate").GetString());
         Assert.False(reason.GetProperty("passed").GetBoolean());
-        Assert.Equal("SECRET", reason.GetProperty("requiredLevel").GetString());
-        Assert.Equal("SECRET", reason.GetProperty("requiredLevelName").GetString());
+        Assert.Equal("FRUIT", reason.GetProperty("category").GetString());
+        Assert.Equal("APPLE", reason.GetProperty("value").GetString());
 
         Assert.DoesNotContain(P1Title, body, StringComparison.Ordinal);
         Assert.DoesNotContain(f.P1.ToString(), body, StringComparison.OrdinalIgnoreCase);
@@ -379,7 +379,7 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
         var row = Assert.Single(await AuditRowsAsync(sub, f.P1));
         Assert.Equal("page.view", row.Action);
         Assert.Equal(AuditOutcome.Denied, row.Outcome);
-        Assert.Equal("classification:secret", Reason(row));
+        Assert.Equal("selector:not_granted:FRUIT", Reason(row));
     }
 
     [Fact]
@@ -447,11 +447,7 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
             new HashSet<string> { "placeholderTitle", "noSpaceAccess", "marking", "reasons" },
             Fields(Data(introspection, "denial")));
         Assert.Equal(
-            new HashSet<string>
-            {
-                "gate", "passed", "requiredLevel", "requiredLevelName", "category", "value",
-                "countries", "ruleId", "inherited", "requiredRole",
-            },
+            new HashSet<string> { "gate", "passed", "category", "value", "countries", "ruleId", "inherited", "requiredRole" },
             Fields(Data(introspection, "gate")));
         Assert.Equal(new HashSet<string> { "title", "sortOrder", "denial" }, Fields(Data(introspection, "leaf")));
 
@@ -498,9 +494,9 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
     [Fact]
     public async Task EveryFailingGate_IsReported_AndTheAuditRowNamesTheFirst()
     {
-        // Bob on P6: below the level, granted neither selector, but eligible for FRUIT
-        // and a NZ national. Every failing gate is listed in ladder order; the audit
-        // row carries only the first (§7's deterministic token).
+        // Bob on P6: granted neither selector, but a NZ national (in the caveat). Every
+        // failing gate is listed in ladder order; the audit row carries only the first
+        // (§7's deterministic token). The SECRET level fails nobody and is not listed.
         var f = await GetFixtureAsync();
         var (bob, sub) = ClientFor(Persona.Bob);
 
@@ -509,45 +505,42 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
         Assert.Equal(P6Label, denial.GetProperty("marking").GetProperty("label").GetString());
 
         var reasons = denial.GetProperty("reasons").EnumerateArray().ToList();
-        Assert.Equal(
-            ["CLASSIFICATION", "SELECTOR_GRANT", "SELECTOR_GRANT"],
-            reasons.Select(r => r.GetProperty("gate").GetString()));
+        Assert.Equal(["SELECTOR_GRANT", "SELECTOR_GRANT"], reasons.Select(r => r.GetProperty("gate").GetString()));
         Assert.All(reasons, r => Assert.False(r.GetProperty("passed").GetBoolean()));
-        Assert.Equal("SECRET", reasons[0].GetProperty("requiredLevel").GetString());
-        Assert.Equal(("FRUIT", "APPLE"), (reasons[1].GetProperty("category").GetString(), reasons[1].GetProperty("value").GetString()));
-        Assert.Equal(("REGION", "NORTH"), (reasons[2].GetProperty("category").GetString(), reasons[2].GetProperty("value").GetString()));
-        Assert.DoesNotContain(reasons, r => r.GetProperty("gate").GetString() is "SELECTOR_ELIGIBILITY" or "NATIONAL_CAVEAT" or "RESTRICTION");
+        Assert.Equal(("FRUIT", "APPLE"), (reasons[0].GetProperty("category").GetString(), reasons[0].GetProperty("value").GetString()));
+        Assert.Equal(("REGION", "NORTH"), (reasons[1].GetProperty("category").GetString(), reasons[1].GetProperty("value").GetString()));
+        Assert.DoesNotContain(reasons, r => r.GetProperty("gate").GetString() is "NATIONAL_CAVEAT" or "RESTRICTION" or "MARKING_UNAVAILABLE");
 
         var row = Assert.Single(await AuditRowsAsync(sub, f.P6));
         Assert.Equal(AuditOutcome.Denied, row.Outcome);
-        Assert.Equal("classification:secret", Reason(row));
+        Assert.Equal("selector:not_granted:FRUIT", Reason(row));
     }
 
     [Fact]
-    public async Task SelectorEligibility_AndGrant_AreSeparateGates()
+    public async Task SelectorGrant_IsTheOnlySelectorGate()
     {
+        // There used to be a second one - eligibility, a per-category claim on the token
+        // that Carol lacked. It is gone with the claim: what admits a reader to an APPLE
+        // page is that an access grant they match confers APPLE, and nothing else about
+        // them is consulted.
         var f = await GetFixtureAsync();
 
-        // Carol: granted APPLE by apple-readers, but no `fruit` claim - E fails, G passes.
-        var (carol, _) = ClientFor(Persona.Carol);
-        using var carolResult = await PageAccessAsync(carol, f.P2);
-        var carolReason = Assert.Single(Data(carolResult, "pageAccess").GetProperty("denial").GetProperty("reasons").EnumerateArray());
-        Assert.Equal("SELECTOR_ELIGIBILITY", carolReason.GetProperty("gate").GetString());
-        Assert.Equal("FRUIT", carolReason.GetProperty("category").GetString());
-        Assert.Equal("APPLE", carolReason.GetProperty("value").GetString());
-
-        // Bob: eligible (fruit=yes) but readers confers no APPLE - E passes, G fails.
+        // Bob: readers confers no APPLE - G fails, and names the category and value.
         var (bob, _) = ClientFor(Persona.Bob);
         using var bobResult = await PageAccessAsync(bob, f.P2);
         var bobReason = Assert.Single(Data(bobResult, "pageAccess").GetProperty("denial").GetProperty("reasons").EnumerateArray());
         Assert.Equal("SELECTOR_GRANT", bobReason.GetProperty("gate").GetString());
         Assert.Equal("FRUIT", bobReason.GetProperty("category").GetString());
+        Assert.Equal("APPLE", bobReason.GetProperty("value").GetString());
 
-        // Alice: both - the page.
-        var (alice, _) = ClientFor(Persona.Alice);
-        using var aliceResult = await PageAccessAsync(alice, f.P2);
-        Assert.Equal(f.P2, Data(aliceResult, "pageAccess").GetProperty("page").GetProperty("id").GetGuid());
-        Assert.Equal(JsonValueKind.Null, Data(aliceResult, "pageAccess").GetProperty("denial").ValueKind);
+        // Carol and Alice: granted APPLE by apple-readers - the page.
+        foreach (var persona in new[] { Persona.Carol, Persona.Alice })
+        {
+            var (client, _) = ClientFor(persona);
+            using var result = await PageAccessAsync(client, f.P2);
+            Assert.Equal(f.P2, Data(result, "pageAccess").GetProperty("page").GetProperty("id").GetGuid());
+            Assert.Equal(JsonValueKind.Null, Data(result, "pageAccess").GetProperty("denial").ValueKind);
+        }
     }
 
     [Fact]
@@ -582,7 +575,7 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
             """);
         var access = Data(denied, "pageAccessBySlug");
         Assert.Equal(JsonValueKind.Null, access.GetProperty("page").ValueKind);
-        Assert.Equal("UK SECRET", access.GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
+        Assert.Equal("UK SECRET APPLE", access.GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
 
         using var missing = await bob.PostGraphQLAsync($$"""
             { pageAccessBySlug(spaceKey: "{{f.SpaceKey}}", slug: "no-such-slug") { page { id } denial { noSpaceAccess } } }
@@ -649,9 +642,9 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
         Assert.False(p1.TryGetProperty("id", out _));
         Assert.False(p1.TryGetProperty("children", out _));
         Assert.Equal("(protected)", p1.GetProperty("title").GetString());
-        Assert.Equal("UK SECRET", p1.GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
+        Assert.Equal("UK SECRET APPLE", p1.GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
         Assert.False(p1.GetProperty("denial").GetProperty("noSpaceAccess").GetBoolean());
-        Assert.Equal("CLASSIFICATION", Assert.Single(p1.GetProperty("denial").GetProperty("reasons").EnumerateArray()).GetProperty("gate").GetString());
+        Assert.Equal("SELECTOR_GRANT", Assert.Single(p1.GetProperty("denial").GetProperty("reasons").EnumerateArray()).GetProperty("gate").GetString());
 
         var p6 = roots.Single(r => r.GetProperty("sortOrder").GetInt32() == 4);
         Assert.Equal(P6Label, p6.GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
@@ -736,7 +729,7 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
         Assert.Equal([f.P1, f.P4, f.MissingLinkId], targets.Select(t => t.GetProperty("id").GetGuid()));
 
         Assert.Equal(JsonValueKind.Null, targets[0].GetProperty("page").ValueKind);
-        Assert.Equal("UK SECRET", targets[0].GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
+        Assert.Equal("UK SECRET APPLE", targets[0].GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
 
         Assert.Equal(JsonValueKind.Null, targets[1].GetProperty("page").ValueKind);
         Assert.Equal("RESTRICTION", Assert.Single(targets[1].GetProperty("denial").GetProperty("reasons").EnumerateArray()).GetProperty("gate").GetString());
@@ -767,7 +760,7 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
     public async Task ParentDenial_ForAChildUnderAProtectedParent()
     {
         // Markings do not accumulate (§21.5): Bob reads P5 (UK OFFICIAL) under P1
-        // (UK SECRET). `parent` stays null; `parentDenial` is the placeholder.
+        // (UK SECRET APPLE). `parent` stays null; `parentDenial` is the placeholder.
         var f = await GetFixtureAsync();
         var (bob, sub) = ClientFor(Persona.Bob);
 
@@ -779,14 +772,14 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
         Assert.Equal(JsonValueKind.Null, page.GetProperty("parent").ValueKind);
         var parentDenial = page.GetProperty("parentDenial");
         Assert.Equal("(protected)", parentDenial.GetProperty("placeholderTitle").GetString());
-        Assert.Equal("UK SECRET", parentDenial.GetProperty("marking").GetProperty("label").GetString());
+        Assert.Equal("UK SECRET APPLE", parentDenial.GetProperty("marking").GetProperty("label").GetString());
         Assert.DoesNotContain(f.P1.ToString(), result.RootElement.ToString(), StringComparison.OrdinalIgnoreCase);
 
         // The parent is a directly requested subject: one Denied row, however many of
         // the two fields asked.
         var row = Assert.Single(await AuditRowsAsync(sub, f.P1));
         Assert.Equal(AuditOutcome.Denied, row.Outcome);
-        Assert.Equal("classification:secret", Reason(row));
+        Assert.Equal("selector:not_granted:FRUIT", Reason(row));
 
         // Control: no parentDenial where the parent is viewable or absent.
         var (alice, _) = ClientFor(Persona.Alice);
@@ -914,19 +907,19 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
     [InlineData(Persona.Alice, "P5", "")]
     [InlineData(Persona.Alice, "P6", "SELECTOR_GRANT,NATIONAL_CAVEAT")]
     [InlineData(Persona.Bob, "P0", "")]
-    [InlineData(Persona.Bob, "P1", "CLASSIFICATION")]
+    [InlineData(Persona.Bob, "P1", "SELECTOR_GRANT")]
     [InlineData(Persona.Bob, "P2", "SELECTOR_GRANT")]
     [InlineData(Persona.Bob, "P3", "")]
     [InlineData(Persona.Bob, "P4", "RESTRICTION")]
     [InlineData(Persona.Bob, "P5", "")]
-    [InlineData(Persona.Bob, "P6", "CLASSIFICATION,SELECTOR_GRANT,SELECTOR_GRANT")]
+    [InlineData(Persona.Bob, "P6", "SELECTOR_GRANT,SELECTOR_GRANT")]
     [InlineData(Persona.Carol, "P0", "")]
     [InlineData(Persona.Carol, "P1", "")]
-    [InlineData(Persona.Carol, "P2", "SELECTOR_ELIGIBILITY")]
+    [InlineData(Persona.Carol, "P2", "")]
     [InlineData(Persona.Carol, "P3", "NATIONAL_CAVEAT")]
     [InlineData(Persona.Carol, "P4", "RESTRICTION")]
     [InlineData(Persona.Carol, "P5", "")]
-    [InlineData(Persona.Carol, "P6", "SELECTOR_ELIGIBILITY,SELECTOR_GRANT,NATIONAL_CAVEAT")]
+    [InlineData(Persona.Carol, "P6", "SELECTOR_GRANT,NATIONAL_CAVEAT")]
     [InlineData(Persona.Dave, "P0", "SPACE_ACCESS")]
     [InlineData(Persona.Dave, "P1", "SPACE_ACCESS")]
     [InlineData(Persona.Dave, "P2", "SPACE_ACCESS")]
@@ -1174,9 +1167,9 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
     [Fact]
     public async Task SetPageMarking_ASelectorYouAreNotGrantedHere_IsForbidden()
     {
-        // §21.6's self-lockout rule through the selector gate: Alice may edit, is
-        // eligible for REGION (claim-less), but no access grant she matches confers
-        // NORTH - so the marking she would set is one she could not then read.
+        // §21.6's self-lockout rule through the selector gate: Alice may edit, but no
+        // access grant she matches confers NORTH - so the marking she would set is one
+        // she could not then read.
         var f = await GetFixtureAsync();
         var page = await CreateScratchPageAsync(f);
         var (alice, _) = ClientFor(Persona.Alice);
@@ -1245,83 +1238,35 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
         Assert.Equal(P6Label, Data(denied, "pageAccess").GetProperty("denial").GetProperty("marking").GetProperty("label").GetString());
     }
 
-    // ================================================================== me and vocabulary
+    // ================================================================== vocabulary
 
     [Fact]
-    public async Task Me_SelectorEligibility_IncludesAttributeFreeCategories_AndOnlyYesClaims()
+    public async Task SelectorCategories_AreNameDescriptionAndValues_AndEmptyForAnonymous()
     {
-        static async Task<List<string>> EligibilityAsync(HttpClient client)
-        {
-            using var result = await client.PostGraphQLAsync("{ me { selectorEligibility } }");
-            return Data(result, "me").GetProperty("selectorEligibility").EnumerateArray().Select(e => e.GetString()!).ToList();
-        }
-
-        var yes = Factory.CreateClient();
-        yes.SetTestUser($"me-yes-{Guid.NewGuid():N}", selectorClaims: [RocketWikiApiFactory.FruitClaim]);
-        Assert.Equal(["FRUIT", "REGION", RocketWikiApiFactory.SentinelSelectorCategory], await EligibilityAsync(yes));
-
-        // The claim-less categories admit everyone; the gated one needs `yes`.
-        var none = Factory.CreateClient();
-        none.SetTestUser($"me-none-{Guid.NewGuid():N}");
-        Assert.Equal(["REGION", RocketWikiApiFactory.SentinelSelectorCategory], await EligibilityAsync(none));
-
-        var no = Factory.CreateClient();
-        no.SetTestUser($"me-no-{Guid.NewGuid():N}", claims: [(RocketWikiApiFactory.FruitClaim, "no")]);
-        Assert.Equal(["REGION", RocketWikiApiFactory.SentinelSelectorCategory], await EligibilityAsync(no));
-
-        // SelectorGate's rule (§21.15): trimmed, case-insensitive `yes` - stated once,
-        // and me reads through it.
-        var spaced = Factory.CreateClient();
-        spaced.SetTestUser($"me-spaced-{Guid.NewGuid():N}", claims: [(RocketWikiApiFactory.FruitClaim, " Yes ")]);
-        Assert.Contains("FRUIT", await EligibilityAsync(spaced));
-
-        // A claim nobody configured is not eligibility for anything.
-        var stray = Factory.CreateClient();
-        stray.SetTestUser($"me-stray-{Guid.NewGuid():N}", claims: [("vegetable", "yes")]);
-        Assert.Equal(["REGION", RocketWikiApiFactory.SentinelSelectorCategory], await EligibilityAsync(stray));
-    }
-
-    [Fact]
-    public async Task Me_Anonymous_ReportsOfficialSensitive()
-    {
-        var client = Factory.CreateClient();
-        client.ClearTestUser();
-
-        using var result = await client.PostGraphQLAsync("{ me { isAuthenticated clearance nationality selectorEligibility } }");
-
-        var me = Data(result, "me");
-        Assert.False(me.GetProperty("isAuthenticated").GetBoolean());
-        Assert.Equal("OFFICIAL_SENSITIVE", me.GetProperty("clearance").GetString());
-        Assert.Empty(me.GetProperty("nationality").EnumerateArray());
-        Assert.Empty(me.GetProperty("selectorEligibility").EnumerateArray());
-    }
-
-    [Fact]
-    public async Task SelectorCategories_ExposeNoClaimNames_AndAreEmptyForAnonymous()
-    {
+        // The type used to carry `requiresAttribute` - whether a Keycloak claim gated
+        // eligibility for the category - and a test that the claim NAME never leaked.
+        // Both concepts are gone with the eligibility gate: a category is its name, its
+        // description and its values, and nothing about it says who may use it, because
+        // that is the space's grant (Space.viewerSelectorGrants).
         var client = Factory.CreateClient();
         client.SetTestUser($"vocab-{Guid.NewGuid():N}");
 
         using var result = await client.PostGraphQLAsync("""
-            { selectorCategories { name description requiresAttribute values }
+            { selectorCategories { name description values }
               type: __type(name: "SelectorCategory") { fields { name } } }
             """);
         var body = result.RootElement.ToString();
 
         var categories = Data(result, "selectorCategories").EnumerateArray().ToList();
         Assert.Equal(["FRUIT", "REGION", RocketWikiApiFactory.SentinelSelectorCategory], categories.Select(c => c.GetProperty("name").GetString()));
-        Assert.True(categories[0].GetProperty("requiresAttribute").GetBoolean());
-        Assert.False(categories[1].GetProperty("requiresAttribute").GetBoolean());
         Assert.Equal(["APPLE", "BANANA"], categories[0].GetProperty("values").EnumerateArray().Select(v => v.GetString()));
         Assert.Equal(["NORTH", "SOUTH"], categories[1].GetProperty("values").EnumerateArray().Select(v => v.GetString()));
 
-        // The claim name is deployment plumbing and would tell an attacker which claim
-        // to forge: not a field, and not in the body.
         Assert.Equal(
-            new HashSet<string> { "name", "description", "requiresAttribute", "values" },
+            new HashSet<string> { "name", "description", "values" },
             Data(result, "type").GetProperty("fields").EnumerateArray().Select(f => f.GetProperty("name").GetString()!).ToHashSet());
-        Assert.DoesNotContain(JsonSerializer.Serialize(RocketWikiApiFactory.FruitClaim), body, StringComparison.Ordinal);
         Assert.DoesNotContain("claimName", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("requiresAttribute", body, StringComparison.OrdinalIgnoreCase);
 
         var anonymous = Factory.CreateClient();
         anonymous.ClearTestUser();

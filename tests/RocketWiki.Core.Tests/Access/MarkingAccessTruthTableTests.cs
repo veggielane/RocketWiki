@@ -6,22 +6,27 @@ using Xunit;
 namespace RocketWiki.Core.Tests.Access;
 
 /// <summary>
-/// design.md §6.4 / §21.2 as a truth table: canView is the conjunction of six gates —
-/// space access (S), classification (C), selector eligibility (E), selector grant (G),
-/// national caveat (N), view restrictions (R) — and the reason a denial names is the first
-/// failing gate in exactly that order. All 64 rows are driven, not a sample: the ladder
-/// is the whole authorization model, and a gate that could be skipped under one
-/// combination of the others is precisely the bug a sample would miss. A second table
-/// drives the edit ladder (replica, role, edit restrictions) over a passing view.
+/// design.md §6.4 / §21.2 as a truth table: canView is the conjunction of four gates —
+/// space access (S), selector grant (G), national caveat (N), view restrictions (R) — and
+/// the reason a denial names is the first failing gate in exactly that order. All 16 rows
+/// are driven, not a sample: the ladder is the whole authorization model, and a gate that
+/// could be skipped under one combination of the others is precisely the bug a sample
+/// would miss. A second table drives the edit ladder (replica, role, edit restrictions)
+/// over a passing view, and one more row drives the gate that has no toggle because it
+/// has no principal-side input: a missing marking row denies every combination.
+///
+/// <para>The table was 64 rows over S, C, E, G, N, R. C (clearance against the level) and
+/// E (a per-category eligibility claim) both read Keycloak attributes this deployment
+/// does not carry, and both are gone; what is left is exactly the four gates that read
+/// something real — a grant, a nationality, a rule.</para>
 ///
 /// <para>Fixture: the confirmed test catalog (<see cref="TestCatalogs.Fruit"/>), a page
 /// marked <c>UK SECRET APPLE UK EYES ONLY</c> with a <c>group: engineering</c> view
-/// restriction. S toggles whether the access grant matches; C toggles the clearance
-/// claim between SECRET and OFFICIAL_SENSITIVE; E toggles the <c>fruit: yes</c> claim; G
-/// toggles whether the access grant carries APPLE; N toggles nationality between UK and
-/// US; R toggles membership of <c>engineering</c>. A role grant matching everyone is
-/// present throughout, so a passing view row reaches the edit ladder — and so the S=false
-/// rows also prove a role grant rescues nothing.</para>
+/// restriction. S toggles whether the access grant matches; G toggles whether the access
+/// grant carries APPLE; N toggles nationality between UK and US; R toggles membership of
+/// <c>engineering</c>. A role grant matching everyone is present throughout, so a passing
+/// view row reaches the edit ladder — and so the S=false rows also prove a role grant
+/// rescues nothing. The SECRET level is on every row and gates none of them.</para>
 /// </summary>
 public class MarkingAccessTruthTableTests
 {
@@ -34,12 +39,12 @@ public class MarkingAccessTruthTableTests
     private static readonly ProtectiveMarking Marking =
         ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], [TestCatalogs.Apple]);
 
-    public static TheoryData<bool, bool, bool, bool, bool, bool> ViewRows()
+    public static TheoryData<bool, bool, bool, bool> ViewRows()
     {
-        var rows = new TheoryData<bool, bool, bool, bool, bool, bool>();
-        for (var bits = 0; bits < 64; bits++)
+        var rows = new TheoryData<bool, bool, bool, bool>();
+        for (var bits = 0; bits < 16; bits++)
         {
-            rows.Add((bits & 32) != 0, (bits & 16) != 0, (bits & 8) != 0, (bits & 4) != 0, (bits & 2) != 0, (bits & 1) != 0);
+            rows.Add((bits & 8) != 0, (bits & 4) != 0, (bits & 2) != 0, (bits & 1) != 0);
         }
 
         return rows;
@@ -59,8 +64,8 @@ public class MarkingAccessTruthTableTests
     private sealed record Scenario(PermissionInputs Inputs, Principal Principal, AccessRule ViewRestriction, AccessRule EditRestriction);
 
     private static Scenario Build(
-        bool s, bool c, bool e, bool g, bool n, bool r,
-        bool replica = false, bool role = true, bool editR = true)
+        bool s, bool g, bool n, bool r,
+        bool replica = false, bool role = true, bool editR = true, ProtectiveMarking? marking = null)
     {
         var access = new AccessRule
         {
@@ -96,37 +101,29 @@ public class MarkingAccessTruthTableTests
 
         var attributes = new List<KeyValuePair<string, IReadOnlyList<string>>>
         {
-            new(ClearanceGate.ClearanceAttributeKey, [c ? "SECRET" : "OFFICIAL_SENSITIVE"]),
-            new(ClearanceGate.NationalityAttributeKey, [n ? "UK" : "US"]),
+            new(CaveatGate.NationalityAttributeKey, [n ? "UK" : "US"]),
         };
-        if (e)
-        {
-            attributes.Add(new(TestCatalogs.FruitClaim, ["yes"]));
-        }
 
         var principal = Principal.Create("user-sub", r ? ["engineering"] : [], attributes);
         var inputs = new PermissionInputs(
-            [access, roleGrant], [viewRestriction, editRestriction], replica, Marking, TestCatalogs.Fruit);
+            [access, roleGrant], [viewRestriction, editRestriction], replica, marking ?? Marking, TestCatalogs.Fruit);
         return new Scenario(inputs, principal, viewRestriction, editRestriction);
     }
 
     [Theory]
     [MemberData(nameof(ViewRows))]
-    public void View_IsTheConjunctionOfAllSixGates_AndNamesTheFirstFailingOneInOrder(
-        bool s, bool c, bool e, bool g, bool n, bool r)
+    public void View_IsTheConjunctionOfAllFourGates_AndNamesTheFirstFailingOneInOrder(bool s, bool g, bool n, bool r)
     {
-        var scenario = Build(s, c, e, g, n, r);
+        var scenario = Build(s, g, n, r);
 
         var permission = EffectivePermissionCalculator.Compute(scenario.Inputs, scenario.Principal);
 
-        Assert.Equal(s && c && e && g && n && r, permission.CanView);
+        Assert.Equal(s && g && n && r, permission.CanView);
 
         var expectedReason =
             !s ? EffectivePermissionCalculator.NoSpaceAccessReason
-            : !c ? "classification:secret"
-            : !e ? "selector:not_eligible:FRUIT"
             : !g ? "selector:not_granted:FRUIT"
-            : !n ? ClearanceGate.EyesOnlyReason
+            : !n ? CaveatGate.EyesOnlyReason
             : !r ? $"restriction:{PageId}:{scenario.ViewRestriction.Id}"
             : null;
         Assert.Equal(expectedReason, permission.ViewDenialReason);
@@ -140,10 +137,9 @@ public class MarkingAccessTruthTableTests
 
     [Theory]
     [MemberData(nameof(ViewRows))]
-    public void Explain_AgreesWithTheVerdict_AndListsExactlyTheFailingGates(
-        bool s, bool c, bool e, bool g, bool n, bool r)
+    public void Explain_AgreesWithTheVerdict_AndListsExactlyTheFailingGates(bool s, bool g, bool n, bool r)
     {
-        var scenario = Build(s, c, e, g, n, r);
+        var scenario = Build(s, g, n, r);
 
         var permission = EffectivePermissionCalculator.Compute(scenario.Inputs, scenario.Principal);
         var explained = EffectivePermissionCalculator.Explain(scenario.Inputs, scenario.Principal);
@@ -156,16 +152,6 @@ public class MarkingAccessTruthTableTests
         if (!s)
         {
             expectedFailing.Add(GateKind.SpaceAccess);
-        }
-
-        if (!c)
-        {
-            expectedFailing.Add(GateKind.Classification);
-        }
-
-        if (!e)
-        {
-            expectedFailing.Add(GateKind.SelectorEligibility);
         }
 
         // No access grant, no granted union: G is unsatisfiable when S fails, whatever
@@ -189,15 +175,36 @@ public class MarkingAccessTruthTableTests
 
         // Every gate is listed in the inspector form, passed or not, in the ladder's order.
         Assert.Equal(
-            [GateKind.SpaceAccess, GateKind.Classification, GateKind.SelectorEligibility, GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
+            [GateKind.SpaceAccess, GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
             explained.ViewGates.Select(x => x.Kind));
+    }
+
+    [Theory]
+    [MemberData(nameof(ViewRows))]
+    public void TheLevel_ChangesNoRow(bool s, bool g, bool n, bool r)
+    {
+        // The row's verdict and reason are identical under every level: the level is on
+        // the marking for display and for the aggregate maximum, and the ladder never
+        // reads it (§21.12).
+        var reference = EffectivePermissionCalculator.Compute(Build(s, g, n, r).Inputs, Build(s, g, n, r).Principal);
+
+        foreach (var level in Enum.GetValues<ClassificationLevel>())
+        {
+            var scenario = Build(s, g, n, r, marking: ProtectiveMarking.Create(level, ["UK"], [TestCatalogs.Apple]));
+            var permission = EffectivePermissionCalculator.Compute(scenario.Inputs, scenario.Principal);
+
+            Assert.Equal(reference.CanView, permission.CanView);
+            Assert.Equal(reference.CanEdit, permission.CanEdit);
+            // The restriction rule id differs per Build; compare the reason's shape.
+            Assert.Equal(reference.ViewDenialReason?.Split(':')[0], permission.ViewDenialReason?.Split(':')[0]);
+        }
     }
 
     [Theory]
     [MemberData(nameof(EditRows))]
     public void Edit_OverAPassingView_IsReplicaThenRoleThenEditRestrictions(bool replica, bool role, bool editR)
     {
-        var scenario = Build(true, true, true, true, true, true, replica, role, editR);
+        var scenario = Build(true, true, true, true, replica, role, editR);
 
         var permission = EffectivePermissionCalculator.Compute(scenario.Inputs, scenario.Principal);
         var explained = EffectivePermissionCalculator.Explain(scenario.Inputs, scenario.Principal);
@@ -241,7 +248,7 @@ public class MarkingAccessTruthTableTests
         // The S=false rows above already carry a matching Editor role grant. Stated once
         // more on its own, with a Space-admin, because it is the invariant the grant split
         // exists for (§6.4: roles never supersede access).
-        var scenario = Build(false, true, true, true, true, true);
+        var scenario = Build(false, true, true, true);
         var inputs = scenario.Inputs with
         {
             SpaceGrants = [scenario.Inputs.SpaceGrants[0], new AccessRule
@@ -254,5 +261,52 @@ public class MarkingAccessTruthTableTests
 
         Assert.False(permission.CanView);
         Assert.Equal(EffectivePermissionCalculator.NoSpaceAccessReason, permission.ViewDenialReason);
+    }
+
+    // --- The gate with no toggle (design.md §21) -------------------------------------------
+
+    [Fact]
+    public void Compute_MarkingRowMissing_DeniesEveryone_EvenASpaceAdminWithEverySelector()
+    {
+        // The fail-open trap this whole removal had to step around. FailClosed used to
+        // deny by being TOP SECRET; with the level out of the ladder it carries nothing a
+        // gate reads - no selectors, no caveat - and would admit this caller outright.
+        // The row is a Space-admin (the highest role), UK national, matching an access
+        // grant that confers every value in the catalog, in engineering: every gate with
+        // a toggle passes, and the verdict is still a denial with the availability token,
+        // for every combination of the toggles behind it.
+        foreach (var (s, g, n, r) in new[] { (true, true, true, true), (true, false, false, false), (false, true, true, true) })
+        {
+            var scenario = Build(s, g, n, r, marking: ProtectiveMarking.FailClosed);
+            var inputs = scenario.Inputs with
+            {
+                SpaceGrants =
+                [
+                    scenario.Inputs.SpaceGrants[0],
+                    new AccessRule
+                    {
+                        Kind = AccessRuleKind.RoleGrant, SpaceId = Guid.NewGuid(), Role = SpaceRole.SpaceAdmin, ExpressionJson = Everyone,
+                    },
+                ],
+            };
+            foreach (var selector in new[] { TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South })
+            {
+                inputs.SpaceGrants[0].Selectors.Add(new AccessRuleSelector
+                {
+                    AccessRuleId = inputs.SpaceGrants[0].Id, Category = selector.Category, Value = selector.Value,
+                });
+            }
+
+            var permission = EffectivePermissionCalculator.Compute(inputs, scenario.Principal);
+            var explained = EffectivePermissionCalculator.Explain(inputs, scenario.Principal);
+
+            Assert.False(permission.CanView);
+            Assert.False(permission.CanEdit);
+            Assert.Equal(s ? MarkingGate.UnavailableReason : EffectivePermissionCalculator.NoSpaceAccessReason, permission.ViewDenialReason);
+            Assert.Equal(permission, explained.Permission);
+            Assert.Contains(explained.ViewGates, gate => gate.Kind == GateKind.MarkingUnavailable && !gate.Passed);
+            // Nothing else about the marking is listed: there is no marking to evaluate.
+            Assert.DoesNotContain(explained.ViewGates, gate => gate.Kind is GateKind.SelectorGrant or GateKind.NationalCaveat);
+        }
     }
 }

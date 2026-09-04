@@ -233,8 +233,8 @@ public sealed class AssistantTelemetryHygieneTests(AskWikiApiFixture fixture) : 
         };
         db.Pages.Add(page);
 
-        // design.md §21.13: a real marking, at a level the (clearance-less, therefore
-        // OFFICIAL-SENSITIVE) asker is admitted to, with a sentinel eyes-only country and a
+        // design.md §21.13: a real marking, at a level (which gates nobody - §21.12) the
+        // asker is admitted to regardless, with a sentinel eyes-only country and a
         // sentinel national prefix. Both flow into the answer's aggregate label and each citation's
         // marking — two new surfaces §15 has to stay clean across.
         var marking = new PageMarking

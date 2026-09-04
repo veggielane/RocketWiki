@@ -26,9 +26,9 @@ public partial class Query
     /// address and everyone's activity times is a surveillance surface (§15's spirit:
     /// operational data is not a product feature). They stay on <c>AdminUser</c>, behind
     /// the instance-admin gate, where reading the roster is itself audited.</description></item>
-    /// <item><description><b>Groups, nationality, clearance — any registered attribute.</b>
+    /// <item><description><b>Groups, nationality — any registered attribute.</b>
     /// These are the rule engine's INPUTS (§6.2, §6.1). A directory carrying them would
-    /// be a who-holds-what-clearance census: an attacker with one ordinary account could
+    /// be a who-holds-what census: an attacker with one ordinary account could
     /// enumerate the whole organisation's caveats and work out exactly whose credentials
     /// are worth stealing to reach a given compartment. That is a worse disclosure than
     /// most page content, and it is why this projection is narrow rather than "the User

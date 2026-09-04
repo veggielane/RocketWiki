@@ -310,7 +310,7 @@ public class DataTelemetryTests : SqliteTestBase
     /// dashboard an operator would consult about it.
     /// </summary>
     [Fact]
-    public async Task PageTreeWalk_RecordsAPermissionCheckPerNode_IncludingClassificationPrunes()
+    public async Task PageTreeWalk_RecordsAPermissionCheckPerNode_IncludingSelectorPrunes()
     {
         using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
 
@@ -320,23 +320,25 @@ public class DataTelemetryTests : SqliteTestBase
         context.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
 
         var visible = TestData.NewPage(space, "visible");
-        var secret = TestData.NewPage(space, "secret");
-        context.Pages.AddRange(visible, secret);
+        var compartment = TestData.NewPage(space, "compartment");
+        context.Pages.AddRange(visible, compartment);
         context.PageMarkings.Add(TestData.NewMarking(visible, ClassificationLevel.Official));
-        context.PageMarkings.Add(TestData.NewMarking(secret, ClassificationLevel.Secret));
+        context.PageMarkings.Add(TestData.NewMarking(compartment, ClassificationLevel.Secret)
+            .WithSelectors(RocketWiki.Core.Tests.Access.TestCatalogs.Apple));
         context.SaveChanges();
 
-        // No clearance claim, so the caller is OFFICIAL (§21.3) and the SECRET page prunes.
+        // No grant confers APPLE, so the compartment page prunes (the SECRET level on it
+        // gates nobody - §21.12).
         var tree = await new PageReadService(context).GetPageTreeAsync(space.Id, EditorPrincipal());
         Assert.Single(Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Found>(tree).Value.OfType<PageTreeNode>());
 
         var measurements = checks.GetMeasurementSnapshot();
         Assert.Equal(2, measurements.Count); // one per node considered, pruned or not
 
-        // The prune is reported under the bounded `classification` category - never the
-        // level itself, which §21.8 keeps out of telemetry deliberately.
+        // The prune is reported under the bounded `selector` category - never the
+        // category name or the value, which §21.8 keeps out of telemetry deliberately.
         var pruned = Assert.Single(measurements.Where(m => Equals(m.Tags[CoreTelemetry.CanViewTag], false)));
-        Assert.Equal("classification", pruned.Tags[CoreTelemetry.DenialReasonTag]);
+        Assert.Equal("selector", pruned.Tags[CoreTelemetry.DenialReasonTag]);
 
         var admitted = Assert.Single(measurements.Where(m => Equals(m.Tags[CoreTelemetry.CanViewTag], true)));
         Assert.Equal("none", admitted.Tags[CoreTelemetry.DenialReasonTag]);

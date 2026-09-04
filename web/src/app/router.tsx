@@ -265,8 +265,8 @@ export const routes: RouteObject[] = [
           return { Component: SettingsPage }
         },
       },
-      // A person's profile (design.md §6.2): their clearance and selector
-      // eligibility as recorded at their last sign-in. Not router-gated —
+      // A person's profile (design.md §6.2): the group memberships recorded
+      // at their last sign-in. Not router-gated —
       // readable by every signed-in user by product decision, and the server
       // returns null for an id that matches nobody, which the page renders as
       // not-found. Addressed by the local user id every UserRef carries.

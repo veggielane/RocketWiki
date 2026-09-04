@@ -12,7 +12,7 @@ namespace RocketWiki.Core.Services;
 /// <c>EffectivePermissionCalculator.Compute</c>, on the same call that decides canView —
 /// there is no path by which a caller reaches a decision through this interface, because
 /// this interface returns no decision. Every id handed to it belongs to a page that
-/// already passed the clearance gate, which is exactly why showing the marking discloses
+/// already passed the marking gate, which is exactly why showing the marking discloses
 /// nothing: it is the reason the caller was let in, not a second secret (the
 /// <c>Page.marking</c> / <c>PageTreeNode.Marking</c> posture, §21.9).</para>
 ///

@@ -22,10 +22,12 @@ namespace RocketWiki.Core.Access;
 /// <c>canEdit</c> (§12); view-only callers pass false deliberately.</param>
 /// <param name="Marking">The page's own protective marking (§21). Required, never
 /// nullable: a page with no marking row is <see cref="ProtectiveMarking.FailClosed"/>,
-/// and that substitution is the loader's, not the calculator's.</param>
+/// which denies everyone by its own flag, and that substitution is the loader's, not
+/// the calculator's.</param>
 /// <param name="Catalog">This instance's selector catalog (§21.15). A category the catalog
-/// does not know is eligible to nobody; <see cref="SelectorCatalog.Empty"/> is therefore
-/// the fail-closed value, not a way to skip the selector gates.</param>
+/// does not know can never be granted and is reported as unknown;
+/// <see cref="SelectorCatalog.Empty"/> is therefore the fail-closed value, not a way to
+/// skip the selector gate.</param>
 public sealed record PermissionInputs(
     IReadOnlyList<AccessRule> SpaceGrants,
     IReadOnlyList<AccessRule> ChainRestrictions,

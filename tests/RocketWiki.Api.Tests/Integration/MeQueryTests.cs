@@ -73,7 +73,7 @@ public sealed class MeQueryTests(RocketWikiApiFactory factory) : IClassFixture<R
     public async Task Me_Nationality_IsCanonicalized_SoTheUiComparesLikeTheServerDoes(string claimValue)
     {
         // design.md §21.4's case-mismatch trap, one layer up. A marking's country set is
-        // ALWAYS canonical (upper-cased) on write, and ClearanceGate canonicalizes the
+        // ALWAYS canonical (upper-cased) on write, and CaveatGate canonicalizes the
         // principal's side before comparing — so the server admits a `gb` token to a `GB`
         // marking. If `me.nationality` echoed the raw claim, the SPA comparing it against
         // `marking.eyesOnly` would disagree with the server and warn that a marking locks
@@ -91,40 +91,54 @@ public sealed class MeQueryTests(RocketWikiApiFactory factory) : IClassFixture<R
     }
 
     [Fact]
-    public async Task Me_Clearance_ResolvesThroughTheGate_SoGarbageReadsAsOfficialSensitiveNotAsTheRawClaim()
+    public async Task Me_Nationality_DropsTokensOutsideTheFixedSet_SoTheUiSeesWhatTheGateHolds()
     {
-        // Same discipline for the level: the SPA must grey out what the server refuses,
-        // and §21.3 says an unrecognised clearance claim is worth OFFICIAL-SENSITIVE and
-        // nothing above. Echoing the raw claim would let the UI offer SECRET to someone the
-        // server will refuse.
+        // The principal side of §21.4: a mapper emitting GB yields a caller who holds
+        // NOTHING - and me says so, which is how the misconfiguration gets noticed
+        // rather than half-worked-around by a UI comparing raw strings.
         var client = factory.CreateClient();
-        client.SetTestUser(sub: $"user-{Guid.NewGuid()}", clearance: "not-a-level");
+        client.SetTestUser(sub: $"user-{Guid.NewGuid()}", nationality: ["GB", "FR"]);
 
-        var garbage = await client.PostGraphQLAsync("{ me { clearance } }");
-        Assert.Equal(
-            "OFFICIAL_SENSITIVE",
-            garbage.RootElement.GetProperty("data").GetProperty("me").GetProperty("clearance").GetString());
+        var result = await client.PostGraphQLAsync("{ me { nationality } }");
 
-        client.SetTestUser(sub: $"user-{Guid.NewGuid()}", clearance: "SECRET");
-        var real = await client.PostGraphQLAsync("{ me { clearance } }");
-        Assert.Equal(
-            "SECRET",
-            real.RootElement.GetProperty("data").GetProperty("me").GetProperty("clearance").GetString());
+        Assert.Empty(result.RootElement.GetProperty("data").GetProperty("me").GetProperty("nationality").EnumerateArray());
     }
 
     [Fact]
-    public async Task Me_Anonymous_ReportsOfficialSensitiveAndNoNationality()
+    public async Task Me_CarriesNoClearanceAndNoSelectorEligibility()
     {
-        // The fail-closed floor, so an unauthenticated SPA renders "you may set OFFICIAL-SENSITIVE"
-        // rather than an empty picker or a crash.
+        // Two affordance fields used to ride here for two gates this deployment no
+        // longer has (a clearance against the level, a per-category eligibility claim).
+        // Both are gone from the schema, so a document selecting them is refused before
+        // any resolver runs - which is what keeps a stale SPA from rendering a picker
+        // greyed out by a fact the server no longer holds.
+        var client = factory.CreateClient();
+        client.SetTestUser(sub: $"user-{Guid.NewGuid()}", nationality: ["UK"]);
+
+        foreach (var field in new[] { "clearance", "selectorEligibility" })
+        {
+            var response = await client.PostAsync(
+                "/graphql",
+                new StringContent($$"""{"query":"{ me { {{field}} } }"}""", System.Text.Encoding.UTF8, "application/json"));
+            var body = await response.Content.ReadAsStringAsync();
+
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains("\"errors\"", body, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task Me_Anonymous_ReportsNoNationality()
+    {
+        // Anonymous holds nothing: every caveated page is closed to them, and an
+        // unauthenticated SPA renders an empty caveat affordance rather than a crash.
         var client = factory.CreateClient();
         client.ClearTestUser();
 
-        var result = await client.PostGraphQLAsync("{ me { isAuthenticated clearance nationality } }");
+        var result = await client.PostGraphQLAsync("{ me { isAuthenticated nationality } }");
 
         var me = result.RootElement.GetProperty("data").GetProperty("me");
         Assert.False(me.GetProperty("isAuthenticated").GetBoolean());
-        Assert.Equal("OFFICIAL_SENSITIVE", me.GetProperty("clearance").GetString());
         Assert.Empty(me.GetProperty("nationality").EnumerateArray());
     }
 }

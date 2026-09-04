@@ -18,7 +18,7 @@ namespace RocketWiki.Api.Tests.Integration;
 /// <item><b>Retrieved beats cited.</b> A SECRET page that entered the model context but
 /// earned no citation still raises the answer's marking. A marking a model could defeat
 /// by declining to cite would not be a marking.</item>
-/// <item><b>Aggregation widens nothing.</b> A page above the asker's clearance never
+/// <item><b>Aggregation widens nothing.</b> A page the asker is not granted never
 /// reaches retrieval (§6.7), so it cannot contribute — verified rather than assumed, by
 /// asking the same question as two principals and watching the label differ, and by
 /// confirming the source stays unopenable afterwards.</item>
@@ -110,11 +110,39 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         return page;
     }
 
-    private HttpClient CreateClient(string? clearance = null, string[]? nationality = null)
+    private HttpClient CreateClient(string[]? nationality = null, string[]? groups = null)
     {
         var client = fixture.Factory.CreateClient();
-        client.SetTestUser(sub: $"agg-{Guid.NewGuid():N}", clearance: clearance, nationality: nationality);
+        client.SetTestUser(sub: $"agg-{Guid.NewGuid():N}", nationality: nationality, groups: groups);
         return client;
+    }
+
+    /// <summary>Puts a selector on a page and adds an access grant, matching only
+    /// <paramref name="grantedToGroup"/>, that confers it - the pair a selector-gated
+    /// fixture needs (design.md §21.15).</summary>
+    private async Task AddSelectorAsync(Page page, string category, string value, string grantedToGroup)
+    {
+        using var scope = fixture.Factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var marking = await db.PageMarkings.Include(m => m.Selectors).SingleAsync(m => m.PageId == page.Id);
+        marking.Selectors.Add(new PageMarkingSelector { PageId = page.Id, Category = category, Value = value });
+
+        var space = await db.Spaces.SingleAsync(s => s.Id == page.SpaceId);
+        var grant = new AccessRule
+        {
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = space.Id,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new GroupCondition(grantedToGroup)),
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = space.CreatedByUserId,
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = space.CreatedByUserId,
+        };
+        grant.Selectors.Add(new AccessRuleSelector { AccessRuleId = grant.Id, Category = category, Value = value });
+        db.AccessRules.Add(grant);
+
+        await db.SaveChangesAsync();
     }
 
     private static Task<JsonDocument> AskAsync(HttpClient client, string question) =>
@@ -167,7 +195,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         fixture.ChatClient.Respond = _ => "A grounded summary with no citation markers whatsoever.";
         try
         {
-            using var response = await AskAsync(CreateClient(clearance: "SECRET"), term);
+            using var response = await AskAsync(CreateClient(), term);
             var ask = Field(response, "askWiki");
 
             // Non-vacuous: the SECRET page's body really did travel to the model.
@@ -220,7 +248,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         await SeedPageAsync(space, "us-only", "US Notes", $"# US\n\nThe {term} figures, again.",
             ClassificationLevel.Secret, eyesOnly: ["US"]);
 
-        using var response = await AskAsync(CreateClient(clearance: "SECRET", nationality: ["UK", "US"]), term);
+        using var response = await AskAsync(CreateClient(nationality: ["UK", "US"]), term);
         var ask = Field(response, "askWiki");
 
         Assert.Equal("UK SECRET UK EYES ONLY, US EYES ONLY", AggregateLabel(ask));
@@ -239,7 +267,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
             ClassificationLevel.Secret, eyesOnly: ["UK"]);
 
         // The fixture's default script cites every marker it was offered.
-        using var response = await AskAsync(CreateClient(clearance: "SECRET", nationality: ["UK"]), term);
+        using var response = await AskAsync(CreateClient(nationality: ["UK"]), term);
         var ask = Field(response, "askWiki");
 
         var byPageId = ask.GetProperty("citations").EnumerateArray()
@@ -292,7 +320,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         await SeedPageAsync(space, "audited", "Audited Source", $"# Audited\n\nAll about {term}.",
             ClassificationLevel.Secret);
 
-        using var response = await AskAsync(CreateClient(clearance: "SECRET"), term);
+        using var response = await AskAsync(CreateClient(), term);
         Assert.Equal("UK SECRET", AggregateLabel(Field(response, "askWiki")));
 
         using var scope = fixture.Factory.Services.CreateScope();
@@ -308,28 +336,30 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
     // ---------- ask: §6.7 — what the caller cannot see contributes nothing ----------
 
     [Fact]
-    public async Task AskWiki_APageAboveTheAskersClearance_ContributesNothingToTheAggregate()
+    public async Task AskWiki_APageTheAskerIsNotGranted_ContributesNothingToTheAggregate()
     {
-        // §6.7 verified, not assumed: the over-classified page never reaches retrieval, so
-        // it cannot raise the label. The cleared half proves the absence was the gate and
-        // not the corpus.
+        // §6.7 verified, not assumed: the ungranted page never reaches retrieval, so it
+        // cannot raise the label. The granted half proves the absence was the gate and
+        // not the corpus. The SECRET on the closed page gates nobody (§21.12); the APPLE
+        // selector, conferred on apple-readers alone, is what closes it.
         fixture.ChatClient.Reset();
         var term = $"zzagg{Guid.NewGuid():N}"[..14];
-        var secretSentinel = $"ZZABOVECLEARANCE{Guid.NewGuid():N}ZZ";
+        var secretSentinel = $"ZZUNGRANTED{Guid.NewGuid():N}ZZ";
 
         var space = await SeedSpaceAsync();
         await SeedPageAsync(space, "gate-open", "Open", $"# Open\n\nThe {term} basics.");
-        await SeedPageAsync(space, "gate-closed", "Closed", $"# Closed\n\n{secretSentinel} and {term}.",
+        var closed = await SeedPageAsync(space, "gate-closed", "Closed", $"# Closed\n\n{secretSentinel} and {term}.",
             ClassificationLevel.Secret);
+        await AddSelectorAsync(closed, "FRUIT", "APPLE", grantedToGroup: "apple-readers");
 
-        using (var uncleared = await AskAsync(CreateClient(), term))
+        using (var ungranted = await AskAsync(CreateClient(), term))
         {
-            Assert.Equal("UK OFFICIAL", AggregateLabel(Field(uncleared, "askWiki")));
+            Assert.Equal("UK OFFICIAL", AggregateLabel(Field(ungranted, "askWiki")));
             Assert.DoesNotContain(secretSentinel, fixture.ChatClient.Transcript);
         }
 
-        using var cleared = await AskAsync(CreateClient(clearance: "SECRET"), term);
-        Assert.Equal("UK SECRET", AggregateLabel(Field(cleared, "askWiki")));
+        using var granted = await AskAsync(CreateClient(groups: ["apple-readers"]), term);
+        Assert.Equal("UK SECRET APPLE", AggregateLabel(Field(granted, "askWiki")));
         Assert.Contains(secretSentinel, fixture.ChatClient.Transcript);
     }
 
@@ -347,7 +377,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         await SeedPageAsync(space, "cav-closed", "Closed", $"# Closed\n\nMore {term}.",
             ClassificationLevel.Secret, eyesOnly: ["US"]);
 
-        using var response = await AskAsync(CreateClient(clearance: "TOP_SECRET", nationality: ["UK"]), term);
+        using var response = await AskAsync(CreateClient(nationality: ["UK"]), term);
         var ask = Field(response, "askWiki");
 
         Assert.Equal("UK OFFICIAL", AggregateLabel(ask));
@@ -368,6 +398,8 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         await SeedPageAsync(space, "acc-open", "Open", $"# Open\n\nThe {term} basics.");
         var closed = await SeedPageAsync(space, "acc-closed", "Closed", $"# Closed\n\nMore {term}.",
             ClassificationLevel.Secret);
+        // Closed by a selector the asker is not granted; the SECRET on it gates nobody.
+        await AddSelectorAsync(closed, "FRUIT", "APPLE", grantedToGroup: "apple-readers");
 
         var client = CreateClient();
 
@@ -397,20 +429,21 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
         var term = $"zzsrch{Guid.NewGuid():N}"[..14];
         var space = await SeedSpaceAsync();
         await SeedPageAsync(space, "s-open", "Open Result", $"# Open\n\nThe {term} routine.");
-        await SeedPageAsync(space, "s-closed", "Closed Result", $"# Closed\n\nThe {term} routine, restricted.",
+        var closed = await SeedPageAsync(space, "s-closed", "Closed Result", $"# Closed\n\nThe {term} routine, restricted.",
             ClassificationLevel.Secret);
+        await AddSelectorAsync(closed, "FRUIT", "APPLE", grantedToGroup: "apple-readers");
 
-        using (var uncleared = await SearchAsync(CreateClient(), term, space.Key))
+        using (var ungranted = await SearchAsync(CreateClient(), term, space.Key))
         {
-            var search = Field(uncleared, "search");
+            var search = Field(ungranted, "search");
             Assert.Equal(1, search.GetProperty("totalCount").GetInt32());
             Assert.Equal("UK OFFICIAL", AggregateLabel(search));
         }
 
-        using var cleared = await SearchAsync(CreateClient(clearance: "SECRET"), term, space.Key);
-        var clearedSearch = Field(cleared, "search");
-        Assert.Equal(2, clearedSearch.GetProperty("totalCount").GetInt32());
-        Assert.Equal("UK SECRET", AggregateLabel(clearedSearch));
+        using var granted = await SearchAsync(CreateClient(groups: ["apple-readers"]), term, space.Key);
+        var grantedSearch = Field(granted, "search");
+        Assert.Equal(2, grantedSearch.GetProperty("totalCount").GetInt32());
+        Assert.Equal("UK SECRET APPLE", AggregateLabel(grantedSearch));
     }
 
     [Fact]
@@ -424,7 +457,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
             ClassificationLevel.OfficialSensitive, eyesOnly: ["US"]);
 
         using var response = await SearchAsync(
-            CreateClient(clearance: "SECRET", nationality: ["UK", "US"]), term, space.Key);
+            CreateClient(nationality: ["UK", "US"]), term, space.Key);
         var search = Field(response, "search");
 
         Assert.Equal(2, search.GetProperty("totalCount").GetInt32());
@@ -456,7 +489,7 @@ public sealed class AggregateMarkingApiTests(AskWikiApiFixture fixture) : IClass
             ClassificationLevel.OfficialSensitive, eyesOnly: ["UK"]);
 
         using var response = await SearchAsync(
-            CreateClient(clearance: "OFFICIAL_SENSITIVE", nationality: ["UK"]), term, space.Key);
+            CreateClient(nationality: ["UK"]), term, space.Key);
         var search = Field(response, "search");
 
         var node = Assert.Single(search.GetProperty("edges").EnumerateArray()).GetProperty("node");

@@ -4,7 +4,7 @@ import type { NationalCaveatCountry } from '../graphql/generated/graphql'
  * design.md §21.4: the eyes-only caveat's vocabulary is the FIXED set of five
  * — AUS, CAN, NZ, UK, US — not a registered attribute's values and not an ISO
  * list. This is the picker's option list, pinned to the schema's input enum
- * in both directions exactly as `CLASSIFICATION_LADDER` pins the levels:
+ * in both directions:
  * `satisfies` rejects a member the enum does not have, and the `AssertNever`
  * below rejects a member the enum gained that nobody listed here. A sixth
  * country therefore breaks the build rather than compiling into a picker

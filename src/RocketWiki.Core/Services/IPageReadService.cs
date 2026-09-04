@@ -61,7 +61,7 @@ public interface IPageReadService
     ///
     /// <para>Deliberately returns an ID and makes NO access decision: the caller feeds
     /// it straight to <see cref="GetPageAsync"/>, which is the one place canView and
-    /// the clearance gate live. Resolving the slug and authorizing it in one method
+    /// the marking gate live. Resolving the slug and authorizing it in one method
     /// would be a second enforcement path to keep in step with the first — and the
     /// caller collapsing "no such slug" and "denied" to the same null is what keeps a
     /// slug URL from becoming an existence oracle (§6.7).</para>
@@ -120,7 +120,7 @@ public interface IPageReadService
     /// <para><b>Each child is gated on its own</b>, against its own ancestor restriction
     /// chain and its own marking, rather than by locating the parent inside a pruned
     /// space tree. That is the only reading consistent with §21.5: a marking does not
-    /// accumulate, so a page whose ANCESTOR is above the caller's clearance is pruned
+    /// accumulate, so a page whose ANCESTOR the caller is not granted is pruned
     /// from the tree along with its subtree — yet the design says that page "stays
     /// reachable by id and through search, both of which check it on its own". Deriving
     /// children from the tree made such a page answer <c>children</c> with an empty list

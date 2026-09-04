@@ -91,33 +91,40 @@ public class PageMarkingService : IPageMarkingService
             .Include(m => m.Selectors)
             .FirstOrDefaultAsync(m => m.PageId == page.Id, cancellationToken);
 
-        // The before-state for the audit row. A page with no marking row reads as
-        // TOP SECRET everywhere else (ProtectiveMarking.FailClosed), and the audit row
-        // says the same thing rather than inventing a friendlier previous value - the
-        // whole point of the before/after pair is that a reviewer can trust it.
+        // The before-state for the audit row. A page with no marking row is unavailable
+        // everywhere else (ProtectiveMarking.FailClosed: readable by nobody, rendered as
+        // a bare TOP SECRET), and the audit row says the same thing rather than inventing
+        // a friendlier previous value - the whole point of the before/after pair is that
+        // a reviewer can trust it. Unreachable in practice: canEdit above already refused
+        // a page whose marking is unavailable, so the only way here is with a row.
         var before = marking?.ToMarking() ?? ProtectiveMarking.FailClosed;
 
         // The prefix is a toggle (design.md §21.12): UK or nothing. It rides along into the
-        // marking and gets no clearance constraint, because it is presentational - there
-        // is nothing to validate it against and nothing for it to be refused for. The
-        // selectors are the FULL replacement set, like the caveat: a marking is one value,
-        // and a partial update would let a caller change the level without ever stating
-        // which compartments they meant (§21.15).
+        // marking and gets no self-lockout constraint, because it is presentational -
+        // there is nothing to validate it against and nothing for it to be refused for.
+        // The level is presentational too, now that nothing compares a clearance against
+        // it, and gets the same treatment: validated as a member of the ladder above,
+        // constrained by nothing below. The selectors are the FULL replacement set, like
+        // the caveat: a marking is one value, and a partial update would let a caller
+        // change the level without ever stating which compartments they meant (§21.15).
         var after = ProtectiveMarking.Create(
             request.Level, vocabularyResult.Countries, selectorResult.Selectors,
             request.UkPrefix ? ProtectiveMarking.UkPrefix : null);
 
         // design.md §21.6: you may not set a marking you could not then read. Enforced on
         // the resulting marking as a WHOLE through the one composition every read path
-        // uses (MarkingGate: level, selector eligibility, selector grant, caveat), because
-        // each of them loses you the page just as completely - a UK editor marking a page
-        // US EYES ONLY, or asserting a selector this space never granted them, has
-        // classified it out of their own reach exactly as surely as over-classifying it.
-        // The granted union is the caller's own in THIS space, from the same grants
-        // canEdit was just computed from; canEdit implies access, so the null arm below is
-        // unreachable and, if it were reached, an empty union would refuse every selector
-        // rather than admit one. Deliberately a Forbidden and not a Validation: the input
-        // is well-formed, the caller is simply not entitled to the result.
+        // uses (MarkingGate: selector grant, caveat), because each of them loses you the
+        // page just as completely - a UK editor marking a page US EYES ONLY, or asserting
+        // a selector this space never granted them, has marked it out of their own reach.
+        // What that check no longer means: "a level above your clearance". There is no
+        // clearance on this deployment, the level is not in the gate, and so an editor may
+        // set any level; the rule now reads "a selector you are not granted here, or a
+        // caveat that excludes you", and nothing else. The granted union is the caller's
+        // own in THIS space, from the same grants canEdit was just computed from; canEdit
+        // implies access, so the null arm below is unreachable and, if it were reached,
+        // an empty union would refuse every selector rather than admit one. Deliberately
+        // a Forbidden and not a Validation: the input is well-formed, the caller is simply
+        // not entitled to the result.
         var access = EffectivePermissionCalculator.ComputeSpaceAccess(context.SpaceGrants, principal);
         var wouldBeReadable = MarkingGate.Check(
             after, principal, _db.SelectorCatalog, access?.GrantedSelectors ?? SpaceAccess.WithoutSelectors.GrantedSelectors);
@@ -134,6 +141,13 @@ public class PageMarkingService : IPageMarkingService
 
         marking.Level = after.Level;
         marking.Prefix = after.Prefix; // already canonical: "UK" or null
+        // Always false here - `after` came from ProtectiveMarking.Create, which cannot
+        // build the unavailable sentinel - written explicitly so that stating a marking
+        // makes it KNOWN: the column carries the value, never a decision made in this
+        // service. (Unreachable for a row that was unavailable, since canEdit above
+        // already refused a page nobody can read; the write is structural, not a repair
+        // path - see IPageMarkingService.)
+        marking.IsUnavailable = after.IsUnavailable;
         marking.SetAtUtc = DateTime.UtcNow;
         marking.SetByUserId = actingUserId;
         ReplaceCountries(marking, after.EyesOnly);

@@ -29,7 +29,7 @@ public sealed record PersonActivity(Guid UserId, string DisplayName, int Count);
 
 /// <summary>
 /// What needs attention rather than what is popular. Every count here is over the
-/// caller's visible set, so two admins with different clearances legitimately see
+/// caller's visible set, so two admins with different grants legitimately see
 /// different numbers — that is the §21 gate working, not an inconsistency.
 /// </summary>
 public sealed record ContentHealth(

@@ -7,15 +7,16 @@ namespace RocketWiki.Core.Tests.Access;
 /// design.md §21.2: <c>MarkingGate</c> is the one composition of the marking gates, and
 /// the way a new gate gets forgotten is by one caller composing its own subset. This
 /// pins that structurally, as a source sweep rather than a behaviour test: no production
-/// code outside RocketWiki.Core calls <c>ClearanceGate.Check*</c> or
+/// code outside RocketWiki.Core calls <c>CaveatGate.Check</c> or
 /// <c>SelectorGate.Check*</c> directly, and inside Core only the composition itself does.
 /// A behaviour test could only ever prove one call site composes correctly; this proves
-/// there is no other call site to get wrong.
+/// there is no other call site to get wrong. (The caveat gate was <c>ClearanceGate</c>
+/// while it also compared a clearance against the level; the sweep followed the rename.)
 /// </summary>
 public class MarkingGateIsTheOnlyEntryPointTests
 {
     private static readonly Regex PartialGateCall = new(
-        @"\b(ClearanceGate|SelectorGate)\.(Check|CheckClassification|CheckCaveat|CheckAll|Evaluate)\(",
+        @"\b(CaveatGate|SelectorGate)\.(Check|CheckGrant|CheckAll|Evaluate)\(",
         RegexOptions.Compiled);
 
     [Fact]
@@ -33,13 +34,13 @@ public class MarkingGateIsTheOnlyEntryPointTests
     [Fact]
     public void InsideCore_OnlyTheCompositionAndTheGatesThemselves_CallAPartialMarkingGate()
     {
-        // MarkingGate composes ClearanceGate + SelectorGate; each gate may call its own
+        // MarkingGate composes CaveatGate + SelectorGate; each gate may call its own
         // pieces. Anything else in Core (the calculator included) must go through
         // MarkingGate, otherwise the calculator itself could drift from the composition.
         var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             Path.Combine("RocketWiki.Core", "Access", "MarkingGate.cs"),
-            Path.Combine("RocketWiki.Core", "Access", "ClearanceGate.cs"),
+            Path.Combine("RocketWiki.Core", "Access", "CaveatGate.cs"),
             Path.Combine("RocketWiki.Core", "Access", "SelectorGate.cs"),
         };
 

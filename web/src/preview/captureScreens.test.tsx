@@ -197,7 +197,7 @@ function mockClient() {
         me: {
           id: 'sub-chris', email: 'chris@rocketwiki.dev', name: 'Chris', groups: ['propulsion'],
           isAuthenticated: true, isInstanceAdmin: true, localUserId: 'user-chris', hasAvatar: true,
-          clearance: 'SECRET', nationality: ['UK'],
+          nationality: ['UK'],
         },
       }
     if (name === 'SpaceReplicaBanner')

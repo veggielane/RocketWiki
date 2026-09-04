@@ -56,6 +56,18 @@ public class PageEntry
     /// <summary>Presentational, exactly as <see cref="PageMarking.Prefix"/> is — never read by the gate.</summary>
     public string? Prefix { get; set; } = ProtectiveMarking.DefaultPrefix;
 
+    /// <summary>
+    /// True when this entry's marking is unknown — the sync importer received it with no
+    /// declared marking (a bundle from before entries were marked, or a malformed one) —
+    /// exactly as <see cref="PageMarking.IsUnavailable"/> for a page, and for the same
+    /// reason: a TOP SECRET row no longer denies anyone (§21.12), so "unknown" needs a
+    /// representation of its own. <see cref="ToMarking"/> then returns
+    /// <see cref="ProtectiveMarking.FailClosed"/>. Cleared by any write that states a
+    /// real marking, since every writer copies <see cref="ProtectiveMarking.IsUnavailable"/>
+    /// from the value it persists.
+    /// </summary>
+    public bool IsUnavailable { get; set; }
+
     /// <summary>The eyes-only country set. A child table rather than a delimited column, for
     /// the same reason <see cref="PageMarkingCountry"/> is one: a set needs set semantics.</summary>
     public ICollection<PageEntryCountry> Countries { get; set; } = new List<PageEntryCountry>();
@@ -80,7 +92,9 @@ public class PageEntry
     /// <see cref="PageMarking.ToMarking"/>.
     /// </summary>
     public ProtectiveMarking ToMarking() =>
-        ProtectiveMarking.Create(Level, Countries.Select(c => c.CountryValue), selectors: null, Prefix);
+        IsUnavailable
+            ? ProtectiveMarking.FailClosed
+            : ProtectiveMarking.Create(Level, Countries.Select(c => c.CountryValue), selectors: null, Prefix);
 }
 
 /// <summary>One country in an entry's eyes-only set. See <see cref="PageMarkingCountry"/>

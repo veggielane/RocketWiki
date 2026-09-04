@@ -25,10 +25,10 @@ namespace RocketWiki.Api.Tests.Integration;
 public sealed class EditSessionHubTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
 {
     private async Task<HubConnection> ConnectAsync(
-        string sub, IEnumerable<string>? nationality = null, IEnumerable<string>? selectorClaims = null)
+        string sub, IEnumerable<string>? nationality = null, IEnumerable<string>? groups = null)
     {
         var claimsHeader = TestUserHttpClientExtensions.BuildEncodedClaimsHeaderValue(
-            sub, name: sub, nationality: nationality, selectorClaims: selectorClaims);
+            sub, name: sub, nationality: nationality, groups: groups);
 
         var connection = new HubConnectionBuilder()
             .WithUrl("http://localhost/hubs/notifications", options =>
@@ -186,10 +186,10 @@ public sealed class EditSessionHubTests(RocketWikiApiFactory factory) : IClassFi
     public async Task JoinEditSession_HonoursSelectorGates_ThroughTheHubPrincipal()
     {
         // design.md §21.15 on the realtime channel: the hub builds its Principal through
-        // the same PrincipalBuilder the HTTP path uses, so a selector claim on the token
-        // admits (and its absence refuses) a co-editor exactly as it would a GraphQL
-        // read. The page carries FRUIT/APPLE; the space's access grant confers APPLE to
-        // everyone, so eligibility - the `fruit` claim - is the one gate that decides.
+        // the same PrincipalBuilder the HTTP path uses, so the groups on the token admit
+        // (and their absence refuses) a co-editor exactly as they would a GraphQL read.
+        // The page carries FRUIT/APPLE; everyone has access, and only apple-readers are
+        // granted APPLE, so the grant is the one gate that decides.
         Guid pageId;
         using (var scope = factory.Services.CreateScope())
         {
@@ -213,14 +213,20 @@ public sealed class EditSessionHubTests(RocketWikiApiFactory factory) : IClassFi
                 ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
                 CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
             });
-            var access = new AccessRule
+            db.AccessRules.Add(new AccessRule
             {
                 Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
                 ExpressionJson = RuleExpressionSerializer.Serialize(new EveryoneCondition()),
                 CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
+            });
+            var appleGrant = new AccessRule
+            {
+                Kind = AccessRuleKind.AccessGrant, SpaceId = space.Id,
+                ExpressionJson = RuleExpressionSerializer.Serialize(new GroupCondition("apple-readers")),
+                CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = seeder.Id, UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = seeder.Id,
             };
-            access.Selectors.Add(new AccessRuleSelector { Category = "FRUIT", Value = "APPLE" });
-            db.AccessRules.Add(access);
+            appleGrant.Selectors.Add(new AccessRuleSelector { Category = "FRUIT", Value = "APPLE" });
+            db.AccessRules.Add(appleGrant);
 
             var page = new Page
             {
@@ -237,15 +243,15 @@ public sealed class EditSessionHubTests(RocketWikiApiFactory factory) : IClassFi
             pageId = page.Id;
         }
 
-        await using var eligible = await ConnectAsync($"eligible-{Guid.NewGuid()}", selectorClaims: [RocketWikiApiFactory.FruitClaim]);
-        Assert.NotNull(await eligible.InvokeAsync<EditSessionJoinResult?>("JoinEditSession", pageId));
+        await using var granted = await ConnectAsync($"granted-{Guid.NewGuid()}", groups: ["apple-readers"]);
+        Assert.NotNull(await granted.InvokeAsync<EditSessionJoinResult?>("JoinEditSession", pageId));
 
-        await using var ineligible = await ConnectAsync($"ineligible-{Guid.NewGuid()}");
-        Assert.Null(await ineligible.InvokeAsync<EditSessionJoinResult?>("JoinEditSession", pageId));
+        await using var ungranted = await ConnectAsync($"ungranted-{Guid.NewGuid()}");
+        Assert.Null(await ungranted.InvokeAsync<EditSessionJoinResult?>("JoinEditSession", pageId));
 
         // §7: the refusal names the selector gate by category, never by value.
         var denied = Assert.Single(AuditRowsFor(pageId, EditSessionAudit.JoinedAction), r => r.Outcome == AuditOutcome.Denied);
-        Assert.Contains("selector:not_eligible:FRUIT", denied.DetailsJson);
+        Assert.Contains("selector:not_granted:FRUIT", denied.DetailsJson);
         Assert.DoesNotContain("APPLE", denied.DetailsJson);
     }
 

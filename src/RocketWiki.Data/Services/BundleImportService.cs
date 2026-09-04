@@ -472,12 +472,16 @@ public class BundleImportService : IBundleImportService
     /// <list type="bullet">
     /// <item>The payload carries a marking — apply it.</item>
     /// <item>No marking in the payload and no local row (a format-1 bundle, or one
-    /// produced before §21 shipped) — create the row at <b>TOP SECRET</b>. This is the
-    /// fail-closed direction and it is deliberately loud in its consequences: content
-    /// arriving from a lower instance without a declared classification is exactly the
-    /// case where guessing OFFICIAL would be a cross-boundary disclosure, so it arrives
-    /// visible to nobody but the highest-cleared and a high-side admin reviews and marks
-    /// it down.</item>
+    /// produced before §21 shipped) — create the row <b>unavailable</b>
+    /// (<see cref="PageMarking.IsUnavailable"/>): the page exists on the high side, its
+    /// marking is recorded as unknown, and nobody can read it until a declared marking
+    /// arrives from the origin. This is the fail-closed direction and it is deliberately
+    /// loud in its consequences: content arriving from a lower instance without a
+    /// declared classification is exactly the case where guessing OFFICIAL would be a
+    /// cross-boundary disclosure. It used to land as a plain TOP SECRET row, which denied
+    /// all but the highest-cleared while the level gated; with the level presentational
+    /// (§21.12) that row would be readable by everyone with space access, so "unknown"
+    /// is now its own persisted state rather than a level.</item>
     /// <item>No marking in the payload but a local row already exists — leave it alone. A
     /// legacy incremental bundle must not silently re-classify a page the high side
     /// already holds a marking for, in either direction.</item>
@@ -508,6 +512,12 @@ public class BundleImportService : IBundleImportService
 
         marking.Level = applied.Level;
         marking.Prefix = applied.Prefix; // travels with the marking so a replica renders the same string
+        // The one write that can set this, and it is copied from the value rather than
+        // decided here: `applied` is FailClosed exactly when the payload carried no
+        // usable marking, and FailClosed is the only marking whose flag is true. Persisting
+        // the sentinel's LEVEL alone was the fail-open this column exists to close - a bare
+        // TOP SECRET row reads back as an ordinary marking that gates nobody (§21.12).
+        marking.IsUnavailable = applied.IsUnavailable;
         marking.SetAtUtc = DateTime.UtcNow;
         marking.SetByUserId = null; // applied by sync, no local actor
 
@@ -572,7 +582,7 @@ public class BundleImportService : IBundleImportService
         }
 
         if (!element.TryGetProperty("level", out var levelElement) || levelElement.ValueKind != JsonValueKind.String
-            || !ClearanceGate.TryParseLevel(levelElement.GetString(), out var level))
+            || !ProtectiveMarking.TryParseLevelWireName(levelElement.GetString(), out var level))
         {
             return null;
         }
@@ -591,9 +601,11 @@ public class BundleImportService : IBundleImportService
 
         // An ABSENT prefix key means null - no prefix - not "use this instance's default".
         // A bundle from an era before prefixes existed carried no national qualifier, and
-        // inventing UK for it would assert something its origin never said. Only the
-        // level gets a fail-closed substitution here, because only the level gates
-        // anything (design.md §21.12).
+        // inventing UK for it would assert something its origin never said. The level, by
+        // contrast, must parse or the whole marking is unparseable: it no longer gates
+        // (design.md §21.12), but it is what the content is declared to be, and a bundle
+        // that cannot say what its page is marked cannot land as though it had said
+        // OFFICIAL (§21.10).
         var prefix = element.TryGetProperty("prefix", out var prefixElement) && prefixElement.ValueKind == JsonValueKind.String
             ? prefixElement.GetString()
             : null;
@@ -876,10 +888,12 @@ public class BundleImportService : IBundleImportService
     /// incremental edit stripped an icon the replica already held.</para>
     ///
     /// <para><b>The marking fails closed.</b> An unparseable or absent level lands the
-    /// entry at TOP SECRET rather than OFFICIAL, exactly as
-    /// <see cref="ApplyPageMarkingAsync"/> does for a page: content arriving from a lower
-    /// instance without a declared classification is precisely the case where guessing
-    /// the bottom of the ladder would be a cross-boundary disclosure.</para>
+    /// entry <b>unavailable</b> (<see cref="PageEntry.IsUnavailable"/>, readable by nobody)
+    /// rather than at OFFICIAL, exactly as <see cref="ApplyPageMarkingAsync"/> does for a
+    /// page: content arriving from a lower instance without a declared classification is
+    /// precisely the case where guessing the bottom of the ladder would be a
+    /// cross-boundary disclosure — and, since the level gates nobody (§21.12), so would
+    /// landing it at the top.</para>
     /// </summary>
     private async Task ApplyPageEntryAsync(JsonElement payload, CancellationToken cancellationToken)
     {
@@ -910,6 +924,10 @@ public class BundleImportService : IBundleImportService
         var applied = declared ?? ProtectiveMarking.FailClosed;
         entry.Level = applied.Level;
         entry.Prefix = applied.Prefix;
+        // Copied from the value, as for a page: true exactly when the payload carried no
+        // usable marking, so the entry lands unknown and readable by nobody rather than as
+        // a bare TOP SECRET row that would gate nobody (§21.12).
+        entry.IsUnavailable = applied.IsUnavailable;
 
         // The country set is replaced wholesale, so a caveat removed on the low side
         // really goes rather than accumulating forever.

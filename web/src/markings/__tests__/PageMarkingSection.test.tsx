@@ -1,18 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { Provider as UrqlProvider } from 'urql'
+import { Client, Provider as UrqlProvider, type Exchange, type Operation, CombinedError } from 'urql'
+import { Kind, type OperationDefinitionNode } from 'graphql'
+import { filter, map, pipe } from 'wonka'
 import { PageMarkingSection } from '../PageMarkingSection'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../../test/axe'
 
 /**
  * The marking control (design.md §21). Three things it has to get right
- * beyond rendering: it must PREVENT the markings §21.6 refuses rather than
- * offer them and report the refusal — by level, by selector (§21.15) and by
- * caveat; it must never assemble a marking string — `label` is the server's,
- * and there is exactly one formatter; and every vocabulary it offers is the
- * server's — level spellings from the scheme, the five caveat countries
+ * beyond rendering: it must PREVENT the two markings the server refuses — a
+ * selector value the caller is not granted here (§21.15) and a caveat that
+ * excludes them (§21.4) — rather than offer them and report the refusal; it
+ * must never assemble a marking string — `label` is the server's, and there
+ * is exactly one formatter; and every vocabulary it offers is the server's —
+ * level spellings AND order from the scheme, the five caveat countries
  * pinned to the schema, selector categories from configuration.
+ *
+ * And one thing it must NOT do: grey a level. This deployment carries no
+ * clearance, so the classification is display, compared against nobody, and
+ * every level is offered to every editor. The "every level is offered" test
+ * below is the one that goes red if a level check ever creeps back in.
  */
 
 interface Selector {
@@ -37,34 +45,61 @@ const scheme = [
   { level: 'TOP_SECRET', name: 'TOP SECRET' },
 ]
 
+const EVERY_LEVEL = ['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET']
+
 /** §21.15: the instance's configured categories — the test catalog. */
 const catalog = [
-  { name: 'FRUIT', description: 'Fruit programme compartments', requiresAttribute: true, values: ['APPLE', 'BANANA'] },
-  { name: 'REGION', description: null, requiresAttribute: false, values: ['NORTH', 'SOUTH'] },
+  { name: 'FRUIT', description: 'Fruit programme compartments', values: ['APPLE', 'BANANA'] },
+  { name: 'REGION', description: null, values: ['NORTH', 'SOUTH'] },
 ]
 
 interface Options {
   marking?: typeof baseMarking
   canEdit?: boolean
-  clearance?: string
   nationality?: string[]
-  eligibility?: string[]
   /** null stages an unanswered grants read, so the picker's "unknown grants" path is exercised. */
   grants?: Selector[] | null
   /** null stages an unanswered categories read. */
   categories?: typeof catalog | null
-  /** null stages an unanswered classificationScheme, so the picker's fallback is exercised. */
+  /** null stages an unanswered classificationScheme read. */
   levelNames?: typeof scheme | null
+  /** The scheme read fails at the transport — the absence of an answer, not an empty one. */
+  schemeFails?: boolean
   setMarkingError?: Record<string, unknown> | null
+}
+
+function operationName(op: Operation): string {
+  const def = op.query.definitions.find((d): d is OperationDefinitionNode => d.kind === Kind.OPERATION_DEFINITION)
+  return def?.name?.value ?? '(anonymous)'
+}
+
+/** Like the mock client, except that ONE named operation fails at the transport. */
+function clientFailingOnly(failing: string, respond: (name: string) => Record<string, unknown> | undefined): Client {
+  const exchange: Exchange = () => (ops$) =>
+    pipe(
+      ops$,
+      filter((op: Operation) => op.kind !== 'teardown'),
+      map((op: Operation) => {
+        const name = operationName(op)
+        return name === failing
+          ? {
+              operation: op,
+              data: undefined,
+              error: new CombinedError({ networkError: new Error('offline') }),
+              stale: false,
+              hasNext: false,
+            }
+          : { operation: op, data: respond(name), stale: false, hasNext: false }
+      }),
+    )
+  return new Client({ url: '/graphql', exchanges: [exchange] })
 }
 
 function renderSection(options: Options = {}) {
   const {
     marking = baseMarking,
     canEdit = true,
-    clearance = 'SECRET',
     nationality = ['UK'],
-    eligibility = ['FRUIT', 'REGION'],
     grants = [
       { category: 'FRUIT', value: 'APPLE' },
       { category: 'REGION', value: 'NORTH' },
@@ -72,18 +107,19 @@ function renderSection(options: Options = {}) {
     ],
     categories = catalog,
     levelNames = scheme,
+    schemeFails = false,
     setMarkingError = null,
   } = options
   const onFeedback = vi.fn()
   const onReplicaRefusal = vi.fn()
   const onChanged = vi.fn()
-  const mock = createMockUrqlClient((name) => {
+  const respond = (name: string): Record<string, unknown> | undefined => {
     if (name === 'CurrentUser')
       return {
         me: {
           id: 'sub-1', email: null, name: 'Editor', groups: [], isAuthenticated: true,
           isInstanceAdmin: false, localUserId: 'user-1', hasAvatar: false,
-          clearance, nationality, selectorEligibility: eligibility,
+          nationality,
         },
       }
     if (name === 'ClassificationScheme') return levelNames === null ? undefined : { classificationScheme: levelNames }
@@ -98,9 +134,10 @@ function renderSection(options: Options = {}) {
         },
       }
     return undefined
-  })
+  }
+  const mock = createMockUrqlClient((name) => respond(name))
   render(
-    <UrqlProvider value={mock.client}>
+    <UrqlProvider value={schemeFails ? clientFailingOnly('ClassificationScheme', respond) : mock.client}>
       <PageMarkingSection
         pageId="page-1"
         spaceKey="ENG"
@@ -117,7 +154,7 @@ function renderSection(options: Options = {}) {
 
 /**
  * Keyed by the ENUM value, not the visible label: the spelling on screen is
- * the server's now (§21.1), so an assertion about which level a radio IS must
+ * the server's (§21.1), so an assertion about which level a radio IS must
  * not go through the text — that would couple every one of these tests to a
  * display decision the SPA does not own.
  */
@@ -126,6 +163,11 @@ const levelRadio = (level: string) => {
   if (!radio) throw new Error(`no radio rendered for level ${level}`)
   return radio
 }
+
+const renderedLevels = () => [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')].map((r) => r.value)
+
+/** The level radios come from the scheme read, so they arrive a tick after the form does. */
+const levelsRendered = () => waitFor(() => expect(renderedLevels().length).toBeGreaterThan(0))
 
 const saveButton = () => screen.findByRole('button', { name: 'Save marking' })
 
@@ -182,12 +224,13 @@ describe('rendering the marking', () => {
   it('has no axe violations in the editable state', async () => {
     renderSection()
     await saveButton()
+    await levelsRendered()
     await screen.findByLabelText('FRUIT')
     await expectNoAxeViolations()
   })
 })
 
-describe('the level picker names levels from the server (design.md §21.1)', () => {
+describe('the level picker names and orders levels from the server (design.md §21.1)', () => {
   it('labels each option with the scheme display spelling, not the wire name', async () => {
     renderSection()
     expect(await screen.findByText('OFFICIAL-SENSITIVE')).toBeTruthy()
@@ -196,45 +239,79 @@ describe('the level picker names levels from the server (design.md §21.1)', () 
     expect(screen.queryByText('TOP_SECRET')).toBeNull()
   })
 
-  it('still offers every level when the scheme query answers nothing', async () => {
-    renderSection({ levelNames: null })
-    await saveButton()
-    for (const level of ['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET']) {
-      expect(levelRadio(level)).toBeTruthy()
-    }
+  it('renders options in the order the scheme returns them, and never re-sorts', async () => {
+    // The scheme arrives least-sensitive first; the SPA encodes no order of
+    // its own, so a scheme staged backwards renders backwards.
+    renderSection({ levelNames: [...scheme].reverse() })
+    await levelsRendered()
+    expect(renderedLevels()).toEqual(['TOP_SECRET', 'SECRET', 'OFFICIAL_SENSITIVE', 'OFFICIAL'])
   })
 
-  it('renders options in ladder order, so position never contradicts availability', async () => {
-    renderSection({ clearance: 'OFFICIAL_SENSITIVE' })
+  it("keeps offering the page's own level, under the server's spelling, when the scheme does not name it", async () => {
+    // A server ahead of this client: what the page carries can still be seen
+    // and kept, and the spelling is the server's `levelName`, never derived.
+    renderSection({
+      marking: { ...baseMarking, level: 'COSMIC', levelName: 'COSMIC TOP SECRET', label: 'UK COSMIC TOP SECRET' },
+    })
+    await levelsRendered()
+    expect(renderedLevels()).toEqual([...EVERY_LEVEL, 'COSMIC'])
+    expect(levelRadio('COSMIC').checked).toBe(true)
+    expect(screen.getByRole('radio', { name: 'COSMIC TOP SECRET' })).toBeTruthy()
+  })
+
+  it('offers no level while the scheme has not answered, rather than spelling any itself', async () => {
+    renderSection({ levelNames: null })
     await saveButton()
-    const rendered = [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')].map((r) => r.value)
-    expect(rendered).toEqual(['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET'])
-    expect(rendered.map((level) => levelRadio(level).disabled)).toEqual([false, false, true, true])
+    expect(renderedLevels()).toEqual([])
+    expect(screen.queryByText('OFFICIAL_SENSITIVE')).toBeNull()
+  })
+
+  it('says so when the scheme cannot be loaded, and still lets the rest of the marking be saved', async () => {
+    const { onFeedback } = renderSection({ schemeFails: true })
+    const save = await saveButton()
+    expect(await screen.findByText(/Couldn't load the classification levels/)).toBeTruthy()
+    expect(renderedLevels()).toEqual([])
+    // The prefix, the caveat and the selectors do not depend on the scheme.
+    fireEvent.click(screen.getByLabelText('UK prefix'))
+    await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(save)
+    await waitFor(() => expect(onFeedback).toHaveBeenCalledWith({ notice: 'Marking set to UK SECRET.', error: null }))
   })
 })
 
-describe('prevent, do not refuse — levels (design.md §21.6)', () => {
-  it('offers every level at or below the caller clearance', async () => {
-    renderSection({ clearance: 'SECRET' })
-    await waitFor(() => expect(levelRadio('OFFICIAL_SENSITIVE').hasAttribute('disabled')).toBe(false))
-    expect(levelRadio('OFFICIAL').hasAttribute('disabled')).toBe(false)
-    expect(levelRadio('SECRET').hasAttribute('disabled')).toBe(false)
+describe('every level is offered to everyone — the classification is display', () => {
+  it('offers all four levels enabled, whatever the caller holds', async () => {
+    // The weakest caller there is: no nationality and no grants at all. The
+    // two gates that remain would refuse plenty, and none of it is about
+    // the level — nothing about a person can make a level unavailable.
+    renderSection({ nationality: [], grants: [] })
+    await levelsRendered()
+    expect(renderedLevels()).toEqual(EVERY_LEVEL)
+    for (const level of EVERY_LEVEL) {
+      expect(levelRadio(level).disabled).toBe(false)
+      expect(screen.getByRole('radio', { name: scheme.find((s) => s.level === level)!.name })).not.toBeDisabled()
+    }
+    // No reason travels with any option, because there is none to give.
+    expect(document.body.textContent).not.toMatch(/clearance|eligib|above your/i)
   })
 
-  it('makes a level above the caller clearance unavailable, with the reason beside it', async () => {
-    renderSection({ clearance: 'SECRET' })
-    await waitFor(() => expect(levelRadio('TOP_SECRET').hasAttribute('disabled')).toBe(true))
-    expect(screen.getByText('Above your clearance')).toBeTruthy()
+  it('says beside the picker that the level is display, like the prefix', async () => {
+    renderSection()
+    expect(
+      await screen.findByText('Any level may be set. Like the prefix, it is shown on the page and compared against nobody.'),
+    ).toBeTruthy()
   })
 
-  it('greys everything above OFFICIAL-SENSITIVE for a caller at the floor (§21.3)', async () => {
-    // `me.clearance` arrives already resolved to the floor for a token with
-    // no usable value; the two everyday tiers stay offered, the rest do not.
-    renderSection({ clearance: 'OFFICIAL_SENSITIVE' })
-    await waitFor(() => expect(levelRadio('SECRET').hasAttribute('disabled')).toBe(true))
-    expect(levelRadio('TOP_SECRET').hasAttribute('disabled')).toBe(true)
-    expect(levelRadio('OFFICIAL').hasAttribute('disabled')).toBe(false)
-    expect(levelRadio('OFFICIAL_SENSITIVE').hasAttribute('disabled')).toBe(false)
+  it('lets TOP SECRET be chosen and saved with no refusal, by a caller holding nothing', async () => {
+    const { mock } = renderSection({ nationality: [], grants: [] })
+    const save = await saveButton()
+    await levelsRendered()
+    fireEvent.click(levelRadio('TOP_SECRET'))
+    await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.click(save)
+    await waitFor(() => expect(mock.operations.some((op) => op.name === 'SetPageMarking')).toBe(true))
+    expect(sentMarking(mock).level).toBe('TOP_SECRET')
   })
 })
 
@@ -296,14 +373,20 @@ describe('prevent, do not refuse — selectors (design.md §21.15)', () => {
     expect(screen.queryByText('Selectors')).toBeNull()
   })
 
-  it('disables a whole category the caller is not eligible for, with the reason where the values would be', async () => {
-    renderSection({ eligibility: ['REGION'] })
-    expect(await screen.findByLabelText('FRUIT')).toHaveAttribute('aria-disabled', 'true')
-    expect(screen.getByText('Not eligible for FRUIT material')).toBeTruthy()
+  it('never disables a whole category — a category has no eligibility to lack, only values to be granted', async () => {
+    // A caller granted nothing in this space: every picker is still live,
+    // and it is the VALUES inside that are greyed, each with its reason.
+    renderSection({ grants: [] })
+    expect(await screen.findByLabelText('FRUIT')).not.toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByLabelText('REGION')).not.toHaveAttribute('aria-disabled', 'true')
+    expect(document.body.textContent).not.toMatch(/eligib/i)
+    const listbox = await openSelect('FRUIT')
+    expect(within(listbox).getByRole('option', { name: /APPLE/ })).toHaveAttribute('aria-disabled', 'true')
+    expect(within(listbox).getByRole('option', { name: /BANANA/ })).toHaveAttribute('aria-disabled', 'true')
+    expect(within(listbox).getByRole('option', { name: 'None' })).not.toHaveAttribute('aria-disabled', 'true')
   })
 
-  it('greys a value no access grant confers on the caller in this space, with the reason', async () => {
+  it('greys only a value no access grant confers on the caller in this space, with the reason', async () => {
     renderSection({ grants: [{ category: 'FRUIT', value: 'APPLE' }] })
     const listbox = await openSelect('FRUIT')
     expect(within(listbox).getByRole('option', { name: 'APPLE' })).not.toHaveAttribute('aria-disabled', 'true')
@@ -333,6 +416,15 @@ describe('prevent, do not refuse — selectors (design.md §21.15)', () => {
         screen.getByText('BANANA is not granted to you in this space, so you could not read this page after marking it.'),
       ).toBeTruthy(),
     )
+  })
+
+  it('states the one rule a value has to satisfy', async () => {
+    renderSection()
+    expect(
+      await screen.findByText(
+        'At most one value per category. A reader must hold an access grant in this space that carries each value.',
+      ),
+    ).toBeTruthy()
   })
 
   it('sends the chosen selectors as category/value pairs, one per category', async () => {
@@ -386,6 +478,7 @@ describe('saving', () => {
       },
     })
     const save = await saveButton()
+    await levelsRendered()
     fireEvent.click(levelRadio('SECRET'))
     await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(save)
@@ -408,17 +501,19 @@ describe('saving', () => {
   it('reports the new marking using the label the server sent back', async () => {
     const { onFeedback } = renderSection()
     const save = await saveButton()
+    await levelsRendered()
     fireEvent.click(levelRadio('SECRET'))
     await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(save)
     await waitFor(() => expect(onFeedback).toHaveBeenCalledWith({ notice: 'Marking set to UK SECRET.', error: null }))
   })
 
-  it('surfaces a server refusal instead of swallowing it — a clearance or a grant can change mid-session', async () => {
+  it('surfaces a server refusal instead of swallowing it — a grant can change mid-session', async () => {
     const { onFeedback } = renderSection({
       setMarkingError: { kind: 'Forbidden', message: 'selector:not_granted:FRUIT' },
     })
     const save = await saveButton()
+    await levelsRendered()
     fireEvent.click(levelRadio('SECRET'))
     await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(save)
@@ -435,6 +530,7 @@ describe('saving', () => {
       setMarkingError: { kind: 'ReadOnlyReplica', spaceId: 'space-1', originInstanceId: 'LOW' },
     })
     const save = await saveButton()
+    await levelsRendered()
     fireEvent.click(levelRadio('SECRET'))
     await waitFor(() => expect((save as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(save)
@@ -443,11 +539,14 @@ describe('saving', () => {
 })
 
 describe('the section is not a property row (design.md §20 vs §21)', () => {
-  it('has its own heading and says what a marking is', () => {
+  it('has its own heading and says which parts of a marking decide who may read the page', () => {
     renderSection()
     const heading = screen.getByRole('heading', { name: 'Protective marking' })
     const section = heading.closest('div')
     expect(section).toBeTruthy()
     expect(within(section as HTMLElement).getByText(/decide who may read this page/)).toBeTruthy()
+    expect(
+      within(section as HTMLElement).getByText(/the classification and the prefix are presentational and decide nothing/),
+    ).toBeTruthy()
   })
 })

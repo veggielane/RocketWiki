@@ -62,7 +62,7 @@ public partial class Query
     /// its address when it is moved.
     ///
     /// <para>Resolves the slug to an id and then goes through the SAME
-    /// <c>GetPageAsync</c> path as <see cref="Page"/> — canView, the clearance gate and
+    /// <c>GetPageAsync</c> path as <see cref="Page"/> — canView, the marking gate and
     /// the §7 denial audit are not reimplemented here, they are the identical code.
     /// Every failure collapses to the same null: no such space, no such slug, and a
     /// page the caller may not view are indistinguishable to the caller, or the URL
@@ -235,7 +235,6 @@ public partial class Query
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] IUserAvatarService avatarService,
         [Service] ICurrentPrincipalAccessor principalAccessor,
-        [Service] SelectorCatalog catalog,
         CancellationToken cancellationToken)
     {
         if (claimsPrincipal.Identity?.IsAuthenticated != true)
@@ -263,51 +262,43 @@ public partial class Query
         var hasAvatar = localUserId is not null
             && await avatarService.HasAvatarAsync(localUserId.Value, cancellationToken);
 
-        // §21: the caller's OWN clearance, nationality and selector eligibility, resolved
-        // through the same ClearanceGate/SelectorGate path enforcement uses — not the raw
-        // claims — so what the SPA greys out matches what the server would refuse.
-        // Echoing the caller's own token back to them leaks nothing (it is the same
-        // category as `groups` above), and it is the difference between offering a
-        // marking that will be rejected and explaining up-front why it is unavailable.
-        // Authorization still happens server-side: this is affordance data, never a
-        // decision (§6.1).
+        // §21: the caller's OWN nationality, resolved through the same CaveatGate path
+        // enforcement uses — not the raw claim — so what the SPA greys out matches what
+        // the server would refuse. Echoing the caller's own token back to them leaks
+        // nothing (it is the same category as `groups` above), and it is the difference
+        // between offering a caveat that will be rejected and explaining up-front why it
+        // is unavailable. Authorization still happens server-side: this is affordance
+        // data, never a decision (§6.1).
         //
-        // All three go through the gates rather than reading Attributes directly, and for
-        // nationality that is load-bearing rather than tidiness: ResolveNationalities
-        // CANONICALIZES (upper-cases, trims, drops blanks) exactly as a marking's country
-        // set is canonicalized on write, and the raw claim does not. A token saying `uk`
-        // against a marking storing `UK` passes the server's gate and would have failed a
-        // client-side comparison against the raw value — so the UI would have warned that
-        // a marking locks you out when it does not, which is precisely the "what the UI
-        // greys out matches what the server refuses" property this field exists for. It
-        // is the §21.4 case-mismatch trap reappearing one layer up, and it is closed the
-        // same way: one canonicalizer, both sides. Eligibility likewise: the `yes` test
-        // (trimmed, case-insensitive, §21.15) is SelectorGate's, stated once.
+        // Going through the gate rather than reading Attributes directly is load-bearing
+        // rather than tidiness: ResolveNationalities CANONICALIZES (upper-cases, trims,
+        // drops blanks) exactly as a marking's country set is canonicalized on write, and
+        // the raw claim does not. A token saying `uk` against a marking storing `UK`
+        // passes the server's gate and would have failed a client-side comparison against
+        // the raw value — so the UI would have warned that a marking locks you out when it
+        // does not, which is precisely the "what the UI greys out matches what the server
+        // refuses" property this field exists for. It is the §21.4 case-mismatch trap
+        // reappearing one layer up, and it is closed the same way: one canonicalizer,
+        // both sides.
+        //
+        // Two fields used to ride beside it - `clearance` and `selectorEligibility` -
+        // each the affordance for a gate (level, per-category claim) that read a Keycloak
+        // attribute this deployment does not carry. The gates went, and so did the
+        // affordances: a picker that greyed out levels by a clearance nobody has would be
+        // lying, and one that greyed out categories by a claim nobody has would offer
+        // nothing. What decides a selector now is the space's grant, and that already has
+        // its own affordance (Space.viewerSelectorGrants).
         var principal = principalAccessor.Current;
-        var clearance = principal is null
-            ? ClearanceGate.DefaultClearance
-            : ClearanceGate.ResolveClearance(principal);
         // Ordinal-sorted so the list is stable between requests and matches the order a
         // marking's EyesOnly set renders in — a diff of the two reads cleanly.
         var nationality = principal is null
             ? []
-            : ClearanceGate.ResolveNationalities(principal).OrderBy(n => n, StringComparer.Ordinal).ToList();
-        // In the catalog's configured order - the order the pickers list categories in
-        // (§21.15) - so the two agree without a client-side sort.
-        var eligibility = principal is null
-            ? []
-            : EligibleCategoriesInCatalogOrder(principal, catalog);
+            : CaveatGate.ResolveNationalities(principal).OrderBy(n => n, StringComparer.Ordinal).ToList();
 
         return new CurrentUser(
             userId, email, name, groups, IsAuthenticated: true,
             instanceRoleAccessor.IsInstanceAdmin, localUserId, hasAvatar,
-            clearance, nationality, eligibility);
-    }
-
-    private static IReadOnlyList<string> EligibleCategoriesInCatalogOrder(Principal principal, SelectorCatalog catalog)
-    {
-        var eligible = SelectorGate.ResolveEligibleCategories(principal, catalog);
-        return catalog.Categories.Where(c => eligible.Contains(c.Name)).Select(c => c.Name).ToList();
+            nationality);
     }
 }
 
@@ -318,11 +309,11 @@ public partial class Query
 /// <see cref="LocalUserId"/> is the one bridge to that JIT row — the caller's OWN
 /// mirror id, exposed so the SPA can match author ids; see Me's doc.
 /// </summary>
-/// <param name="SelectorEligibility">The selector categories the caller is eligible for
-/// (design.md §21.15): every claim-less category plus every gated category whose claim
-/// answers <c>yes</c>, in the catalog's configured order — the categories a marking
-/// picker may offer at all. Whether a VALUE may then be chosen is the space's grant
-/// (<c>Space.viewerSelectorGrants</c>), not the caller's.</param>
+/// <param name="Nationality">The caller's nationality values the eyes-only caveat
+/// recognises (design.md §21.4), canonical and ordinal-sorted — the caveat affordance:
+/// a marking picker can say up front which eyes-only sets would lock the caller out.
+/// Empty for an anonymous caller and for a token whose nationality claim holds only
+/// tokens outside the fixed five.</param>
 public sealed record CurrentUser(
     string? Id,
     string? Email,
@@ -332,15 +323,10 @@ public sealed record CurrentUser(
     bool IsInstanceAdmin,
     Guid? LocalUserId,
     bool HasAvatar,
-    ClassificationLevel Clearance,
-    IReadOnlyList<string> Nationality,
-    IReadOnlyList<string> SelectorEligibility)
+    IReadOnlyList<string> Nationality)
 {
-    // The clearance floor is ClearanceGate's, not a literal: an anonymous caller is worth
-    // exactly what an absent clearance claim is worth (design.md §21.3), and stating it
-    // twice is how the affordance and the gate drift. Eligible for nothing: an anonymous
-    // caller has no token to answer `yes` with, and the claim-less categories admit
-    // principals, not the absence of one.
+    // No nationality: an anonymous caller has no token to hold one, and every caveated
+    // page is closed to them - which is what an empty list already means to the gate.
     public static readonly CurrentUser Anonymous =
-        new(null, null, null, [], false, false, null, false, ClearanceGate.DefaultClearance, [], []);
+        new(null, null, null, [], false, false, null, false, []);
 }

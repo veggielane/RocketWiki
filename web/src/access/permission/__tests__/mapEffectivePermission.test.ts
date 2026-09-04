@@ -9,8 +9,6 @@ type Wire = NonNullable<EffectivePermissionQuery['effectivePermission']>
 const passedGate = (gate: Wire['viewGates'][number]['gate']): Wire['viewGates'][number] => ({
   gate,
   passed: true,
-  requiredLevel: null,
-  requiredLevelName: null,
   category: null,
   value: null,
   countries: null,
@@ -74,14 +72,14 @@ describe('toEffectivePermissionDetail', () => {
     const detail = toEffectivePermissionDetail(
       wire({
         hasSpaceAccess: false,
-        viewGates: [{ ...passedGate('SPACE_ACCESS'), passed: false }, passedGate('CLASSIFICATION')],
+        viewGates: [{ ...passedGate('SPACE_ACCESS'), passed: false }, passedGate('MARKING_UNAVAILABLE')],
         editGates: [{ ...passedGate('ROLE'), passed: false, requiredRole: 'EDITOR' }],
       }),
     )
     expect(detail.hasSpaceAccess).toBe(false)
     expect(detail.viewGates.map((g) => [g.gate, g.passed])).toEqual([
       ['SPACE_ACCESS', false],
-      ['CLASSIFICATION', true],
+      ['MARKING_UNAVAILABLE', true],
     ])
     expect(detail.editGates[0]).toMatchObject({ gate: 'ROLE', passed: false, requiredRole: 'EDITOR' })
   })

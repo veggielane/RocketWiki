@@ -302,8 +302,8 @@ opt-in toggle it proposed was rejected.)
 - **The protective-marking and access-model overhaul** (design.md §6.4, §6.7,
   §21, and the new §21.15). Four changes land together: **additional
   selectors** (instance-configured categories such as `FRUIT` with values
-  `APPLE`/`BANANA`, gated by a per-category Keycloak attribute *and* a
-  per-space grant — `UK SECRET APPLE NORTH AUS/NZ EYES ONLY`); **access and
+  `APPLE`/`BANANA`, conferred by a per-space access grant —
+  `UK SECRET APPLE NORTH AUS/NZ EYES ONLY`); **access and
   role are separate grant kinds** (an access grant says who may see a space's
   pages and carries selector values; a role grant says who may edit or
   administer and confers no visibility — "viewer" is gone, and a space admin
@@ -311,14 +311,15 @@ opt-in toggle it proposed was rejected.)
   protected); **denial is disclosed on the page view, the tree and in-page
   links** as a `(protected)` placeholder carrying the marking label and every
   failing reason, while search, Ask, RQL, listings and MCP keep omitting, and
-  a space you hold no access grant in withholds even the marking; and three
-  spec changes — the absent-clearance floor moves to OFFICIAL-SENSITIVE, the
-  caveat vocabulary becomes the fixed `AUS CAN NZ UK US` set rendered without
-  brackets, and the prefix becomes a UK on/off toggle. **This supersedes three
-  claims in the "Protective markings" bullet below** as written when it was
-  verified: absent-not-forbidden now holds only on the omitting surfaces, the
-  floor is OFFICIAL-SENSITIVE rather than OFFICIAL, and the caveat vocabulary
-  is fixed rather than the registry's. Two migrations
+  a space you hold no access grant in withholds even the marking; and two
+  spec changes — the caveat vocabulary becomes the fixed `AUS CAN NZ UK US`
+  set rendered without brackets, and the prefix becomes a UK on/off toggle.
+  **This supersedes four claims in the "Protective markings" bullet below**
+  as written when it was verified: absent-not-forbidden now holds only on the
+  omitting surfaces, the caveat vocabulary is fixed rather than the
+  registry's, the classification no longer enforces at all (next bullet), and
+  the absent-clearance floor — which this overhaul first moved to
+  OFFICIAL-SENSITIVE — no longer exists. Two migrations
   (`AddMarkingSelectorsAndFixedCaveat`, `SplitSpaceGrantsIntoAccessAndRole`)
   convert existing rows behaviour-preservingly. **Done**: the overhaul is
   implemented and green on every test tier — the unit and SQLite integration
@@ -326,30 +327,79 @@ opt-in toggle it proposed was rejected.)
   real-SQL-Server tier run locally against SQL Server 2025 with Full-Text
   Search (46/46), whose two new migration tests seed the previous schema with
   viewer grants, `GB` caveats and a non-UK prefix and assert the conversion —
-  the migration rehearsal in miniature. The suites include the 64-row
-  S/C/E/G/N/R truth table in Core, the persona × page truth table through the
-  real API mutations, the placeholder introspection allowlist, the
-  omitting-surface sweep, the telemetry-hygiene sweeps over the disclosing
-  surfaces and the SPA's 1,798 tests; the mutation drills behind each gate went
-  red and were restored, four of them repeated by hand. **Also done, on
-  2026-09-03, against the live stack** (`aspire run`, Docker Desktop, a fresh
-  Keycloak volume so the realm's new `fruit` mapper imported, and the existing
-  SQL volume so both migrations ran on real dev rows — they did, converting
-  the TEST space's admin-everyone grant into a role grant plus a mirror access
-  grant): PKCE tokens for five dev users carried exactly the realm's claims;
-  `me` reported the OFFICIAL-SENSITIVE floor for the claim-less user and an
-  explicit OFFICIAL honoured; `selectorCategories` came back from the AppHost
-  environment; an access grant carrying `FRUIT/APPLE` plus a page marked
-  `UK OFFICIAL APPLE` gave the user granted but not eligible a `(protected)`
-  placeholder with that label and the single failing eligibility gate, the
-  eligible-and-granted users the page, the legacy `page(id)` null, the tree a
-  `ProtectedTreeNode`, and search nothing; a role-only administrator of a new
-  space saw it listed with `viewerHasAccess: false`, an empty tree, and a
-  denial carrying only the space gate with the marking withheld. **Not yet
-  done**: a low→high bundle round-trip of a selector-bearing page between two
-  running instances (the bundle path itself is pinned by the sync tests), and
-  the browser SPA against the live API (the walk-through drove GraphQL directly;
-  the SPA's 1,798 tests run against a mocked transport).
+  the migration rehearsal in miniature. The suites include the marking truth
+  table in Core (its current shape is in the next bullet), the persona × page
+  truth table through the real API mutations, the placeholder introspection
+  allowlist, the omitting-surface sweep, the telemetry-hygiene sweeps over
+  the disclosing surfaces and the SPA's tests; the mutation drills behind
+  each gate went red and were restored, four of them repeated by hand. **Also
+  done, on 2026-09-03, against the live stack** (`aspire run`, Docker
+  Desktop, a fresh Keycloak volume so the realm's then-new `fruit` mapper
+  imported, and the existing SQL volume so both migrations ran on real dev
+  rows — they did, converting the TEST space's admin-everyone grant into a
+  role grant plus a mirror access grant): PKCE tokens for five dev users
+  carried exactly the realm's claims; `me` reported the OFFICIAL-SENSITIVE
+  floor for the claim-less user and an explicit OFFICIAL honoured;
+  `selectorCategories` came back from the AppHost environment; an access
+  grant carrying `FRUIT/APPLE` plus a page marked `UK OFFICIAL APPLE` gave the
+  user granted but not eligible a `(protected)` placeholder with that label
+  and the single failing eligibility gate, the eligible-and-granted users the
+  page, the legacy `page(id)` null, the tree a `ProtectedTreeNode`, and search
+  nothing; a role-only administrator of a new space saw it listed with
+  `viewerHasAccess: false`, an empty tree, and a denial carrying only the
+  space gate with the marking withheld. **That walk-through predates the next
+  bullet**: the floor, the eligibility gate and the `fruit` mapper it
+  exercised no longer exist, so two of its observations — the `me` floor and
+  the "granted but not eligible" placeholder — can no longer be reproduced;
+  the rest (grants, the role-only admin, the space-gate denial, search
+  omitting) are unchanged in design and re-pinned by the current tests, but
+  have not been re-walked live. **Not yet done**: a low→high bundle
+  round-trip of a selector-bearing page between two running instances (the
+  bundle path itself is pinned by the sync tests), and the browser SPA
+  against the live API (the walk-through drove GraphQL directly; the SPA's
+  tests run against a mocked transport).
+- **The clearance and selector-eligibility gates are gone** (2026-09-04;
+  design.md §21.2, §21.12, §21.15). This deployment's Keycloak carries no
+  per-user clearance attribute and no per-category selector attribute, so the
+  two gates that read them — C (clearance ≥ level) and E (a `yes` claim per
+  category) — were removed rather than defaulted: a gate on a claim nobody
+  emits is either an outage or a fake control. What is left is
+  `canView = S ∧ G ∧ N ∧ R`, with a marking-availability check ahead of G:
+  space access, every selector granted by a matched access grant, the
+  eyes-only caveat against nationality, and the restriction chain. The
+  **classification level is presentational**, exactly like the UK prefix: no
+  gate reads it, no denial reason names it, any editor may set any level, and
+  its ordering survives for the picker and the aggregate label. A page whose
+  marking row is *missing* used to deny by being TOP SECRET and now denies by
+  an explicit unavailable flag (`marking:unavailable`, wire gate
+  `MARKING_UNAVAILABLE`), because a TOP SECRET row that gates nothing would
+  have failed *open*. The profile page shows group memberships instead of a
+  clearance and an eligibility table; `me` keeps `nationality` only; Keycloak
+  needs `groups`, `nationality` and `roles` mappers and nothing else; a
+  selector category is a name, a description and values, with no `ClaimName`.
+  **Done**: the removal is implemented and green on every test tier,
+  including the real-SQL-Server Testcontainers tier — the Core truth table is
+  now 16 rows over S/G/N/R plus a sweep that the level changes no row, and
+  the mutation drills (the availability flag, the grant check, the
+  unknown-category branch, the caveat, the self-lockout rule, the principal's
+  claim allowlist, the profile field list) each went red and were restored.
+  **Sync follows the same rule** (design.md §21.10): a page arriving with no
+  declared marking lands in a recorded *unavailable* state — `IsUnavailable`,
+  a bit on both marking tables added by `AddMarkingUnavailableFlag`, set by
+  the importer and cleared by any write that states a real marking — which
+  reads back as the unavailable sentinel, so the page is readable by nobody
+  and shows as the protected placeholder with the missing-marking reason until
+  the origin sends a declared marking; an unavailable marking re-exports as no
+  marking, never as a bare TOP SECRET. It used to land as a TOP SECRET row,
+  which was a control only while the level gated; the refusal now comes from
+  the recorded state, not from how high TOP SECRET is. Rows an older importer
+  wrote that way are not backfilled (indistinguishable from a real prefix-less
+  TOP SECRET); the migration's comment carries the review query. **Not yet
+  done**: nothing
+  about this change has run against the live stack (the dev realm's
+  `clearance` and `fruit` mappers were removed in the same step and are
+  unverified until the next `aspire run`), and the bundle round-trip above is
+  still outstanding.
 
 **Verified:**
 - `dotnet build RocketWiki.sln` / `dotnet test RocketWiki.sln`, run solution-wide,
@@ -560,7 +610,10 @@ opt-in toggle it proposed was rejected.)
 **Verified by tests and CI** (the standing caveat — design.md §16 —
 applies: test-proven, never yet run against live infrastructure; each
 bullet keeps its own sharper caveat where one exists):
-- **Protective markings** (design.md §21) — every page carries a UK
+- **Protective markings** (design.md §21) — *as verified on the day, and kept
+  as that record; the two bullets under "In progress" above say what has
+  changed since, chiefly that the classification no longer enforces and there
+  is no clearance floor (2026-09-04).* Every page carries a UK
   Government classification (`OFFICIAL` < `OFFICIAL_SENSITIVE` < `SECRET` <
   `TOP_SECRET`) plus an optional *eyes-only* set of countries it is
   releasable to, written with a national prefix — `UK SECRET`,
@@ -885,8 +938,10 @@ executed on Docker Desktop 4.87.0 (engine 29.7.2, Linux containers) from
   users complete an Authorization Code + PKCE flow; the decoded access tokens
   carry `sub`, `preferred_username`, `email`, `name`, `aud: rocketwiki-api`,
   `groups` as bare names, multivalued `nationality` (including the dual
-  national), `clearance`, and `roles` — with `carol.noattr` carrying no
-  attribute claims at all, which is §6.3's fail-closed case behaving.
+  national), `clearance` (a claim the realm has since stopped emitting — the
+  gate that read it went on 2026-09-04), and `roles` — with `carol.noattr`
+  carrying no attribute claims at all, which is §6.3's fail-closed case
+  behaving.
 - **The full authentication path**: token → JWT validation → `PrincipalBuilder`
   → JIT provisioning → GraphQL. An ABAC grant resolved from a real `groups`
   claim and let its holder create a page; the instance-admin gate accepted

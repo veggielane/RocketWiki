@@ -30,14 +30,11 @@ public class PageMarkingSyncTests : SqliteTestBase
 
     private static readonly AuditContext AuditCtx = new(AuditChannel.Sync, "sync-job-1", "127.0.0.1");
 
-    private static Principal EditorPrincipal(string clearance = "TOP_SECRET", params string[] nationality) =>
+    private static Principal EditorPrincipal(params string[] nationality) =>
         Principal.Create(
             "editor-sub",
             [],
-            [
-                new("clearance", new[] { clearance }),
-                new("nationality", nationality.Length == 0 ? ["UK"] : nationality),
-            ]);
+            [new("nationality", nationality.Length == 0 ? ["UK"] : nationality)]);
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
@@ -374,12 +371,17 @@ public class PageMarkingSyncTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task Import_AnUpsertCarryingNoMarking_LandsTheNewPageAtTopSecret_NotOfficial()
+    public async Task Import_APayloadWithNoMarking_LandsUnreadableByEveryone_NotAsAPlainTopSecret()
     {
         // A legacy (pre-§21) bundle. Content arriving from a lower instance without a
         // declared classification is exactly where guessing OFFICIAL would be a
-        // cross-boundary disclosure, so it arrives visible to almost nobody and a
-        // high-side admin marks it down after review.
+        // cross-boundary disclosure, so it lands UNKNOWN (PageMarking.IsUnavailable) and
+        // readable by nobody until the origin declares a marking. It used to land as a
+        // bare TOP SECRET row, which denied all but the highest-cleared while the level
+        // gated; now that the level is presentational (§21.12) such a row would gate
+        // nobody - the fail-open this test exists to keep closed. So the assertion is
+        // through the REAL gate, for the most generous caller there is: a Space-admin
+        // whose access grant confers every selector value, holding every nationality.
         var pageId = Guid.CreateVersion7();
         var spaceId = Guid.CreateVersion7();
         var legacyPayload = JsonSerializer.Serialize(new
@@ -405,23 +407,25 @@ public class PageMarkingSyncTests : SqliteTestBase
             using (highConnection)
             using (highContext)
             {
-                highContext.Spaces.Add(new Space
-                {
-                    Id = spaceId,
-                    Key = "LEG",
-                    Name = "Legacy",
-                    OriginInstanceId = LowInstanceId,
-                    CreatedAtUtc = DateTime.UtcNow,
-                    CreatedByUserId = Guid.NewGuid(),
-                });
+                highContext.Spaces.Add(HighSideSpace(spaceId));
+                highContext.AccessRules.AddRange(
+                    AccessGrantWith(spaceId, TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South),
+                    SpaceAdminGrant(spaceId));
                 highContext.SaveChanges();
 
                 Assert.True((await new BundleImportService(highContext, storage)
                     .ImportAsync(bundlePath, LowInstanceId, AuditCtx)).IsSuccess);
 
-                Assert.Equal(
-                    ClassificationLevel.TopSecret,
-                    highContext.PageMarkings.Single(m => m.PageId == pageId).Level);
+                var row = highContext.PageMarkings.Include(m => m.Countries).Include(m => m.Selectors).Single(m => m.PageId == pageId);
+                Assert.True(row.IsUnavailable);
+                Assert.True(row.ToMarking().IsUnavailable);
+                // Still renders as the sentinel's bare TOP SECRET - the visual signal that
+                // something is missing - but that is display, not what denies.
+                Assert.Equal("TOP SECRET", row.ToMarking().Format(TestCatalogs.Fruit));
+
+                var denied = Assert.IsType<ReadResult<Page>.Denied>(
+                    await new PageReadService(highContext).GetPageAsync(pageId, EveryoneAdmittingPrincipal()));
+                Assert.Equal("marking:unavailable", denied.Reason);
             }
         }
         finally
@@ -429,6 +433,135 @@ public class PageMarkingSyncTests : SqliteTestBase
             if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
             if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task Import_ADeclaredMarking_ClearsTheUnavailableFlag_AndThePageBecomesReadable()
+    {
+        // The recovery path: the flag means "unknown", and the origin stating the marking
+        // makes it known. A second bundle carrying a declared marking for the same page
+        // overwrites the unavailable row (the "never re-classify from silence" rule only
+        // protects a row when the payload is silent), and the page opens for whoever the
+        // declared marking admits.
+        var pageId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var legacyPayload = JsonSerializer.Serialize(new
+        {
+            pageId,
+            spaceId,
+            parentPageId = (Guid?)null,
+            ancestorPath = "/",
+            slug = "legacy",
+            title = "Legacy",
+            sortOrder = 0,
+            content = "# Legacy",
+            revisionNumber = 1,
+        });
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                highContext.Spaces.Add(HighSideSpace(spaceId));
+                highContext.AccessRules.Add(TestData.AccessGrantMirroring(EditorGrant(spaceId)));
+                highContext.SaveChanges();
+
+                var unknownBundle = WriteLegacyBundle(Path.Combine(outputDir, "unknown"), spaceId, legacyPayload);
+                Assert.True((await new BundleImportService(highContext, storage).ImportAsync(unknownBundle, LowInstanceId, AuditCtx)).IsSuccess);
+                Assert.True(highContext.PageMarkings.Single(m => m.PageId == pageId).IsUnavailable);
+                Assert.IsType<ReadResult<Page>.Denied>(await new PageReadService(highContext).GetPageAsync(pageId, Principal.Create("reader", [])));
+
+                // Chained as bundle 2: an unchained repeat of bundle 1 is skipped as a
+                // duplicate (success, nothing applied), which would make this test pass for
+                // the wrong reason.
+                var previousHash = highContext.SyncImportStates.Single(s => s.OriginInstanceId == LowInstanceId).LastManifestHash;
+                var declaredBundle = WriteLegacyBundle(Path.Combine(outputDir, "declared"), spaceId, UpsertPayload(pageId, spaceId, new
+                {
+                    level = "OFFICIAL", eyesOnly = Array.Empty<string>(), prefix = "UK", selectors = new Dictionary<string, string>(),
+                }), bundleNumber: 2, previousManifestHash: previousHash, sequence: 2);
+                var second = await new BundleImportService(highContext, storage).ImportAsync(declaredBundle, LowInstanceId, AuditCtx);
+                Assert.True(second.IsSuccess, $"{second.Error}");
+                Assert.Equal(1, second.Value.EventsApplied);
+
+                var row = highContext.PageMarkings.Include(m => m.Countries).Include(m => m.Selectors).Single(m => m.PageId == pageId);
+                Assert.False(row.IsUnavailable);
+                Assert.Equal(ClassificationLevel.Official, row.Level);
+                Assert.IsType<ReadResult<Page>.Found>(await new PageReadService(highContext).GetPageAsync(pageId, Principal.Create("reader", [])));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Export_AnUnavailableMarking_CrossesAsNoMarking_NeverAsABareTopSecret()
+    {
+        // The other side of the same trap: a row that says "unknown" must not be
+        // serialized as the sentinel's parts, or the next instance stores a bare TOP
+        // SECRET that gates nobody. It crosses as a null marking, which the importer
+        // reads as unknown - so "unknown" survives every hop.
+        var space = NewExportedSpace();
+        var page = TestData.NewPage(space, "unknown");
+
+        using var lowContext = CreateContext();
+        lowContext.Spaces.Add(space);
+        lowContext.Pages.Add(page);
+        var lowRow = TestData.NewMarking(page, ClassificationLevel.Official);
+        lowRow.IsUnavailable = true;
+        lowContext.PageMarkings.Add(lowRow);
+        lowContext.SaveChanges();
+
+        var storage = CreateFileStorage(out var storageDir);
+        var outputDir = CreateBundleOutputDir();
+        try
+        {
+            var bundleInfo = await new BundleExportService(lowContext, storage).ExportBaselineAsync(space.Id, outputDir, LowInstanceId);
+
+            using (var archive = System.IO.Compression.ZipFile.OpenRead(bundleInfo.BundleFilePath))
+            using (var reader = new StreamReader(archive.GetEntry(BundleFormat.EventsEntryName(BundleFormat.CurrentVersion))!.Open()))
+            {
+                // One line per event; the page's payload rides inside it as a JSON string.
+                var line = reader.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries).Single();
+                using var record = JsonDocument.Parse(line);
+                using var payload = JsonDocument.Parse(record.RootElement.GetProperty("payloadJson").GetString()!);
+                Assert.Equal(JsonValueKind.Null, payload.RootElement.GetProperty("marking").ValueKind);
+                Assert.DoesNotContain("TOP_SECRET", line, StringComparison.Ordinal);
+            }
+
+            var (highConnection, highContext) = CreateSecondaryDatabase();
+            using (highConnection)
+            using (highContext)
+            {
+                Assert.True((await new BundleImportService(highContext, storage)
+                    .ImportAsync(bundleInfo.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
+
+                Assert.True(highContext.PageMarkings.Single(m => m.PageId == page.Id).IsUnavailable);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
+            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
+        }
+    }
+
+    /// <summary>The most generous principal the model can describe: in every group a
+    /// fixture uses, holding every nationality in the fixed vocabulary.</summary>
+    private static Principal EveryoneAdmittingPrincipal() =>
+        Principal.Create("high-admin", ["engineering", "editors", "readers"], [new("nationality", NationalCaveatVocabulary.Values.ToArray())]);
+
+    private static AccessRule SpaceAdminGrant(Guid spaceId)
+    {
+        var grant = EditorGrant(spaceId);
+        grant.Role = SpaceRole.SpaceAdmin;
+        return grant;
     }
 
     [Fact]
@@ -495,21 +628,28 @@ public class PageMarkingSyncTests : SqliteTestBase
 
     /// <summary>A hand-built format-1 bundle: one PageUpsert line with no <c>marking</c>
     /// key, exactly what a pre-§21 low side produced.</summary>
-    private static string WriteLegacyBundle(string outputDirectory, Guid spaceId, string payloadJson)
+    /// <summary>A one-event legacy-format bundle. Bundle 1 with no predecessor by default;
+    /// a FOLLOW-UP bundle for the same origin must carry the next bundle number, the
+    /// previous manifest's hash and the next sequence, or the importer skips it as a
+    /// duplicate (success, zero events applied) - which is silent, so a test that expects
+    /// a second bundle to change anything must chain it.</summary>
+    private static string WriteLegacyBundle(
+        string outputDirectory, Guid spaceId, string payloadJson,
+        int bundleNumber = 1, string? previousManifestHash = null, long sequence = 1)
     {
         Directory.CreateDirectory(outputDirectory);
         var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        var record = new NdjsonEventRecord("LEG", spaceId, 1, nameof(SyncEventType.PageUpsert), payloadJson, DateTime.UtcNow);
+        var record = new NdjsonEventRecord("LEG", spaceId, sequence, nameof(SyncEventType.PageUpsert), payloadJson, DateTime.UtcNow);
         var ndjson = JsonSerializer.Serialize(record, jsonOptions) + Environment.NewLine;
         var ndjsonBytes = Encoding.UTF8.GetBytes(ndjson);
 
         var manifest = new BundleManifest(
-            LowInstanceId, 1, null,
+            LowInstanceId, bundleNumber, previousManifestHash,
             Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(ndjsonBytes)),
-            new Dictionary<string, SpaceEventRange> { ["LEG"] = new(spaceId, 1, 1, 1) },
+            new Dictionary<string, SpaceEventRange> { ["LEG"] = new(spaceId, sequence, sequence, 1) },
             BundleFormat.LegacyVersion);
 
-        var bundlePath = Path.Combine(outputDirectory, "bundle-000001.zip");
+        var bundlePath = Path.Combine(outputDirectory, $"bundle-{bundleNumber:D6}.zip");
         using (var fileStream = new FileStream(bundlePath, FileMode.CreateNew))
         using (var archive = new System.IO.Compression.ZipArchive(fileStream, System.IO.Compression.ZipArchiveMode.Create))
         {
@@ -540,8 +680,8 @@ public class PageMarkingSyncTests : SqliteTestBase
         return grant;
     }
 
-    private static Principal EligibleEditor() =>
-        Principal.Create("editor-sub", [], [new("clearance", ["TOP_SECRET"]), new("nationality", ["UK"]), new(TestCatalogs.FruitClaim, ["yes"])]);
+    private static Principal UkEditor() =>
+        Principal.Create("editor-sub", [], [new("nationality", ["UK"])]);
 
     [Fact]
     public async Task Incremental_MarkingWithSelectors_RoundTrips_AndTheHighSideEnforcesThem()
@@ -556,11 +696,11 @@ public class PageMarkingSyncTests : SqliteTestBase
         lowContext.SaveChanges();
 
         var created = await new PageService(lowContext, LowInstanceId).CreatePageAsync(
-            new CreatePageRequest(space.Id, null, "home", "Home", "# Welcome"), EligibleEditor(), actor.Id, AuditCtx);
+            new CreatePageRequest(space.Id, null, "home", "Home", "# Welcome"), UkEditor(), actor.Id, AuditCtx);
         Assert.True(created.IsSuccess);
         var set = await new PageMarkingService(lowContext, LowInstanceId).SetAsync(
             new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, [], [TestCatalogs.Apple, TestCatalogs.North], UkPrefix: true),
-            EligibleEditor(), actor.Id, AuditCtx);
+            UkEditor(), actor.Id, AuditCtx);
         Assert.True(set.IsSuccess, set.Error?.ToString());
 
         var outboxEvent = Assert.Single(lowContext.SyncOutboxEvents.Where(e => e.EventType == SyncEventType.PageMarking));
@@ -588,12 +728,12 @@ public class PageMarkingSyncTests : SqliteTestBase
                 var marking = highContext.PageMarkings.Include(m => m.Selectors).Single(m => m.PageId == created.Value.Id);
                 Assert.Equal([TestCatalogs.Apple, TestCatalogs.North], marking.ToMarking().Selectors);
 
-                // The high side enforces what crossed: a reader with access and clearance but
-                // no APPLE grant is refused by the grant gate, exactly as on the low side.
+                // The high side enforces what crossed: a reader with access but no APPLE
+                // grant is refused by the grant gate, exactly as on the low side.
                 highContext.AccessRules.Add(TestData.AccessGrantMirroring(EditorGrant(space.Id)));
                 highContext.SaveChanges();
                 var denied = Assert.IsType<ReadResult<Page>.Denied>(await new PageReadService(highContext)
-                    .GetPageAsync(created.Value.Id, Principal.Create("high-user", [], [new("clearance", ["TOP_SECRET"]), new("fruit", ["yes"])])));
+                    .GetPageAsync(created.Value.Id, Principal.Create("high-user", [])));
                 Assert.Equal("selector:unknown:FRUIT", denied.Reason); // the secondary database stamps no catalog: unknown, fail closed
             }
         }
@@ -683,13 +823,13 @@ public class PageMarkingSyncTests : SqliteTestBase
         }
     }
 
-    private static string UpsertPayload(Guid pageId, Guid spaceId, object marking) => JsonSerializer.Serialize(new
+    private static string UpsertPayload(Guid pageId, Guid spaceId, object marking, string slug = "crossing") => JsonSerializer.Serialize(new
     {
         pageId,
         spaceId,
         parentPageId = (Guid?)null,
         ancestorPath = "/",
-        slug = "crossing",
+        slug,
         title = "Crossing",
         sortOrder = 0,
         content = "# Crossing",
@@ -740,7 +880,7 @@ public class PageMarkingSyncTests : SqliteTestBase
                 Assert.Equal([new SelectorValue("CODEWORD", "ZEBRA")], marking.ToMarking().Selectors); // canonicalized, kept verbatim otherwise
 
                 var denied = Assert.IsType<ReadResult<Page>.Denied>(await new PageReadService(highContext)
-                    .GetPageAsync(pageId, Principal.Create("high-user", [], [new("clearance", ["TOP_SECRET"])])));
+                    .GetPageAsync(pageId, Principal.Create("high-user", [])));
                 Assert.Equal("selector:unknown:CODEWORD", denied.Reason);
             }
         }
@@ -752,11 +892,12 @@ public class PageMarkingSyncTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task Import_AMalformedSelectorsObject_LandsANewPageAtTopSecret_AndLeavesAnExistingRowAlone()
+    public async Task Import_AMalformedSelectorsObject_LandsANewPageUnavailable_AndLeavesAnExistingRowAlone()
     {
         // design.md §21.10: anything malformed in selectors makes the WHOLE marking
         // unparseable - dropping only the bad selector would widen - so a new page fails
-        // closed to TOP SECRET and an existing row is not re-classified from silence.
+        // closed to UNKNOWN (unavailable, readable by nobody; it still renders as the
+        // sentinel's TOP SECRET) and an existing row is not re-classified from silence.
         var newPageId = Guid.CreateVersion7();
         var existingPageId = Guid.CreateVersion7();
         var spaceId = Guid.CreateVersion7();
@@ -776,20 +917,35 @@ public class PageMarkingSyncTests : SqliteTestBase
                 highContext.Spaces.Add(space);
                 highContext.Pages.Add(existing);
                 highContext.PageMarkings.Add(TestData.NewMarking(existing, ClassificationLevel.Secret, "UK").WithSelectors(TestCatalogs.Apple));
+                // Access for everyone, so the denial below is the marking's and not the space's.
+                highContext.AccessRules.Add(TestData.AccessGrantMirroring(EditorGrant(spaceId)));
                 highContext.SaveChanges();
 
                 var newBundle = WriteLegacyBundle(Path.Combine(outputDir, "new"), spaceId, UpsertPayload(newPageId, spaceId, malformed));
                 Assert.True((await new BundleImportService(highContext, storage).ImportAsync(newBundle, LowInstanceId, AuditCtx)).IsSuccess);
                 var landed = highContext.PageMarkings.Include(m => m.Selectors).Single(m => m.PageId == newPageId);
+                Assert.True(landed.IsUnavailable);
                 Assert.Equal(ClassificationLevel.TopSecret, landed.Level);
                 Assert.Empty(landed.Selectors);
+                Assert.Equal(
+                    "marking:unavailable",
+                    Assert.IsType<ReadResult<Page>.Denied>(
+                        await new PageReadService(highContext).GetPageAsync(newPageId, EveryoneAdmittingPrincipal())).Reason);
 
-                var existingBundle = WriteLegacyBundle(Path.Combine(outputDir, "existing"), spaceId, UpsertPayload(existingPageId, spaceId, malformed));
-                Assert.True((await new BundleImportService(highContext, storage).ImportAsync(existingBundle, LowInstanceId, AuditCtx)).IsSuccess);
+                // Chained as bundle 2: an unchained repeat of bundle 1 is skipped as a
+                // duplicate (success, nothing applied), and "left alone" would then be
+                // vacuous. EventsApplied == 1 proves the upsert really ran against the row.
+                var previousHash = highContext.SyncImportStates.Single(s => s.OriginInstanceId == LowInstanceId).LastManifestHash;
+                var existingBundle = WriteLegacyBundle(Path.Combine(outputDir, "existing"), spaceId, UpsertPayload(existingPageId, spaceId, malformed, slug: "existing"),
+                    bundleNumber: 2, previousManifestHash: previousHash, sequence: 2);
+                var existingResult = await new BundleImportService(highContext, storage).ImportAsync(existingBundle, LowInstanceId, AuditCtx);
+                Assert.True(existingResult.IsSuccess);
+                Assert.Equal(1, existingResult.Value.EventsApplied);
                 var untouched = highContext.PageMarkings.Include(m => m.Selectors).Include(m => m.Countries).Single(m => m.PageId == existingPageId);
                 Assert.Equal(ClassificationLevel.Secret, untouched.Level);
                 Assert.Equal([TestCatalogs.Apple], untouched.ToMarking().Selectors);
                 Assert.Equal(["UK"], untouched.Countries.Select(c => c.CountryValue));
+                Assert.False(untouched.IsUnavailable); // silence never re-classifies an existing row, in either direction
             }
         }
         finally

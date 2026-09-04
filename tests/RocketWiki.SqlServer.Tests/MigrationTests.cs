@@ -121,7 +121,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260831072347_AddSpaceOwner", applied);
         Assert.Contains("20260902222520_AddMarkingSelectorsAndFixedCaveat", applied);
         Assert.Contains("20260902224034_SplitSpaceGrantsIntoAccessAndRole", applied);
-        Assert.Equal(19, applied.Count);
+        Assert.Contains("20260904230211_AddMarkingUnavailableFlag", applied);
+        Assert.Equal(20, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -470,6 +471,126 @@ public sealed class MigrationTests : SqlServerTestBase
             JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
             WHERE ic.object_id = OBJECT_ID('dbo.PageMarkings') AND c.name = 'Prefix'
             """));
+    }
+
+    [SqlServerFact]
+    public async Task AddMarkingUnavailableFlag_LeavesEveryPreExistingRowAvailable_AndOnlyTheFlagDeniesEveryone()
+    {
+        // design.md §21.10. The column exists so "we do not know this page's marking" is a
+        // state the database can hold. Before it, the importer persisted that state as a
+        // bare prefix-less TOP SECRET, and the level-blind ladder (§21.12) reads such a
+        // row as readable by everyone the space admits. The migration cannot tell that
+        // row from a genuine TOP SECRET an editor set with the prefix toggled off, so it
+        // defaults EVERY existing row to available and repairs nothing — this test pins
+        // that honestly rather than letting anyone believe the migration closes the gap
+        // for old data. The migration's own comment carries the review query an operator
+        // runs to find candidates; the second half here proves the repair it prescribes
+        // is the only thing that makes such a row unreadable, and that the flag — not the
+        // level — is what ToMarking() consults.
+        using var context = CreateContext();
+
+        var pageId = Guid.CreateVersion7();
+        var entryId = Guid.CreateVersion7();
+        var spaceId = Guid.CreateVersion7();
+        var userId = Guid.CreateVersion7();
+        await ExecuteNonQueryAsync($$"""
+            INSERT INTO Users (Id, Subject, DisplayName, AttributesJson, IsExternal, CreatedAtUtc, LastSeenAtUtc)
+            VALUES ('{{userId}}', 'unavailable-sub', 'Unavailable', '{}', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+            INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, IsDeleted, LastOutboxSequence, CreatedAtUtc, CreatedByUserId)
+            VALUES ('{{spaceId}}', 'UNV', 'Unavailable Space', 'local-instance', 0, 0, 0, SYSUTCDATETIME(), '{{userId}}');
+
+            INSERT INTO Pages (Id, SpaceId, AncestorPath, Slug, Title, SortOrder, CurrentRevisionNumber, CurrentContent, IsDeleted, CreatedAtUtc, UpdatedAtUtc)
+            VALUES ('{{pageId}}', '{{spaceId}}', '/', 'unavailable', 'Unavailable', 0, 1, '# Unavailable', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
+
+            -- Both rows shaped exactly as the OLDER importer wrote "no marking": TOP SECRET
+            -- (4), no prefix, no countries, no actor — and, being pre-migration rows, they
+            -- do not name IsUnavailable at all. The column default is what fills it.
+            INSERT INTO PageMarkings (PageId, Level, Prefix, SetAtUtc, SetByUserId)
+            VALUES ('{{pageId}}', 4, NULL, SYSUTCDATETIME(), NULL);
+
+            INSERT INTO PageEntries (Id, PageId, Collection, Data, Version, Level, Prefix, CreatedAtUtc, UpdatedAtUtc, UpdatedByUserId, IsDeleted)
+            VALUES ('{{entryId}}', '{{pageId}}', 'incident', '{}', 1, 4, NULL, SYSUTCDATETIME(), SYSUTCDATETIME(), NULL, 0);
+            """);
+
+        // NOT NULL bit on both tables: "unknown" is a fact every row states, never a
+        // NULL a reader could interpret either way.
+        Assert.Equal(2, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.columns c
+            JOIN sys.types t ON t.user_type_id = c.user_type_id
+            WHERE c.name = 'IsUnavailable' AND c.is_nullable = 0 AND t.name = 'bit'
+              AND c.object_id IN (OBJECT_ID('dbo.PageMarkings'), OBJECT_ID('dbo.PageEntries'))
+            """));
+
+        // Deliberately UNINDEXED (see the migration comment): the only enforcement read
+        // is the per-row PK lookup.
+        Assert.Equal(0, await ExecuteScalarAsync<int>("""
+            SELECT COUNT(*)
+            FROM sys.index_columns ic
+            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+            WHERE c.name = 'IsUnavailable'
+              AND ic.object_id IN (OBJECT_ID('dbo.PageMarkings'), OBJECT_ID('dbo.PageEntries'))
+            """));
+
+        // The honest part: a pre-existing row defaults to AVAILABLE, and reads back as an
+        // ordinary TOP SECRET, not as the sentinel. No backfill happened.
+        Assert.False(await ExecuteScalarAsync<bool>($"SELECT IsUnavailable FROM PageMarkings WHERE PageId = '{pageId}'"));
+        Assert.False(await ExecuteScalarAsync<bool>($"SELECT IsUnavailable FROM PageEntries WHERE Id = '{entryId}'"));
+
+        var markingBefore = (await context.Set<PageMarking>()
+            .Include(m => m.Countries).Include(m => m.Selectors)
+            .SingleAsync(m => m.PageId == pageId)).ToMarking();
+        Assert.False(markingBefore.IsUnavailable);
+        Assert.Equal(ClassificationLevel.TopSecret, markingBefore.Level);
+
+        var entryBefore = (await context.Set<PageEntry>()
+            .Include(e => e.Countries)
+            .SingleAsync(e => e.Id == entryId)).ToMarking();
+        Assert.False(entryBefore.IsUnavailable);
+        Assert.Equal(ClassificationLevel.TopSecret, entryBefore.Level);
+
+        // The migration's review query — restricted to this page so a shared database
+        // cannot make the count lie — finds exactly these two candidates.
+        Assert.Equal(1, await ExecuteScalarAsync<int>($"""
+            SELECT COUNT(*)
+            FROM PageMarkings m
+            WHERE m.IsUnavailable = 0
+              AND m.Level = 4
+              AND m.Prefix IS NULL
+              AND m.SetByUserId IS NULL
+              AND NOT EXISTS (SELECT 1 FROM PageMarkingCountries c WHERE c.PageId = m.PageId)
+              AND NOT EXISTS (SELECT 1 FROM PageMarkingSelectors s WHERE s.PageId = m.PageId)
+              AND m.PageId = '{pageId}'
+            """));
+        Assert.Equal(1, await ExecuteScalarAsync<int>($"""
+            SELECT COUNT(*)
+            FROM PageEntries e
+            WHERE e.IsUnavailable = 0
+              AND e.Level = 4 AND e.Prefix IS NULL AND e.UpdatedByUserId IS NULL
+              AND NOT EXISTS (SELECT 1 FROM PageEntryCountries c WHERE c.PageEntryId = e.Id)
+              AND e.Id = '{entryId}'
+            """));
+
+        // The prescribed repair, and the proof that the FLAG is what the entity reads:
+        // every other column is unchanged, and the row now denies everyone.
+        await ExecuteNonQueryAsync($"""
+            UPDATE PageMarkings SET IsUnavailable = 1 WHERE PageId = '{pageId}';
+            UPDATE PageEntries SET IsUnavailable = 1 WHERE Id = '{entryId}';
+            """);
+
+        using var fresh = CreateContext();
+        var markingAfter = (await fresh.Set<PageMarking>()
+            .Include(m => m.Countries).Include(m => m.Selectors)
+            .SingleAsync(m => m.PageId == pageId)).ToMarking();
+        Assert.True(markingAfter.IsUnavailable);
+        Assert.Equal(ProtectiveMarking.FailClosed, markingAfter);
+
+        var entryAfter = (await fresh.Set<PageEntry>()
+            .Include(e => e.Countries)
+            .SingleAsync(e => e.Id == entryId)).ToMarking();
+        Assert.True(entryAfter.IsUnavailable);
+        Assert.Equal(ProtectiveMarking.FailClosed, entryAfter);
     }
 
     [SqlServerFact]

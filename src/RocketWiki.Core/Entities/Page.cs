@@ -57,9 +57,11 @@ public class Page
     /// This page's protective marking (design.md §21). Every page has exactly one;
     /// nullable here only because a navigation reference is null until it is loaded, and
     /// because a row read from a database that somehow lacks one must be representable
-    /// rather than crash. The read path treats a missing marking as TOP SECRET
-    /// (<c>ProtectiveMarking.FailClosed</c>), and RocketWikiDbContext materializes one
-    /// for any page inserted without it, so "absent" is a diagnosis, never a mode.
+    /// rather than crash. The read path treats a missing marking as unavailable
+    /// (<c>ProtectiveMarking.FailClosed</c>, readable by nobody), and RocketWikiDbContext
+    /// materializes one for any page inserted without it, so "absent" is a diagnosis,
+    /// never a mode. A row can also record that the marking is unknown
+    /// (<c>PageMarking.IsUnavailable</c>), which reads the same way.
     /// </summary>
     public PageMarking? Marking { get; set; }
 

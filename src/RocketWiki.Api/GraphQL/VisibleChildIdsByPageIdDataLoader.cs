@@ -19,7 +19,7 @@ namespace RocketWiki.Api.GraphQL;
 /// full-space walks. Here the whole batch costs a constant four queries, and it fixes a
 /// correctness bug at the same time (see
 /// <see cref="IPageReadService.GetVisibleChildIdsAsync"/>: children are gated
-/// individually, so a page whose ancestor is above the caller's clearance no longer
+/// individually, so a page whose ancestor is beyond the caller's grants no longer
 /// answers <c>children</c> with a misleading empty list).</para>
 ///
 /// <para>The Core method it calls is batch-shaped, so the keys collapse into one round of

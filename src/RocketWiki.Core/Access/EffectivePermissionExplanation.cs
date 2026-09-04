@@ -40,8 +40,8 @@ public sealed record RestrictionCheckDetail(
 /// computations, the exact verdict the enforcement gate would reach
 /// (<see cref="Permission"/> — same reasons, same precedence; a unit test pins Explain
 /// and Compute to identical verdicts), and <b>every gate</b> evaluated, not just the first
-/// failing one — S, C, E, G, N and each view restriction on the view side; replica, role
-/// and each edit restriction on the edit side (§21.2's order).
+/// failing one — S, marking availability, G, N and each view restriction on the view
+/// side; replica, role and each edit restriction on the edit side (§21.2's order).
 ///
 /// <para><b>Explain never short-circuits.</b> When space access fails the marking gates
 /// and restrictions are still evaluated (with an empty granted-selector set, so every
@@ -49,8 +49,8 @@ public sealed record RestrictionCheckDetail(
 /// complete picture. What a caller <i>without</i> space access may be told about the
 /// marking is a separate question the API answers (§21.8, §6.7) — and
 /// <see cref="MarkingWithheld"/> is the datum it acts on: a page whose space the
-/// principal cannot enter discloses nothing beyond that fact, since the C/E/G/N tokens
-/// embed the level and category names.</para>
+/// principal cannot enter discloses nothing beyond that fact, since the G token embeds
+/// the category name and the marking itself carries the level and caveat.</para>
 /// </summary>
 /// <param name="HasSpaceAccess">S: some access grant matched (§6.4). Roles never
 /// supersede access — a role grant alone leaves this false.</param>
@@ -61,8 +61,9 @@ public sealed record RestrictionCheckDetail(
 /// <param name="IsReplicaSpace">The replica invariant's input (§12).</param>
 /// <param name="Permission">The verdict, derived from the gates below with exactly the
 /// enforcement gate's precedence.</param>
-/// <param name="ViewGates">S, C, E (per selector), G (per selector), N, then every view
-/// restriction root-most first. Every entry evaluated.</param>
+/// <param name="ViewGates">S, then marking availability (only when the marking is
+/// missing), G (per selector), N, then every view restriction root-most first. Every
+/// entry evaluated.</param>
 /// <param name="EditGates">Replica, role, then every edit restriction root-most first.
 /// Every entry evaluated.</param>
 public sealed record EffectivePermissionExplanation(

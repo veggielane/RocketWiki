@@ -237,7 +237,7 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
     /// design.md §8's eviction promise applied to the input it was missing. <c>canView</c>
     /// is computed from space grants, the restriction chain <b>and the protective marking</b>
     /// (§21), but the sweep was called from the access-rule mutations only — so a page
-    /// re-marked above a joined viewer's clearance left them in the SignalR group.
+    /// re-marked out of a joined viewer's reach left them in the SignalR group.
     ///
     /// <para>For a co-editor that means still receiving <c>UpdateReceived</c>, which is
     /// page content in CRDT form, on a page they can no longer read. §21 is explicit that a
@@ -248,24 +248,26 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
     /// the notifier, because the defect was precisely that the resolver never called it.</para>
     /// </summary>
     [Fact]
-    public async Task MarkingChange_EvictsAViewerWhoseClearanceNoLongerCovers_ThePage()
+    public async Task MarkingChange_EvictsAViewerTheMarkingNoLongerAdmits()
     {
         var (_, page) = await SeedViewablePageAsync();
 
-        // No clearance claim, so this viewer resolves to OFFICIAL (§21.3).
-        await using var connection = await ConnectAsync($"about-to-be-outranked-{Guid.NewGuid()}");
+        // No nationality claim, so this viewer holds nothing an eyes-only caveat could
+        // match (§21.4). (This used to be "no clearance, so OFFICIAL"; the level gates
+        // nobody now, so the caveat is the marking change that can evict.)
+        await using var connection = await ConnectAsync($"about-to-be-excluded-{Guid.NewGuid()}");
         await connection.InvokeAsync("JoinPage", page.Id);
 
         var registry = factory.Services.GetRequiredService<IRealtimeConnectionRegistry>();
         Assert.Single(registry.GetViewers($"page:{page.Id}"));
 
-        // A cleared editor raises the page to SECRET. Nothing about the access RULES
-        // changes - only the marking - which is exactly the case the sweep used to miss.
+        // A UK-national editor marks the page UK EYES ONLY. Nothing about the access
+        // RULES changes - only the marking - which is exactly the case the sweep used to miss.
         var editorClient = factory.CreateClient();
-        editorClient.SetTestUser(sub: $"cleared-{Guid.NewGuid()}", roles: ["admin"], clearance: "SECRET");
+        editorClient.SetTestUser(sub: $"uk-editor-{Guid.NewGuid()}", roles: ["admin"], nationality: ["UK"]);
         var mutationResult = await editorClient.PostGraphQLAsync($$"""
             mutation {
-              setPageMarking(input: { pageId: "{{page.Id}}", level: SECRET, eyesOnly: [], selectors: [], ukPrefix: true }) {
+              setPageMarking(input: { pageId: "{{page.Id}}", level: SECRET, eyesOnly: [UK], selectors: [], ukPrefix: true }) {
                 marking { level }
                 error { kind message }
               }

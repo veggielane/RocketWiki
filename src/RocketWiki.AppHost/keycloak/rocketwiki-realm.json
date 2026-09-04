@@ -75,38 +75,6 @@
           }
         },
         {
-          "name": "clearance",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-usermodel-attribute-mapper",
-          "consentRequired": false,
-          "config": {
-            "user.attribute": "clearance",
-            "claim.name": "clearance",
-            "jsonType.label": "String",
-            "id.token.claim": "true",
-            "access.token.claim": "true",
-            "userinfo.token.claim": "true",
-            "multivalued": "false",
-            "aggregate.attrs": "false"
-          }
-        },
-        {
-          "name": "fruit",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-usermodel-attribute-mapper",
-          "consentRequired": false,
-          "config": {
-            "user.attribute": "fruit",
-            "claim.name": "fruit",
-            "jsonType.label": "String",
-            "id.token.claim": "true",
-            "access.token.claim": "true",
-            "userinfo.token.claim": "true",
-            "multivalued": "false",
-            "aggregate.attrs": "false"
-          }
-        },
-        {
           "name": "roles",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-realm-role-mapper",
@@ -159,9 +127,7 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["NZ"],
-        "clearance": ["OFFICIAL"],
-        "fruit": ["yes"]
+        "nationality": ["NZ"]
       }
     },
     {
@@ -175,8 +141,7 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["US", "CAN"],
-        "clearance": ["SECRET"]
+        "nationality": ["US", "CAN"]
       }
     },
     {
@@ -201,9 +166,7 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["NZ", "UK"],
-        "clearance": ["OFFICIAL_SENSITIVE"],
-        "fruit": ["yes"]
+        "nationality": ["NZ", "UK"]
       }
     },
     {
@@ -217,9 +180,7 @@
       "groups": ["/export-cleared"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["US"],
-        "clearance": ["TOP_SECRET"],
-        "fruit": ["no"]
+        "nationality": ["US"]
       }
     },
     {
@@ -233,9 +194,7 @@
       "groups": ["/engineering"],
       "realmRoles": ["user"],
       "attributes": {
-        "nationality": ["AUS"],
-        "clearance": ["SECRET"],
-        "fruit": ["yes"]
+        "nationality": ["AUS"]
       }
     },
     {

@@ -627,6 +627,11 @@ namespace RocketWiki.Data.Migrations
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("IsUnavailable")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
                     b.Property<byte>("Level")
                         .HasColumnType("tinyint");
 
@@ -690,6 +695,11 @@ namespace RocketWiki.Data.Migrations
                 {
                     b.Property<Guid>("PageId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IsUnavailable")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
 
                     b.Property<byte>("Level")
                         .HasColumnType("tinyint");

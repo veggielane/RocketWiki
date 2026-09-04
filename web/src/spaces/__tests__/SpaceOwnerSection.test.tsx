@@ -204,7 +204,7 @@ describe('the picker', () => {
   })
 
   it('asks the directory for identity only', () => {
-    // A picker that returned email, groups or clearance would be a second place
+    // A picker that returned email, groups or nationality would be a second place
     // to learn things about colleagues.
     const { mock } = renderSection()
     fireEvent.click(screen.getByRole('button', { name: 'Change owner' }))

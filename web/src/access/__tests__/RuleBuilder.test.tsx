@@ -96,11 +96,11 @@ describe('RuleBuilder', () => {
  * it in. Both are routed by a `field` tag now.
  */
 describe('rule validation messages reach the control they are about', () => {
-  const ATTRIBUTES = [{ key: 'clearance', displayName: 'Clearance', allowedValues: ['SC', 'DV'] }]
+  const ATTRIBUTES = [{ key: 'nationality', displayName: 'Nationality', allowedValues: ['UK', 'US'] }]
 
   it('writes down "at least one value is required" under the In field', () => {
     render(
-      <RuleBuilder initialValue={attr('clearance', [])} onChange={() => {}} groups={[]} attributes={ATTRIBUTES} />,
+      <RuleBuilder initialValue={attr('nationality', [])} onChange={() => {}} groups={[]} attributes={ATTRIBUTES} />,
     )
 
     const field = screen.getByLabelText('In')
@@ -110,7 +110,7 @@ describe('rule validation messages reach the control they are about', () => {
 
   it('writes down "Values must not be empty." — the message that used to match no branch', () => {
     render(
-      <RuleBuilder initialValue={attr('clearance', ['  '])} onChange={() => {}} groups={[]} attributes={ATTRIBUTES} />,
+      <RuleBuilder initialValue={attr('nationality', ['  '])} onChange={() => {}} groups={[]} attributes={ATTRIBUTES} />,
     )
 
     expect(screen.getByText('Values must not be empty.')).toBeInTheDocument()

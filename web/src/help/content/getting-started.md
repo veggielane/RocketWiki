@@ -70,14 +70,17 @@ see anyone's. Open your own from the account menu at the bottom of the left
 sidebar, or a colleague's by following their name wherever it appears — on a
 comment, an attachment, a page's history, or as the owner of a space.
 
-A profile shows two things: the person's **clearance**, and for each selector
-category whether they are **eligible** for it. That is what a colleague needs
-before showing someone a page at a given level or in a given compartment, and
-it is all the page shows — no email address, no nationality, no activity.
+A profile shows one thing: the **groups** the person belongs to. Access grants,
+role grants and restrictions are written against group names, so that is what
+a colleague needs before writing a rule meant to include someone — and it is
+all the page shows: no email address, no nationality, no activity, and nothing
+about which pages the person may read. Whether they can open a particular page
+is decided per space and per page, from that space's grants and the page's own
+marking and restrictions, never from anything on a profile.
 
-Both values are whatever the person's sign-in carried the last time they signed
-in here, and both are managed in Keycloak rather than in RocketWiki: nothing on
-the page can be edited, and a change made in Keycloak shows once the person
-next signs in. A clearance that was never recorded shows as **Not recorded**
-rather than as a level. An account that was created by sync and has never
+The groups are whatever the person's sign-in carried the last time they signed
+in here, and group membership is managed in Keycloak rather than in RocketWiki:
+nothing on the page can be edited, and a change made in Keycloak shows once the
+person next signs in. A sign-in that carried no groups shows as none recorded,
+rather than as an empty list. An account that was created by sync and has never
 signed in here has nothing to show yet, and says so.

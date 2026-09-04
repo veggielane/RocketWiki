@@ -14,7 +14,7 @@ namespace RocketWiki.Data.Services;
 ///
 /// <para>The gate order is page-then-entry on every path, and both gates are real. The
 /// page gate is the existing one, loaded through <see cref="PermissionContextLoader"/> so
-/// space grants, the restriction chain and the page's own clearance check are inherited
+/// space grants, the restriction chain and the page's own marking check are inherited
 /// rather than re-derived. The entry gate is <see cref="MarkingGate.Check"/> against the
 /// entry's own marking — the same composition pages use (§21.2), called once more per
 /// entry with the caller's granted selectors for the page's space. Entry markings carry no
@@ -75,10 +75,10 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
                 : new ReadResult<PageEntryView>.Denied(failure.Reason!);
         }
 
-        var clearance = MarkingGate.Check(entry.ToMarking(), principal, db.SelectorCatalog, gate.Access!.GrantedSelectors);
-        return clearance.IsAllowed
+        var markingCheck = MarkingGate.Check(entry.ToMarking(), principal, db.SelectorCatalog, gate.Access!.GrantedSelectors);
+        return markingCheck.IsAllowed
             ? new ReadResult<PageEntryView>.Found(ToView(entry))
-            : new ReadResult<PageEntryView>.Denied(clearance.DenialReason!);
+            : new ReadResult<PageEntryView>.Denied(markingCheck.DenialReason!);
     }
 
     public async Task<PageMutationResult<PageEntryView>> CreateAsync(
@@ -114,6 +114,10 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
             Version = 1,
             Level = marking.Level,
             Prefix = marking.Prefix,
+            // Copied from the value, never decided here (see PageMarking.IsUnavailable).
+            // Always false on this path: an unavailable page marking fails canEdit and
+            // CheckMarking above, and a request marking comes from Create.
+            IsUnavailable = marking.IsUnavailable,
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
             UpdatedByUserId = actingUserId,
@@ -157,6 +161,7 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
 
             entry.Level = newMarking.Level;
             entry.Prefix = newMarking.Prefix;
+            entry.IsUnavailable = newMarking.IsUnavailable; // false: the request marking came from Create
             // Replaced wholesale, like a page's country set: a partial update would let a
             // caller change the level without ever stating what caveat they meant.
             db.PageEntryCountries.RemoveRange(entry.Countries);
@@ -209,7 +214,7 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
     ///
     /// <para>Below the page is refused because the page is the container: a reader who
     /// cannot open the page never reaches the entry, so a lower marking is a claim that
-    /// will eventually be believed by someone. Above your own clearance is refused because
+    /// will eventually be believed by someone. Out of your own reach is refused because
     /// §21.6 already says you may not set a marking you could not then read, and an entry
     /// is no different — it would also let someone write a record and then be unable to
     /// correct it.</para>
@@ -351,8 +356,8 @@ public sealed class PageEntryService(RocketWikiDbContext db, string localInstanc
 
         // The marking gate BEFORE the version check, so a caller who may not read this
         // entry cannot learn its version by comparing which refusal they get.
-        var clearance = MarkingGate.Check(entry.ToMarking(), principal, db.SelectorCatalog, access!.GrantedSelectors);
-        if (!clearance.IsAllowed)
+        var markingCheck = MarkingGate.Check(entry.ToMarking(), principal, db.SelectorCatalog, access!.GrantedSelectors);
+        if (!markingCheck.IsAllowed)
         {
             return (null, null, null, new NotFoundError(entryId));
         }

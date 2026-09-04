@@ -46,6 +46,9 @@ public class PageEntryConfiguration : IEntityTypeConfiguration<PageEntry>
         builder.Property(e => e.Version).IsRequired();
         builder.Property(e => e.Level).HasColumnType("tinyint").IsRequired();
         builder.Property(e => e.Prefix).HasMaxLength(PageMarkingConfiguration.MaxPrefixLength);
+        // "This entry's marking is unknown", the same column PageMarkings carries and for
+        // the same reason (see PageMarkingConfiguration): NOT NULL, default false.
+        builder.Property(e => e.IsUnavailable).IsRequired().HasDefaultValue(false);
         builder.Property(e => e.CreatedAtUtc).HasColumnType("datetime2(3)");
         builder.Property(e => e.UpdatedAtUtc).HasColumnType("datetime2(3)");
 

@@ -44,7 +44,6 @@ public sealed partial class NotificationsHub : Hub
     private readonly IPagePermissionReadService pagePermissionReadService;
     private readonly IOptions<CoEditOptions> coEditOptions;
     private readonly RocketWikiDbContext db;
-    private readonly PrincipalBuilder principalBuilder;
 
     public NotificationsHub(
         IRealtimeConnectionRegistry registry,
@@ -52,8 +51,7 @@ public sealed partial class NotificationsHub : Hub
         IPageReadService pageReadService,
         IPagePermissionReadService pagePermissionReadService,
         IOptions<CoEditOptions> coEditOptions,
-        RocketWikiDbContext db,
-        PrincipalBuilder principalBuilder)
+        RocketWikiDbContext db)
     {
         this.registry = registry;
         this.editSessions = editSessions;
@@ -61,10 +59,6 @@ public sealed partial class NotificationsHub : Hub
         this.pagePermissionReadService = pagePermissionReadService;
         this.coEditOptions = coEditOptions;
         this.db = db;
-        // The same singleton builder the HTTP accessor uses (design.md §21.15): the hub
-        // principal maps every configured selector claim exactly as a GraphQL request's
-        // does, so a co-editor is admitted or evicted by the same gates on both paths.
-        this.principalBuilder = principalBuilder;
     }
 
     /// <summary>The room key IS the SignalR group name — see <see cref="PresenceRoom"/>.
@@ -75,7 +69,7 @@ public sealed partial class NotificationsHub : Hub
 
     public override async Task OnConnectedAsync()
     {
-        var principal = principalBuilder.Build(Context.User);
+        var principal = PrincipalBuilder.Build(Context.User);
         if (principal is not null)
         {
             // By the time a page is open to establish this connection, the SPA has
@@ -131,7 +125,7 @@ public sealed partial class NotificationsHub : Hub
         "Contrast JoinEditSession, which IS audited: joining an edit session consumes canEdit and opens a content-bearing channel.")]
     public async Task JoinRoom(string roomKey)
     {
-        var principal = principalBuilder.Build(Context.User);
+        var principal = PrincipalBuilder.Build(Context.User);
         if (principal is null)
         {
             ApiTelemetry.RecordPresenceJoin(ApiTelemetry.PresenceNoPrincipal);

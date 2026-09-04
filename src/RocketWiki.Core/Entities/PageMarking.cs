@@ -12,9 +12,13 @@ namespace RocketWiki.Core.Entities;
 /// <para>Every page has exactly one of these rows. Creation writes one (inheriting the
 /// parent's, or OFFICIAL at the root), sync import writes one, and the
 /// <c>AddPageMarkings</c> migration backfilled every page that existed before the
-/// feature. A page found without one is treated as TOP SECRET by the read path
-/// (<see cref="ProtectiveMarking.FailClosed"/>) — belt and braces against a future code
-/// path that forgets, never a licence for one to exist.</para>
+/// feature. A page found without one is treated as unavailable by the read path
+/// (<see cref="ProtectiveMarking.FailClosed"/>, readable by nobody) — belt and braces
+/// against a future code path that forgets, never a licence for one to exist.</para>
+///
+/// <para>A row can also SAY it is unavailable — <see cref="IsUnavailable"/> — which is how
+/// "we do not know this page's marking" survives the persistence boundary. See that
+/// property for the fail-open it closes.</para>
 /// </summary>
 public class PageMarking
 {
@@ -24,6 +28,32 @@ public class PageMarking
     public Page? Page { get; set; }
 
     public ClassificationLevel Level { get; set; } = ClassificationLevel.Official;
+
+    /// <summary>
+    /// True when this page's marking is <b>unknown</b>: the row exists (every page has
+    /// one) but nobody has stated what the page is marked. The sync importer writes it
+    /// for a page arriving from a bundle that carries no marking (a format-1/2 bundle,
+    /// or a malformed one — design.md §21.10), and <see cref="ToMarking"/> then returns
+    /// <see cref="ProtectiveMarking.FailClosed"/>, which denies everyone.
+    ///
+    /// <para><b>Why a column, and not a sentinel level.</b> The importer used to persist
+    /// that case as a plain TOP SECRET row, and TOP SECRET denied all but the
+    /// highest-cleared — so "unknown" and "TOP SECRET" could share a representation.
+    /// The level gates nothing now (§21.12), so a bare TOP SECRET row is readable by
+    /// everyone with space access, and an unknown marking stored that way would be a
+    /// silent fail-open on every pre-marking bundle. The state therefore has to be one
+    /// the database can hold in its own right, and it is never inferred from the level:
+    /// a real page legitimately marked TOP SECRET reads <c>false</c> here.</para>
+    ///
+    /// <para><b>Stating a marking clears it.</b> Every writer that persists a
+    /// <see cref="ProtectiveMarking"/> copies its <see cref="ProtectiveMarking.IsUnavailable"/>
+    /// onto this column, and the only marking that carries <c>true</c> is
+    /// <see cref="ProtectiveMarking.FailClosed"/> itself — so a declared marking arriving
+    /// through sync, or set through <c>setPageMarking</c>, replaces "unknown" with a
+    /// known value, and nothing that builds a marking through <c>ProtectiveMarking.Create</c>
+    /// can ever set it.</para>
+    /// </summary>
+    public bool IsUnavailable { get; set; }
 
     /// <summary>
     /// The national prefix a UK marking is conventionally written with — <c>UK</c> by
@@ -73,13 +103,21 @@ public class PageMarking
     /// (every marking query includes both); a row read without its children would
     /// compare as a LESS restrictive marking than it is, which is the one direction this
     /// type must never err in.
+    ///
+    /// <para>An <see cref="IsUnavailable"/> row is <see cref="ProtectiveMarking.FailClosed"/>
+    /// — the one instance that denies everyone — whatever its other columns say. The
+    /// flag is read, never inferred: <c>ProtectiveMarking.Create</c> cannot build an
+    /// unavailable marking, so the level, countries and selectors of such a row are
+    /// deliberately not consulted.</para>
     /// </summary>
     public ProtectiveMarking ToMarking() =>
-        ProtectiveMarking.Create(
-            Level,
-            Countries.Select(c => c.CountryValue),
-            Selectors.Select(s => SelectorValue.Canonical(s.Category, s.Value)),
-            Prefix);
+        IsUnavailable
+            ? ProtectiveMarking.FailClosed
+            : ProtectiveMarking.Create(
+                Level,
+                Countries.Select(c => c.CountryValue),
+                Selectors.Select(s => SelectorValue.Canonical(s.Category, s.Value)),
+                Prefix);
 }
 
 /// <summary>

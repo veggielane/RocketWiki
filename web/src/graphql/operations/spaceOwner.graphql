@@ -5,7 +5,7 @@
 # The people a space can be handed to.
 #
 # Identity only — id, display name and whether they have an avatar. No email,
-# groups, clearance or activity: this is a picker, and a directory that
+# groups, nationality or activity: this is a picker, and a directory that
 # answered more than "which person do you mean" would become a second place to
 # learn things about colleagues.
 #

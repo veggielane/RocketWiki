@@ -105,7 +105,7 @@ function PermissionOutcome({
 
 /**
  * The whole ladder, every gate evaluated. The server's explain path does not
- * short-circuit, so a user who fails the clearance gate still sees whether
+ * short-circuit, so a user who fails the selector gate still sees whether
  * the caveat would have admitted them — which is the difference between
  * "one thing to fix" and "three".
  */

@@ -1,79 +1,39 @@
+import { useId } from 'react'
 import { useParams } from 'react-router-dom'
-import {
-  Alert,
-  Box,
-  Paper,
-  Skeleton,
-  Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  Typography,
-} from '@mui/material'
-import CheckCircleOutlinedIcon from '@mui/icons-material/CheckCircleOutlined'
-import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined'
-import HighlightOffOutlinedIcon from '@mui/icons-material/HighlightOffOutlined'
+import { Alert, List, ListItem, ListItemText, Paper, Skeleton, Stack, Typography } from '@mui/material'
 import { useUserProfileQuery } from '../graphql/generated/graphql'
 import { describeLoadFailure } from '../feedback/unavailableCopy'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { UserAvatar } from '../avatars/UserAvatar'
-import { ClearanceBadge } from '../markings/ClearanceBadge'
 import {
-  CLEARANCE_NOT_RECORDED,
-  CLEARANCE_NOT_RECORDED_DETAIL,
   EXTERNAL_ACCOUNT_NOTE,
-  NO_SELECTOR_CATEGORIES,
+  GROUPS_SECTION_DESCRIPTION,
+  NO_GROUPS_RECORDED,
   PROFILE_RECORDED_CAPTION,
-  SELECTOR_SECTION_DESCRIPTION,
-  describeEligibility,
-  eligibilityKind,
-  type EligibilityStatus,
 } from '../users/profileCopy'
 import { NotFoundPage } from './NotFoundPage'
 
 /**
- * The accent beside each eligibility row. Decorative on purpose: MUI's icons
- * are `aria-hidden` by default and the tone is a palette token, so a reader
- * with neither colour nor pictures gets the row's text and loses nothing
- * (WCAG 1.4.1). The kind comes from the same function the text does, so the
- * two cannot disagree.
- */
-function EligibilityIcon({ status }: { status: EligibilityStatus }) {
-  switch (eligibilityKind(status)) {
-    case 'EVERYONE':
-      return <GroupsOutlinedIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-    case 'ELIGIBLE':
-      return <CheckCircleOutlinedIcon fontSize="small" sx={{ color: 'success.main' }} />
-    case 'NOT_ELIGIBLE':
-      return <HighlightOffOutlinedIcon fontSize="small" sx={{ color: 'text.secondary' }} />
-  }
-}
-
-/**
- * A person's profile: their clearance and their site-wide selector
- * eligibility per category, as the gate would read them from the claims
- * their last sign-in carried.
+ * A person's profile: the group memberships their sign-in carried, as the
+ * server recorded them at their last sign-in.
  *
  * **Readable by every signed-in user, and that is a product decision, not a
- * gap.** The user directory deliberately carries no clearance because a list
- * of clearances is a census; this page is that census one person at a time,
- * accepted because the everyday use — a colleague checking whether someone
- * may be shown a level or a compartment before sharing it — is worth it.
- * Nationality, email and last-seen are NOT here: they stay on the audited
- * admin roster.
+ * gap.** The everyday use — a colleague checking which groups someone is in
+ * before writing a grant or a restriction against one — is worth a page that
+ * names them one person at a time. Nationality, email and last-seen are NOT
+ * here: they stay on the audited admin roster.
+ *
+ * **Nothing that reads like a permission.** There is no clearance and no
+ * selector eligibility, because this deployment has neither attribute: a
+ * level is compared against nobody, and a selector is gated by the grants in
+ * each space. Whether this person may read a particular page is a per-page
+ * answer the permission inspector gives; a profile that summarised it would
+ * be a second, stale answer.
  *
  * **Nothing here is edited here.** Every value is Keycloak's, mirrored at
  * sign-in, and the caption says so. There is no timestamp on purpose: the
  * page says "last sign-in" in words and no more precisely than that.
- *
- * **The floor is never shown as a clearance.** An absent or unrecognised
- * claim resolves on the wire to OFFICIAL-SENSITIVE — that is what the gate
- * does with it — but `clearanceRecorded: false` means the level is the
- * gate's default, not a fact about this person, and the page says "Not
- * recorded" in the badge's place (users/profileCopy.ts).
  *
  * Null from the server — an id that matches nobody — takes the app's
  * not-found treatment, the same screen an unknown page gets. A read that
@@ -81,6 +41,7 @@ function EligibilityIcon({ status }: { status: EligibilityStatus }) {
  */
 export function UserProfilePage() {
   const { userId } = useParams<{ userId: string }>()
+  const groupsHeadingId = useId()
   const [{ data, fetching, error }] = useUserProfileQuery({
     variables: { id: userId ?? '' },
     pause: !userId,
@@ -97,8 +58,7 @@ export function UserProfilePage() {
     return (
       <Stack spacing={1}>
         <Skeleton variant="text" width="40%" height={48} />
-        <Skeleton variant="rectangular" height={120} />
-        <Skeleton variant="rectangular" height={200} />
+        <Skeleton variant="rectangular" height={160} />
       </Stack>
     )
   }
@@ -113,8 +73,6 @@ export function UserProfilePage() {
   if (!profile) {
     return <NotFoundPage />
   }
-
-  const rows = profile.selectorEligibility
 
   return (
     <Stack spacing={3}>
@@ -135,72 +93,35 @@ export function UserProfilePage() {
 
       {profile.isExternal ? (
         // A shadow account created by sync. Nothing below the name was ever
-        // recorded, so say why rather than render two empty sections.
+        // recorded, so say why rather than render an empty section.
         <Alert severity="info">{EXTERNAL_ACCOUNT_NOTE}</Alert>
       ) : (
         <>
           <Paper variant="outlined" sx={{ p: 2 }}>
-            <Stack spacing={1.5}>
-              <Typography variant="h6" component="h2">
-                Clearance
-              </Typography>
-              {profile.clearanceRecorded ? (
-                <Box>
-                  <ClearanceBadge level={profile.clearance} levelName={profile.clearanceName} />
-                </Box>
-              ) : (
-                <Stack spacing={0.5}>
-                  <Typography>{CLEARANCE_NOT_RECORDED}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {CLEARANCE_NOT_RECORDED_DETAIL}
-                  </Typography>
-                </Stack>
-              )}
-            </Stack>
-          </Paper>
-
-          <Paper variant="outlined">
-            <Stack spacing={0.5} sx={{ p: 2, pb: rows.length === 0 ? 1 : 2 }}>
-              <Typography variant="h6" component="h2">
-                Selectors
+            <Stack spacing={1}>
+              <Typography variant="h6" component="h2" id={groupsHeadingId}>
+                Groups
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {SELECTOR_SECTION_DESCRIPTION}
+                {GROUPS_SECTION_DESCRIPTION}
               </Typography>
-            </Stack>
-            {rows.length === 0 ? (
-              <Typography color="text.secondary" sx={{ px: 2, pb: 2 }}>
-                {NO_SELECTOR_CATEGORIES}
-              </Typography>
-            ) : (
-              <Table size="small" aria-label="Selector eligibility">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Category</TableCell>
-                    <TableCell>Eligibility</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {rows.map((row) => (
-                    <TableRow key={row.category}>
-                      {/* The category names the row, so it is the row header
-                          rather than a data cell — a screen reader moving down
-                          the second column hears which category each answer
-                          is for. */}
-                      <TableCell component="th" scope="row" sx={{ fontWeight: 500 }}>
-                        {row.category}
-                      </TableCell>
-                      <TableCell>
-                        <Stack direction="row" spacing={0.75} sx={{ alignItems: 'center' }}>
-                          <EligibilityIcon status={row} />
-                          <span>{describeEligibility(row)}</span>
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
+              {profile.groups.length === 0 ? (
+                <Typography color="text.secondary">{NO_GROUPS_RECORDED}</Typography>
+              ) : (
+                // A list rather than chips: a group name is the thing a grant
+                // or a restriction is written against, so each is a plain row
+                // a reader can select and copy exactly, and a screen reader
+                // hears how many there are. In the server's order, which is
+                // ordinal — not re-sorted here.
+                <List dense disablePadding aria-labelledby={groupsHeadingId}>
+                  {profile.groups.map((name) => (
+                    <ListItem key={name} disableGutters sx={{ py: 0.25 }}>
+                      <ListItemText primary={name} />
+                    </ListItem>
                   ))}
-                </TableBody>
-              </Table>
-            )}
+                </List>
+              )}
+            </Stack>
           </Paper>
 
           <Typography variant="body2" color="text.secondary">

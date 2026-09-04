@@ -297,8 +297,9 @@ to `Pages` rather than assume every row belongs to a live page.
 | Column | Type | Notes |
 |---|---|---|
 | PageId | uniqueidentifier PK, FK → Page | **the PK is the page id** — 1:1 by construction |
-| Level | tinyint | `ClassificationLevel`: 1 OFFICIAL, 2 OFFICIAL_SENSITIVE, 3 SECRET, 4 TOP_SECRET |
+| Level | tinyint | `ClassificationLevel`: 1 OFFICIAL, 2 OFFICIAL_SENSITIVE, 3 SECRET, 4 TOP_SECRET. **Presentational** since 2026-09-04 (design.md §21.12): no gate reads it and no principal attribute is compared against it; the ordering serves the picker's display order and the §21.13 aggregate maximum |
 | Prefix | nvarchar(16) null | national qualifier — **only `UK` or NULL is writable** (the mutation takes `ukPrefix: Boolean!`; the API exposes `ukPrefix`, not the string). `UK` by default, giving `UK SECRET`; **NULL is legal** and means no prefix (design.md §21.12). The column stays a string rather than a bit so a sync-imported legacy value renders verbatim; `AddMarkingSelectorsAndFixedCaveat` nulled every stored value other than `UK` — on `PageMarkings` and on `PageEntries` alike |
+| IsUnavailable | bit, NOT NULL, default 0 | **the marking is unknown.** Set by the sync importer for a page that arrived with no usable marking; cleared by any write that states a real marking — every writer copies it from the `ProtectiveMarking` it persists, and only `FailClosed` carries true. `ToMarking()` returns the unavailable sentinel when set, whatever the other columns say, so the page is readable by nobody (design.md §21.5, §21.10). Never inferred from `Level`. Added by `AddMarkingUnavailableFlag` |
 | SetAtUtc | datetime2(3) | |
 | SetByUserId | uniqueidentifier null FK → User | **null** for a row applied by sync import, or by the every-page-is-marked backstop — no local actor |
 
@@ -319,18 +320,46 @@ marking for a page is a primary-key violation rather than something application
 code has to prevent — for a table that gates access, "which marking applies" must
 not be a question with two possible answers.
 
-`Level` is a **tinyint, not a string**: the ordering *is* the access comparison
-(§21.1), so it must be numeric on every provider, and a value outside the
-four-member ladder cannot be typed in. The wire formats (GraphQL enum, sync
-payload, audit details) all use the member's name; only storage is numeric.
+`Level` is a **tinyint, not a string**, and the reason changed on 2026-09-04
+without the column changing. The ordering *was* the access comparison
+(clearance ≥ level), which had to be numeric on every provider; that gate is
+gone (design.md §21.2, §21.12), and the ordering now serves the picker's
+display order and the §21.13 aggregate maximum — still numeric comparisons —
+while a value outside the four-member ladder still cannot be typed in. The
+wire formats (GraphQL enum, sync payload, audit details) all use the member's
+name; only storage is numeric. Nothing reads this column to decide whether a
+caller may see the page.
 
 **No global query filter**, matching `PageProperty` and `PageLabel`: a
 soft-deleted page keeps its marking, which is what makes restore give the page
 back with the classification it had. Every page has exactly one row — creation
 writes it, sync import writes it, `RocketWikiDbContext` materializes one for any
 page inserted without it, and the `AddPageMarkings` migration backfilled every
-page that predated the feature. A page found *without* one is read as TOP SECRET
-(§21.5); that is a diagnosis, never a mode.
+page that predated the feature. A page found *without* one is read as the
+unavailable sentinel (§21.5) — denied to everyone by an explicit flag, not by
+its level, and rendered as a bare TOP SECRET; that is a diagnosis, never a
+mode. A row with `IsUnavailable` set reads as the same sentinel, and that one
+is a state, not a diagnosis. (The sentinel used to deny by *being* TOP SECRET.
+Once the level stopped gating, a TOP SECRET row with no selectors or caveat
+would have denied nobody, which is why the flag exists and why it is never
+inferable from `Level`.)
+
+**`IsUnavailable` exists because the level stopped gating.** The importer used
+to write an unmarked arrival as a bare TOP SECRET row, and while TOP SECRET
+denied all but the highest-cleared, "unknown" and "TOP SECRET" could share a
+representation. With the level presentational (design.md §21.12) a bare TOP
+SECRET row is readable by everyone the space admits, so "we do not know" had
+to become a state the database holds in its own right. `AddMarkingUnavailableFlag`
+adds the bit here and on `PageEntries` — an entry's marking has the same two
+representations and the same fail-open — NOT NULL, default 0, unindexed,
+because the only enforcement read is the PK lookup. It does **not** backfill:
+a row the older importer wrote (TOP SECRET, no prefix, no countries, no
+selectors, no actor) is byte-identical to a genuine prefix-less TOP SECRET
+marking, so the migration cannot tell them apart; its comment carries the
+review query for an operator inheriting a pre-flag database, and the repair
+is a re-synced declared marking or a hand-set bit. On the wire the state is
+carried as *no marking* — export and the outbox serialize an unavailable
+marking as null, never as the sentinel's parts (design.md §21.10).
 
 **Aggregate markings (§21.13) add no storage, and that is the point.** The label a
 search result list or an Ask answer carries is computed per response from the
@@ -418,7 +447,7 @@ Local mirror for display only — **authorization never reads this table**
 | Subject | nvarchar(255) null | OIDC `sub`; **null for shadow users** from sync |
 | Email | nvarchar(320) null | |
 | DisplayName | nvarchar(200) | |
-| AttributesJson | nvarchar(max) | mirrored registered attributes plus the configured selector claims, raw values keyed by claim name; nationality admin-visible only, clearance and selector eligibility shown on the profile page (design.md §6.2); never an authorization input |
+| AttributesJson | nvarchar(max) | exactly two mirrored claims, raw values keyed by claim name: `nationality` (admin-visible only) and `groups` (shown on the profile page, design.md §6.2). Every key present, an empty list when the token carried none. It briefly also held the clearance and per-category selector claims; those went with the gates that read them on 2026-09-04 (design.md §21.2). Never an authorization input |
 | IsExternal | bit | shadow user (sync author), never loginable |
 | CreatedAtUtc / LastSeenAtUtc | | |
 
@@ -491,25 +520,25 @@ Id (PK v7), Key nvarchar(64) unique, ClaimName nvarchar(128), DisplayName
 nvarchar(128), Type tinyint (1 string, 2 string[]), AllowedValuesJson
 nvarchar(max) null.
 
-Two keys are **well known** to code as well as to admins: `nationality`, which
+One key is **well known** to code as well as to admins: `nationality`, which
 gates the eyes-only caveat (`PageMarkingCountry`, design.md §21.4) — but whose
 `AllowedValuesJson` is **no longer read by anything in markings**: the caveat's
 vocabulary is the fixed five-token set, and a `nationality` row, where one
-exists, is ordinary rule-builder vocabulary for `attr` conditions — and
-`clearance`, whose values are the four `ClassificationLevel` wire names and
-which gates every page read against its protective marking (§21.3). Both are
-still ordinary registered attributes — read from the token per request like any
-other — and both are absent rather than empty when the claim is missing, which
-is what makes their fail-closed defaults land on the intended answer.
+exists, is ordinary rule-builder vocabulary for `attr` conditions. It is still
+an ordinary registered attribute — read from the token per request like any
+other — and absent rather than empty when the claim is missing, which is what
+makes its fail-closed default land on the intended answer. `clearance` was the
+second well-known key, gating every page read against its level; it went with
+that gate on 2026-09-04 (design.md §21.2, §21.12), and a `clearance` row here
+would now be an ordinary `attr` key that nothing in markings reads.
 
 The **selector categories** (design.md §21.15) are deliberately *not* registry
-rows. They come from configuration (`ProtectiveMarking:SelectorCategories`), and
-the claims they name are mapped into the `Principal` from that catalog rather
-than from this table. JIT provisioning mirrors those claims into
-`User.AttributesJson` beside nationality and clearance — the raw values, keyed
-by claim name, never a derived "eligible" — so the profile page (design.md
-§6.2, 2026-09-03) can derive each person's eligibility through the gate at read
-time, against the catalog current then. A vocabulary that gates access still
+rows. They come from configuration (`ProtectiveMarking:SelectorCategories`),
+and they name no claim: a selector value is conferred by a space's access
+grant alone (`AccessRuleSelector`), never by anything on the principal. (Each
+category used to name a claim, mapped into the `Principal` from the catalog
+and mirrored into `User.AttributesJson` for the profile page; that went with
+the eligibility gate on 2026-09-04.) A vocabulary that gates access still
 lives in a reviewed diff, not in an editable row, and the mirror is never an
 authorization input (design.md §6.1).
 

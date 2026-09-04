@@ -2,10 +2,10 @@ namespace RocketWiki.Core.Access;
 
 /// <summary>
 /// design.md §21.15: the instance's configured selector categories, validated once at
-/// startup and immutable thereafter. It is the vocabulary that <see cref="SelectorGate"/>
-/// checks eligibility against, that the marking mutation and the grant mutations validate
-/// input against, and that <see cref="ProtectiveMarking.FormatLabel"/> takes the
-/// <i>display order</i> from.
+/// startup and immutable thereafter. It is the vocabulary that the marking mutation and
+/// the grant mutations validate input against, that <see cref="SelectorGate"/> consults
+/// to tell an unconfigured category from an ungranted one, and that
+/// <see cref="ProtectiveMarking.FormatLabel"/> takes the <i>display order</i> from.
 ///
 /// <para><b>Built once, in the host, from configuration</b> (the API's
 /// <c>ProtectiveMarkingConfiguration</c>; the sync CLI and the importer read the same
@@ -14,12 +14,21 @@ namespace RocketWiki.Core.Access;
 /// the instance id, and Core takes no dependency on the options framework to carry
 /// it.</para>
 ///
+/// <para><b>A category is a name, a description and its values — nothing else.</b> It used
+/// to carry a claim name as well: the Keycloak attribute whose <c>yes</c> made a principal
+/// eligible for the category before any grant was consulted. That went with the
+/// eligibility gate (see <see cref="SelectorGate"/>), because this deployment carries no
+/// per-category attributes in Keycloak; with it went the catalog's list of claim names and
+/// the rule that a claim name may not be <c>groups</c>, <c>sub</c> or <c>nationality</c>,
+/// since there is no longer a claim to reserve against. Whether a principal may read a
+/// selector-bearing page is decided by the space's access grants alone.</para>
+///
 /// <para><b><see cref="Empty"/> is the fail-closed catalog.</b> An instance with no
-/// configured categories knows no selector, so any page carrying one is eligible to nobody
-/// (<see cref="SelectorGate"/> reports <c>selector:unknown:{CATEGORY}</c>). That is the
-/// §12 posture for a bundle arriving from an instance that configured a category this one
-/// has not: the content lands, invisible, until an operator configures the category and
-/// an admin grants it. There is no "unknown means ignore" reading anywhere.</para>
+/// configured categories knows no selector, so any page carrying one is readable by
+/// nobody (<see cref="SelectorGate"/> reports <c>selector:unknown:{CATEGORY}</c>). That is
+/// the §12 posture for a bundle arriving from an instance that configured a category this
+/// one has not: the content lands, invisible, until an operator configures the category
+/// and an admin grants it. There is no "unknown means ignore" reading anywhere.</para>
 ///
 /// <para><b>Validation happens here and nowhere else</b>, and it is what makes the
 /// category name safe to put into a denial reason: every name and value is canonical
@@ -27,10 +36,9 @@ namespace RocketWiki.Core.Access;
 /// <see cref="MaxNameLength"/>/<see cref="MaxValueLength"/> long (the column lengths of
 /// <c>PageMarkingSelectors</c> and <c>AccessRuleSelectors</c> — SQLite does not enforce
 /// declared lengths, so the catalog is what keeps an over-long token out of the test tier),
-/// unique, and never named after a well-known principal attribute. Invalid configuration
-/// throws <see cref="SelectorCatalogException"/>, which the host turns into a refusal to
-/// start: a wiki that silently dropped a mis-typed category would be enforcing a
-/// vocabulary its operator did not configure.</para>
+/// and unique. Invalid configuration throws <see cref="SelectorCatalogException"/>, which
+/// the host turns into a refusal to start: a wiki that silently dropped a mis-typed
+/// category would be enforcing a vocabulary its operator did not configure.</para>
 /// </summary>
 public sealed class SelectorCatalog
 {
@@ -39,18 +47,6 @@ public sealed class SelectorCatalog
 
     /// <summary>Column length of <c>PageMarkingSelectors.Value</c> / <c>AccessRuleSelectors.Value</c>.</summary>
     public const int MaxValueLength = 32;
-
-    /// <summary>
-    /// Attribute keys a <see cref="SelectorCategory.ClaimName"/> may not be. A category
-    /// whose claim was <c>clearance</c> would test the clearance values for <c>yes</c> —
-    /// never eligible, silently — and one named <c>groups</c> would make group membership
-    /// look like a selector claim. Refused at startup rather than reasoned about at runtime.
-    /// </summary>
-    public static readonly IReadOnlySet<string> ReservedClaimNames =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "groups", "sub", ClearanceGate.ClearanceAttributeKey, ClearanceGate.NationalityAttributeKey,
-        };
 
     private readonly Dictionary<string, SelectorCategory> _byName;
     private readonly Dictionary<string, int> _displayIndexByName;
@@ -64,12 +60,6 @@ public sealed class SelectorCatalog
         {
             _displayIndexByName[categories[i].Name] = i;
         }
-
-        ClaimNames = categories
-            .Where(c => c.ClaimName is not null)
-            .Select(c => c.ClaimName!)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
     }
 
     /// <summary>No categories: every selector is unknown, every selector-bearing page is
@@ -80,10 +70,6 @@ public sealed class SelectorCatalog
     /// display order (§21.15): an operator who lists <c>FRUIT</c> before <c>REGION</c> gets
     /// <c>APPLE NORTH</c>, not <c>NORTH APPLE</c>.</summary>
     public IReadOnlyList<SelectorCategory> Categories { get; }
-
-    /// <summary>Every distinct claim name a category is gated by, ordinal — what the API's
-    /// principal builder maps from the token. One claim may gate several categories.</summary>
-    public IReadOnlyList<string> ClaimNames { get; }
 
     public int Count => Categories.Count;
 
@@ -168,15 +154,6 @@ public sealed class SelectorCatalog
                 return false;
             }
 
-            var claimName = string.IsNullOrWhiteSpace(definition.ClaimName) ? null : definition.ClaimName.Trim();
-            if (claimName is not null && ReservedClaimNames.Contains(claimName))
-            {
-                error = $"Selector category '{name}' names the reserved principal attribute '{claimName}' as its " +
-                    "claim. A selector claim must be its own attribute, never groups, sub, clearance or nationality.";
-                catalog = Empty;
-                return false;
-            }
-
             var values = new List<string>();
             var seenValues = new HashSet<string>(StringComparer.Ordinal);
             foreach (var rawValue in definition.Values ?? [])
@@ -208,7 +185,7 @@ public sealed class SelectorCatalog
                 return false;
             }
 
-            categories.Add(new SelectorCategory(name, definition.Description, claimName, values));
+            categories.Add(new SelectorCategory(name, definition.Description, values));
         }
 
         catalog = new SelectorCatalog(categories);

@@ -20,19 +20,8 @@ public class PagePermissionReadServiceTests : SqliteTestBase
 {
     private const string LocalInstanceId = "local-instance";
 
-    private static Principal PrincipalWith(string userId = "caller-sub", string[]? groups = null, bool fruit = false)
-    {
-        var attributes = new List<KeyValuePair<string, IReadOnlyList<string>>>
-        {
-            new("clearance", ["SECRET"]),
-        };
-        if (fruit)
-        {
-            attributes.Add(new(TestCatalogs.FruitClaim, ["yes"]));
-        }
-
-        return Principal.Create(userId, groups ?? [], attributes);
-    }
+    private static Principal PrincipalWith(string userId = "caller-sub", string[]? groups = null) =>
+        Principal.Create(userId, groups ?? []);
 
     private static AccessRule AccessGrant(Guid spaceId, params SelectorValue[] selectors)
     {
@@ -111,7 +100,7 @@ public class PagePermissionReadServiceTests : SqliteTestBase
         context.SaveChanges();
 
         var service = new PagePermissionReadService(context, LocalInstanceId);
-        var rules = await service.GetRestrictionsAsync(chain.Child.Id, PrincipalWith(fruit: true), callerIsInstanceAdmin: false);
+        var rules = await service.GetRestrictionsAsync(chain.Child.Id, PrincipalWith(), callerIsInstanceAdmin: false);
 
         var rule = Assert.Single(rules);
         Assert.Equal(chain.ParentRule.Id, rule.RuleId);
@@ -123,16 +112,16 @@ public class PagePermissionReadServiceTests : SqliteTestBase
     [Fact]
     public async Task GetRestrictions_AChainPageTheCallerFailsASelectorGateFor_ContributesAnEmptyTitle()
     {
-        // Access, eligibility, a role - everything except the APPLE grant. The caller can
-        // read the child; the parent's title is withheld by the full gate (G fails), where
-        // a level-only check would have let it through.
+        // Access and a role - everything except the APPLE grant. The caller can read the
+        // child; the parent's title is withheld by the full gate (G fails), where a check
+        // that forgot the selectors would have let it through.
         using var context = CreateContext();
         var chain = SeedChain(context);
         context.AccessRules.AddRange(AccessGrant(chain.Space.Id), RoleGrant(chain.Space.Id, SpaceRole.SpaceAdmin));
         context.SaveChanges();
 
         var service = new PagePermissionReadService(context, LocalInstanceId);
-        var rules = await service.GetRestrictionsAsync(chain.Child.Id, PrincipalWith(fruit: true), callerIsInstanceAdmin: false);
+        var rules = await service.GetRestrictionsAsync(chain.Child.Id, PrincipalWith(), callerIsInstanceAdmin: false);
 
         var rule = Assert.Single(rules);
         Assert.Equal(string.Empty, rule.PageTitle);
@@ -141,7 +130,7 @@ public class PagePermissionReadServiceTests : SqliteTestBase
         context.AccessRules.Add(AccessGrant(chain.Space.Id, TestCatalogs.Apple));
         context.SaveChanges();
         var shown = Assert.Single(await new PagePermissionReadService(context, LocalInstanceId)
-            .GetRestrictionsAsync(chain.Child.Id, PrincipalWith(fruit: true), callerIsInstanceAdmin: false));
+            .GetRestrictionsAsync(chain.Child.Id, PrincipalWith(), callerIsInstanceAdmin: false));
         Assert.Equal(chain.Parent.Title, shown.PageTitle);
     }
 
@@ -156,7 +145,7 @@ public class PagePermissionReadServiceTests : SqliteTestBase
         context.AccessRules.Add(AccessGrant(chain.Space.Id));
         context.SaveChanges();
 
-        var caller = PrincipalWith(fruit: true);
+        var caller = PrincipalWith();
         var service = new PagePermissionReadService(context, LocalInstanceId);
         var found = Assert.IsType<ReadResult<PagePermissionExplanation>.Found>(await service.ExplainAsync(chain.Child.Id, caller, caller));
 
@@ -173,22 +162,26 @@ public class PagePermissionReadServiceTests : SqliteTestBase
     {
         using var context = CreateContext();
         var chain = SeedChain(context);
-        context.AccessRules.AddRange(AccessGrant(chain.Space.Id, TestCatalogs.Apple), RoleGrant(chain.Space.Id, SpaceRole.Editor));
+        // Everyone has access; only apple-readers are granted APPLE. The caller is one,
+        // so they may inspect the parent; the subject is not, so the parent denies them.
+        var appleReaders = AccessGrant(chain.Space.Id, TestCatalogs.Apple);
+        appleReaders.ExpressionJson = """{ "group": "apple-readers" }""";
+        context.AccessRules.AddRange(AccessGrant(chain.Space.Id), appleReaders, RoleGrant(chain.Space.Id, SpaceRole.Editor));
         context.SaveChanges();
 
-        var caller = PrincipalWith(fruit: true);
-        var subject = PrincipalWith(userId: "subject-sub"); // access, not eligible for FRUIT
+        var caller = PrincipalWith(groups: ["apple-readers"]);
+        var subject = PrincipalWith(userId: "subject-sub"); // access, not granted APPLE
         var service = new PagePermissionReadService(context, LocalInstanceId);
         var found = Assert.IsType<ReadResult<PagePermissionExplanation>.Found>(await service.ExplainAsync(chain.Parent.Id, caller, subject));
 
         var explanation = found.Value;
         Assert.False(explanation.Permission.CanView);
-        Assert.Equal("selector:not_eligible:FRUIT", explanation.Permission.ViewDenialReason);
+        Assert.Equal("selector:not_granted:FRUIT", explanation.Permission.ViewDenialReason);
         Assert.True(explanation.HasSpaceAccess);
-        Assert.Equal([TestCatalogs.Apple], explanation.GrantedSelectors);
+        Assert.Empty(explanation.GrantedSelectors);
         Assert.Equal(SpaceRole.Editor, explanation.SpaceRole);
         Assert.Equal(
-            [GateKind.SpaceAccess, GateKind.Classification, GateKind.SelectorEligibility, GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
+            [GateKind.SpaceAccess, GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
             explanation.ViewGates.Select(g => g.Kind));
         Assert.Equal([GateKind.ReplicaReadOnly, GateKind.SpaceRole], explanation.EditGates.Select(g => g.Kind));
         Assert.Single(explanation.ViewGates, g => !g.Passed);

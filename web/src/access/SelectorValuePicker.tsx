@@ -1,5 +1,5 @@
 import { Autocomplete, Chip, TextField } from '@mui/material'
-import type { SelectorValue } from '../markings/clearance'
+import type { SelectorValue } from '../markings/markingRefusal'
 
 /** One configured category (`Query.selectorCategories`), as the picker needs it. */
 export interface SelectorCategoryOption {

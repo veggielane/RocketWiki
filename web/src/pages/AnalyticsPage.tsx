@@ -40,7 +40,7 @@ const PERIODS = [
  * enforce.
  *
  * **Every number is scoped to what this caller can see.** Two admins with
- * different clearances legitimately see different totals, which is why the header
+ * different grants legitimately see different totals, which is why the header
  * states the page count the report covered rather than leaving the reader to
  * assume it is the whole space.
  */
@@ -95,7 +95,7 @@ export function AnalyticsPage() {
         // names on adjacent screens. Falls back to the key only while the
         // list is still in flight.
         subject={spaceKey ? { label: spaceName ?? spaceKey, to: `/spaces/${spaceKey}` } : undefined}
-        // Says what the numbers are OF. A report filtered by clearance that
+        // Says what the numbers are OF. A report filtered by access that
         // presented itself as the whole space would be quietly misleading.
         description={
           report

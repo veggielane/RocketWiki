@@ -7,24 +7,22 @@ namespace RocketWiki.Core.Tests.Access;
 /// design.md §21.15: the configured selector vocabulary is validated ONCE, at startup, and
 /// every rule that makes a category name safe to put into a denial reason lives in that
 /// validation. These pin each refusal, the canonical form, and the two lookups the gate
-/// and the formatter depend on.
+/// and the formatter depend on. (The reserved-claim-name refusal is gone with the claim
+/// name itself: a category no longer names a Keycloak attribute.)
 /// </summary>
 public class SelectorCatalogTests
 {
-    private static SelectorCategory Category(string name, string? claim, params string[] values) =>
-        new(name, null, claim, values);
+    private static SelectorCategory Category(string name, params string[] values) =>
+        new(name, null, values);
 
     [Fact]
     public void Create_CanonicalizesNamesAndValues()
     {
-        var catalog = SelectorCatalog.Create([Category(" fruit ", " fruit ", "apple", " Banana ")]);
+        var catalog = SelectorCatalog.Create([Category(" fruit ", "apple", " Banana ")]);
 
         var category = Assert.Single(catalog.Categories);
         Assert.Equal("FRUIT", category.Name);
         Assert.Equal(["APPLE", "BANANA"], category.Values);
-        // The claim name is trimmed but NOT upper-cased: it is an attribute key matched
-        // ordinally against the principal (§6.3), not a marking token.
-        Assert.Equal("fruit", category.ClaimName);
         Assert.True(catalog.IsKnown(new SelectorValue("fruit", "apple")));
     }
 
@@ -33,8 +31,8 @@ public class SelectorCatalogTests
     {
         var error = Assert.Throws<SelectorCatalogException>(() => SelectorCatalog.Create(
         [
-            Category("FRUIT", null, "APPLE"),
-            Category("fruit", null, "PEAR"), // same name after canonicalization
+            Category("FRUIT", "APPLE"),
+            Category("fruit", "PEAR"), // same name after canonicalization
         ]));
 
         Assert.Contains("FRUIT", error.Message, StringComparison.Ordinal);
@@ -43,29 +41,15 @@ public class SelectorCatalogTests
     [Fact]
     public void DuplicateValueWithinCategory_IsRefused()
     {
-        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT", null, "APPLE", "apple")], out _, out var error));
+        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT", "APPLE", "apple")], out _, out var error));
         Assert.Contains("APPLE", error, StringComparison.Ordinal);
     }
 
     [Fact]
     public void EmptyValues_IsRefused()
     {
-        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT", null)], out _, out var error));
+        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT")], out _, out var error));
         Assert.Contains("FRUIT", error, StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("groups")]
-    [InlineData("sub")]
-    [InlineData("clearance")]
-    [InlineData("nationality")]
-    [InlineData("Clearance")]   // refused case-insensitively: a claim that LOOKS like the reserved one is the trap
-    public void ReservedClaimName_IsRefused(string claim)
-    {
-        // A category gated by "clearance" would test the clearance values for "yes" -
-        // never eligible, silently. Refused at startup rather than reasoned about at runtime.
-        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT", claim, "APPLE")], out _, out var error));
-        Assert.Contains(claim, error, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -78,7 +62,7 @@ public class SelectorCatalogTests
     {
         // A category name is a label token (space-separated) and the caveat uses "/" -
         // neither may appear inside a name.
-        Assert.False(SelectorCatalog.TryCreate([Category(name, null, "APPLE")], out _, out _));
+        Assert.False(SelectorCatalog.TryCreate([Category(name, "APPLE")], out _, out _));
     }
 
     [Theory]
@@ -87,7 +71,7 @@ public class SelectorCatalogTests
     [InlineData("")]
     public void ValueWithWhitespaceOrSlash_IsRefused(string value)
     {
-        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT", null, value)], out _, out _));
+        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT", value)], out _, out _));
     }
 
     [Fact]
@@ -98,37 +82,9 @@ public class SelectorCatalogTests
         var atLimit = new string('A', SelectorCatalog.MaxNameLength);
         var overLimit = new string('A', SelectorCatalog.MaxNameLength + 1);
 
-        Assert.True(SelectorCatalog.TryCreate([Category(atLimit, null, atLimit)], out _, out _));
-        Assert.False(SelectorCatalog.TryCreate([Category(overLimit, null, "APPLE")], out _, out _));
-        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT", null, overLimit)], out _, out _));
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void BlankClaimName_MeansEveryoneEligible(string? claim)
-    {
-        var catalog = SelectorCatalog.Create([Category("REGION", claim, "NORTH")]);
-
-        var category = Assert.Single(catalog.Categories);
-        Assert.Null(category.ClaimName);
-        Assert.False(category.RequiresClaim);
-        Assert.Empty(catalog.ClaimNames);
-        Assert.True(SelectorGate.IsEligible(Principal.Create("anyone", []), category));
-    }
-
-    [Fact]
-    public void ClaimNames_AreDistinct_OneClaimMayGateSeveralCategories()
-    {
-        var catalog = SelectorCatalog.Create(
-        [
-            Category("FRUIT", "fruit", "APPLE"),
-            Category("VEG", "fruit", "CARROT"),
-            Category("REGION", null, "NORTH"),
-        ]);
-
-        Assert.Equal(["fruit"], catalog.ClaimNames);
+        Assert.True(SelectorCatalog.TryCreate([Category(atLimit, atLimit)], out _, out _));
+        Assert.False(SelectorCatalog.TryCreate([Category(overLimit, "APPLE")], out _, out _));
+        Assert.False(SelectorCatalog.TryCreate([Category("FRUIT", overLimit)], out _, out _));
     }
 
     [Fact]
@@ -151,7 +107,7 @@ public class SelectorCatalogTests
         Assert.False(catalog.IsKnown(new SelectorValue("FRUIT", "PEAR")));     // known category, unknown value
         Assert.False(catalog.IsKnown(new SelectorValue("COLOUR", "APPLE")));   // unknown category
         Assert.True(catalog.TryGet("FRUIT", out var fruit));
-        Assert.Equal("fruit", fruit.ClaimName);
+        Assert.Equal("Fruit compartments", fruit.Description);
         Assert.False(catalog.TryGet("COLOUR", out _));
     }
 
@@ -161,7 +117,6 @@ public class SelectorCatalogTests
         // The fail-closed catalog: an instance with no configuration knows no selector,
         // so any selector-bearing page is readable by nobody (§12's "unknown matches nobody").
         Assert.Empty(SelectorCatalog.Empty.Categories);
-        Assert.Empty(SelectorCatalog.Empty.ClaimNames);
         Assert.False(SelectorCatalog.Empty.IsKnown(TestCatalogs.Apple));
         Assert.False(SelectorCatalog.Empty.TryGet("FRUIT", out _));
         Assert.Equal(int.MaxValue, SelectorCatalog.Empty.DisplayIndex("FRUIT"));

@@ -9,9 +9,9 @@ namespace RocketWiki.Core.Services;
 /// <para><b>Every number is computed over the caller's visible set.</b> The audit table
 /// records what happened to everything; a report must only ever count what this caller
 /// could read for themselves. That set comes from the existing permission- and
-/// marking-pruned page walk rather than a query written here, so the §21 clearance gate
+/// marking-pruned page walk rather than a query written here, so the §21 marking gate
 /// and §6.4 restrictions are inherited rather than reimplemented — the same rule the
-/// tree, search and RQL all follow. Two admins with different clearances therefore see
+/// tree, search and RQL all follow. Two admins with different grants therefore see
 /// different totals, which is the gate working.</para>
 ///
 /// <para><b>Classification is never a dimension.</b> No breakdown, filter or series is

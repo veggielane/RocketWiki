@@ -60,8 +60,8 @@ public class ProtectiveMarkingTests
         var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["GB"]);
 
         Assert.Equal(["GB"], marking.EyesOnly);
-        Assert.False(ClearanceGate.Check(
-            marking, Principal.Create("u", [], [new("clearance", new[] { "SECRET" }), new("nationality", new[] { "GB" })])).IsAllowed);
+        Assert.False(CaveatGate.Check(
+            marking, Principal.Create("u", [], [new("nationality", new[] { "GB" })])).IsAllowed);
     }
 
     [Fact]
@@ -81,12 +81,30 @@ public class ProtectiveMarkingTests
     [Fact]
     public void FailClosed_CarriesNoSelectors()
     {
-        // No sentinel selector is invented, for the reason no sentinel country is: TOP
-        // SECRET already denies all but the highest-cleared, and a token nobody configured
-        // must never enter enforcement. It can never be LESS restrictive than a real
-        // marking on selectors either, because a real marking's selectors only subtract.
+        // No sentinel selector is invented, for the reason no sentinel country is: the
+        // unavailability flag already denies everyone, and a token nobody configured must
+        // never enter enforcement.
         Assert.Empty(ProtectiveMarking.FailClosed.Selectors);
         Assert.False(ProtectiveMarking.FailClosed.HasSelectors);
+    }
+
+    [Fact]
+    public void FailClosed_IsUnavailable_AndNothingCreateBuildsIs()
+    {
+        // The flag is what denies (the level no longer does), it is set by the FailClosed
+        // factory alone, and it participates in equality - so the sentinel can never be
+        // mistaken for, or equal to, a real TOP SECRET marking with nothing else on it.
+        Assert.True(ProtectiveMarking.FailClosed.IsUnavailable);
+
+        foreach (var level in Enum.GetValues<ClassificationLevel>())
+        foreach (string? prefix in new[] { null, "UK" })
+        {
+            var real = ProtectiveMarking.Create(level, null, null, prefix);
+            Assert.False(real.IsUnavailable);
+            Assert.NotEqual(ProtectiveMarking.FailClosed, real);
+        }
+
+        Assert.False(ProtectiveMarking.Create((ClassificationLevel)0, null, null, prefix: null).IsUnavailable);
     }
 
     [Fact]
@@ -100,18 +118,20 @@ public class ProtectiveMarkingTests
     [InlineData(0)]     // an uninitialized tinyint — the dangerous one: BELOW the ladder
     [InlineData(7)]     // above the ladder
     [InlineData(255)]
-    public void Create_ALevelOutsideTheLadder_BecomesTopSecret_NeverASilentBypass(byte raw)
+    public void Create_ALevelOutsideTheLadder_BecomesTopSecret_NeverABlankMarking(byte raw)
     {
         // The column is a tinyint, so a hand-edited row or a botched restore can present
-        // a value the enum does not define. A value BELOW the ladder would compare as
-        // less than every clearance and make the page readable by everybody - a silent
-        // bypass of the entire control. Normalized at the one constructor instead.
+        // a value the enum does not define. The level no longer gates, so this is not the
+        // access bypass it once was - but a marking says what the content IS, and a value
+        // below the ladder would render as nothing and drag every aggregate down to it.
+        // Normalized at the one constructor instead: it renders as the top of the scheme,
+        // and it is still an ordinary, available marking (the missing-row sentinel is a
+        // different state, carried by its own flag).
         var marking = ProtectiveMarking.Create((ClassificationLevel)raw, null);
 
         Assert.Equal(ClassificationLevel.TopSecret, marking.Level);
-        Assert.False(ClearanceGate.Check(
-            marking,
-            Principal.Create("u", [], [new("clearance", new[] { "SECRET" })])).IsAllowed);
+        Assert.Equal("UK TOP SECRET", marking.Format(SelectorCatalog.Empty));
+        Assert.False(marking.IsUnavailable);
     }
 
     [Theory]
@@ -229,8 +249,8 @@ public class ProtectiveMarkingTests
         // unknown selector is enforced (against everyone), so the label must show it.
         var reversedCatalog = SelectorCatalog.Create(
         [
-            new SelectorCategory("REGION", null, null, ["NORTH", "SOUTH"]),
-            new SelectorCategory("FRUIT", null, "fruit", ["APPLE", "BANANA"]),
+            new SelectorCategory("REGION", null, ["NORTH", "SOUTH"]),
+            new SelectorCategory("FRUIT", null, ["APPLE", "BANANA"]),
         ]);
         var marking = ProtectiveMarking.Create(
             ClassificationLevel.Official, null, [Apple, North, new SelectorValue("COLOUR", "RED")]);
@@ -398,14 +418,32 @@ public class ProtectiveMarkingTests
     [InlineData(ClassificationLevel.OfficialSensitive, "OFFICIAL_SENSITIVE")]
     [InlineData(ClassificationLevel.Secret, "SECRET")]
     [InlineData(ClassificationLevel.TopSecret, "TOP_SECRET")]
-    public void LevelWireName_RoundTripsThroughTheClaimParser(ClassificationLevel level, string expected)
+    public void LevelWireName_RoundTripsThroughTheWireParser(ClassificationLevel level, string expected)
     {
-        // The claim vocabulary, the sync wire format, the audit DetailsJson and the
-        // GraphQL enum are all this one spelling. If they ever diverge, a token minted
-        // for one stops working with another.
+        // The sync wire format, the audit DetailsJson and the GraphQL enum are all this
+        // one spelling. If they ever diverge, a token minted for one stops working with
+        // another - and a bundle's level would land as unparseable (§21.10).
         Assert.Equal(expected, ProtectiveMarking.LevelWireName(level));
-        Assert.True(ClearanceGate.TryParseLevel(expected, out var parsed));
+        Assert.True(ProtectiveMarking.TryParseLevelWireName(expected, out var parsed));
         Assert.Equal(level, parsed);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("TopSecret")]      // the C# member spelling is NOT the wire vocabulary
+    [InlineData("top_secret")]     // ordinal, no case folding
+    [InlineData("TOP SECRET")]     // the human marking is not the machine name either
+    [InlineData("4")]              // Enum.TryParse would have accepted this as TopSecret
+    [InlineData("SUPER_SECRET")]
+    [InlineData(null)]
+    public void TryParseLevelWireName_RefusesEverythingButTheFourWireNames(string? value)
+    {
+        // The parser is closed on purpose: a bundle may not smuggle a level in under a
+        // spelling the exporter never writes. The failure value is the top of the scheme,
+        // so a caller that ignores the bool still renders the most restrictive spelling.
+        Assert.False(ProtectiveMarking.TryParseLevelWireName(value, out var level));
+        Assert.Equal(ClassificationLevel.TopSecret, level);
     }
 
     // --- Downgrade predicate ------------------------------------------------------------

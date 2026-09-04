@@ -202,16 +202,22 @@ api:
   # design.md §21.15 "Additional selectors": the protective-marking selector
   # categories this instance recognises — compartments such as a programme
   # codeword that a marking carries beside its classification
-  # (`UK SECRET APPLE …`). Reading such a page needs, per selector, eligibility
-  # for the category (from the token) AND a grant of that value in the space
-  # (§6.4); both gates fail closed.
+  # (`UK SECRET APPLE …`). A category is the instance's VOCABULARY of such
+  # values, nothing more: a page may carry at most one value per category, and
+  # a reader sees it only if a space access grant that matches them carries
+  # that exact value (§6.4). There is no site-wide eligibility attribute —
+  # nothing in the token gates a category, and the classification beside the
+  # selectors is display-only — so the grant alone decides, and it fails
+  # closed.
   #
   # EMPTY by default, and that absence is a configuration, not a gap: with no
   # categories the marking control offers no selector pickers, access grants
   # carry no selector values, and a page whose marking carries a selector for a
   # category not listed here — arrived by sync, or the category was removed —
-  # is visible to NOBODY. Both instances of a low/high pair must therefore list
-  # every category that travels between them, spelled identically.
+  # is visible to NOBODY (no grant can carry a value the catalog does not
+  # define, and the denial names the unknown category). Both instances of a
+  # low/high pair must therefore list every category that travels between
+  # them, spelled identically.
   #
   # Each entry renders into the API's indexed env form on the api container
   # (ProtectiveMarking__SelectorCategories__<n>__Name and friends —
@@ -226,20 +232,19 @@ api:
   #
   #   name         REQUIRED. The category, as it appears in marking labels.
   #   description  Optional. Shown to users beside the picker.
-  #   claimName    Optional. The token claim that gates eligibility: a user is
-  #                eligible only when that claim is exactly "yes" — one
-  #                single-valued mapper per claim in Keycloak, see
-  #                src/RocketWiki.AppHost/keycloak/README.md. Empty or omitted
-  #                means EVERY user is eligible and the space grant alone
-  #                decides; the schema rejects unknown keys so a misspelt
-  #                claimName cannot silently become that.
   #   values       REQUIRED. The value list; a marking carries at most one per
-  #                category.
+  #                category, an access grant may carry several.
+  #
+  # There is deliberately NO claimName key. It went with the selector-
+  # eligibility gate on 2026-09-04: selector eligibility is not a Keycloak
+  # concern, so no mapper per category exists to name. values.schema.json
+  # refuses unknown keys, which means a values file still carrying claimName
+  # fails `helm lint` / `helm install` instead of rendering a variable the
+  # API would not bind.
   protectiveMarking:
     selectorCategories: []
     #  - name: FRUIT
     #    description: Fruit programme compartments
-    #    claimName: fruit
     #    values: [APPLE, BANANA]
     #  - name: REGION
     #    description: Regional releasability

@@ -50,7 +50,7 @@ public enum AskWikiUnavailableReason
 /// per-result marking, the same value <c>Page.marking</c> would show, so a citation list
 /// reads as the marked bibliography it is rather than as four indistinguishable links.
 /// Not a leak on the established construction: the citation exists only because the asker
-/// passed the clearance gate for this page.</para></summary>
+/// passed the marking gate for this page.</para></summary>
 public sealed record AskWikiCitation(
     Guid PageId,
     string Title,
@@ -228,7 +228,7 @@ public sealed class AskWikiService(
         // afterwards, so if every one of those candidates is restricted the ask
         // answers NO_RESULTS even though a viewable page ranked just outside the
         // window would have answered it. Never a leak — an availability cliff, and it
-        // is steepest for exactly the low-clearance caller in a heavily-restricted
+        // is steepest for exactly the least-granted caller in a heavily-restricted
         // space. Raising the multiplier trades latency for the tail; it is a tuning
         // decision, recorded here rather than silently accepted.
         var hits = await searchService.SearchAsync(

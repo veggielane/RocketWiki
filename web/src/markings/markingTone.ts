@@ -50,9 +50,10 @@ const DARK: Record<ClassificationLevel, MarkingTone> = {
 
 /**
  * A level the SPA cannot place falls back to the loudest tone rather than an
- * unstyled one, matching §21.3's asymmetry: an out-of-ladder level is treated
- * as TOP SECRET, because the quiet direction is the one that misrepresents
- * how protected the content is.
+ * unstyled one, because the two failure directions are not symmetric: the
+ * quiet one misrepresents how protected the content is, the loud one only
+ * overstates it. Styling only — nothing here ranks the levels, and nothing
+ * in the SPA compares one against a person.
  */
 export function markingTone(level: ClassificationLevel, mode: ThemeMode): MarkingTone {
   const table = mode === 'dark' ? DARK : LIGHT

@@ -16,18 +16,20 @@ namespace RocketWiki.Core.Services;
 ///
 /// <para><b>You may not set a marking you could not then read.</b> This is the one rule
 /// here that is not a restatement of §6: the resulting marking must pass the caller's own
-/// clearance gate. Its rationale is literal — classifying a page above your clearance
-/// makes the page instantly invisible to you, so the "edit" would consume a canEdit
-/// authorization to produce something you can no longer see, and the only way back is to
-/// find someone cleared higher. Enforcing the resulting marking as a whole (rather than
-/// just its level) is what mechanizes that rationale: marking a page
-/// <c>SECRET US EYES ONLY</c> as a UK-national editor, or asserting a selector this
-/// space never granted them, loses the page just as completely as over-classifying it
-/// does. <b>The prefix is outside that rule</b> and falls outside it for free rather than
-/// by exception: the check is <c>MarkingGate.Check(resultingMarking, principal, catalog,
-/// grantedSelectors)</c> - the one composition every read path uses (§21.2) - and no gate
-/// in it reads the prefix, so there is no prefix a caller can be refused for (design.md
-/// §21.12).</para>
+/// marking gate. Its rationale is literal — marking a page out of your own reach makes
+/// it instantly invisible to you, so the "edit" would consume a canEdit authorization to
+/// produce something you can no longer see, and the only way back is to find someone
+/// the marking admits. Concretely that means two things: marking a page
+/// <c>US EYES ONLY</c> as a UK-national editor, or asserting a selector this space never
+/// granted them. <b>The level is not one of them.</b> It used to be — over-classifying a
+/// page above your own clearance was the original case — but this deployment carries no
+/// clearance attribute, the level no longer gates, and so the level is unconstrained
+/// here: an editor may set any level, exactly as they may set any prefix. Both fall
+/// outside the rule for free rather than by exception: the check is
+/// <c>MarkingGate.Check(resultingMarking, principal, catalog, grantedSelectors)</c> - the
+/// one composition every read path uses (§21.2) - and no gate in it reads the level or
+/// the prefix, so there is neither a level nor a prefix a caller can be refused for
+/// (design.md §21.12).</para>
 ///
 /// <para><b>The eyes-only vocabulary is the fixed five-eyes set</b>
 /// (<c>NationalCaveatVocabulary</c>, design.md §21.4); a value outside it is refused with

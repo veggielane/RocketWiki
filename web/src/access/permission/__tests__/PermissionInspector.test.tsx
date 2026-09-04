@@ -60,11 +60,11 @@ describe('PermissionInspector', () => {
       <PermissionInspector
         detail={baseDetail({
           canView: false,
-          viewDenialReason: 'classification:SECRET',
+          viewDenialReason: 'selector:not_granted:FRUIT',
           viewGates: [
             { gate: 'SPACE_ACCESS', passed: true },
-            { gate: 'CLASSIFICATION', passed: false },
-            { gate: 'SELECTOR_ELIGIBILITY', passed: true, category: 'FRUIT' },
+            { gate: 'MARKING_UNAVAILABLE', passed: true },
+            { gate: 'SELECTOR_GRANT', passed: false, category: 'FRUIT', value: 'BANANA' },
             { gate: 'NATIONAL_CAVEAT', passed: true },
           ],
           editGates: [{ gate: 'ROLE', passed: false, requiredRole: 'EDITOR' }],
@@ -74,8 +74,8 @@ describe('PermissionInspector', () => {
     const viewGates = screen.getByRole('list', { name: 'View gates' })
     expect(within(viewGates).getAllByRole('listitem')).toHaveLength(4)
     expect(within(viewGates).getByText('You hold an access grant in this space.')).toBeInTheDocument()
-    expect(within(viewGates).getByText('Above your clearance.')).toBeInTheDocument()
-    expect(within(viewGates).getByText('Eligible for FRUIT material.')).toBeInTheDocument()
+    expect(within(viewGates).getByText("This page's marking is present.")).toBeInTheDocument()
+    expect(within(viewGates).getByText('BANANA is not granted to you in this space.')).toBeInTheDocument()
     expect(within(viewGates).getAllByRole('img', { name: 'Passed' })).toHaveLength(3)
     expect(within(viewGates).getAllByRole('img', { name: 'Failed' })).toHaveLength(1)
     const editGates = screen.getByRole('list', { name: 'Edit gates' })

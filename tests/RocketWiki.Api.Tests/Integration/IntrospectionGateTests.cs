@@ -14,7 +14,7 @@ namespace RocketWiki.Api.Tests.Integration;
 /// introspection answered without one. What it hands over is structure, never content: an
 /// introspection response cannot name a page, a space or a marking value, and every actual
 /// read still returns empty/absent (design.md §6.7). So closing it removes a map, not a
-/// disclosure. On an instance whose schema carries field names like <c>clearance</c> and
+/// disclosure. On an instance whose schema carries field names like <c>eyesOnly</c> and
 /// <c>protectiveMarking</c>, a free, unauthenticated, machine-readable inventory of every
 /// query, mutation, argument and enum value has no operational purpose in production.
 ///

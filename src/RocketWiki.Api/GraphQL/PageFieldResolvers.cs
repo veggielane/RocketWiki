@@ -167,7 +167,7 @@ public sealed class PageFieldResolvers
     /// <c>IPageReadService.GetVisibleChildIdsAsync</c>, which gates each child on its OWN
     /// chain and marking. It used to locate this page inside the already-pruned space
     /// tree instead, and that had two costs. It was wrong: a page whose ancestor sits
-    /// above the caller's clearance is pruned from the tree along with its whole subtree
+    /// beyond the caller's grants is pruned from the tree along with its whole subtree
     /// (§21.5), so this page was absent from the tree and answered <c>children</c> with
     /// an empty list — even though the design says such a page "stays reachable by id",
     /// and its children were perfectly viewable. And it was expensive: the tree walk

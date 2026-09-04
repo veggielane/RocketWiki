@@ -17,7 +17,7 @@ namespace RocketWiki.Api.GraphQL;
 ///
 /// <para>No authorization decision here, and the reasoning is the labels/properties one
 /// (§6.4.2/§20/§21): every page id reaching this loader belongs to a <c>Page</c> that
-/// already passed canView — which now <i>includes</i> the clearance gate — to be
+/// already passed canView — which now <i>includes</i> the marking gate — to be
 /// resolvable at all. Displaying a marking to someone already cleared for the page
 /// reveals nothing they were not entitled to; the marking is not a second secret, it is
 /// the reason they were let in.</para>

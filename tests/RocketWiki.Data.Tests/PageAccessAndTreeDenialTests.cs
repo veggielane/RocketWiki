@@ -18,22 +18,12 @@ namespace RocketWiki.Data.Tests;
 /// </summary>
 public class PageAccessAndTreeDenialTests : SqliteTestBase
 {
-    private static Principal PrincipalWith(string? clearance = null, string[]? nationality = null, string[]? groups = null, bool fruit = false)
+    private static Principal PrincipalWith(string[]? nationality = null, string[]? groups = null)
     {
         var attributes = new List<KeyValuePair<string, IReadOnlyList<string>>>();
-        if (clearance is not null)
-        {
-            attributes.Add(new("clearance", [clearance]));
-        }
-
         if (nationality is not null)
         {
             attributes.Add(new("nationality", nationality));
-        }
-
-        if (fruit)
-        {
-            attributes.Add(new(TestCatalogs.FruitClaim, ["yes"]));
         }
 
         return Principal.Create("user-sub", groups ?? [], attributes);
@@ -56,6 +46,15 @@ public class PageAccessAndTreeDenialTests : SqliteTestBase
             grant.Selectors.Add(new AccessRuleSelector { AccessRuleId = grant.Id, Category = selector.Category, Value = selector.Value });
         }
 
+        return grant;
+    }
+
+    /// <summary>An access grant that matches only <c>apple-readers</c> and confers APPLE:
+    /// the way a test gives one caller a selector and withholds it from another.</summary>
+    private static AccessRule AppleReadersGrant(Guid spaceId)
+    {
+        var grant = AccessGrant(spaceId, TestCatalogs.Apple);
+        grant.ExpressionJson = """{ "group": "apple-readers" }""";
         return grant;
     }
 
@@ -88,10 +87,10 @@ public class PageAccessAndTreeDenialTests : SqliteTestBase
     [Fact]
     public async Task GetPageAccess_DeniedByTheMarking_CarriesTheMarkingAndEveryFailedGate()
     {
-        // SECRET APPLE US EYES ONLY behind an engineering-only restriction, read by an
-        // OFFICIAL-SENSITIVE (floor) NZ caller who is not eligible, not granted and not in
-        // engineering: five failed gates, the level named first, and the marking disclosed
-        // so the placeholder can carry its label.
+        // SECRET APPLE US EYES ONLY behind an engineering-only restriction, read by an NZ
+        // caller who is not granted APPLE and not in engineering: three failed gates, the
+        // grant named first, and the marking disclosed so the placeholder can carry its
+        // label. The SECRET level is on the marking and fails nobody.
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space);
 
@@ -107,12 +106,12 @@ public class PageAccessAndTreeDenialTests : SqliteTestBase
         var access = await new PageReadService(context).GetPageAccessAsync(page.Id, PrincipalWith(nationality: ["NZ"]));
 
         var denial = Assert.IsType<PageAccess.Denied>(access).Denial;
-        Assert.Equal("classification:secret", denial.Reason);
+        Assert.Equal("selector:not_granted:FRUIT", denial.Reason);
         Assert.False(denial.NoSpaceAccess);
         Assert.NotNull(denial.Marking);
         Assert.Equal("UK SECRET APPLE US EYES ONLY", denial.Marking.Format(TestCatalogs.Fruit));
         Assert.Equal(
-            [GateKind.Classification, GateKind.SelectorEligibility, GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
+            [GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
             denial.Reasons.Select(r => r.Kind));
         Assert.All(denial.Reasons, r => Assert.False(r.Passed));
         Assert.Equal($"restriction:{page.Id}:{restriction.Id}", denial.Reasons[^1].Reason);
@@ -134,7 +133,7 @@ public class PageAccessAndTreeDenialTests : SqliteTestBase
         context.AccessRules.Add(RoleGrant(space.Id, SpaceRole.SpaceAdmin));
         context.SaveChanges();
 
-        var access = await new PageReadService(context).GetPageAccessAsync(page.Id, PrincipalWith("SECRET", ["UK"]));
+        var access = await new PageReadService(context).GetPageAccessAsync(page.Id, PrincipalWith(["UK"]));
 
         var denial = Assert.IsType<PageAccess.Denied>(access).Denial;
         Assert.Equal("no-space-access", denial.Reason);
@@ -170,24 +169,55 @@ public class PageAccessAndTreeDenialTests : SqliteTestBase
     {
         var space = TestData.NewSpace();
         var open = TestData.NewPage(space, "open");
-        var secret = TestData.NewPage(space, "secret");
+        var compartment = TestData.NewPage(space, "compartment");
         var missing = Guid.NewGuid();
 
         using var context = CreateContext();
         context.Spaces.Add(space);
-        context.Pages.AddRange(open, secret);
-        context.PageMarkings.Add(TestData.NewMarking(secret, ClassificationLevel.Secret));
+        context.Pages.AddRange(open, compartment);
+        context.PageMarkings.Add(TestData.NewMarking(compartment, ClassificationLevel.Secret).WithSelectors(TestCatalogs.Apple));
         context.AccessRules.Add(AccessGrant(space.Id));
         context.SaveChanges();
 
-        var batch = await new PageReadService(context).GetPageAccessBatchAsync([open.Id, secret.Id, missing, open.Id], PrincipalWith());
+        var batch = await new PageReadService(context).GetPageAccessBatchAsync([open.Id, compartment.Id, missing, open.Id], PrincipalWith());
 
         Assert.Equal(3, batch.Count);
         Assert.IsType<PageAccess.Found>(batch[open.Id]);
-        var denial = Assert.IsType<PageAccess.Denied>(batch[secret.Id]).Denial;
-        Assert.Equal("classification:secret", denial.Reason);
+        var denial = Assert.IsType<PageAccess.Denied>(batch[compartment.Id]).Denial;
+        Assert.Equal("selector:not_granted:FRUIT", denial.Reason);
         Assert.Equal(ClassificationLevel.Secret, denial.Marking!.Level);
         Assert.IsType<PageAccess.NotFound>(batch[missing]);
+    }
+
+    [Fact]
+    public async Task GetPageAccess_MarkingRowMissing_IsDeniedToEveryone_WithTheUnavailableGate()
+    {
+        // The read path's half of the fail-open trap: a page whose marking row was lost is
+        // a placeholder for the most generous caller there is, and the placeholder says
+        // why - one availability gate, and no selector or caveat entry, because there is
+        // no marking to evaluate. The label it carries is the sentinel's bare TOP SECRET.
+        var space = TestData.NewSpace();
+        var page = TestData.NewPage(space);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(page);
+        context.AccessRules.AddRange(
+            AccessGrant(space.Id, TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South),
+            RoleGrant(space.Id, SpaceRole.SpaceAdmin));
+        context.SaveChanges();
+        context.PageMarkings.Remove(context.PageMarkings.Single(m => m.PageId == page.Id));
+        context.SaveChanges();
+
+        var access = await new PageReadService(context).GetPageAccessAsync(page.Id, PrincipalWith(["UK", "US"], ["engineering"]));
+
+        var denial = Assert.IsType<PageAccess.Denied>(access).Denial;
+        Assert.Equal("marking:unavailable", denial.Reason);
+        Assert.False(denial.NoSpaceAccess);
+        Assert.True(denial.Marking!.IsUnavailable);
+        Assert.Equal("TOP SECRET", denial.Marking.Format(TestCatalogs.Fruit));
+        var only = Assert.Single(denial.Reasons);
+        Assert.Equal(GateKind.MarkingUnavailable, only.Kind);
     }
 
     // --- The tree's protected entries ----------------------------------------------------
@@ -217,11 +247,11 @@ public class PageAccessAndTreeDenialTests : SqliteTestBase
         // Position, denial, marking - and nothing else: no id, title, slug or children
         // exist on the type to leak (§6.7's leak analysis holds by construction).
         Assert.Equal(compartment.SortOrder, placeholder.SortOrder);
-        Assert.Equal("classification:secret", placeholder.Denial.Reason);
+        Assert.Equal("selector:not_granted:FRUIT", placeholder.Denial.Reason);
         Assert.False(placeholder.Denial.NoSpaceAccess);
         Assert.Equal("UK SECRET APPLE US EYES ONLY", placeholder.Denial.Marking!.Format(TestCatalogs.Fruit));
         Assert.Equal(
-            [GateKind.Classification, GateKind.SelectorEligibility, GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
+            [GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
             placeholder.Denial.Reasons.Select(r => r.Kind));
         Assert.DoesNotContain(compartment.Title, placeholder.ToString());
         Assert.DoesNotContain(beneath.Title, placeholder.ToString());
@@ -232,40 +262,40 @@ public class PageAccessAndTreeDenialTests : SqliteTestBase
     public async Task PageTree_NodeVerdict_MatchesGetPage_ForEveryPageInTheSpace()
     {
         // Parity between the tree walk and the id fetch, over a space that exercises every
-        // gate kind: a SECRET branch, a selector-bearing branch, a restricted branch, a
-        // caveated leaf, and open pages beneath each - for two callers who fail different
-        // gates. Every entry the walk produces is checked against GetPageAsync for the
-        // same page: a visible node must be Found, a protected entry must be Denied with
-        // the same reason.
+        // gate kind: a selector-bearing branch, a restricted branch, a caveated leaf, a
+        // page whose marking row is missing, and open pages beneath each - for three
+        // callers who fail different gates. Every entry the walk produces is checked
+        // against GetPageAsync for the same page: a visible node must be Found, a
+        // protected entry must be Denied with the same reason.
         var space = TestData.NewSpace();
         var root = TestData.NewPage(space, "root");
-        var secretBranch = TestData.NewPage(space, "secret-branch", root);
-        var underSecret = TestData.NewPage(space, "under-secret", secretBranch);
         var appleBranch = TestData.NewPage(space, "apple-branch", root);
         var underApple = TestData.NewPage(space, "under-apple", appleBranch);
         var restrictedBranch = TestData.NewPage(space, "restricted-branch", root);
         var underRestricted = TestData.NewPage(space, "under-restricted", restrictedBranch);
         var caveated = TestData.NewPage(space, "caveated", root);
+        var orphaned = TestData.NewPage(space, "orphaned", root);
         var open = TestData.NewPage(space, "open", root);
 
         using var context = CreateContext();
         context.Spaces.Add(space);
-        context.Pages.AddRange(root, secretBranch, underSecret, appleBranch, underApple, restrictedBranch, underRestricted, caveated, open);
-        context.PageMarkings.Add(TestData.NewMarking(secretBranch, ClassificationLevel.Secret));
-        context.PageMarkings.Add(TestData.NewMarking(underSecret, ClassificationLevel.Official));
-        context.PageMarkings.Add(TestData.NewMarking(appleBranch, ClassificationLevel.Official).WithSelectors(TestCatalogs.Apple));
+        context.Pages.AddRange(root, appleBranch, underApple, restrictedBranch, underRestricted, caveated, orphaned, open);
+        context.PageMarkings.Add(TestData.NewMarking(appleBranch, ClassificationLevel.Secret).WithSelectors(TestCatalogs.Apple));
         context.PageMarkings.Add(TestData.NewMarking(underApple, ClassificationLevel.Official));
         context.PageMarkings.Add(TestData.NewMarking(caveated, ClassificationLevel.Official, "US"));
-        context.AccessRules.Add(AccessGrant(space.Id, TestCatalogs.Apple));
+        context.AccessRules.Add(AccessGrant(space.Id));
+        context.AccessRules.Add(AppleReadersGrant(space.Id));
         context.AccessRules.Add(ViewRestriction(restrictedBranch.Id, """{ "group": "engineering" }"""));
+        context.SaveChanges();
+        context.PageMarkings.Remove(context.PageMarkings.Single(m => m.PageId == orphaned.Id));
         context.SaveChanges();
 
         var service = new PageReadService(context);
         var callers = new[]
         {
-            PrincipalWith("SECRET", ["US"], ["engineering"], fruit: true), // sees everything
-            PrincipalWith(nationality: ["NZ"]),                             // fails C, E, R and N
-            PrincipalWith("TOP_SECRET", ["US"], fruit: false),              // fails E only
+            PrincipalWith(["US"], ["engineering", "apple-readers"]), // sees everything but the orphan
+            PrincipalWith(["NZ"]),                                  // fails G, R and N
+            PrincipalWith(["US"], ["engineering"]),                 // fails G only
         };
 
         foreach (var caller in callers)

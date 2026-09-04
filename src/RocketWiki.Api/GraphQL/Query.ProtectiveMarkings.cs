@@ -17,15 +17,16 @@ public partial class Query
     /// other half and it has no marking in hand: it must offer all four options before
     /// one is chosen. Without this field the SPA would hard-code four display spellings
     /// and their order — which is precisely the second implementation §21.1 says must not
-    /// exist, and the order it would be duplicating is the access comparison itself. One
-    /// small query is cheaper than that, permanently.</para>
+    /// exist, and the order it would be duplicating is the one §21.13's aggregate label
+    /// takes its maximum by. One small query is cheaper than that, permanently.</para>
     ///
     /// <para><b>The list order IS the scheme order</b>, least sensitive first, so a client
     /// never needs to know that OFFICIAL sorts below SECRET — it renders the list as
     /// given. A numeric rank field was considered and left out: the only use for one is
-    /// comparing two levels client-side, and the comparisons that matter (may I read
-    /// this, may I set this) are decisions the server already makes and returns typed
-    /// errors for. A rank would be an invitation to re-derive them in the browser.</para>
+    /// comparing two levels client-side, and the level is not compared against anything
+    /// about the caller — it is presentational (§21.12), so the picker offers all four to
+    /// everyone. A rank would be an invitation to invent a comparison the server does not
+    /// make.</para>
     ///
     /// <para>Discloses nothing: these four names are compile-time constants and the enum
     /// is already in the published SDL. Anonymous callers get an empty list anyway — the
@@ -59,15 +60,14 @@ public partial class Query
     /// Identical for every authenticated caller; <c>[]</c> for anonymous, like every
     /// other read.
     ///
-    /// <para><b>Claim names are not exposed.</b> Which token attribute gates a category
-    /// is deployment plumbing with no client use — <c>requiresAttribute</c> is the whole
-    /// affordance ("you may or may not be eligible; see <c>me.selectorEligibility</c>")
-    /// — and publishing it would tell anyone exactly which claim to forge.</para>
-    ///
-    /// <para>Whether the CALLER may pick a value is a different question with two
-    /// answers, neither of them here: <c>me.selectorEligibility</c> (the categories the
-    /// caller's token admits them to) and <c>Space.viewerSelectorGrants</c> (the values
-    /// the space's access grants confer on them).</para>
+    /// <para><b>Whether the CALLER may pick a value is a different question</b>, with one
+    /// answer, and it is not here: <c>Space.viewerSelectorGrants</c> — the values the
+    /// space's access grants confer on them. There used to be a second answer
+    /// (<c>me.selectorEligibility</c>, driven by a per-category Keycloak claim) and a
+    /// <c>requiresAttribute</c> flag on this type saying whether a category had one;
+    /// both went with the eligibility gate, because this deployment carries no
+    /// per-category attributes in Keycloak. A category is now a name, a description and
+    /// its values, and the space's grant is the whole of who may use it.</para>
     /// </summary>
     [NoAudit("Deployment configuration (the configured selector categories and values, design.md §21.15), " +
         "identical for every authenticated caller; no wiki content, no page, and no per-subject access decision " +
@@ -82,7 +82,7 @@ public partial class Query
         }
 
         return catalog.Categories
-            .Select(c => new SelectorCategoryView(c.Name, c.Description, c.RequiresClaim, c.Values))
+            .Select(c => new SelectorCategoryView(c.Name, c.Description, c.Values))
             .ToList();
     }
 }
@@ -97,13 +97,13 @@ public sealed record ClassificationLevelInfo(ClassificationLevel Level, string N
 
 /// <summary>
 /// One configured selector category (design.md §21.15) as a client sees it. A view
-/// record rather than Core's <c>SelectorCategory</c>, which carries the claim name this
-/// type deliberately withholds; <see cref="RequiresAttribute"/> says only that some
-/// token attribute gates eligibility.
+/// record rather than Core's <c>SelectorCategory</c>, so the wire shape is decided here
+/// and not by whatever Core's record grows; today the two carry the same three members.
+/// It used to carry <c>requiresAttribute</c> as well — whether a Keycloak claim gated
+/// eligibility for the category — which went with that gate.
 /// </summary>
 [GraphQLName("SelectorCategory")]
 public sealed record SelectorCategoryView(
     string Name,
     string? Description,
-    bool RequiresAttribute,
     IReadOnlyList<string> Values);

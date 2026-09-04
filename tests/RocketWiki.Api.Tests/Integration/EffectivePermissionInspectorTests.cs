@@ -148,7 +148,7 @@ public sealed class EffectivePermissionInspectorTests(RocketWikiApiFactory facto
     {
         // design.md §6.6/§21.2: the whole ladder, every gate with its pass/fail, in the
         // same GateResult shape a placeholder's reasons use (§21.8). PageA for an
-        // access-only caller: S, C and N pass (no selectors, no restrictions on A), and
+        // access-only caller: S and N pass (no selectors, no restrictions on A), and
         // the edit half is replica (passed) then role (failed - no role grant matched).
         var f = await SeedAsync();
         var client = factory.CreateClient();
@@ -166,7 +166,7 @@ public sealed class EffectivePermissionInspectorTests(RocketWikiApiFactory facto
         Assert.True(detail.GetProperty("hasSpaceAccess").GetBoolean());
         Assert.Equal(JsonValueKind.Null, detail.GetProperty("spaceRole").ValueKind);
         Assert.Equal(
-            ["SPACE_ACCESS", "CLASSIFICATION", "NATIONAL_CAVEAT"],
+            ["SPACE_ACCESS", "NATIONAL_CAVEAT"],
             detail.GetProperty("viewGates").EnumerateArray().Select(g => g.GetProperty("gate").GetString()));
         Assert.All(detail.GetProperty("viewGates").EnumerateArray(), g => Assert.True(g.GetProperty("passed").GetBoolean()));
 

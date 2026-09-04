@@ -1,22 +1,22 @@
-import type { AccessGate, ClassificationLevel, SpaceRole } from '../../graphql/generated/graphql'
-import { NO_SPACE_ACCESS } from './protectedCopy'
+import type { AccessGate, SpaceRole } from '../../graphql/generated/graphql'
+import { MARKING_UNAVAILABLE, NO_SPACE_ACCESS } from './protectedCopy'
 
 /**
  * One evaluated gate, as the API's `GateResult` carries it — on a denial
  * (failing gates only), on the inspector (every gate, pass and fail), and on
  * a tree placeholder. Every detail field is nullable and each gate uses at
- * most a couple: the classification gate carries the required level's
- * display name, the selector gates a category and value, the caveat gate the
+ * most a couple: the selector gate a category and value, the caveat gate the
  * releasable countries, a restriction its rule id and whether it was
- * inherited, the role gate the role required. Never a page id, title,
- * timestamp, expression or ancestor title — the projection is pinned
- * server-side.
+ * inherited, the role gate the role required; the space-access and
+ * marking-present gates carry nothing. Never a page id, title, timestamp,
+ * expression or ancestor title — the projection is pinned server-side.
+ *
+ * No level, and nothing about what the reader "holds": the classification
+ * is on no gate, because this deployment compares it against nobody.
  */
 export interface GateCheck {
   gate: AccessGate
   passed: boolean
-  requiredLevel?: ClassificationLevel | null
-  requiredLevelName?: string | null
   category?: string | null
   value?: string | null
   countries?: readonly string[] | null
@@ -25,25 +25,13 @@ export interface GateCheck {
   requiredRole?: SpaceRole | null
 }
 
-/**
- * What the sentence may say about the READER. `heldLevelName` is the display
- * spelling of the caller's own clearance (`me.clearance` looked up in
- * `classificationScheme`); the SPA owns no spelling, so a caller that cannot
- * supply one gets the sentence without it rather than a wire name.
- */
-export interface GateContext {
-  heldLevelName?: string | null
-}
-
 /** The short name of a gate, for a row label or a list heading. */
 export function accessGateTitle(gate: AccessGate): string {
   switch (gate) {
     case 'SPACE_ACCESS':
       return 'Space access'
-    case 'CLASSIFICATION':
-      return 'Clearance'
-    case 'SELECTOR_ELIGIBILITY':
-      return 'Eligibility'
+    case 'MARKING_UNAVAILABLE':
+      return 'Marking'
     case 'SELECTOR_GRANT':
       return 'Selector grant'
     case 'NATIONAL_CAVEAT':
@@ -74,21 +62,19 @@ export function accessGateTitle(gate: AccessGate): string {
  * lists them in a label (`AUS/NZ EYES ONLY`), and they arrive already
  * sorted; this does not re-order them.
  */
-export function describeAccessGate(check: GateCheck, context: GateContext = {}): string {
-  return check.passed ? describePassing(check, context) : describeFailing(check, context)
+export function describeAccessGate(check: GateCheck): string {
+  return check.passed ? describePassing(check) : describeFailing(check)
 }
 
-function describeFailing(check: GateCheck, context: GateContext): string {
-  const held = context.heldLevelName
+function describeFailing(check: GateCheck): string {
   switch (check.gate) {
     case 'SPACE_ACCESS':
       return NO_SPACE_ACCESS
-    case 'CLASSIFICATION':
-      if (check.requiredLevelName && held) return `Needs ${check.requiredLevelName} clearance; you hold ${held}.`
-      if (check.requiredLevelName) return `Needs ${check.requiredLevelName} clearance.`
-      return 'Above your clearance.'
-    case 'SELECTOR_ELIGIBILITY':
-      return check.category ? `Not eligible for ${check.category} material.` : 'Not eligible for material this page carries.'
+    case 'MARKING_UNAVAILABLE':
+      // Nothing about the reader changes this one, so it says the same thing
+      // to everyone: the page's marking row is gone and the server fails
+      // closed on it.
+      return MARKING_UNAVAILABLE
     case 'SELECTOR_GRANT':
       if (check.value) return `${check.value} is not granted to you in this space.`
       if (check.category) return `No ${check.category} value is granted to you in this space.`
@@ -112,17 +98,12 @@ function describeFailing(check: GateCheck, context: GateContext): string {
   }
 }
 
-function describePassing(check: GateCheck, context: GateContext): string {
-  const held = context.heldLevelName
+function describePassing(check: GateCheck): string {
   switch (check.gate) {
     case 'SPACE_ACCESS':
       return 'You hold an access grant in this space.'
-    case 'CLASSIFICATION':
-      if (check.requiredLevelName && held) return `${check.requiredLevelName} clearance required; you hold ${held}.`
-      if (check.requiredLevelName) return `${check.requiredLevelName} clearance required; you hold it.`
-      return 'Your clearance covers this page.'
-    case 'SELECTOR_ELIGIBILITY':
-      return check.category ? `Eligible for ${check.category} material.` : 'Eligible for the material this page carries.'
+    case 'MARKING_UNAVAILABLE':
+      return "This page's marking is present."
     case 'SELECTOR_GRANT':
       return check.value
         ? `${check.value} is granted to you in this space.`

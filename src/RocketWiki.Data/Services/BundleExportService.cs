@@ -137,10 +137,10 @@ public class BundleExportService : IBundleExportService
                 space.Key, space.Id, SequenceNumber: 0, SyncEventType.PageUpsert,
                 SerializePageUpsert(
                     p, revisionsByPage.GetValueOrDefault(p.Id, []), authorsById,
-                    // A page with no marking row exports as TOP SECRET rather than as
-                    // "no marking" - the same fail-closed substitution the read path
-                    // makes, carried across the boundary so the high side inherits the
-                    // caution rather than the gap.
+                    // A page with no marking row exports as UNKNOWN (FailClosed, which
+                    // MarkingPayload writes as a null marking) - the same fail-closed
+                    // substitution the read path makes, carried across the boundary so the
+                    // high side inherits the caution (an unavailable row) rather than the gap.
                     markingsByPage.GetValueOrDefault(p.Id) ?? ProtectiveMarking.FailClosed),
                 DateTime.UtcNow))
             .ToList();
@@ -420,7 +420,10 @@ public class BundleExportService : IBundleExportService
             collection = entry.Collection,
             data = entry.Data,
             version = entry.Version,
-            level = ProtectiveMarking.LevelWireName(entry.Level),
+            // An unknown marking crosses as a null level: the import side reads an
+            // unparseable level as "no marking" and lands the entry unavailable, which is
+            // what it is here. See MarkingPayload for why the sentinel's level must not travel.
+            level = entry.IsUnavailable ? null : ProtectiveMarking.LevelWireName(entry.Level),
             eyesOnly = entry.Countries.Select(c => c.CountryValue).OrderBy(c => c, StringComparer.Ordinal).ToArray(),
             prefix = entry.Prefix,
             isDeleted = entry.IsDeleted,
@@ -823,8 +826,16 @@ public class BundleExportService : IBundleExportService
             JsonOptions);
 
     /// <summary>The shape a marking crosses in, shared by the baseline's PageUpsert and
-    /// the incremental enrichment below so the import side has exactly one parser.</summary>
-    private static object MarkingPayload(ProtectiveMarking marking) => new
+    /// the incremental enrichment below so the import side has exactly one parser.
+    ///
+    /// <para><b>An unavailable marking crosses as <c>null</c>.</b> "We do not know this
+    /// page's marking" (<c>PageMarking.IsUnavailable</c>, or a page with no row at all)
+    /// must arrive as exactly that, and the import side already reads a null or absent
+    /// marking as unknown — landing the page unavailable. Serializing the sentinel's
+    /// parts instead would put a bare TOP SECRET on the wire, which the receiving side
+    /// would store as an ordinary marking that gates nobody (§21.12): a fail-open across
+    /// the boundary, the one direction §12 never takes.</para></summary>
+    private static object? MarkingPayload(ProtectiveMarking marking) => marking.IsUnavailable ? null : new
     {
         level = ProtectiveMarking.LevelWireName(marking.Level),
         eyesOnly = marking.EyesOnly,

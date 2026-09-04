@@ -21,7 +21,7 @@ import { PageViewPage } from './PageViewPage'
  *
  * A homepage the caller may not view falls back to the browser rather than a
  * refusal. The server already collapses "denied" into "absent" (design.md
- * §6.7), so a space whose default page is above your clearance simply behaves
+ * §6.7), so a space whose default page is withheld from you simply behaves
  * like a space without one — which reveals nothing, and beats a dead end where
  * the space used to be.
  */

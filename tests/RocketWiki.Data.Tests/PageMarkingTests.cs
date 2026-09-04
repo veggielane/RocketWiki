@@ -14,32 +14,25 @@ namespace RocketWiki.Data.Tests;
 /// <summary>
 /// design.md §21: protective markings as they behave against a real database — the
 /// every-page-is-marked invariant, inheritance at creation, the write-side rules on
-/// re-marking, and the read paths that must exclude an over-classified page ENTIRELY
-/// rather than merely rank it lower or count it.
+/// re-marking, and the read paths that must exclude a page the caller is not granted
+/// ENTIRELY rather than merely rank it lower or count it.
+///
+/// <para>The level used to be the denying fact in most of these fixtures — a SECRET page,
+/// a caller with no clearance. This deployment carries no clearance attribute, so the
+/// level gates nothing and those fixtures now deny by a selector the caller is not
+/// granted or a caveat they are not in; the cases that proved the level denied are
+/// replaced by ones that prove it does not.</para>
 /// </summary>
 public class PageMarkingTests : SqliteTestBase
 {
     private static readonly AuditContext AuditCtx = new(AuditChannel.GraphQl, "req-1", "127.0.0.1");
 
-    private static Principal PrincipalWith(
-        string? clearance = null, string[]? nationality = null, string[]? groups = null, bool fruit = false)
+    private static Principal PrincipalWith(string[]? nationality = null, string[]? groups = null)
     {
         var attributes = new List<KeyValuePair<string, IReadOnlyList<string>>>();
-        if (clearance is not null)
-        {
-            attributes.Add(new("clearance", new[] { clearance }));
-        }
-
         if (nationality is not null)
         {
             attributes.Add(new("nationality", nationality));
-        }
-
-        if (fruit)
-        {
-            // Eligible for the FRUIT category (design.md §21.15) - the claim the test
-            // catalog gates it on says yes.
-            attributes.Add(new(TestCatalogs.FruitClaim, ["yes"]));
         }
 
         return Principal.Create("user-sub", groups ?? [], attributes);
@@ -58,8 +51,7 @@ public class PageMarkingTests : SqliteTestBase
     };
 
     /// <summary>An access grant for everyone that confers the given selector values
-    /// (design.md §21.15) - what a reader of a selector-bearing page needs beside
-    /// eligibility.</summary>
+    /// (design.md §21.15) - the whole of what a reader of a selector-bearing page needs.</summary>
     private static AccessRule AccessGrantWith(Guid spaceId, params SelectorValue[] selectors)
     {
         var grant = Grant(spaceId, null);
@@ -131,7 +123,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageService(context, "local-instance");
         var result = await service.CreatePageAsync(
             new CreatePageRequest(space.Id, parent.Id, "child", "Child", "# Child"),
-            PrincipalWith("SECRET", ["UK"]), author.Id, AuditCtx);
+            PrincipalWith(["UK"]), author.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
         var marking = context.PageMarkings.Include(m => m.Countries).Single(m => m.PageId == result.Value.Id);
@@ -143,10 +135,10 @@ public class PageMarkingTests : SqliteTestBase
     public async Task CreatePage_UnderAParentWithSelectors_InheritsThem()
     {
         // design.md §21.15: selectors inherit exactly like the level and the caveat. The
-        // creator must pass the parent's full marking - eligible for FRUIT and granted
-        // APPLE and NORTH in this space - to create beneath it at all (§6.4: canEdit falls
-        // through canView); what this pins is that the child's ROWS then carry the
-        // parent's selectors, so nothing widens at creation.
+        // creator must pass the parent's full marking - granted APPLE and NORTH in this
+        // space - to create beneath it at all (§6.4: canEdit falls through canView); what
+        // this pins is that the child's ROWS then carry the parent's selectors, so nothing
+        // widens at creation.
         var author = TestData.NewUser();
         var space = TestData.NewSpace();
         var parent = TestData.NewPage(space, "parent");
@@ -163,7 +155,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageService(context, "local-instance");
         var result = await service.CreatePageAsync(
             new CreatePageRequest(space.Id, parent.Id, "child", "Child", "# Child"),
-            PrincipalWith("SECRET", ["UK"], fruit: true), author.Id, AuditCtx);
+            PrincipalWith(["UK"]), author.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
         using var readContext = CreateContext();
@@ -224,7 +216,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageService(context, "local-instance");
         var created = await service.CreatePageAsync(
             new CreatePageRequest(space.Id, null, "fresh", "Fresh", "# Fresh"),
-            PrincipalWith("SECRET", ["UK"]), author.Id, AuditCtx);
+            PrincipalWith(["UK"]), author.Id, AuditCtx);
         Assert.True(created.IsSuccess);
 
         var inheritedMarking = context.PageMarkings.Single(m => m.PageId == created.Value.Id);
@@ -234,7 +226,7 @@ public class PageMarkingTests : SqliteTestBase
         // judgement, so it does name its actor and drops out of the unreviewed query.
         var marked = await new PageMarkingService(context, "local-instance").SetAsync(
             new SetPageMarkingRequest(created.Value.Id, ClassificationLevel.Secret, [], [], UkPrefix: true),
-            PrincipalWith("SECRET", ["UK"]), author.Id, AuditCtx);
+            PrincipalWith(["UK"]), author.Id, AuditCtx);
         Assert.True(marked.IsSuccess, $"re-mark failed: {marked.Error}");
 
         Assert.Equal(author.Id, context.PageMarkings.Single(m => m.PageId == created.Value.Id).SetByUserId);
@@ -262,27 +254,28 @@ public class PageMarkingTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task CreatePage_UnderAParentTheCallerCannotBeClearedFor_IsRefused()
+    public async Task CreatePage_UnderAParentTheCallerIsNotGranted_IsRefused()
     {
         // Creating a page you could not then read is impossible by construction: the
-        // create's canEdit check runs against the marking the new page will inherit.
+        // create's canEdit check runs against the marking the new page will inherit. The
+        // parent carries APPLE and the caller's access grant confers nothing.
         var space = TestData.NewSpace();
         var parent = TestData.NewPage(space, "parent");
 
         using var context = CreateContext();
         context.Spaces.Add(space);
         context.Pages.Add(parent);
-        context.PageMarkings.Add(TestData.NewMarking(parent, ClassificationLevel.TopSecret));
+        context.PageMarkings.Add(TestData.NewMarking(parent, ClassificationLevel.TopSecret).WithSelectors(TestCatalogs.Apple));
         context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.SpaceAdmin));
         context.SaveChanges();
 
         var service = new PageService(context, "local-instance");
         var result = await service.CreatePageAsync(
             new CreatePageRequest(space.Id, parent.Id, "child", "Child", "# Child"),
-            PrincipalWith("SECRET"), Guid.NewGuid(), AuditCtx);
+            PrincipalWith(), Guid.NewGuid(), AuditCtx);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal("classification:top_secret", Assert.IsType<ForbiddenError>(result.Error).Reason);
+        Assert.Equal("selector:not_granted:FRUIT", Assert.IsType<ForbiddenError>(result.Error).Reason);
     }
 
     // --- The national prefix (design.md §21.12) ------------------------------------------
@@ -339,7 +332,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageMarkingService(context, "local-instance");
         var on = await service.SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Secret, ["UK"], [], UkPrefix: true),
-            PrincipalWith("SECRET", ["UK"]), f.ActingUserId, AuditCtx);
+            PrincipalWith(["UK"]), f.ActingUserId, AuditCtx);
 
         Assert.True(on.IsSuccess);
         Assert.True(on.Value.UkPrefix);
@@ -352,7 +345,7 @@ public class PageMarkingTests : SqliteTestBase
 
         var off = await service.SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Secret, ["UK"], [], UkPrefix: false),
-            PrincipalWith("SECRET", ["UK"]), f.ActingUserId, AuditCtx);
+            PrincipalWith(["UK"]), f.ActingUserId, AuditCtx);
 
         Assert.True(off.IsSuccess);
         Assert.False(off.Value.UkPrefix);
@@ -368,9 +361,9 @@ public class PageMarkingTests : SqliteTestBase
     [InlineData("ZZNONSENSEZZ")]
     public async Task ThePrefix_ChangesNoAccessDecision(string? prefix)
     {
-        // The end-to-end half of ClearanceGateTests' invariance proof: the SAME page, read
-        // through the real permission loader, gives identical answers to a cleared and an
-        // uncleared principal whatever prefix it carries.
+        // The end-to-end half of CaveatGateTests' invariance proof: the SAME page, read
+        // through the real permission loader, gives identical answers to an admitted and
+        // an excluded principal whatever prefix it carries.
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space);
 
@@ -383,56 +376,58 @@ public class PageMarkingTests : SqliteTestBase
 
         var service = new PageReadService(context);
 
-        Assert.IsType<ReadResult<Page>.Found>(
-            await service.GetPageAsync(page.Id, PrincipalWith("SECRET", ["UK"])));
+        Assert.IsType<ReadResult<Page>.Found>(await service.GetPageAsync(page.Id, PrincipalWith(["UK"])));
 
-        var deniedByLevel = Assert.IsType<ReadResult<Page>.Denied>(
-            await service.GetPageAsync(page.Id, PrincipalWith("OFFICIAL", ["UK"])));
-        Assert.Equal("classification:secret", deniedByLevel.Reason);
-
-        var deniedByCaveat = Assert.IsType<ReadResult<Page>.Denied>(
-            await service.GetPageAsync(page.Id, PrincipalWith("SECRET", ["NZ"])));
+        var deniedByCaveat = Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(page.Id, PrincipalWith(["NZ"])));
         Assert.Equal("caveat:eyes_only", deniedByCaveat.Reason);
     }
 
     // --- Read paths ----------------------------------------------------------------------
 
     [Fact]
-    public async Task GetPage_OverClassified_IsDeniedWithTheClassificationReason_NotFound()
+    public async Task GetPage_TheLevelGatesNothing_EveryLevelIsReadableWithAccess()
     {
+        // The retired invariant, inverted and pinned: a caller with nothing but an access
+        // grant reads a page at every level, TOP SECRET included, because this deployment
+        // carries no clearance to compare against and the level is presentational
+        // (§21.12). If the level ever gates again, this goes red.
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space);
 
         using var context = CreateContext();
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.PageMarkings.Add(TestData.NewMarking(page, ClassificationLevel.Secret));
-        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.SpaceAdmin));
+        context.PageMarkings.Add(TestData.NewMarking(page, ClassificationLevel.TopSecret));
+        context.AccessRules.Add(Grant(space.Id, null));
         context.SaveChanges();
 
         var service = new PageReadService(context);
-        var denied = Assert.IsType<ReadResult<Page>.Denied>(
-            await service.GetPageAsync(page.Id, PrincipalWith("OFFICIAL_SENSITIVE")));
+        foreach (var level in Enum.GetValues<ClassificationLevel>())
+        {
+            context.PageMarkings.Single(m => m.PageId == page.Id).Level = level;
+            context.SaveChanges();
 
-        Assert.Equal("classification:secret", denied.Reason);
-
-        // ... and the same page IS readable by someone cleared for it, proving the denial
-        // was the marking and not some unrelated seeding mistake.
-        Assert.IsType<ReadResult<Page>.Found>(await service.GetPageAsync(page.Id, PrincipalWith("SECRET")));
+            Assert.IsType<ReadResult<Page>.Found>(await service.GetPageAsync(page.Id, PrincipalWith()));
+        }
     }
 
     [Fact]
-    public async Task GetPage_MissingMarkingRow_IsTreatedAsTopSecret()
+    public async Task GetPage_MissingMarkingRow_IsUnavailable_AndDeniedToEveryone()
     {
         // Belt and braces against a future code path that forgets. The row is removed
         // AFTER the save that materialized it, which is the only way to reach this state.
+        // Nobody reads the page - not a Space-admin, not a caller granted every selector,
+        // not a five-eyes national - because the sentinel denies by its own gate, not by
+        // a level that no longer gates.
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space);
 
         using var context = CreateContext();
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.SpaceAdmin));
+        context.AccessRules.AddRange(
+            AccessGrantWith(space.Id, TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South),
+            Grant(space.Id, SpaceRole.SpaceAdmin));
         context.SaveChanges();
 
         context.PageMarkings.Remove(context.PageMarkings.Single(m => m.PageId == page.Id));
@@ -440,11 +435,11 @@ public class PageMarkingTests : SqliteTestBase
 
         var service = new PageReadService(context);
 
-        var denied = Assert.IsType<ReadResult<Page>.Denied>(
-            await service.GetPageAsync(page.Id, PrincipalWith("SECRET")));
-        Assert.Equal("classification:top_secret", denied.Reason);
-
-        Assert.IsType<ReadResult<Page>.Found>(await service.GetPageAsync(page.Id, PrincipalWith("TOP_SECRET")));
+        foreach (var caller in new[] { PrincipalWith(), PrincipalWith(["UK"]), PrincipalWith(["AUS", "CAN", "NZ", "UK", "US"], ["engineering"]) })
+        {
+            var denied = Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(page.Id, caller));
+            Assert.Equal("marking:unavailable", denied.Reason);
+        }
     }
 
     [Fact]
@@ -462,31 +457,30 @@ public class PageMarkingTests : SqliteTestBase
 
         var service = new PageReadService(context);
 
-        Assert.IsType<ReadResult<Page>.Found>(
-            await service.GetPageAsync(page.Id, PrincipalWith("SECRET", ["US"])));
+        Assert.IsType<ReadResult<Page>.Found>(await service.GetPageAsync(page.Id, PrincipalWith(["US"])));
 
-        var denied = Assert.IsType<ReadResult<Page>.Denied>(
-            await service.GetPageAsync(page.Id, PrincipalWith("SECRET", ["NZ"])));
+        var denied = Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(page.Id, PrincipalWith(["NZ"])));
         Assert.Equal("caveat:eyes_only", denied.Reason);
 
         // No nationality at all: denied, fail closed like any attr condition.
-        Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(page.Id, PrincipalWith("SECRET")));
+        Assert.IsType<ReadResult<Page>.Denied>(await service.GetPageAsync(page.Id, PrincipalWith()));
     }
 
     [Fact]
-    public async Task PageTree_ExcludesAnOverClassifiedPage_AndItsSubtree_Entirely()
+    public async Task PageTree_ExcludesAnUngrantedPage_AndItsSubtree_Entirely()
     {
         var space = TestData.NewSpace();
         var open = TestData.NewPage(space, "open");
-        var classified = TestData.NewPage(space, "classified");
-        var childOfClassified = TestData.NewPage(space, "child", classified);
+        var compartment = TestData.NewPage(space, "compartment");
+        var childOfCompartment = TestData.NewPage(space, "child", compartment);
 
         using var context = CreateContext();
         context.Spaces.Add(space);
-        context.Pages.AddRange(open, classified, childOfClassified);
-        context.PageMarkings.Add(TestData.NewMarking(classified, ClassificationLevel.TopSecret));
-        // The child is deliberately OFFICIAL: it is pruned because its parent is, not
+        context.Pages.AddRange(open, compartment, childOfCompartment);
+        context.PageMarkings.Add(TestData.NewMarking(compartment, ClassificationLevel.TopSecret).WithSelectors(TestCatalogs.Apple));
+        // The child is deliberately plain: it is pruned because its parent is, not
         // because of its own marking - a tree cannot render a node whose parent is absent.
+        context.PageMarkings.Add(TestData.NewMarking(childOfCompartment, ClassificationLevel.Official));
         context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.SpaceAdmin));
         context.SaveChanges();
 
@@ -498,12 +492,12 @@ public class PageMarkingTests : SqliteTestBase
         Assert.Equal(open.Id, node.Id);
         Assert.Empty(node.Children);
 
-        // The classified root is a protected leaf at its position (design.md §6.7/§21.8):
-        // its denial names the level, and nothing beneath it is walked - the OFFICIAL
+        // The compartment root is a protected leaf at its position (design.md §6.7/§21.8):
+        // its denial names the selector, and nothing beneath it is walked - the plain
         // child is neither a node nor a placeholder, because a tree cannot render a
         // child of a page the caller cannot see.
         var placeholder = Assert.Single(found.Value.OfType<ProtectedTreeNode>());
-        Assert.Equal("classification:top_secret", placeholder.Denial.Reason);
+        Assert.Equal("selector:not_granted:FRUIT", placeholder.Denial.Reason);
         Assert.False(placeholder.Denial.NoSpaceAccess);
         Assert.Equal(ClassificationLevel.TopSecret, placeholder.Denial.Marking!.Level);
     }
@@ -511,7 +505,7 @@ public class PageMarkingTests : SqliteTestBase
     [Fact]
     public async Task PageTree_CarriesEachVisibleNodesMarking_TheSameValueThePruningUsed()
     {
-        // The tree is a listing surface, and every node in it already passed the clearance
+        // The tree is a listing surface, and every node in it already passed the marking
         // gate for the marking reported here - so this exposes what the walk computed
         // rather than loading it a second time (design.md §21.9). A node showing a
         // different marking from the one it was gated on would be the wrong kind of wrong.
@@ -529,7 +523,7 @@ public class PageMarkingTests : SqliteTestBase
 
         var service = new PageReadService(context);
         var found = Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Found>(
-            await service.GetPageTreeAsync(space.Id, PrincipalWith("SECRET", ["UK"])));
+            await service.GetPageTreeAsync(space.Id, PrincipalWith(["UK"])));
 
         var rootNode = Assert.IsType<PageTreeNode>(Assert.Single(found.Value));
         Assert.Equal("UK OFFICIAL", rootNode.Marking.Label);
@@ -541,19 +535,21 @@ public class PageMarkingTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task PageTree_APageWhoseMarkingRowIsMissing_IsPruned_AndNeverReportsABlankMarking()
+    public async Task PageTree_APageWhoseMarkingRowIsMissing_IsPrunedForEveryone_AndNeverReportsABlankMarking()
     {
         // The fail-closed guard reaching the listing surface: a page with no marking row
-        // reads as TOP SECRET, so it is pruned for anyone below that - and for a caller
-        // who IS cleared, the node reports TOP SECRET rather than an empty badge that
-        // would misrepresent the enforcement they are subject to.
+        // is unavailable, so it is a placeholder for every caller - and the placeholder
+        // reports the sentinel's bare TOP SECRET rather than an empty badge that would
+        // misrepresent the enforcement they are subject to.
         var space = TestData.NewSpace();
         var page = TestData.NewPage(space, "orphaned");
 
         using var context = CreateContext();
         context.Spaces.Add(space);
         context.Pages.Add(page);
-        context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.SpaceAdmin));
+        context.AccessRules.AddRange(
+            AccessGrantWith(space.Id, TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South),
+            Grant(space.Id, SpaceRole.SpaceAdmin));
         context.SaveChanges();
 
         context.PageMarkings.Remove(context.PageMarkings.Single(m => m.PageId == page.Id));
@@ -561,35 +557,32 @@ public class PageMarkingTests : SqliteTestBase
 
         var service = new PageReadService(context);
 
-        var pruned = Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Found>(
-            await service.GetPageTreeAsync(space.Id, PrincipalWith("SECRET")));
-        Assert.Empty(pruned.Value.OfType<PageTreeNode>());
-        // The placeholder reports the same fail-closed marking the gate used - TOP SECRET,
-        // never a blank badge for a page that is in fact the most restricted there is.
-        var placeholder = Assert.IsType<ProtectedTreeNode>(Assert.Single(pruned.Value));
-        Assert.Equal("classification:top_secret", placeholder.Denial.Reason);
-        Assert.Equal("TOP SECRET", placeholder.Denial.Marking!.Format(TestCatalogs.Fruit));
-
-        var visible = Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Found>(
-            await service.GetPageTreeAsync(space.Id, PrincipalWith("TOP_SECRET")));
-        Assert.Equal("TOP SECRET", Assert.IsType<PageTreeNode>(Assert.Single(visible.Value)).Marking.Label);
+        foreach (var caller in new[] { PrincipalWith(), PrincipalWith(["AUS", "CAN", "NZ", "UK", "US"], ["engineering"]) })
+        {
+            var pruned = Assert.IsType<ReadResult<IReadOnlyList<PageTreeEntry>>.Found>(
+                await service.GetPageTreeAsync(space.Id, caller));
+            Assert.Empty(pruned.Value.OfType<PageTreeNode>());
+            var placeholder = Assert.IsType<ProtectedTreeNode>(Assert.Single(pruned.Value));
+            Assert.Equal("marking:unavailable", placeholder.Denial.Reason);
+            Assert.Equal("TOP SECRET", placeholder.Denial.Marking!.Format(TestCatalogs.Fruit));
+        }
     }
 
     [Fact]
-    public async Task Search_ExcludesAnOverClassifiedPage_TitleAndSnippetNeverBuilt()
+    public async Task Search_ExcludesAnUngrantedPage_TitleAndSnippetNeverBuilt()
     {
         var space = TestData.NewSpace();
         var open = TestData.NewPage(space, "open");
         open.Title = "Nozzle geometry";
         open.CurrentContent = "# Nozzle geometry\n\nExpansion ratio notes.";
-        var classified = TestData.NewPage(space, "classified");
-        classified.Title = "Nozzle geometry ZZSECRETTITLEZZ";
-        classified.CurrentContent = "# Nozzle geometry\n\nZZSECRETBODYZZ expansion ratio.";
+        var compartment = TestData.NewPage(space, "compartment");
+        compartment.Title = "Nozzle geometry ZZSECRETTITLEZZ";
+        compartment.CurrentContent = "# Nozzle geometry\n\nZZSECRETBODYZZ expansion ratio.";
 
         using var context = CreateContext();
         context.Spaces.Add(space);
-        context.Pages.AddRange(open, classified);
-        context.PageMarkings.Add(TestData.NewMarking(classified, ClassificationLevel.Secret));
+        context.Pages.AddRange(open, compartment);
+        context.PageMarkings.Add(TestData.NewMarking(compartment, ClassificationLevel.Secret).WithSelectors(TestCatalogs.Apple));
         context.AccessRules.AddRange(Grant(space.Id, null), Grant(space.Id, SpaceRole.SpaceAdmin));
         context.SaveChanges();
 
@@ -633,7 +626,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Secret, ["uk", "US"], [], UkPrefix: true),
-            PrincipalWith("TOP_SECRET", ["UK"]), f.ActingUserId, AuditCtx);
+            PrincipalWith(["UK"]), f.ActingUserId, AuditCtx);
 
         Assert.True(result.IsSuccess);
         Assert.Equal("UK SECRET UK/US EYES ONLY", result.Value.Label);
@@ -660,12 +653,14 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [], UkPrefix: true),
-            PrincipalWith("SECRET"), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.True(result.IsSuccess);
 
         var audit = Assert.Single(context.AuditEvents.Where(e => e.Action.StartsWith("page.marking")));
-        // Its own action name, so a reviewer can find every widening with one query.
+        // Its own action name, so a reviewer can find every declassification with one
+        // query - the level gates nothing here, but lowering what content is declared to
+        // be is still the judgement the downgrade query exists to surface.
         Assert.Equal("page.marking.downgrade", audit.Action);
         Assert.Contains("\"previousLevel\":\"SECRET\"", audit.DetailsJson);
         Assert.Contains("\"level\":\"OFFICIAL\"", audit.DetailsJson);
@@ -688,7 +683,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(page.Id, ClassificationLevel.Secret, [], [], UkPrefix: true),
-            PrincipalWith("SECRET", ["UK"]), user.Id, AuditCtx);
+            PrincipalWith(["UK"]), user.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
         Assert.Empty(context.PageMarkingCountries.Where(c => c.PageId == page.Id));
@@ -696,34 +691,38 @@ public class PageMarkingTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task SetMarking_AboveYourOwnClearance_IsForbidden()
+    public async Task SetMarking_ToAnyLevel_IsAllowed_TheLevelIsUnconstrained()
     {
+        // The retired self-lockout case, inverted: "above your own clearance" used to be
+        // Forbidden, and now there is no clearance - the level is presentational (§21.12),
+        // so an editor with no attributes at all may set TOP SECRET and can still read
+        // the result. The self-lockout rule is about selectors and the caveat only.
         using var context = CreateContext();
         var f = Seed(context);
 
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.TopSecret, [], [], UkPrefix: true),
-            PrincipalWith("SECRET"), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
-        Assert.False(result.IsSuccess);
-        Assert.Equal("classification:top_secret", Assert.IsType<ForbiddenError>(result.Error).Reason);
-        Assert.Equal(ClassificationLevel.Official, context.PageMarkings.Single(m => m.PageId == f.Page.Id).Level);
+        Assert.True(result.IsSuccess, $"{result.Error}");
+        Assert.Equal("UK TOP SECRET", result.Value.Label);
+        Assert.Equal(ClassificationLevel.TopSecret, context.PageMarkings.Single(m => m.PageId == f.Page.Id).Level);
+        Assert.IsType<ReadResult<Page>.Found>(await new PageReadService(context).GetPageAsync(f.Page.Id, PrincipalWith()));
     }
 
     [Fact]
     public async Task SetMarking_ToAnEyesOnlySetYouAreNotIn_IsForbidden()
     {
-        // Same rule as the level, for the same stated reason: you may not classify a page
-        // out of your own reach. A GB editor marking a page US EYES ONLY loses it as
-        // completely as over-classifying it would.
+        // The self-lockout rule (§21.6): you may not mark a page out of your own reach. A
+        // UK editor marking a page US EYES ONLY loses it completely.
         using var context = CreateContext();
         var f = Seed(context);
 
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, ["US"], [], UkPrefix: true),
-            PrincipalWith("SECRET", ["UK"]), f.ActingUserId, AuditCtx);
+            PrincipalWith(["UK"]), f.ActingUserId, AuditCtx);
 
         Assert.False(result.IsSuccess);
         Assert.Equal("caveat:eyes_only", Assert.IsType<ForbiddenError>(result.Error).Reason);
@@ -738,7 +737,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, ["FR"], [], UkPrefix: true),
-            PrincipalWith("SECRET", ["FR"]), f.ActingUserId, AuditCtx);
+            PrincipalWith(["FR"]), f.ActingUserId, AuditCtx);
 
         Assert.False(result.IsSuccess);
         var error = Assert.IsType<ValidationError>(result.Error);
@@ -763,7 +762,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(page.Id, ClassificationLevel.Secret, [], [], UkPrefix: true),
-            PrincipalWith("TOP_SECRET"), user.Id, AuditCtx);
+            PrincipalWith(), user.Id, AuditCtx);
 
         Assert.Equal("canEdit required", Assert.IsType<ForbiddenError>(result.Error).Reason);
     }
@@ -785,7 +784,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(page.Id, ClassificationLevel.Secret, [], [], UkPrefix: true),
-            PrincipalWith("TOP_SECRET"), user.Id, AuditCtx);
+            PrincipalWith(), user.Id, AuditCtx);
 
         Assert.IsType<ReadOnlyReplicaError>(result.Error);
     }
@@ -793,19 +792,22 @@ public class PageMarkingTests : SqliteTestBase
     [Fact]
     public async Task SetMarking_OnAPageYouCannotSee_IsRefusedWithoutRevealingItExists()
     {
-        // canEdit already includes the clearance gate against the page's CURRENT marking,
+        // canEdit already includes the marking gate against the page's CURRENT marking,
         // so a page you cannot read is a page you cannot re-mark - including re-marking it
-        // downward to make it readable.
+        // to make it readable. The page carries APPLE; the caller's grant confers nothing.
         using var context = CreateContext();
         var f = Seed(context, ClassificationLevel.TopSecret);
+        context.PageMarkings.Include(m => m.Selectors).Single(m => m.PageId == f.Page.Id).WithSelectors(TestCatalogs.Apple);
+        context.SaveChanges();
 
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [], UkPrefix: true),
-            PrincipalWith("OFFICIAL"), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.Equal("canEdit required", Assert.IsType<ForbiddenError>(result.Error).Reason);
         Assert.Equal(ClassificationLevel.TopSecret, context.PageMarkings.Single(m => m.PageId == f.Page.Id).Level);
+        Assert.Single(context.PageMarkingSelectors.Where(x => x.PageId == f.Page.Id));
     }
 
     [Fact]
@@ -825,7 +827,7 @@ public class PageMarkingTests : SqliteTestBase
         var service = new PageMarkingService(context, "local-instance");
         var result = await service.SetAsync(
             new SetPageMarkingRequest(page.Id, ClassificationLevel.Secret, ["NZ", "UK"], [], UkPrefix: true),
-            PrincipalWith("SECRET", ["UK"]), user.Id, AuditCtx);
+            PrincipalWith(["UK"]), user.Id, AuditCtx);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(
@@ -846,13 +848,10 @@ public class PageMarkingTests : SqliteTestBase
 
         var readService = new PageReadService(context);
 
-        // Eligible (fruit: yes) but no access grant in this space carries APPLE.
-        var denied = Assert.IsType<ReadResult<Page>.Denied>(await readService.GetPageAsync(f.Page.Id, PrincipalWith(fruit: true)));
+        // No access grant in this space carries APPLE - and nothing about the principal
+        // could make up for that: there is no claim a selector reads.
+        var denied = Assert.IsType<ReadResult<Page>.Denied>(await readService.GetPageAsync(f.Page.Id, PrincipalWith(["UK", "US"], ["engineering"])));
         Assert.Equal("selector:not_granted:FRUIT", denied.Reason);
-
-        // Not eligible at all: reported before the grant is even consulted.
-        var notEligible = Assert.IsType<ReadResult<Page>.Denied>(await readService.GetPageAsync(f.Page.Id, PrincipalWith()));
-        Assert.Equal("selector:not_eligible:FRUIT", notEligible.Reason);
     }
 
     [Fact]
@@ -868,7 +867,7 @@ public class PageMarkingTests : SqliteTestBase
         context.SaveChanges();
 
         var denied = Assert.IsType<ReadResult<Page>.Denied>(
-            await new PageReadService(context).GetPageAsync(page.Id, PrincipalWith("TOP_SECRET")));
+            await new PageReadService(context).GetPageAsync(page.Id, PrincipalWith()));
         Assert.Equal("no-space-access", denied.Reason);
     }
 
@@ -907,7 +906,7 @@ public class PageMarkingTests : SqliteTestBase
 
         var result = await MarkingService(context).SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [new SelectorValue("CODEWORD", "ZEBRA")], UkPrefix: true),
-            PrincipalWith("SECRET", fruit: true), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.False(result.IsSuccess);
         var error = Assert.IsType<ValidationError>(result.Error);
@@ -924,7 +923,7 @@ public class PageMarkingTests : SqliteTestBase
 
         var result = await MarkingService(context).SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [new SelectorValue("FRUIT", "CHERRY")], UkPrefix: true),
-            PrincipalWith("SECRET", fruit: true), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.False(result.IsSuccess);
         Assert.Contains("CHERRY", Assert.IsType<ValidationError>(result.Error).Message, StringComparison.Ordinal);
@@ -942,7 +941,7 @@ public class PageMarkingTests : SqliteTestBase
 
         var result = await MarkingService(context).SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [TestCatalogs.Apple, TestCatalogs.Banana], UkPrefix: true),
-            PrincipalWith("SECRET", fruit: true), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.False(result.IsSuccess);
         var error = Assert.IsType<ValidationError>(result.Error);
@@ -951,36 +950,17 @@ public class PageMarkingTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task SetMarking_ToASelectorYouAreNotEligibleFor_IsForbidden()
-    {
-        // §21.6's self-lockout through the full MarkingGate: the caller holds the grant
-        // (G would pass) but not the eligibility claim, so the page would be out of their
-        // own reach. Forbidden, not validation - the input is well-formed.
-        using var context = CreateContext();
-        var f = Seed(context);
-        context.AccessRules.Add(AccessGrantWith(f.Space.Id, TestCatalogs.Apple));
-        context.SaveChanges();
-
-        var result = await MarkingService(context).SetAsync(
-            new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [TestCatalogs.Apple], UkPrefix: true),
-            PrincipalWith("SECRET"), f.ActingUserId, AuditCtx);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal("selector:not_eligible:FRUIT", Assert.IsType<ForbiddenError>(result.Error).Reason);
-        Assert.Empty(context.PageMarkingSelectors.Where(x => x.PageId == f.Page.Id));
-    }
-
-    [Fact]
     public async Task SetMarking_ToASelectorYouAreNotGrantedInThisSpace_IsForbidden()
     {
-        // Eligible (fruit: yes) but no access grant in this space carries APPLE: the
-        // granted union is empty, and the gate refuses with the grant token.
+        // §21.6's self-lockout through the full MarkingGate: no access grant in this space
+        // carries APPLE, so the granted union is empty and the gate refuses with the grant
+        // token. Forbidden, not validation - the input is well-formed.
         using var context = CreateContext();
         var f = Seed(context);
 
         var result = await MarkingService(context).SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [TestCatalogs.Apple], UkPrefix: true),
-            PrincipalWith("SECRET", fruit: true), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.False(result.IsSuccess);
         Assert.Equal("selector:not_granted:FRUIT", Assert.IsType<ForbiddenError>(result.Error).Reason);
@@ -997,7 +977,7 @@ public class PageMarkingTests : SqliteTestBase
 
         var result = await MarkingService(context).SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [TestCatalogs.North, TestCatalogs.Apple], UkPrefix: true),
-            PrincipalWith("SECRET", fruit: true), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.True(result.IsSuccess);
         Assert.Equal([TestCatalogs.Apple, TestCatalogs.North], result.Value.Selectors);
@@ -1028,7 +1008,7 @@ public class PageMarkingTests : SqliteTestBase
 
         var result = await MarkingService(context).SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [TestCatalogs.North], UkPrefix: true),
-            PrincipalWith("SECRET", fruit: true), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.True(result.IsSuccess);
         Assert.Equal([TestCatalogs.North], result.Value.Selectors);
@@ -1055,7 +1035,7 @@ public class PageMarkingTests : SqliteTestBase
 
         var result = await MarkingService(context).SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [TestCatalogs.Banana], UkPrefix: true),
-            PrincipalWith("SECRET", fruit: true), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.True(result.IsSuccess);
         using var readContext = CreateContext();
@@ -1075,12 +1055,96 @@ public class PageMarkingTests : SqliteTestBase
 
         var result = await MarkingService(context).SetAsync(
             new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [], UkPrefix: true),
-            PrincipalWith("SECRET", fruit: true), f.ActingUserId, AuditCtx);
+            PrincipalWith(), f.ActingUserId, AuditCtx);
 
         Assert.True(result.IsSuccess);
         Assert.Empty(result.Value.Selectors);
         Assert.Equal("UK OFFICIAL", result.Value.Label);
         using var readContext = CreateContext();
         Assert.Empty(readContext.PageMarkingSelectors.Where(x => x.PageId == f.Page.Id));
+    }
+
+    // --- The persisted "unknown" state (design.md §21.10) ---------------------------------
+
+    [Fact]
+    public async Task SetMarking_OnAnUnavailablePage_IsRefusedForEveryone_NoReMarkAround()
+    {
+        // A row that says "unknown" reads as FailClosed, and FailClosed fails canEdit
+        // for everyone - so re-marking it through the product is refused exactly as
+        // reading it is, for the most generous caller there is: a Space-admin whose
+        // access grant confers every selector, holding every nationality. There is no
+        // role that re-marks around an unknown marking any more than there is one that
+        // reads around it (§6.5); the flag is cleared by the origin declaring a marking
+        // through sync, or by an operator repairing the row. The service's own write
+        // would clear it (it copies IsUnavailable from a Create-built marking, which is
+        // always false), which is why it must never get that far here.
+        using var context = CreateContext();
+        var f = Seed(context, ClassificationLevel.Official);
+        context.AccessRules.AddRange(
+            AccessGrantWith(f.Space.Id, TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South),
+            Grant(f.Space.Id, SpaceRole.SpaceAdmin));
+        context.PageMarkings.Single(m => m.PageId == f.Page.Id).IsUnavailable = true;
+        context.SaveChanges();
+
+        var everyone = PrincipalWith(["AUS", "CAN", "NZ", "UK", "US"], ["engineering"]);
+        var denied = Assert.IsType<ReadResult<Page>.Denied>(await new PageReadService(context).GetPageAsync(f.Page.Id, everyone));
+        Assert.Equal("marking:unavailable", denied.Reason);
+
+        var result = await MarkingService(context).SetAsync(
+            new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.Official, [], [], UkPrefix: true),
+            everyone, f.ActingUserId, AuditCtx);
+
+        Assert.Equal("canEdit required", Assert.IsType<ForbiddenError>(result.Error).Reason);
+        using var readContext = CreateContext();
+        Assert.True(readContext.PageMarkings.Single(m => m.PageId == f.Page.Id).IsUnavailable);
+    }
+
+    [Fact]
+    public async Task SetMarking_WritesAKnownMarking_SoAStatedMarkingCanNeverBeUnavailable()
+    {
+        // The write side of the flag's contract: a marking set through the product is
+        // KNOWN by construction (ProtectiveMarking.Create cannot build the sentinel), and
+        // the service writes that fact to the column rather than leaving it to a default.
+        using var context = CreateContext();
+        var f = Seed(context);
+
+        var result = await MarkingService(context).SetAsync(
+            new SetPageMarkingRequest(f.Page.Id, ClassificationLevel.TopSecret, [], [], UkPrefix: false),
+            PrincipalWith(), f.ActingUserId, AuditCtx);
+
+        Assert.True(result.IsSuccess, $"{result.Error}");
+        using var readContext = CreateContext();
+        var row = readContext.PageMarkings.Include(m => m.Countries).Include(m => m.Selectors).Single(m => m.PageId == f.Page.Id);
+        // Byte-for-byte what the old importer wrote for "unknown" - and available.
+        Assert.Equal(ClassificationLevel.TopSecret, row.Level);
+        Assert.Null(row.Prefix);
+        Assert.False(row.IsUnavailable);
+        Assert.False(row.ToMarking().IsUnavailable);
+        Assert.IsType<ReadResult<Page>.Found>(await new PageReadService(readContext).GetPageAsync(f.Page.Id, PrincipalWith()));
+    }
+
+    [Fact]
+    public void AnyPageInsertedAlongsideAnUnavailableParent_InheritsTheUnavailability()
+    {
+        // The persistence-seam backstop copies the flag with the rest of the marking: a
+        // child inserted beside a parent whose marking is unknown is unknown too, never
+        // an OFFICIAL page reachable beneath a parent nobody can read.
+        var space = TestData.NewSpace();
+        var parent = TestData.NewPage(space, "parent");
+        var child = TestData.NewPage(space, "child", parent);
+
+        using var context = CreateContext();
+        context.Spaces.Add(space);
+        context.Pages.Add(parent);
+        var parentRow = TestData.NewMarking(parent, ClassificationLevel.Official);
+        parentRow.IsUnavailable = true;
+        context.PageMarkings.Add(parentRow);
+        context.Pages.Add(child);
+        context.SaveChanges();
+
+        using var readContext = CreateContext();
+        var childRow = readContext.PageMarkings.Single(m => m.PageId == child.Id);
+        Assert.True(childRow.IsUnavailable);
+        Assert.True(childRow.ToMarking().IsUnavailable);
     }
 }

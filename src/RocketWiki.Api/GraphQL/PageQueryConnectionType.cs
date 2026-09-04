@@ -41,7 +41,7 @@ public sealed class PageQueryConnectionFieldResolvers
     /// paged past the sensitive ones.</para>
     ///
     /// <para>Nothing the caller was not shown contributes: the id set arrives already
-    /// canView-filtered from <c>IPageQueryService</c>, so a page above their clearance or
+    /// canView-filtered from <c>IPageQueryService</c>, so a page beyond their grants or
     /// behind a restriction they fail is absent and cannot raise this label. Resolution rides
     /// <see cref="PageMarkingByPageIdDataLoader"/>, so asking for this and for
     /// <c>edges { node { page { marking } } }</c> costs one PageMarkings query in total and

@@ -7,6 +7,7 @@ using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Core.Sync;
+using RocketWiki.Core.Tests.Access;
 using RocketWiki.Data.Services;
 using RocketWiki.Storage;
 using Xunit;
@@ -39,13 +40,13 @@ public class BundleExportImportTests : SqliteTestBase
 
     private static Principal EditorPrincipal(params string[] groups) => Principal.Create("editor-sub", groups);
 
-    /// <summary>An editor who also holds a clearance. Needed wherever a test raises a
-    /// marking: §21.6 refuses one you could not then read, and the plain EditorPrincipal
-    /// holds no clearance attribute at all — so it can only ever write OFFICIAL.</summary>
-    private static Principal ClearedEditorPrincipal(string clearance, params string[] nationalities) =>
+    /// <summary>An editor who also holds a nationality. Needed wherever a test writes a
+    /// caveated marking: §21.6 refuses one you could not then read, and the plain
+    /// EditorPrincipal holds no nationality at all — so it can never write an eyes-only
+    /// caveat. (The level needs nothing: it is presentational, §21.12.)</summary>
+    private static Principal NationalEditorPrincipal(params string[] nationalities) =>
         Principal.Create("editor-sub", [], new Dictionary<string, IReadOnlyList<string>>
         {
-            ["clearance"] = [clearance],
             ["nationality"] = nationalities,
         });
 
@@ -517,7 +518,7 @@ public class BundleExportImportTests : SqliteTestBase
                 var raised = await entryService.UpdateAsync(
                     new UpdatePageEntryRequest(entry.Value.Id, 1, """{"severity":"critical"}""",
                         ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], prefix: "UK")),
-                    ClearedEditorPrincipal("SECRET", "UK"), actor.Id, AuditCtx);
+                    NationalEditorPrincipal("UK"), actor.Id, AuditCtx);
                 Assert.True(raised.IsSuccess, $"{raised.Error}");
 
                 var second = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
@@ -534,7 +535,7 @@ public class BundleExportImportTests : SqliteTestBase
                 // Deleting it needs the clearance too: an entry you cannot read is an
                 // entry you cannot remove.
                 Assert.True((await entryService.DeleteAsync(
-                    new DeletePageEntryRequest(entry.Value.Id, 2), ClearedEditorPrincipal("SECRET", "UK"), actor.Id, AuditCtx)).IsSuccess);
+                    new DeletePageEntryRequest(entry.Value.Id, 2), NationalEditorPrincipal("UK"), actor.Id, AuditCtx)).IsSuccess);
 
                 var third = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
                 Assert.NotNull(third);
@@ -551,13 +552,16 @@ public class BundleExportImportTests : SqliteTestBase
     }
 
     /// <summary>
-    /// An entry arriving with no declared marking lands at TOP SECRET, not OFFICIAL —
-    /// the same fail-closed reading a page gets (§21). Content from a lower instance
-    /// without a classification is exactly the case where guessing the bottom of the
-    /// ladder would be a cross-boundary disclosure.
+    /// An entry arriving with no declared marking lands UNKNOWN (<c>PageEntry.IsUnavailable</c>)
+    /// and readable by nobody, not at OFFICIAL — the same fail-closed reading a page gets
+    /// (§21.10). Content from a lower instance without a classification is exactly the
+    /// case where guessing the bottom of the ladder would be a cross-boundary disclosure;
+    /// and since the level gates nobody (§21.12), landing it at the TOP of the ladder — the
+    /// old behaviour — would have been the same disclosure wearing a stricter label. The
+    /// assertion is through the real entry gate for the most generous caller there is.
     /// </summary>
     [Fact]
-    public async Task Import_AnEntryWithNoMarking_LandsAtTopSecret()
+    public async Task Import_AnEntryWithNoMarking_LandsUnreadableByEveryone_NotAsAPlainTopSecret()
     {
         var webOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
         var entryId = Guid.NewGuid();
@@ -623,8 +627,42 @@ public class BundleExportImportTests : SqliteTestBase
                 var result = await new BundleImportService(highContext, storage)
                     .ImportAsync(bundlePath, LowInstanceId, AuditCtx);
                 Assert.True(result.IsSuccess, $"{result.Error}");
-                Assert.Equal(ClassificationLevel.TopSecret,
-                    highContext.PageEntries.Single(e => e.Id == entryId).Level);
+
+                var landed = highContext.PageEntries.Include(e => e.Countries).Single(e => e.Id == entryId);
+                Assert.True(landed.IsUnavailable);
+                Assert.True(landed.ToMarking().IsUnavailable);
+                Assert.Equal(ClassificationLevel.TopSecret, landed.Level); // the sentinel's rendering, not what denies
+
+                // The most generous caller: a Space-admin whose access grant confers every
+                // selector value, holding every nationality. The page itself (OFFICIAL) is
+                // readable to them; the entry is not, and the reason says why.
+                var everySelector = new AccessRule
+                {
+                    Kind = AccessRuleKind.AccessGrant, SpaceId = spaceId,
+                    ExpressionJson = """{ "everyone": true }""",
+                    CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid(), UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = Guid.NewGuid(),
+                };
+                foreach (var selector in new[] { TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South })
+                {
+                    everySelector.Selectors.Add(new AccessRuleSelector { AccessRuleId = everySelector.Id, Category = selector.Category, Value = selector.Value });
+                }
+
+                highContext.AccessRules.AddRange(everySelector, new AccessRule
+                {
+                    Kind = AccessRuleKind.RoleGrant, SpaceId = spaceId, Role = SpaceRole.SpaceAdmin,
+                    ExpressionJson = """{ "everyone": true }""",
+                    CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid(), UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = Guid.NewGuid(),
+                });
+                highContext.SaveChanges();
+
+                var admin = Principal.Create("high-admin", ["engineering"], [new("nationality", NationalCaveatVocabulary.Values.ToArray())]);
+                Assert.IsType<ReadResult<Page>.Found>(await new PageReadService(highContext).GetPageAsync(pageId, admin));
+                var denied = Assert.IsType<ReadResult<PageEntryView>.Denied>(
+                    await new PageEntryService(highContext, LowInstanceId).GetAsync(entryId, admin));
+                Assert.Equal("marking:unavailable", denied.Reason);
+                // And the listing prunes it, saying nothing (§6.7).
+                Assert.Empty(Assert.IsType<ReadResult<IReadOnlyList<PageEntryView>>.Found>(
+                    await new PageEntryService(highContext, LowInstanceId).ListAsync(pageId, "incident-report", admin)).Value);
             }
         }
         finally

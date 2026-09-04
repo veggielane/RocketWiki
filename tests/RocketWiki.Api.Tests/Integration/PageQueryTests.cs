@@ -150,12 +150,39 @@ public sealed class PageQueryTests(RocketWikiApiFactory factory) : IClassFixture
         return page;
     }
 
-    private HttpClient CreateUserClient(string? sub = null, string[]? groups = null, string? clearance = null)
+    private HttpClient CreateUserClient(string? sub = null, string[]? groups = null)
     {
         var client = factory.CreateClient();
-        client.SetTestUser(
-            sub: sub ?? $"rql-{Guid.NewGuid():N}", name: "RQL Tester", groups: groups, clearance: clearance);
+        client.SetTestUser(sub: sub ?? $"rql-{Guid.NewGuid():N}", name: "RQL Tester", groups: groups);
         return client;
+    }
+
+    /// <summary>Puts a selector on a page and adds an access grant, matching only
+    /// <paramref name="grantedToGroup"/>, that confers it - the pair a selector-gated
+    /// fixture needs (design.md §21.15).</summary>
+    private async Task AddSelectorAsync(Page page, string category, string value, string grantedToGroup)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var marking = await db.PageMarkings.Include(m => m.Selectors).SingleAsync(m => m.PageId == page.Id);
+        marking.Selectors.Add(new PageMarkingSelector { PageId = page.Id, Category = category, Value = value });
+
+        var space = await db.Spaces.SingleAsync(s => s.Id == page.SpaceId);
+        var grant = new AccessRule
+        {
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = space.Id,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new GroupCondition(grantedToGroup)),
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = space.CreatedByUserId,
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = space.CreatedByUserId,
+        };
+        grant.Selectors.Add(new AccessRuleSelector { AccessRuleId = grant.Id, Category = category, Value = value });
+        db.AccessRules.Add(grant);
+
+        await db.SaveChangesAsync();
     }
 
     // ---------- helpers ----------
@@ -474,23 +501,25 @@ public sealed class PageQueryTests(RocketWikiApiFactory factory) : IClassFixture
     }
 
     [Fact]
-    public async Task OverClassifiedPages_AreExcluded_AndTheAggregateNeverRisesAboveWhatWasShown()
+    public async Task UngrantedPages_AreExcluded_AndTheAggregateNeverRisesAboveWhatWasShown()
     {
         var (space, _) = await SeedSpaceAsync();
         await SeedPageAsync(space, "official", "Official Ops Notes");
-        await SeedPageAsync(space, "secret", "Secret Ops Notes", level: ClassificationLevel.Secret);
+        var secret = await SeedPageAsync(space, "secret", "Secret Ops Notes", level: ClassificationLevel.Secret);
+        // The SECRET level gates nobody (§21.12); the APPLE selector, conferred on
+        // apple-readers alone, is what puts the page out of reach.
+        await AddSelectorAsync(secret, "FRUIT", "APPLE", grantedToGroup: "apple-readers");
 
-        // design.md §21.3: no clearance claim reads as OFFICIAL, so SECRET is out of reach.
-        using var uncleared = await RunAsync(CreateUserClient(), $"space = {space.Key}");
-        var unclearedConnection = Connection(uncleared);
-        Assert.Equal(["Official Ops Notes"], Titles(unclearedConnection));
-        Assert.DoesNotContain("Secret Ops Notes", uncleared.RootElement.GetRawText(), StringComparison.Ordinal);
-        Assert.Equal("UK OFFICIAL", unclearedConnection.GetProperty("aggregateMarking").GetProperty("label").GetString());
+        using var ungranted = await RunAsync(CreateUserClient(), $"space = {space.Key}");
+        var ungrantedConnection = Connection(ungranted);
+        Assert.Equal(["Official Ops Notes"], Titles(ungrantedConnection));
+        Assert.DoesNotContain("Secret Ops Notes", ungranted.RootElement.GetRawText(), StringComparison.Ordinal);
+        Assert.Equal("UK OFFICIAL", ungrantedConnection.GetProperty("aggregateMarking").GetProperty("label").GetString());
 
-        using var cleared = await RunAsync(CreateUserClient(clearance: "SECRET"), $"space = {space.Key}");
-        var clearedConnection = Connection(cleared);
-        Assert.Equal(2, clearedConnection.GetProperty("totalCount").GetInt32());
-        Assert.Equal("UK SECRET", clearedConnection.GetProperty("aggregateMarking").GetProperty("label").GetString());
+        using var granted = await RunAsync(CreateUserClient(groups: ["apple-readers"]), $"space = {space.Key}");
+        var grantedConnection = Connection(granted);
+        Assert.Equal(2, grantedConnection.GetProperty("totalCount").GetInt32());
+        Assert.Equal("UK SECRET APPLE", grantedConnection.GetProperty("aggregateMarking").GetProperty("label").GetString());
     }
 
     [Fact]

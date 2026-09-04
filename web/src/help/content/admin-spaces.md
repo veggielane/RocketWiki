@@ -34,10 +34,12 @@ Grants add. Someone who matches two access grants holds the selector values of
 both. Nobody sees anything in a space until an access grant matches them, and
 an access grant on its own lets people read, not edit.
 
-Holding a selector value here is only half of what a reader needs for a page
-marked with it: their account must also make them eligible for that category.
-A grant to someone who is not eligible confers nothing, and eligibility without
-a grant opens nothing.
+Holding a selector value here is the whole of what a reader needs for a page
+marked with it, beyond access to the space itself. There is no site-wide
+eligibility: a category is not gated by anything on the reader's account, so a
+grant carrying `APPLE` lets everyone it matches open pages marked `APPLE`, and
+nothing else does. A value a reader is not granted in a space keeps every page
+carrying it out of their reach there, however they are marked elsewhere.
 
 ## Role grants: who may edit or administer
 
@@ -67,8 +69,9 @@ default.
 
 A page can carry restrictions of its own, which apply to it and everything
 beneath it. They can only narrow what a grant allows, never widen it. A
-classification, and the rest of a marking, subtracts from everyone, admins
-included.
+marking's selectors and caveat subtract from everyone in the same way, admins
+included; its classification and prefix say what the page is and subtract from
+nobody.
 
 ## Trash
 
@@ -78,7 +81,7 @@ Deleted pages, grouped by the delete that produced them, restorable as a batch.
 
 What is being read and edited in this space, over the pages **you** can see.
 
-Two admins with different clearances therefore see different numbers, and the
-header states the page count a report covered so nobody mistakes it for the
-whole space. Reading the report is itself recorded in the audit log, because it
+Two admins holding different grants or nationalities therefore see different
+numbers, and the header states the page count a report covered so nobody
+mistakes it for the whole space. Reading the report is itself recorded in the audit log, because it
 names who read what.

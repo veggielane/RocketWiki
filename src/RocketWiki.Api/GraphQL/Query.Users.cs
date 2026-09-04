@@ -22,7 +22,7 @@ namespace RocketWiki.Api.GraphQL;
 /// identity and activity, and every extra column here is one more thing an admin session
 /// can leak. Add it only if someone asks for it, and audit it then.</para>
 ///
-/// <para><b>No groups, clearance, or effective permissions.</b> Those come from the
+/// <para><b>No groups or effective permissions.</b> Those come from the
 /// token (§6.1) — the rule engine never reads this table — so a list of them per user
 /// would be either a lie (the values from whenever that user last signed in) or an
 /// invention. What the database actually knows about a person is who they are and when

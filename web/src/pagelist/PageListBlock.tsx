@@ -119,7 +119,7 @@ export function PageListBlock({ spec }: { spec: PageListSpec }) {
               <span className="rw-visually-hidden">in space </span>
               {node.page.spaceKey}
             </span>
-            {/* §21: the level only. Rows are already clearance-filtered, so
+            {/* §21: the level only. Rows are already permission-filtered, so
                 this gates nothing — it tells a reader scanning the list how
                 sensitive each page is before they open it. The page's own
                 banner carries the full marking, caveat included. */}

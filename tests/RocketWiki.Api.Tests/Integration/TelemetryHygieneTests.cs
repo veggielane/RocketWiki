@@ -111,12 +111,12 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
 
         var now = DateTime.UtcNow;
 
-        // A page the caller CANNOT read (design.md §21.8): SECRET, so the clearance gate
-        // passes for the SECRET-cleared caller below, and carrying the sentinel selector
-        // value in the claim-less SENTINEL category, which no grant confers - so G is the
-        // one gate that fails, and the placeholder the caller is shown carries the
-        // sentinel selector AND the sentinel country in its label. The readable page
-        // below links to it, so Page.linkTargets renders the same placeholder.
+        // A page the caller CANNOT read (design.md §21.8): SECRET (which gates nobody -
+        // §21.12 - and rides along so the level travels through every surface too), and
+        // carrying the sentinel selector value in the SENTINEL category, which no grant
+        // confers - so G is the one gate that fails, and the placeholder the caller is
+        // shown carries the sentinel selector AND the sentinel country in its label. The
+        // readable page below links to it, so Page.linkTargets renders the same placeholder.
         var protectedPage = new Page
         {
             SpaceId = space.Id,
@@ -141,9 +141,9 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         };
         db.Pages.Add(page);
 
-        // design.md §21: a protective marking the caller *is* cleared for, so the
-        // clearance gate genuinely evaluates a real level and a real country set on every
-        // resolution of this page rather than short-circuiting on the OFFICIAL default.
+        // design.md §21: a protective marking the caller *is* admitted to, so the caveat
+        // gate genuinely evaluates a real country set on every resolution of this page
+        // rather than short-circuiting on an empty caveat.
         // The eyes-only set carries the sentinel nationality, which makes the marking's own
         // contents part of what this sweep is looking for: if a level, a country, or a
         // marking-with-page-id ever reached a span or a metric tag, it lands here. The
@@ -196,10 +196,10 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
             sub: $"tel-{Guid.NewGuid()}",
             email: "telemetry@example.test",
             name: "Telemetry Tester",
-            nationality: [SentinelNationality, "NZ"],
-            // Cleared for the seeded pages' SECRET markings (design.md §21), so the reads
-            // below still succeed and the clearance gate runs on real values.
-            clearance: "SECRET");
+            // NZ admits the caller to the seeded pages' caveats (design.md §21.4), so the
+            // reads below still succeed and the caveat gate runs on real values; the
+            // SECRET level on them gates nobody.
+            nationality: [SentinelNationality, "NZ"]);
 
         var captured = new List<Activity>();
         var metricTags = new List<string>();

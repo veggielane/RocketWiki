@@ -113,10 +113,11 @@ public class AnalyticsServiceTests : SqliteTestBase
     [Fact]
     public async Task Report_CountsNothingAboutAPageTheCallerCannotRead()
     {
-        // THE test. A page above the caller's clearance contributes no view count, no
-        // ranked row, and nothing to visiblePageCount — because a total that moved when
-        // classified content was viewed would report the existence of that content to
-        // someone §21 has already decided must not learn it.
+        // THE test. A page the caller is not granted contributes no view count, no ranked
+        // row, and nothing to visiblePageCount — because a total that moved when
+        // compartmented content was viewed would report the existence of that content to
+        // someone §21 has already decided must not learn it. The SECRET level is on the
+        // page and gates nobody; the APPLE selector no grant confers is what does.
         var actor = TestData.NewUser();
         var space = TestData.NewSpace();
         using var context = CreateContext();
@@ -128,7 +129,8 @@ public class AnalyticsServiceTests : SqliteTestBase
         var secret = TestData.NewPage(space, "secret");
         context.Pages.AddRange(readable, secret);
         context.PageMarkings.Add(TestData.NewMarking(readable, ClassificationLevel.Official));
-        context.PageMarkings.Add(TestData.NewMarking(secret, ClassificationLevel.Secret));
+        context.PageMarkings.Add(TestData.NewMarking(secret, ClassificationLevel.Secret)
+            .WithSelectors(RocketWiki.Core.Tests.Access.TestCatalogs.Apple));
         RecordView(context, readable.Id, actor.Id, From.AddDays(1));
         for (var i = 0; i < 50; i++)
         {
@@ -137,7 +139,7 @@ public class AnalyticsServiceTests : SqliteTestBase
 
         context.SaveChanges();
 
-        // An OFFICIAL-cleared caller: administers the space, cannot read the SECRET page.
+        // The caller administers the space and is granted no selector: cannot read the APPLE page.
         var result = await NewService(context).GetReportAsync(
             space.Key, From, To, Caller(), isInstanceAdmin: false);
 

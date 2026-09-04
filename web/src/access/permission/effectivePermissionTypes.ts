@@ -54,7 +54,7 @@ export interface EffectivePermissionDetail {
   canEdit: boolean
   viewDenialReason: string | null
   editDenialReason: string | null
-  /** The whole view ladder — space access, classification, selector eligibility and grant, national caveat, restriction — each evaluated. */
+  /** The whole view ladder — space access, marking present, selector grant, national caveat, restriction — each evaluated. */
   viewGates: GateCheck[]
   /** The edit ladder: the view gates again, then replica and role. */
   editGates: GateCheck[]

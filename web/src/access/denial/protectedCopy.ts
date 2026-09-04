@@ -17,6 +17,15 @@ export const PROTECTED_PAGE_TITLE = 'Protected page'
 /** The single sentence a caller with no access grant in the space is told — and all they are told. */
 export const NO_SPACE_ACCESS = 'You have no access to this space.'
 
+/**
+ * A page whose marking row is missing: the MARKING_UNAVAILABLE gate on a
+ * denial and the `marking:unavailable` token in the inspector, one sentence
+ * for both. The server fails closed on it — no marking means no reader,
+ * whoever they are — so the sentence says the same thing to everyone: nothing
+ * about the reader could change it, only restoring the marking does.
+ */
+export const MARKING_UNAVAILABLE = "This page's marking is missing, so nobody can read it until it is restored."
+
 /** Above a tree whose every page reads as protected because the caller holds no access grant there. */
 export const PROTECTED_TREE_NOTE = 'You have no access to this space, so its pages are shown as protected.'
 

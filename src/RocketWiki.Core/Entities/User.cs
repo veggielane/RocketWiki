@@ -15,11 +15,13 @@ public class User
     public string DisplayName { get; set; } = string.Empty;
 
     /// <summary>
-    /// Mirrored registered attributes (nationality, clearance) plus every configured
-    /// selector claim, as raw claim values keyed by claim name (design.md §11.3).
-    /// Nationality is admin-visible only; clearance and selector eligibility are shown
-    /// to every signed-in user on the profile page (design.md §6.2), derived at read time
-    /// through the gates. Never an authorization input (design.md §6.1).
+    /// Mirrored claims, as raw claim values keyed by claim name (design.md §11.3):
+    /// <c>nationality</c> (the registered attribute, admin-visible only on the roster)
+    /// and <c>groups</c> (the group memberships, shown to every signed-in user on the
+    /// profile page, design.md §6.2). It used to mirror a clearance claim and every
+    /// configured selector claim as well; both went with the gates that read them, since
+    /// this deployment carries neither attribute in Keycloak. Never an authorization
+    /// input (design.md §6.1): the Principal is built from the token, every request.
     /// </summary>
     public string AttributesJson { get; set; } = "{}";
 

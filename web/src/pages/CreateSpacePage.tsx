@@ -20,7 +20,7 @@ import { serializeRuleNode } from '../access/ruleSerializer'
 import { group, user, type RuleNode } from '../access/ruleTypes'
 import type { AttributeOption } from '../access/attributeOption'
 import type { ValidationResult } from '../access/builderState'
-import type { SelectorValue } from '../markings/clearance'
+import type { SelectorValue } from '../markings/markingRefusal'
 
 /**
  * design.md §6.5.1: space creation is atomic with its first grants — a

@@ -263,7 +263,7 @@ public class RocketWikiDbContext : DbContext
     /// the transaction opens, so an unmarked page cannot be committed through any code
     /// path — present or future — that goes through this context.
     ///
-    /// <para>This is the write-side twin of putting the clearance gate inside
+    /// <para>This is the write-side twin of putting the marking gate inside
     /// <c>EffectivePermissionCalculator</c>: an invariant that lives in one structural
     /// place cannot be lost one call site at a time. It is a backstop, not the feature —
     /// <c>PageService.CreatePageAsync</c> sets the marking explicitly (with real parent
@@ -280,10 +280,14 @@ public class RocketWikiDbContext : DbContext
     /// database is <c>PageService</c>'s job, where the parent is loaded anyway.</para>
     ///
     /// <para>Note the asymmetry with the READ side, which is intentional. A missing
-    /// marking on read means "something went wrong" and fails closed to TOP SECRET; a
-    /// missing marking on insert means "nobody said", and the answer to that is the
-    /// scheme's floor. Defaulting an insert to TOP SECRET would classify content nobody
-    /// asked to classify and lock its own author out of it.</para>
+    /// marking on read means "something went wrong" and fails closed to unavailable
+    /// (readable by nobody); a missing marking on insert means "nobody said", and the
+    /// answer to that is the scheme's floor. Defaulting an insert to "unknown" would lock
+    /// content nobody asked to classify away from its own author. Inheritance is the one
+    /// case where "unknown" does propagate: a child of a parent whose marking is
+    /// unavailable (<see cref="PageMarking.IsUnavailable"/>) inherits the unavailability,
+    /// because a child that read as OFFICIAL beneath a parent nobody can read would be
+    /// exactly the widening this seam exists to prevent.</para>
     /// </summary>
     private void EnsurePageMarkings()
     {
@@ -322,6 +326,10 @@ public class RocketWikiDbContext : DbContext
                 // Inherited from the parent when there is one, ProtectiveMarking.Baseline's
                 // UK otherwise (design.md §21.12).
                 Prefix = inherited.Prefix,
+                // "Unknown" inherits too (see the class doc): only a parent whose row says
+                // so can produce it here, since Baseline and every Create-built marking
+                // carry false.
+                IsUnavailable = inherited.IsUnavailable,
                 SetAtUtc = now,
                 // No actor: nobody chose this marking, the invariant did. Same "system
                 // action, no user" shape a sync-applied marking has.

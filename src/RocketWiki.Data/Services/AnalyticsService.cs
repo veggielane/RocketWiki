@@ -14,7 +14,7 @@ namespace RocketWiki.Data.Services;
 /// <para>The whole design turns on one decision — the visible page set is obtained
 /// from <see cref="IPageReadService.GetPageTreeAsync"/> rather than from a query
 /// written here. That walk already applies space grants, accumulated page
-/// restrictions and the §21 clearance gate, and it is the same walk the tree and
+/// restrictions and the §21 marking gate, and it is the same walk the tree and
 /// search use. Re-deriving visibility in an aggregation query would be a second
 /// implementation of the rule engine that nothing keeps in step, and the failure
 /// mode would be silent: a number slightly too large, in a screen whose whole

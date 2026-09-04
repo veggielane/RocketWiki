@@ -1,7 +1,9 @@
 # design.md §21: every page carries a protective marking — a UK Government
 # classification, optional selectors (§21.15), an optional eyes-only national
-# caveat, and a presentational UK prefix — and all but the prefix GATE READ
-# ACCESS. This is an access control the SPA renders, not a decoration it draws.
+# caveat, and a presentational UK prefix. The selectors and the caveat GATE
+# READ ACCESS; the classification is display, compared against nobody, like
+# the prefix. This is an access control the SPA renders, not a decoration it
+# draws.
 #
 # `label` is the whole reason this fragment asks for the display strings
 # instead of composing them: §21.4/§21.12 put the ONE formatter server-side
@@ -76,13 +78,13 @@ query ClassificationScheme {
 # defaults, so there is nothing an omission could silently re-assert.
 #
 # Refusals that reach here despite the control trying to make them unreachable
-# (markings/clearance.ts): a level above the caller's own clearance, a
-# selector they are not eligible for or not granted in this space, and a
-# resulting marking they could not then read — all Forbidden (§21.6). They are
-# still surfaced rather than swallowed: a clearance or a grant can change
-# mid-session, and the server is the authority either way. Two values in one
-# category, or a value the instance does not configure, is a Validation error
-# the control cannot produce.
+# (markings/markingRefusal.ts): a selector value the caller is not granted in
+# this space, and a resulting caveat they could not then read — both
+# Forbidden. They are still surfaced rather than swallowed: a grant or a
+# nationality can change mid-session, and the server is the authority either
+# way. No refusal names the level: any editor may set any level. Two values
+# in one category, or a value the instance does not configure, is a
+# Validation error the control cannot produce.
 mutation SetPageMarking($input: SetPageMarkingRequestInput!) {
   setPageMarking(input: $input) {
     marking {

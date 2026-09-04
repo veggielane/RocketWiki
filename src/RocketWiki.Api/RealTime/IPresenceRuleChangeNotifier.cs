@@ -17,8 +17,8 @@ namespace RocketWiki.Api.RealTime;
 /// <para><b>"Rules" means every input to canView/canEdit, not just AccessRule rows.</b>
 /// This used to be called only from Mutation.AccessRules.cs, which covered one of the
 /// three things the decision is computed from (§6.4/§21: space grants, the restriction
-/// chain, AND the protective marking). So a page re-marked above a joined co-editor's
-/// clearance left them in the SignalR group — still receiving <c>UpdateReceived</c>,
+/// chain, AND the protective marking). So a page re-marked out of a joined co-editor's
+/// reach left them in the SignalR group — still receiving <c>UpdateReceived</c>,
 /// which is page content in CRDT form, and still able to <c>PushUpdate</c>. It is now
 /// called after every mutation that can change the answer: rule create/update/delete,
 /// <c>setPageMarking</c> (§21 gates views "on every read path, exactly as a page

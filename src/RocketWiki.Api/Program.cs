@@ -151,10 +151,10 @@ builder.Services.AddScoped<IAuditSink, DbAuditSink>();
 
 // The ABAC Principal (design.md §6.1) — built fresh from the validated token on every
 // request, never from the local User mirror. PrincipalBuilder is the one claim-to-
-// Principal mapping, shared by the request accessor and the SignalR hub; a singleton
-// because its only state is the immutable selector catalog (§21.15), which decides
-// which selector claims are mapped at all.
-builder.Services.AddSingleton<PrincipalBuilder>();
+// Principal mapping, shared by the request accessor and the SignalR hub; a static with
+// a fixed claim list (groups, nationality), so nothing to register. It was briefly a
+// singleton carrying the selector catalog, while configured selector claims were mapped
+// too - see its doc for why that went.
 builder.Services.AddScoped<ICurrentPrincipalAccessor, CurrentPrincipalAccessor>();
 
 // design.md §6.6: the rule builder's group picker, accumulated from observed logins by
@@ -177,7 +177,7 @@ builder.Services.AddScoped<IInstanceRoleAccessor, InstanceRoleAccessor>();
 builder.Services.AddSingleton(new InstanceIdentity(localInstanceId));
 builder.Services.AddScoped<IPageReadService, PageReadService>();
 // Analytics reads through IPageReadService rather than the DbContext for its
-// visible-page set, so the §21 clearance gate and §6.4 restrictions are the ones
+// visible-page set, so the §21 marking gate and §6.4 restrictions are the ones
 // already enforced everywhere else rather than a second copy in an aggregation.
 builder.Services.AddScoped<IAnalyticsService, AnalyticsService>();
 // Viewer-relative permission facts, the §6.6 inspector, and the manage-gated
@@ -367,7 +367,7 @@ builder.Services
     // page, a space or a marking value, and every actual read still returns empty/absent
     // (design.md §6.7). So this is defence in depth, not a disclosure fix, and it is
     // ranked that way: what it removes is a map. On an instance whose schema carries
-    // field names like `clearance` and `protectiveMarking`, a free, unauthenticated,
+    // field names like `eyesOnly` and `protectiveMarking`, a free, unauthenticated,
     // machine-readable inventory of every query, mutation, argument and enum value is a
     // reconnaissance convenience with no operational purpose in production.
     //
@@ -492,7 +492,7 @@ app.MapHub<NotificationsHub>("/hubs/notifications", options =>
     // design.md §6.1/§8: the hub builds its ABAC Principal from the token at CONNECT and
     // keeps it for the connection's life — send-time canView, the presence sweep and the
     // co-edit sweep all evaluate against that one snapshot. Without this, a connection
-    // outlived its token indefinitely: a principal whose `clearance` or `nationality` had
+    // outlived its token indefinitely: a principal whose `groups` or `nationality` had
     // been revoked in Keycloak kept authorizing presence membership, notification titles
     // and CRDT relay for as long as the socket stayed open, and the rule-change sweep
     // could not compensate because it re-evaluates rules against that same stale

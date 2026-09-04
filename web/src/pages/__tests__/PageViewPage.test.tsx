@@ -92,7 +92,6 @@ const denial: {
   noSpaceAccess: false,
   marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: [], ukPrefix: true, selectors: [{ category: 'FRUIT', value: 'APPLE' }], label: 'UK SECRET APPLE' },
   reasons: [
-    { gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'SECRET' },
     { gate: 'SELECTOR_GRANT', passed: false, category: 'FRUIT', value: 'APPLE' },
   ],
 }
@@ -384,7 +383,6 @@ describe('PageViewPage withheld and missing pages (design.md §6.7 / §21.8)', (
     renderPage({ access: { page: null, denial } })
     expect(await screen.findByRole('heading', { level: 1, name: 'Protected page' })).toBeInTheDocument()
     expect(screen.getByText('UK SECRET APPLE')).toBeInTheDocument()
-    expect(screen.getByText('Needs SECRET clearance.')).toBeInTheDocument()
     expect(screen.getByText('APPLE is not granted to you in this space.')).toBeInTheDocument()
     // Nothing of the page itself: no title, no content, no actions.
     expect(document.body.textContent).not.toContain('Runbook')

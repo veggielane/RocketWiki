@@ -36,7 +36,7 @@ public class PageTreeEvaluatorParityTests
         for (var i = 0; i < 500; i++)
         {
             // Probabilities are skewed towards passing so that both outcomes are common:
-            // with six independent gates an even coin per gate denies almost every row.
+            // with four independent gates an even coin per gate denies almost every row.
             var marking = ProtectiveMarking.Create(
                 levels[random.Next(levels.Length)],
                 countries.Where(_ => random.Next(5) == 0).ToArray(),
@@ -47,19 +47,9 @@ public class PageTreeEvaluatorParityTests
                 .ToList();
 
             var attributes = new List<KeyValuePair<string, IReadOnlyList<string>>>();
-            if (random.Next(5) != 0)
-            {
-                attributes.Add(new("clearance", [new[] { "OFFICIAL", "OFFICIAL_SENSITIVE", "SECRET", "TOP_SECRET", "TOP_SECRET" }[random.Next(5)]]));
-            }
-
             if (random.Next(4) != 0)
             {
                 attributes.Add(new("nationality", [countries[random.Next(countries.Length)]]));
-            }
-
-            if (random.Next(4) != 0)
-            {
-                attributes.Add(new(TestCatalogs.FruitClaim, ["yes"]));
             }
 
             var principal = Principal.Create(

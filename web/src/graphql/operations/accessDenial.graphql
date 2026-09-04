@@ -14,8 +14,6 @@
 fragment GateCheck on GateResult {
   gate
   passed
-  requiredLevel
-  requiredLevelName
   category
   value
   countries

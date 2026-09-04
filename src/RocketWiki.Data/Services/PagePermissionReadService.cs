@@ -207,7 +207,7 @@ public class PagePermissionReadService : IPagePermissionReadService
     /// <para><b>A chain page the caller could not view contributes an EMPTY title</b>
     /// (design.md §21.8/§6.4.1), decided by the FULL view gate for that page — space
     /// access, then the calculator's own ladder (<see cref="EffectivePermissionCalculator.EvaluateViewGates"/>:
-    /// level, selector eligibility, selector grant, caveat, and the restrictions
+    /// marking availability, selector grant, caveat, and the restrictions
     /// accumulated down to that page) — never a subset. Restrictions accumulate down the
     /// tree but markings do not (§21.5 — "a child may legitimately sit above or below its
     /// parent", and re-marking a parent does not re-mark the subtree), so passing canView

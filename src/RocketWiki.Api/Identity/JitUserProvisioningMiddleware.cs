@@ -17,25 +17,30 @@ namespace RocketWiki.Api.Identity;
 /// that need an <c>actingUserId</c> to stamp on what they write.
 ///
 /// <para><b>What the attribute mirror is for, and what it is not.</b> <c>AttributesJson</c>
-/// carries the nationality and clearance claims and, since the profile page (design.md
-/// §6.2, 2026-09-03), every configured selector claim (§21.15). It feeds two readers: the
-/// admin roster, and the profile page every signed-in user can open, which renders the
-/// clearance and selector eligibility recorded at the subject's last request. It is
-/// <b>never</b> read for an authorization decision: the rule engine, the clearance gate
-/// and the selector gate all build their Principal from the token, per request, so a
-/// stale mirror can never widen anyone's access — and the profile page reads the mirror
-/// through the same gate functions, over a Principal rebuilt from this JSON
-/// (<see cref="MirroredPrincipal"/>), so what it shows is what the gate would have
-/// decided from those claims, never a second implementation of the rules.</para>
+/// carries two claims: <c>nationality</c>, for the admin roster (§6.2), and — since the
+/// profile page changed shape (§6.2) — <c>groups</c>, the memberships recorded at the
+/// subject's last request, which the profile page every signed-in user can open renders
+/// as they were mirrored. It used to carry the clearance claim and every configured
+/// selector claim too, so the profile could re-run the clearance and eligibility gates
+/// over them; those gates are gone (this deployment carries neither attribute in
+/// Keycloak), so those claims are no longer recorded and there is nothing to re-run.
+/// The mirror is <b>never</b> read for an authorization decision: the rule engine and
+/// the marking gate build their Principal from the token, per request, so a stale mirror
+/// can never widen anyone's access — and the profile page reads the mirrored group list
+/// as a recorded fact about a mirror, never as an input to any gate.</para>
 /// </summary>
 public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
 {
+    /// <summary>The claim the mirror records group membership from — the same
+    /// <c>groups</c> claim <see cref="PrincipalBuilder"/> builds the Principal's groups
+    /// from, so what the profile shows is what the gates were handed.</summary>
+    public const string GroupsClaimName = "groups";
+
     public async Task InvokeAsync(
         HttpContext context,
         RocketWikiDbContext db,
         IActingUserAccessor actingUser,
-        KnownGroupRecorder knownGroups,
-        SelectorCatalog catalog)
+        KnownGroupRecorder knownGroups)
     {
         if (context.User.Identity?.IsAuthenticated == true)
         {
@@ -44,7 +49,7 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
 
             if (!string.IsNullOrEmpty(subject))
             {
-                actingUser.ActingUserId = await UpsertUserAsync(db, context.User, subject, catalog, context.RequestAborted);
+                actingUser.ActingUserId = await UpsertUserAsync(db, context.User, subject, context.RequestAborted);
 
                 // design.md §6.6's "accumulated from observed logins" — the rule builder's
                 // group picker, and the only thing on this instance that can learn a group
@@ -54,7 +59,7 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
                 // Never read back for an authorization decision (§6.1) — the Principal is
                 // still built from the token, every request.
                 await knownGroups.RecordAsync(
-                    db, context.User.FindAll("groups").Select(c => c.Value).ToList(), context.RequestAborted);
+                    db, context.User.FindAll(GroupsClaimName).Select(c => c.Value).ToList(), context.RequestAborted);
             }
         }
 
@@ -62,14 +67,14 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
     }
 
     private static async Task<Guid> UpsertUserAsync(
-        RocketWikiDbContext db, ClaimsPrincipal principal, string subject, SelectorCatalog catalog, CancellationToken ct)
+        RocketWikiDbContext db, ClaimsPrincipal principal, string subject, CancellationToken ct)
     {
         var email = principal.FindFirst("email")?.Value ?? principal.FindFirst(ClaimTypes.Email)?.Value;
         var displayName = principal.FindFirst("name")?.Value
             ?? principal.FindFirst(ClaimTypes.Name)?.Value
             ?? subject;
 
-        var attributesJson = JsonSerializer.Serialize(MirrorAttributes(principal, catalog));
+        var attributesJson = JsonSerializer.Serialize(MirrorAttributes(principal));
 
         var now = DateTime.UtcNow;
         var user = await db.Users.FirstOrDefaultAsync(u => u.Subject == subject, ct);
@@ -132,42 +137,25 @@ public sealed class JitUserProvisioningMiddleware(RequestDelegate next)
     }
 
     /// <summary>
-    /// The claims the mirror records, and ONLY those: the two registered attributes
-    /// (design.md §6.2 — nationality and, since §21, clearance) plus every claim the
-    /// configured selector catalog names (§21.15). The same allowlist
-    /// <see cref="PrincipalBuilder"/> maps from the token, taken from the same singleton
-    /// catalog, so the mirror and the principal cannot disagree about which claims exist.
-    /// A claim nobody configured is not recorded — the mirror is not "the token, saved".
+    /// The claims the mirror records, and ONLY those: <c>nationality</c> (the registered
+    /// attribute, design.md §6.2) and <c>groups</c> (for the profile page). The same two
+    /// claims <see cref="PrincipalBuilder"/> maps from the token, so the mirror and the
+    /// principal cannot disagree about which claims exist. A claim outside that list is
+    /// not recorded — the mirror is not "the token, saved".
     ///
-    /// <para><b>Raw values, not derived answers.</b> A selector claim is stored as the
-    /// literal values the token carried (<c>yes</c>, <c>Yes </c>, <c>no</c>, …), never as
-    /// an "eligible" boolean, and the clearance as the literal claim value, never as a
-    /// resolved level. Eligibility and clearance are derived at READ time by the gates'
-    /// own resolution functions over <see cref="MirroredPrincipal"/>, against the catalog
-    /// current at that moment — so a category reconfigured after the user's last sign-in
-    /// reads correctly, and the mirror never holds a decision that could go stale on its
-    /// own. Every configured key is present (an empty list when the token had no such
-    /// claim), matching how nationality and clearance have always been recorded;
-    /// <see cref="MirroredPrincipal"/> reads an empty list as "absent", exactly as the
-    /// principal builder treats a missing claim.</para>
+    /// <para><b>Raw values, in token order.</b> The group list is stored exactly as the
+    /// token carried it, never sorted, de-duplicated or interpreted; the profile page
+    /// sorts for display and says "as of your last sign-in" in words. Every key is
+    /// present (an empty list when the token had no such claim), matching how nationality
+    /// has always been recorded, so a reader can tell "recorded as none" from "never
+    /// recorded by this build".</para>
     /// </summary>
-    private static Dictionary<string, string[]> MirrorAttributes(ClaimsPrincipal principal, SelectorCatalog catalog)
-    {
-        var attributes = new Dictionary<string, string[]>(StringComparer.Ordinal)
+    private static Dictionary<string, string[]> MirrorAttributes(ClaimsPrincipal principal) =>
+        new(StringComparer.Ordinal)
         {
-            [ClearanceGate.NationalityAttributeKey] = ClaimValues(principal, ClearanceGate.NationalityAttributeKey),
-            [ClearanceGate.ClearanceAttributeKey] = ClaimValues(principal, ClearanceGate.ClearanceAttributeKey),
+            [CaveatGate.NationalityAttributeKey] = ClaimValues(principal, CaveatGate.NationalityAttributeKey),
+            [GroupsClaimName] = ClaimValues(principal, GroupsClaimName),
         };
-
-        // The catalog already refused a claim name that collides with the two above
-        // (SelectorCatalog.ReservedClaimNames), so nothing here can overwrite them.
-        foreach (var claimName in catalog.ClaimNames)
-        {
-            attributes[claimName] = ClaimValues(principal, claimName);
-        }
-
-        return attributes;
-    }
 
     private static string[] ClaimValues(ClaimsPrincipal principal, string claimName) =>
         principal.FindAll(claimName).Select(c => c.Value).ToArray();

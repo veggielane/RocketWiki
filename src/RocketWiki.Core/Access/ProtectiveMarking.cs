@@ -9,13 +9,17 @@ namespace RocketWiki.Core.Access;
 /// Written <c>&lt;PREFIX&gt; &lt;CLASSIFICATION&gt; &lt;SELECTORS&gt; &lt;CAVEAT&gt;</c>:
 /// <c>UK SECRET APPLE NORTH AUS/NZ EYES ONLY</c>.
 ///
-/// <para><b>Three of those four gate access; the prefix does not.</b> The prefix is
-/// presentational — the national qualifier UK markings are conventionally written with
-/// (<c>UK SECRET</c>) — and it is deliberately outside the gate: <see cref="MarkingGate"/>
-/// does not read it, no denial reason mentions it, and no verdict depends on it. It
-/// lives on this type only because this type owns the canonical display string. If you
-/// are here to "finish" the prefix by giving it access semantics: don't. There is
-/// nothing to compare it against, and §21.12 says why.</para>
+/// <para><b>Two of those four gate access; the level and the prefix do not.</b> The
+/// selectors gate through the space's access grants (G) and the caveat through the
+/// principal's nationality (N). The level and the prefix are <i>presentational</i>: they
+/// say what the content is marked, and <see cref="MarkingGate"/> reads neither. The
+/// prefix has always been outside the gate (§21.12); the level joined it when this
+/// deployment decided it would carry no per-user clearance attribute in Keycloak — a
+/// clearance-versus-level comparison with nothing to compare against would be a gate
+/// that denies on a made-up floor, so it was removed rather than defaulted. No denial
+/// reason mentions the level, and no verdict depends on it. If you are here to "finish"
+/// the level by giving it access semantics again: there is no clearance to compare it
+/// against, and §21.12's argument for the prefix now covers it.</para>
 ///
 /// <para><b>This is a value object, not the database row.</b> The row is
 /// <c>RocketWiki.Core.Entities.PageMarking</c> (plus its country and selector child
@@ -45,23 +49,35 @@ namespace RocketWiki.Core.Access;
 public sealed record ProtectiveMarking
 {
     private ProtectiveMarking(
-        ClassificationLevel level, IReadOnlyList<string> eyesOnly, IReadOnlyList<SelectorValue> selectors, string? prefix)
+        ClassificationLevel level,
+        IReadOnlyList<string> eyesOnly,
+        IReadOnlyList<SelectorValue> selectors,
+        string? prefix,
+        bool isUnavailable)
     {
         Level = level;
         EyesOnly = eyesOnly;
         Selectors = selectors;
         Prefix = prefix;
+        IsUnavailable = isUnavailable;
     }
 
+    /// <summary>
+    /// The classification level. <b>Presentational, like the prefix</b> (§21.12): it is
+    /// what the label leads with and what §21.13's aggregate takes the maximum of, and it
+    /// is <i>not</i> an access comparison — <see cref="MarkingGate"/> does not read it, and
+    /// no principal attribute is compared against it. The ordering the enum carries
+    /// exists for display and for that aggregate maximum only.
+    /// </summary>
     public ClassificationLevel Level { get; }
 
     /// <summary>
     /// design.md §21.15: the additional selectors, canonical (each
     /// <see cref="SelectorValue"/> is upper-cased and trimmed by construction), <b>at most
     /// one per category</b>, sorted ordinally by category. Empty means none — the page is
-    /// limited by its level and caveat alone. Every selector present must be both
-    /// eligible-for and granted-to a principal (<see cref="SelectorGate"/>) before the
-    /// page is readable.
+    /// limited by its caveat alone. Every selector present must be granted to the
+    /// principal by an access grant they match in the page's space
+    /// (<see cref="SelectorGate"/>) before the page is readable.
     ///
     /// <para><b>Stored order is ordinal; displayed order is the catalog's.</b> This value
     /// object cannot know the instance's configured category order — an entity's
@@ -84,7 +100,7 @@ public sealed record ProtectiveMarking
     /// <para><b>Presentational only.</b> Nothing in <see cref="MarkingGate"/> reads
     /// this property, and nothing should: a prefix is a national qualifier on how the
     /// marking is written, not a claim about who may read it. Pinned by test — see
-    /// <c>ClearanceGateTests</c>' and <c>MarkingGateTests</c>' prefix-invariance cases.</para>
+    /// <c>CaveatGateTests</c>' and <c>MarkingGateTests</c>' prefix-invariance cases.</para>
     ///
     /// <para>Through the product it is a <b>toggle</b>: the mutation writes
     /// <see cref="UkPrefix"/> or null, never free text (§21.12). The type keeps a string
@@ -94,6 +110,25 @@ public sealed record ProtectiveMarking
     public string? Prefix { get; }
 
     public bool HasPrefix => !string.IsNullOrEmpty(Prefix);
+
+    /// <summary>
+    /// True only for <see cref="FailClosed"/> — the stand-in for a page whose marking row
+    /// is missing. <b>This flag, not the level, is what denies.</b> <see cref="MarkingGate"/>
+    /// refuses an unavailable marking outright, before any selector or caveat is looked
+    /// at, with its own reason (<c>marking:unavailable</c>).
+    ///
+    /// <para>It exists because the level no longer gates. <see cref="FailClosed"/> used to
+    /// deny everyone by being TOP SECRET — the level was the gate, and TOP SECRET was above
+    /// every clearance. With the level presentational, a TOP SECRET marking with no
+    /// selectors and no caveat would deny <i>nobody</i>: a bug that lost a page's marking
+    /// row would have quietly made the page readable by everyone with space access, the
+    /// exact inversion of what "fail closed" means. So the missing-row case is now a
+    /// distinct state carried by this flag, set only by the factory that builds the
+    /// sentinel and never inferable from the level: a real page legitimately marked
+    /// TOP SECRET is available, readable by whoever its selectors and caveat admit, and
+    /// reads <c>false</c> here.</para>
+    /// </summary>
+    public bool IsUnavailable { get; }
 
     /// <summary>
     /// The prefix a marking gets when nobody has said otherwise. UK Government markings
@@ -114,9 +149,9 @@ public sealed record ProtectiveMarking
 
     /// <summary>
     /// The eyes-only country set, canonical (upper-case, ordinal-sorted, distinct).
-    /// <b>Empty means no caveat</b> — the page is limited by its level and selectors
-    /// alone. A non-empty set means the principal must hold at least one nationality
-    /// value in it (design.md §21.4). The tokens a mutation may write are
+    /// <b>Empty means no caveat</b> — the page is limited by its selectors alone. A
+    /// non-empty set means the principal must hold at least one nationality value in it
+    /// (design.md §21.4). The tokens a mutation may write are
     /// <see cref="NationalCaveatVocabulary"/>'s five; a token outside it can only be here
     /// from legacy data or a bundle, and matches nobody.
     /// </summary>
@@ -130,46 +165,45 @@ public sealed record ProtectiveMarking
     /// backfill every pre-existing page to (design.md §21 — read the risk note there
     /// before assuming the OFFICIAL half is the safe choice; it is the pragmatic one).
     /// </summary>
-    public static ProtectiveMarking Baseline { get; } = new(ClassificationLevel.Official, [], [], DefaultPrefix);
+    public static ProtectiveMarking Baseline { get; } = new(ClassificationLevel.Official, [], [], DefaultPrefix, isUnavailable: false);
 
     /// <summary>
     /// What the read path uses for a page whose <c>PageMarking</c> row is missing.
     /// Every page is supposed to have exactly one row — creation writes it, import
     /// writes it, the migration backfilled it — so a missing row means a code path
     /// forgot, and the belt-and-braces answer to "a bug lost this page's marking" is
-    /// the most restrictive LEVEL in the scheme, not the least (design.md §21).
+    /// <b>nobody reads it</b> until somebody puts the row back (design.md §21).
     ///
-    /// <para>The eyes-only set and the selectors are empty here on purpose: TOP SECRET
-    /// alone already denies all but the highest-cleared principals, and inventing a
+    /// <para><b>What denies is <see cref="IsUnavailable"/>, not the level.</b> This
+    /// instance renders as a bare <c>TOP SECRET</c> — the most restrictive spelling in
+    /// the scheme, a quiet visual signal that something is wrong, and the value §21.13's
+    /// aggregate must take when a missing row is among its sources — but the level is
+    /// presentational and could not deny anyone on its own. The flag does; see its
+    /// doc for the fail-open trap it closes.</para>
+    ///
+    /// <para>The eyes-only set and the selectors are empty on purpose: inventing a
     /// sentinel country or selector would put a token into enforcement that nobody
-    /// configured. A missing row can never be <i>less</i> restrictive than any real
-    /// marking on selectors either, because a real marking's selectors only subtract
-    /// further.</para>
-    ///
-    /// <para>And <b>no prefix</b>, unlike <see cref="Baseline"/>. This state means "this
-    /// page's marking is missing and we do not know what it said", so asserting a
-    /// national qualifier on its behalf would be inventing a fact. It renders as a bare
-    /// <c>TOP SECRET</c>, which is also a quiet visual signal that something is wrong —
-    /// every marking the app actually writes carries a prefix.</para>
+    /// configured, and the flag already refuses everyone. And <b>no prefix</b>, unlike
+    /// <see cref="Baseline"/>: this state means "this page's marking is missing and we
+    /// do not know what it said", so asserting a national qualifier on its behalf would
+    /// be inventing a fact.</para>
     /// </summary>
-    public static ProtectiveMarking FailClosed { get; } = new(ClassificationLevel.TopSecret, [], [], null);
+    public static ProtectiveMarking FailClosed { get; } = new(ClassificationLevel.TopSecret, [], [], null, isUnavailable: true);
 
     /// <summary>
     /// The only way to build one. Canonicalizes the country set: trims, drops blanks,
     /// upper-cases with the invariant culture, de-duplicates ordinally, and sorts
-    /// ordinally.
+    /// ordinally. Never builds an unavailable marking — that state has exactly one
+    /// instance, <see cref="FailClosed"/>, so a caller cannot manufacture "missing".
     ///
     /// <para><b>A level outside the four-member ladder becomes TOP SECRET.</b> The
     /// column is a tinyint, so a hand-edited row, a botched restore, or a future
-    /// migration bug can present a value the enum does not define — and the two ways
-    /// that could go wrong are not symmetric. A value ABOVE the ladder would deny
-    /// everyone (harmless but noisy); a value BELOW it — <c>0</c>, which is what an
-    /// uninitialized tinyint is — would compare as less than every clearance and make
-    /// the page readable by <i>everybody</i>. That is a silent bypass of the whole
-    /// control, so an undefined level is normalized to the top of the scheme here,
-    /// where every marking is built, rather than being trusted at each comparison.
-    /// Fail closed, §6.3's doctrine applied to a corrupt value instead of a corrupt
-    /// rule.</para>
+    /// migration bug can present a value the enum does not define. The level no longer
+    /// gates, so this is not the access bypass it once was — but a marking is a statement
+    /// about what the content <i>is</i>, and one that rendered as nothing, or that dragged
+    /// a §21.13 aggregate down to an undefined minimum, would misstate that on every
+    /// surface. Normalized to the top of the scheme here, where every marking is built,
+    /// rather than special-cased at each rendering.</para>
     ///
     /// <para><paramref name="selectors"/> are the page's additional selectors (design.md
     /// §21.15): canonicalized (trimmed, upper-cased), blanks dropped, exact duplicates
@@ -186,8 +220,8 @@ public sealed record ProtectiveMarking
     ///
     /// <para>The <paramref name="prefix"/> is trimmed and upper-cased; null, empty or
     /// whitespace all collapse to null, which is the legal "no prefix" state. It gets
-    /// none of the fail-closed treatment the level gets, because it carries no access
-    /// weight to fail closed <i>on</i>.</para>
+    /// none of the normalization the level gets, because there is no scheme for it to
+    /// fall outside of.</para>
     /// </summary>
     public static ProtectiveMarking Create(
         ClassificationLevel level, IEnumerable<string>? eyesOnly, IEnumerable<SelectorValue>? selectors = null,
@@ -196,7 +230,8 @@ public sealed record ProtectiveMarking
             Enum.IsDefined(level) ? level : ClassificationLevel.TopSecret,
             Canonicalize(eyesOnly),
             CanonicalizeSelectors(selectors),
-            CanonicalizePrefix(prefix));
+            CanonicalizePrefix(prefix),
+            isUnavailable: false);
 
     /// <summary>
     /// The canonical form of a prefix: trimmed and upper-cased, or null when there is
@@ -387,12 +422,11 @@ public sealed record ProtectiveMarking
 
     /// <summary>
     /// The machine name of a level: <c>OFFICIAL</c>, <c>OFFICIAL_SENSITIVE</c>,
-    /// <c>SECRET</c>, <c>TOP_SECRET</c>. This is the single spelling used by the
-    /// <c>clearance</c> claim (<see cref="ClearanceGate.TryParseLevel"/>), the sync wire
-    /// format (§12), the audit <c>DetailsJson</c>, and the GraphQL enum — deliberately
-    /// not <c>Level.ToString()</c>, which would emit the C# member spelling
-    /// (<c>TopSecret</c>) and quietly make the claim vocabulary and the audit vocabulary
-    /// two different things.
+    /// <c>SECRET</c>, <c>TOP_SECRET</c>. This is the single spelling used by the sync
+    /// wire format (§12), the audit <c>DetailsJson</c>, and the GraphQL enum —
+    /// deliberately not <c>Level.ToString()</c>, which would emit the C# member spelling
+    /// (<c>TopSecret</c>) and quietly make the wire vocabulary and the audit vocabulary
+    /// two different things. <see cref="TryParseLevelWireName"/> is its inverse.
     /// </summary>
     public static string LevelWireName(ClassificationLevel level) => level switch
     {
@@ -404,8 +438,43 @@ public sealed record ProtectiveMarking
     };
 
     /// <summary>
-    /// The bounded token used in denial reasons and audit details:
+    /// The inverse of <see cref="LevelWireName"/>: parses a wire name back into a level.
+    /// Ordinal, exact, and closed — only the four SCREAMING_SNAKE names parse.
+    /// <c>Enum.TryParse</c> is deliberately NOT used: it accepts the C# member spellings,
+    /// is case-insensitive on request, and happily parses <c>"4"</c> into
+    /// <see cref="ClassificationLevel.TopSecret"/>, none of which a sync bundle (§21.10)
+    /// is allowed to smuggle in as a level. The failure <paramref name="level"/> is TOP
+    /// SECRET, the same normalization <see cref="Create"/> applies to an undefined value,
+    /// so a caller that ignores the return value still renders the most restrictive
+    /// spelling rather than a blank.
+    /// </summary>
+    public static bool TryParseLevelWireName(string? value, out ClassificationLevel level)
+    {
+        switch (value)
+        {
+            case "OFFICIAL":
+                level = ClassificationLevel.Official;
+                return true;
+            case "OFFICIAL_SENSITIVE":
+                level = ClassificationLevel.OfficialSensitive;
+                return true;
+            case "SECRET":
+                level = ClassificationLevel.Secret;
+                return true;
+            case "TOP_SECRET":
+                level = ClassificationLevel.TopSecret;
+                return true;
+            default:
+                level = ClassificationLevel.TopSecret;
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// The bounded token used in audit details:
     /// <c>official</c> / <c>official_sensitive</c> / <c>secret</c> / <c>top_secret</c>.
+    /// No denial reason carries it any more — the level does not gate — but the audit
+    /// row's before/after pair still names the level in this spelling (§21.7).
     /// </summary>
     public static string LevelToken(ClassificationLevel level) => level switch
     {
@@ -418,14 +487,18 @@ public sealed record ProtectiveMarking
 
     /// <summary>
     /// design.md §21.6: is moving <paramref name="from"/> to <paramref name="to"/> a
-    /// <b>downgrade</b> — a change that makes the page readable by someone it was not
-    /// readable by before? Downgrading is permitted, but it is the operationally risky
-    /// direction, so it gets its own audit action (<c>page.marking.downgrade</c>) and a
-    /// reviewer can find every one of them with a single query.
+    /// <b>downgrade</b> — a change that widens the page's audience, or lowers what the
+    /// content is declared to be? Downgrading is permitted, but it is the operationally
+    /// risky direction, so it gets its own audit action (<c>page.marking.downgrade</c>)
+    /// and a reviewer can find every one of them with a single query.
     ///
-    /// <para>Three ways to widen the audience, and all count:</para>
+    /// <para>Three ways to count, and all count:</para>
     /// <list type="number">
-    /// <item>the level drops; or</item>
+    /// <item>the level drops. The level no longer moves the access line on this
+    /// deployment (it is presentational, like the prefix), but a declassification is
+    /// still the fact a reviewer's downgrade query exists to find: the marking states
+    /// what the content <i>is</i>, wherever it is read, and lowering that statement is a
+    /// judgement worth its own row whether or not this instance gated on it; or</item>
     /// <item>the eyes-only caveat is <i>relaxed</i> — cleared entirely, or extended to a
     /// country that was not previously admitted. Note that swapping <c>{UK}</c> for
     /// <c>{US}</c> counts as a downgrade even though it also excludes UK: somebody who
@@ -440,10 +513,9 @@ public sealed record ProtectiveMarking
     /// Adding a selector never widens.</item>
     /// </list>
     ///
-    /// <para><b>The prefix is deliberately not consulted.</b> A downgrade is defined as
-    /// "somebody who could not read this page yesterday can read it today", and the
-    /// prefix cannot move that line in either direction — it is not read by the gate at
-    /// all. Changing <c>UK SECRET</c> to <c>SECRET</c> is therefore an ordinary
+    /// <para><b>The prefix is deliberately not consulted.</b> It is neither a statement
+    /// of what the content is nor a gate — a national qualifier on how the marking is
+    /// written — so changing <c>UK SECRET</c> to <c>SECRET</c> is an ordinary
     /// <c>page.marking.set</c>, not a downgrade, and the audit row still records the
     /// before-and-after prefix so a reviewer can see exactly what happened. Counting it
     /// as a downgrade would dilute the one query that exists to find real
@@ -474,11 +546,14 @@ public sealed record ProtectiveMarking
     /// Records equality would compare <see cref="EyesOnly"/> and <see cref="Selectors"/>
     /// by reference; two markings with the same canonical countries and selectors must be
     /// equal, so both members are overridden. The prefix participates — two markings that
-    /// render differently are different markings, even though they gate identically.
+    /// render differently are different markings, even though they gate identically —
+    /// and so does <see cref="IsUnavailable"/>: the missing-row sentinel is never equal to
+    /// a real TOP SECRET marking, because one denies everyone and the other does not.
     /// </summary>
     public bool Equals(ProtectiveMarking? other) =>
         other is not null
         && Level == other.Level
+        && IsUnavailable == other.IsUnavailable
         && string.Equals(Prefix, other.Prefix, StringComparison.Ordinal)
         && EyesOnly.SequenceEqual(other.EyesOnly, StringComparer.Ordinal)
         && Selectors.SequenceEqual(other.Selectors);
@@ -487,6 +562,7 @@ public sealed record ProtectiveMarking
     {
         var hash = new HashCode();
         hash.Add(Level);
+        hash.Add(IsUnavailable);
         hash.Add(Prefix, StringComparer.Ordinal);
         foreach (var country in EyesOnly)
         {

@@ -1,93 +1,84 @@
 using System.Security.Claims;
 using RocketWiki.Api.Identity;
-using RocketWiki.Core.Access;
 using Xunit;
 
 namespace RocketWiki.Api.Tests;
 
 /// <summary>
-/// design.md §6.1/§21.15: the one claim-to-Principal mapping, pinned at the unit tier.
-/// What it must do is small — the three fixed attributes plus every configured selector
-/// claim — and what it must NOT do is the part worth a test: a claim nobody configured
-/// never becomes a principal attribute, because an attribute that exists is an attribute
-/// a rule or a gate can match on.
+/// design.md §6.1: the one claim-to-Principal mapping, pinned at the unit tier. What it
+/// must do is small — <c>groups</c> and <c>nationality</c>, and nothing else — and what
+/// it must NOT do is the part worth a test: a claim not on that list never becomes a
+/// principal attribute, because an attribute that exists is an attribute a rule or a gate
+/// can match on. The list used to be longer (a clearance claim, and every configured
+/// selector claim); both went with the gates that read them, and this is the test that
+/// keeps them from creeping back in.
 /// </summary>
 public class PrincipalBuilderTests
 {
-    private static readonly SelectorCatalog Catalog = SelectorCatalog.Create(
-    [
-        new SelectorCategory("FRUIT", null, "fruit", ["APPLE", "BANANA"]),
-        new SelectorCategory("REGION", null, null, ["NORTH", "SOUTH"]),
-    ]);
-
     private static ClaimsPrincipal Authenticated(params (string Type, string Value)[] claims) =>
         new(new ClaimsIdentity(claims.Select(c => new Claim(c.Type, c.Value)), authenticationType: "test"));
 
     [Fact]
-    public void PrincipalBuilder_MapsOnlyConfiguredSelectorClaims()
+    public void PrincipalBuilder_MapsGroupsAndNationality_AndNothingElse()
     {
-        var builder = new PrincipalBuilder(Catalog);
-        var principal = builder.Build(Authenticated(
+        var principal = PrincipalBuilder.Build(Authenticated(
             ("sub", "alice"),
             ("groups", "engineering"),
+            ("groups", "legal"),
             ("nationality", "NZ"),
+            ("nationality", "UK"),
+            // The two claims the removed gates used to read. Neither is an attribute now:
+            // a rule written against `clearance` would match nobody, which is the point.
             ("clearance", "SECRET"),
-            ("fruit", " Yes "),
-            // Looks exactly like a selector claim, but no configured category names it.
+            ("fruit", "yes"),
+            // Looks exactly like a selector claim; nothing configures it either way.
             ("vegetable", "yes"),
-            // An ordinary token claim, present to prove the builder maps by allowlist,
-            // not by "everything that is there".
-            ("email", "alice@example.test")));
+            // Ordinary token claims, present to prove the builder maps by allowlist, not
+            // by "everything that is there".
+            ("email", "alice@example.test"),
+            ("roles", "admin")));
 
         Assert.NotNull(principal);
         Assert.Equal("alice", principal!.UserId);
-        Assert.Equal(["engineering"], principal.Groups);
+        Assert.Equal(["engineering", "legal"], principal.Groups.OrderBy(g => g, StringComparer.Ordinal));
 
-        Assert.Equal(
-            ["clearance", "fruit", "nationality"],
-            principal.Attributes.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        var only = Assert.Single(principal.Attributes);
+        Assert.Equal("nationality", only.Key);
+        // Values travel as-is: canonicalization belongs to CaveatGate, stated once.
+        Assert.Equal(["NZ", "UK"], only.Value);
+    }
 
-        // Values travel as-is: the trim-and-case rule for `yes` belongs to SelectorGate
-        // (design.md §21.15), stated once, not re-implemented in the builder.
-        Assert.Equal([" Yes "], principal.Attributes["fruit"]);
-        Assert.True(SelectorGate.IsEligible(principal, Catalog.Categories[0]));
-        Assert.False(principal.Attributes.ContainsKey("vegetable"));
-        Assert.False(principal.Attributes.ContainsKey("email"));
+    [Theory]
+    [InlineData("clearance")]
+    [InlineData("fruit")]
+    [InlineData("vegetable")]
+    [InlineData("email")]
+    [InlineData("sub")]
+    public void AClaimOffTheList_IsNeverAnAttribute(string claimName)
+    {
+        var principal = PrincipalBuilder.Build(Authenticated(("sub", "bob"), (claimName, "anything")));
+
+        Assert.NotNull(principal);
+        Assert.False(principal!.Attributes.ContainsKey(claimName));
     }
 
     [Fact]
-    public void AnAbsentSelectorClaim_IsAbsentFromTheAttributes_NotAnEmptyList()
+    public void AnAbsentNationalityClaim_IsAbsentFromTheAttributes_NotAnEmptyList()
     {
         // Principal's fail-closed contract: a key nobody holds a value for is missing,
-        // which SelectorGate reads as "not eligible" without any empty-string comparison.
-        var principal = new PrincipalBuilder(Catalog).Build(Authenticated(("sub", "bob")));
+        // which CaveatGate reads as "holds nothing" without any empty-string comparison.
+        var principal = PrincipalBuilder.Build(Authenticated(("sub", "bob"), ("groups", "engineering")));
 
         Assert.NotNull(principal);
-        Assert.False(principal!.Attributes.ContainsKey("fruit"));
-        Assert.False(SelectorGate.IsEligible(principal, Catalog.Categories[0]));
-        // The claim-less category admits everyone regardless.
-        Assert.True(SelectorGate.IsEligible(principal, Catalog.Categories[1]));
-    }
-
-    [Fact]
-    public void AnEmptyCatalog_MapsNoSelectorClaims_AndStillMapsTheFixedThree()
-    {
-        var principal = new PrincipalBuilder(SelectorCatalog.Empty).Build(Authenticated(
-            ("sub", "carol"), ("nationality", "UK"), ("clearance", "OFFICIAL"), ("fruit", "yes")));
-
-        Assert.NotNull(principal);
-        Assert.Equal(
-            ["clearance", "nationality"],
-            principal!.Attributes.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Empty(principal!.Attributes);
+        Assert.Equal(["engineering"], principal.Groups);
     }
 
     [Fact]
     public void UnauthenticatedOrSubjectless_IsNull()
     {
-        var builder = new PrincipalBuilder(Catalog);
-
-        Assert.Null(builder.Build(null));
-        Assert.Null(builder.Build(new ClaimsPrincipal(new ClaimsIdentity())));
-        Assert.Null(builder.Build(Authenticated(("groups", "engineering"))));
+        Assert.Null(PrincipalBuilder.Build(null));
+        Assert.Null(PrincipalBuilder.Build(new ClaimsPrincipal(new ClaimsIdentity())));
+        Assert.Null(PrincipalBuilder.Build(Authenticated(("groups", "engineering"))));
     }
 }

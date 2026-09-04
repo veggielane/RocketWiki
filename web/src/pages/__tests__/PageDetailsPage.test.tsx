@@ -67,8 +67,8 @@ function renderPage(options: Options = {}) {
     // The move dialog's destination tree lives on this screen now.
     if (name === 'SpaceTreeForMove') return { pageTree: [] }
     if (name === 'MovePage') return { movePage: { page: { id: 'page-1' }, error: null } }
-    // The marking section (design.md §21) reads the caller's own clearance,
-    // eligibility and per-space selector grants, and the instance's selector
+    // The marking section (design.md §21) reads the caller's own nationality
+    // and per-space selector grants, and the instance's selector
     // categories; all are staged so this screen's property assertions aren't
     // testing the marking control by accident.
     if (name === 'CurrentUser')
@@ -76,11 +76,11 @@ function renderPage(options: Options = {}) {
         me: {
           id: 'sub-1', email: null, name: 'Editor', groups: [], isAuthenticated: true,
           isInstanceAdmin: false, localUserId: 'user-1', hasAvatar: false,
-          clearance: 'SECRET', nationality: ['UK'], selectorEligibility: ['FRUIT'],
+          nationality: ['UK'],
         },
       }
     if (name === 'SelectorCategories')
-      return { selectorCategories: [{ name: 'FRUIT', description: null, requiresAttribute: true, values: ['APPLE', 'BANANA'] }] }
+      return { selectorCategories: [{ name: 'FRUIT', description: null, values: ['APPLE', 'BANANA'] }] }
     if (name === 'SpaceSelectorGrants')
       return { space: { id: 'space-1', key: 'ENG', viewerSelectorGrants: [{ category: 'FRUIT', value: 'APPLE' }] } }
     if (name === 'ClassificationScheme')

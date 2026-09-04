@@ -13,7 +13,7 @@ import { expectNoAxeViolations } from '../../test/axe'
  * The account roster.
  *
  * Two properties carry the weight. It shows identity and activity and nothing
- * that looks like permissions — an admin who reads a clearance column here
+ * that looks like permissions — an admin who reads a nationality column here
  * would be reading a stale copy of a decision made per request from a token.
  * And it never presents a fetched slice as the whole roster: the columns do not
  * sort, for the same reason the audit log's do not.
@@ -113,7 +113,7 @@ describe('AdminUsersPage — what it shows', () => {
     expect(screen.queryByText('Internal')).not.toBeInTheDocument()
   })
 
-  it('shows no clearance, nationality or group column', async () => {
+  it('shows no nationality or group column', async () => {
     // There is no such field to select: they are token claims evaluated per
     // request, never stored per account. A column here would be a second, stale
     // answer to "who is allowed what".

@@ -6,16 +6,22 @@ namespace RocketWiki.Api.GraphQL;
 
 /// <summary>
 /// The gates a page read is decided by, as the wire names them (design.md §6.4/§21.2):
-/// the view ladder S, C, E, G, N, R, then the two edit-only gates the §6.6 inspector
-/// also reports. <see cref="Replica"/> and <see cref="Role"/> never appear in a denial's
-/// reasons — a view denial evaluates no edit gate — and exist here so the inspector's
-/// <c>editGates</c> share one vocabulary with the placeholder's <c>reasons</c>.
+/// the view ladder S, marking availability, G, N, R, then the two edit-only gates the
+/// §6.6 inspector also reports. <see cref="Replica"/> and <see cref="Role"/> never appear
+/// in a denial's reasons — a view denial evaluates no edit gate — and exist here so the
+/// inspector's <c>editGates</c> share one vocabulary with the placeholder's <c>reasons</c>.
+///
+/// <para>Two members this enum no longer has: <c>CLASSIFICATION</c> and
+/// <c>SELECTOR_ELIGIBILITY</c>. Both named gates that read Keycloak attributes this
+/// deployment does not carry (a clearance, a per-category eligibility claim), and both
+/// went with those gates; the level is presentational now (§21.12) and selectors gate
+/// once, through the space grant. <see cref="MarkingUnavailable"/> arrived in their
+/// place: the page's marking row is missing, and nobody reads it until it is put back.</para>
 /// </summary>
 public enum AccessGate
 {
     SpaceAccess,
-    Classification,
-    SelectorEligibility,
+    MarkingUnavailable,
     SelectorGrant,
     NationalCaveat,
     Restriction,
@@ -36,19 +42,19 @@ public enum AccessGate
 /// none of those travel: the page id is a UUIDv7 (a timestamp) naming a page the caller
 /// cannot view, and the expression says who <i>can</i> see the page (§6.4.1/§6.6's title
 /// rule, extended to expressions). What does travel is already the caller's to know:
-/// the level and countries are the marking they are shown beside, the category and
-/// value are in its label, and the rule id is the token the audit row carries
+/// the countries are the caveat they are shown beside, the category and value are in
+/// the marking's label, and the rule id is the token the audit row carries
 /// (<c>restriction:{pageId}:{ruleId}</c>) and the inspector already discloses in self
-/// mode. Pinned by an introspection allowlist test.</para>
+/// mode. Pinned by an introspection allowlist test. The level used to travel here too
+/// (<c>requiredLevel</c>, for a CLASSIFICATION gate); with no such gate there is no
+/// "required" level to name, and the marking beside the denial still shows it.</para>
 /// </summary>
 /// <param name="Gate">Which gate.</param>
 /// <param name="Passed">Whether the subject passed it. Always false inside a denial's
 /// <c>reasons</c> (Core lists only failed gates there); meaningful in the inspector,
 /// where every gate is listed.</param>
-/// <param name="RequiredLevel">CLASSIFICATION: the page's level, when the marking is in hand.</param>
-/// <param name="RequiredLevelName">CLASSIFICATION: the level's UK written form.</param>
-/// <param name="Category">SELECTOR_ELIGIBILITY / SELECTOR_GRANT: the selector's category.</param>
-/// <param name="Value">SELECTOR_ELIGIBILITY / SELECTOR_GRANT: the selector's value.</param>
+/// <param name="Category">SELECTOR_GRANT: the selector's category.</param>
+/// <param name="Value">SELECTOR_GRANT: the selector's value.</param>
 /// <param name="Countries">NATIONAL_CAVEAT: the caveat's country set, when the marking is in hand.</param>
 /// <param name="RuleId">RESTRICTION: the rule. Never the page it sits on, never its expression.</param>
 /// <param name="Inherited">RESTRICTION: whether the rule sits on an ancestor rather than
@@ -59,8 +65,6 @@ public enum AccessGate
 public sealed record GateResultView(
     AccessGate Gate,
     bool Passed,
-    ClassificationLevel? RequiredLevel,
-    string? RequiredLevelName,
     string? Category,
     string? Value,
     IReadOnlyList<string>? Countries,
@@ -71,18 +75,17 @@ public sealed record GateResultView(
     /// <summary>
     /// THE projection. <paramref name="marking"/> is the page's marking when the caller
     /// may be shown it (a denial after space access, never before — see
-    /// <see cref="AccessDenialView.From"/>) and null otherwise; it feeds only the level
-    /// and the country set. <paramref name="subjectPageId"/> is the page the gates were
-    /// evaluated for, when the caller holds it; null means a tree placeholder, whose
-    /// failing restrictions are its own by construction (see <see cref="Inherited"/>).
+    /// <see cref="AccessDenialView.From"/>) and null otherwise; it feeds only the country
+    /// set. <paramref name="subjectPageId"/> is the page the gates were evaluated for,
+    /// when the caller holds it; null means a tree placeholder, whose failing
+    /// restrictions are its own by construction (see <see cref="Inherited"/>).
     /// </summary>
     internal static GateResultView From(GateCheck check, ProtectiveMarking? marking, Guid? subjectPageId)
     {
         var gate = check.Kind switch
         {
             GateKind.SpaceAccess => AccessGate.SpaceAccess,
-            GateKind.Classification => AccessGate.Classification,
-            GateKind.SelectorEligibility => AccessGate.SelectorEligibility,
+            GateKind.MarkingUnavailable => AccessGate.MarkingUnavailable,
             GateKind.SelectorGrant => AccessGate.SelectorGrant,
             GateKind.NationalCaveat => AccessGate.NationalCaveat,
             GateKind.ViewRestriction => AccessGate.Restriction,
@@ -98,12 +101,8 @@ public sealed record GateResultView(
         return new GateResultView(
             gate,
             check.Passed,
-            RequiredLevel: gate == AccessGate.Classification ? marking?.Level : null,
-            RequiredLevelName: gate == AccessGate.Classification && marking is not null
-                ? ProtectiveMarking.LevelName(marking.Level)
-                : null,
-            Category: gate is AccessGate.SelectorEligibility or AccessGate.SelectorGrant ? check.SelectorCategory : null,
-            Value: gate is AccessGate.SelectorEligibility or AccessGate.SelectorGrant ? check.SelectorValue : null,
+            Category: gate == AccessGate.SelectorGrant ? check.SelectorCategory : null,
+            Value: gate == AccessGate.SelectorGrant ? check.SelectorValue : null,
             Countries: gate == AccessGate.NationalCaveat ? marking?.EyesOnly : null,
             RuleId: isRestriction ? check.RuleId : null,
             Inherited: isRestriction
@@ -137,8 +136,8 @@ public sealed record GateResultView(
 /// <see cref="Reasons"/> holds the single SPACE_ACCESS entry.</param>
 /// <param name="Marking">The page's own marking — label, level, selectors, caveat —
 /// withheld when <see cref="NoSpaceAccess"/>.</param>
-/// <param name="Reasons">Every view gate the caller failed, in ladder order (S, C, E, G,
-/// N, R).</param>
+/// <param name="Reasons">Every view gate the caller failed, in ladder order (S, marking
+/// availability, G, N, R).</param>
 [GraphQLName("AccessDenial")]
 public sealed record AccessDenialView(
     bool NoSpaceAccess,
@@ -154,8 +153,9 @@ public sealed record AccessDenialView(
     /// Projects Core's denial (<see cref="PageDenial"/>) to the wire. Core already applies
     /// the withholding rule — a denial with <see cref="PageDenial.NoSpaceAccess"/> carries
     /// no marking and only the S gate — and this projection applies it again rather than
-    /// trusting that: the C/E/G/N tokens embed the level and the category names, and a
-    /// caller who cannot enter the space is told nothing about the marking (§21.8).
+    /// trusting that: the G token embeds the category name and the marking carries the
+    /// level and caveat, and a caller who cannot enter the space is told nothing about
+    /// the marking (§21.8).
     /// </summary>
     /// <param name="subjectPageId">The page the denial is for, when the caller holds its
     /// id (a root field, a link target, a parent); null for a tree placeholder, which has

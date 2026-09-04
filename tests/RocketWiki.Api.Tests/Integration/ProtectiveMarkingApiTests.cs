@@ -16,21 +16,28 @@ namespace RocketWiki.Api.Tests.Integration;
 ///
 /// <list type="number">
 /// <item><b>The composition invariant end to end.</b> An instance admin and a space admin
-/// are both refused a TOP SECRET page they hold no clearance for — the roles that exist
-/// specifically to widen access do not widen this.</item>
+/// are both refused a page carrying a selector no grant confers on them — the roles that
+/// exist specifically to widen access do not widen this.</item>
 /// <item><b>§6.7 holds for a marking denial exactly as it does for a restriction</b>: the
 /// response is byte-identical to a page that does not exist, on every path a Page is
 /// reachable by, while the audit row records the real reason.</item>
-/// <item><b>Nothing above the caller's clearance leaks through a derived surface</b> —
+/// <item><b>Nothing the caller is not granted leaks through a derived surface</b> —
 /// a search snippet, a comment, an attachment's bytes, a page property, a tree node.</item>
 /// </list>
+///
+/// <para>The denying fact used to be the level: a SECRET page and a caller with no
+/// clearance. This deployment carries no clearance attribute, so the level gates nobody
+/// (§21.12) and the compartment page here is <c>UK SECRET APPLE</c> — the SECRET stays on
+/// it to prove it changes nothing, and the APPLE selector, conferred only on
+/// <c>apple-readers</c>, is what denies.</para>
 /// </summary>
 public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IClassFixture<RocketWikiApiFactory>
 {
     private const string SecretSentinelTitle = "ZZMARKEDTITLEZZ";
     private const string SecretSentinelBody = "ZZMARKEDBODYZZ";
+    private const string AppleReaders = "apple-readers";
 
-    private sealed record Fixture(Guid SpaceId, string SpaceKey, Guid OpenPageId, Guid SecretPageId, Guid EyesOnlyPageId, Guid CreatorId);
+    private sealed record Fixture(Guid SpaceId, string SpaceKey, Guid OpenPageId, Guid CompartmentPageId, Guid EyesOnlyPageId, Guid CreatorId);
 
     private async Task<Fixture> SeedAsync()
     {
@@ -69,6 +76,21 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
             UpdatedByUserId = creator.Id,
         }));
 
+        // The one grant that confers APPLE, and it matches apple-readers only: the whole
+        // of what separates a "granted" caller from an "ungranted" one here.
+        var appleGrant = new AccessRule
+        {
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = space.Id,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new GroupCondition(AppleReaders)),
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = creator.Id,
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = creator.Id,
+        };
+        appleGrant.Selectors.Add(new AccessRuleSelector { AccessRuleId = appleGrant.Id, Category = "FRUIT", Value = "APPLE" });
+        db.AccessRules.Add(appleGrant);
+
         if (!await db.AttributeDefinitions.AnyAsync(a => a.Key == "nationality"))
         {
             db.AttributeDefinitions.Add(new AttributeDefinition
@@ -87,37 +109,39 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
             SpaceId = space.Id, AncestorPath = "/", Slug = "open", Title = "Open page",
             CurrentContent = "# Open page\n\nNozzle expansion notes.", CreatedAtUtc = now, UpdatedAtUtc = now,
         };
-        var secret = new Page
+        var compartment = new Page
         {
-            SpaceId = space.Id, AncestorPath = "/", Slug = "secret", Title = $"Secret {SecretSentinelTitle}",
-            CurrentContent = $"# Secret\n\n{SecretSentinelBody} nozzle expansion notes.", CreatedAtUtc = now, UpdatedAtUtc = now,
+            SpaceId = space.Id, AncestorPath = "/", Slug = "compartment", Title = $"Compartment {SecretSentinelTitle}",
+            CurrentContent = $"# Compartment\n\n{SecretSentinelBody} nozzle expansion notes.", CreatedAtUtc = now, UpdatedAtUtc = now,
         };
         var eyesOnly = new Page
         {
             SpaceId = space.Id, AncestorPath = "/", Slug = "eyes-only", Title = "Eyes only page",
             CurrentContent = "# Eyes only\n\nnozzle expansion notes.", CreatedAtUtc = now, UpdatedAtUtc = now,
         };
-        db.Pages.AddRange(open, secret, eyesOnly);
-        db.PageMarkings.Add(NewMarking(secret.Id, ClassificationLevel.Secret));
+        db.Pages.AddRange(open, compartment, eyesOnly);
+        var compartmentMarking = NewMarking(compartment.Id, ClassificationLevel.Secret);
+        compartmentMarking.Selectors.Add(new PageMarkingSelector { PageId = compartment.Id, Category = "FRUIT", Value = "APPLE" });
+        db.PageMarkings.Add(compartmentMarking);
         db.PageMarkings.Add(NewMarking(eyesOnly.Id, ClassificationLevel.Official, "UK"));
         await db.SaveChangesAsync();
 
-        // A comment and an attachment on the SECRET page: both inherit its marking, and
-        // both must be unreachable to an OFFICIAL caller.
+        // A comment and an attachment on the compartment page: both inherit its marking,
+        // and both must be unreachable to an ungranted caller.
         db.Comments.Add(new Comment
         {
-            PageId = secret.Id, Body = $"Comment mentioning {SecretSentinelBody}",
+            PageId = compartment.Id, Body = $"Comment mentioning {SecretSentinelBody}",
             AuthorUserId = creator.Id, CreatedAtUtc = now,
         });
         db.Attachments.Add(new Attachment
         {
-            PageId = secret.Id, FileName = "spec.txt", ContentType = "text/plain", SizeBytes = 4,
+            PageId = compartment.Id, FileName = "spec.txt", ContentType = "text/plain", SizeBytes = 4,
             ContentHash = new byte[32], StorageKey = $"attachments/{Guid.NewGuid():N}",
             UploadedByUserId = creator.Id, CreatedAtUtc = now,
         });
         await db.SaveChangesAsync();
 
-        return new Fixture(space.Id, space.Key, open.Id, secret.Id, eyesOnly.Id, creator.Id);
+        return new Fixture(space.Id, space.Key, open.Id, compartment.Id, eyesOnly.Id, creator.Id);
     }
 
     private static PageMarking NewMarking(Guid pageId, ClassificationLevel level, params string[] countries)
@@ -131,11 +155,13 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         return marking;
     }
 
-    private HttpClient ClientFor(string? clearance, string[]? nationality = null, string[]? roles = null)
+    /// <summary>A caller: <paramref name="granted"/> puts them in <c>apple-readers</c>, the
+    /// group the APPLE grant matches. Nothing else about a caller decides a selector.</summary>
+    private HttpClient ClientFor(bool granted, string[]? nationality = null, string[]? roles = null)
     {
         var client = factory.CreateClient();
         client.SetTestUser(
-            sub: $"pmk-{Guid.NewGuid()}", nationality: nationality, roles: roles, clearance: clearance);
+            sub: $"pmk-{Guid.NewGuid()}", nationality: nationality, roles: roles, groups: granted ? [AppleReaders] : null);
         return client;
     }
 
@@ -144,35 +170,64 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     [Theory]
     [InlineData(false)]  // an ordinary user, who already holds SpaceAdmin via the seed grant
     [InlineData(true)]   // ... and additionally the INSTANCE `admin` realm role
-    public async Task ASpaceAdmin_AndAnInstanceAdmin_AreBothDeniedAnOverClassifiedPage(bool instanceAdmin)
+    public async Task ASpaceAdmin_AndAnInstanceAdmin_AreBothDeniedAnUngrantedPage(bool instanceAdmin)
     {
         string[]? roles = instanceAdmin ? ["admin"] : null;
         // Every caller here already holds SpaceAdmin on the space (see SeedAsync), and the
         // second case additionally holds the instance `admin` realm role. §6.5 already
         // forbids reading around a restriction; §21 says the same about a marking, and
         // this is the test that would fail if someone ever threaded an admin flag into the
-        // clearance gate.
+        // marking gate.
         var f = await SeedAsync();
-        var client = ClientFor(clearance: null, roles: roles);
+        var client = ClientFor(granted: false, roles: roles);
 
-        using var result = await client.PostGraphQLAsync($$"""{ page(id: "{{f.SecretPageId}}") { id title } }""");
+        using var result = await client.PostGraphQLAsync($$"""{ page(id: "{{f.CompartmentPageId}}") { id title } }""");
 
         Assert.Equal(JsonValueKind.Null, result.RootElement.GetProperty("data").GetProperty("page").ValueKind);
     }
 
     [Fact]
-    public async Task AClearedCaller_SeesTheSamePage_ProvingTheDenialWasTheMarking()
+    public async Task AGrantedCaller_SeesTheSamePage_ProvingTheDenialWasTheMarking()
     {
         var f = await SeedAsync();
-        var client = ClientFor("SECRET");
+        var client = ClientFor(granted: true);
 
-        using var result = await client.PostGraphQLAsync($$"""{ page(id: "{{f.SecretPageId}}") { id title marking { level eyesOnly label } } }""");
+        using var result = await client.PostGraphQLAsync($$"""{ page(id: "{{f.CompartmentPageId}}") { id title marking { level eyesOnly label } } }""");
 
         var page = result.RootElement.GetProperty("data").GetProperty("page");
-        Assert.Equal(f.SecretPageId.ToString(), page.GetProperty("id").GetString());
+        Assert.Equal(f.CompartmentPageId.ToString(), page.GetProperty("id").GetString());
         Assert.Equal("SECRET", page.GetProperty("marking").GetProperty("level").GetString());
         // The seeded marking carries the UK default, so the label is the prefixed form.
-        Assert.Equal("UK SECRET", page.GetProperty("marking").GetProperty("label").GetString());
+        Assert.Equal("UK SECRET APPLE", page.GetProperty("marking").GetProperty("label").GetString());
+    }
+
+    [Fact]
+    public async Task TheLevel_AloneDeniesNobody_OverTheWire()
+    {
+        // The retired gate, pinned absent at the HTTP boundary: a page marked TOP SECRET
+        // with no selector and no caveat is readable by a caller with nothing but space
+        // access - there is no clearance to compare against (§21.12). If the level ever
+        // gates again, this is the test that says so.
+        var f = await SeedAsync();
+        var editor = ClientFor(granted: true);
+        var plain = ClientFor(granted: false);
+
+        using var set = await editor.PostGraphQLAsync($$"""
+            mutation {
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: TOP_SECRET, eyesOnly: [], selectors: [], ukPrefix: true }) {
+                marking { label }
+                error { kind message }
+              }
+            }
+            """);
+        Assert.Equal(
+            JsonValueKind.Null,
+            set.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("error").ValueKind);
+
+        using var read = await plain.PostGraphQLAsync($$"""{ page(id: "{{f.OpenPageId}}") { id marking { label } } }""");
+        var page = read.RootElement.GetProperty("data").GetProperty("page");
+        Assert.Equal(f.OpenPageId.ToString(), page.GetProperty("id").GetString());
+        Assert.Equal("UK TOP SECRET", page.GetProperty("marking").GetProperty("label").GetString());
     }
 
     [Fact]
@@ -181,7 +236,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         // design.md §21.12: `marking.label` is the single server-built display string, so
         // this is the contract the SPA renders from. Prefix, space, level, then caveat.
         var f = await SeedAsync();
-        var client = ClientFor("SECRET", nationality: ["UK"]);
+        var client = ClientFor(granted: true, nationality: ["UK"]);
 
         using var set = await client.PostGraphQLAsync($$"""
             mutation {
@@ -214,17 +269,17 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     public async Task ThePrefix_ChangesNoAccessDecision_OverTheWire()
     {
         // The HTTP-boundary half of the invariance proof: the same page, re-prefixed, is
-        // still exactly as invisible to an uncleared caller and exactly as visible to a
-        // cleared one.
+        // still exactly as invisible to an ungranted caller and exactly as visible to a
+        // granted one.
         var f = await SeedAsync();
-        var editor = ClientFor("SECRET");
-        var uncleared = ClientFor(clearance: null);
+        var editor = ClientFor(granted: true);
+        var ungranted = ClientFor(granted: false);
 
         foreach (var prefix in new[] { "true", "false" })
         {
             using var set = await editor.PostGraphQLAsync($$"""
                 mutation {
-                  setPageMarking(input: { pageId: "{{f.SecretPageId}}", level: SECRET, eyesOnly: [], selectors: [], ukPrefix: {{prefix}} }) {
+                  setPageMarking(input: { pageId: "{{f.CompartmentPageId}}", level: SECRET, eyesOnly: [], selectors: [{ category: "FRUIT", value: "APPLE" }], ukPrefix: {{prefix}} }) {
                     error { kind }
                   }
                 }
@@ -233,12 +288,12 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
                 JsonValueKind.Null,
                 set.RootElement.GetProperty("data").GetProperty("setPageMarking").GetProperty("error").ValueKind);
 
-            using var denied = await uncleared.PostGraphQLAsync($$"""{ page(id: "{{f.SecretPageId}}") { id } }""");
+            using var denied = await ungranted.PostGraphQLAsync($$"""{ page(id: "{{f.CompartmentPageId}}") { id } }""");
             Assert.Equal(JsonValueKind.Null, denied.RootElement.GetProperty("data").GetProperty("page").ValueKind);
 
-            using var allowed = await editor.PostGraphQLAsync($$"""{ page(id: "{{f.SecretPageId}}") { id } }""");
+            using var allowed = await editor.PostGraphQLAsync($$"""{ page(id: "{{f.CompartmentPageId}}") { id } }""");
             Assert.Equal(
-                f.SecretPageId.ToString(),
+                f.CompartmentPageId.ToString(),
                 allowed.RootElement.GetProperty("data").GetProperty("page").GetProperty("id").GetString());
         }
     }
@@ -248,30 +303,30 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     {
         var f = await SeedAsync();
 
-        var gb = ClientFor("OFFICIAL", nationality: ["UK"]);
+        var gb = ClientFor(granted: false, nationality: ["UK"]);
         using var allowed = await gb.PostGraphQLAsync($$"""{ page(id: "{{f.EyesOnlyPageId}}") { id marking { label eyesOnly } } }""");
         var marking = allowed.RootElement.GetProperty("data").GetProperty("page").GetProperty("marking");
         Assert.Equal("UK OFFICIAL UK EYES ONLY", marking.GetProperty("label").GetString());
         Assert.Equal(["UK"], marking.GetProperty("eyesOnly").EnumerateArray().Select(e => e.GetString()));
 
-        var nz = ClientFor("TOP_SECRET", nationality: ["NZ"]);
+        var nz = ClientFor(granted: true, nationality: ["NZ"]);
         using var denied = await nz.PostGraphQLAsync($$"""{ page(id: "{{f.EyesOnlyPageId}}") { id } }""");
-        // Top clearance, wrong nationality: the caveat is not outranked by the level.
+        // Every selector granted, wrong nationality: the caveat is not outranked by anything.
         Assert.Equal(JsonValueKind.Null, denied.RootElement.GetProperty("data").GetProperty("page").ValueKind);
     }
 
     // --- §6.7: absent, not forbidden ---------------------------------------------------
 
     [Fact]
-    public async Task OverClassifiedAndMissing_PageResponses_AreByteIdentical_AtTheHttpBoundary()
+    public async Task UngrantedAndMissing_PageResponses_AreByteIdentical_AtTheHttpBoundary()
     {
         // The marking twin of DeniedReadAuditTests' restriction version. Same status, same
         // content type, and - because neither id is echoed back - the same body bytes.
         var f = await SeedAsync();
-        var client = ClientFor(clearance: null);
+        var client = ClientFor(granted: false);
 
         var deniedResponse = await client.PostAsJsonAsync(
-            "/graphql", new { query = $$"""{ page(id: "{{f.SecretPageId}}") { id title } }""" });
+            "/graphql", new { query = $$"""{ page(id: "{{f.CompartmentPageId}}") { id title } }""" });
         var missingResponse = await client.PostAsJsonAsync(
             "/graphql", new { query = $$"""{ page(id: "{{Guid.NewGuid()}}") { id title } }""" });
 
@@ -285,36 +340,39 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     }
 
     [Fact]
-    public async Task ADeniedMarkingRead_IsAudited_WithTheClassificationReason_AndNoMarkingValueLeaksToTheCaller()
+    public async Task ADeniedMarkingRead_IsAudited_WithTheSelectorReason_AndNoMarkingValueLeaksToTheCaller()
     {
         var f = await SeedAsync();
-        var client = ClientFor(clearance: null);
+        var client = ClientFor(granted: false);
 
-        using var result = await client.PostGraphQLAsync($$"""{ page(id: "{{f.SecretPageId}}") { id title } }""");
+        using var result = await client.PostGraphQLAsync($$"""{ page(id: "{{f.CompartmentPageId}}") { id title } }""");
         var body = result.RootElement.ToString();
 
         Assert.DoesNotContain(SecretSentinelTitle, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("APPLE", body, StringComparison.Ordinal);
         Assert.DoesNotContain("SECRET", body, StringComparison.Ordinal);
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
         var denial = Assert.Single(await db.AuditEvents
-            .Where(e => e.SubjectId == f.SecretPageId && e.Outcome == AuditOutcome.Denied)
+            .Where(e => e.SubjectId == f.CompartmentPageId && e.Outcome == AuditOutcome.Denied)
             .ToListAsync());
 
         Assert.Equal("page.view", denial.Action);
         Assert.Equal(AuditSubjectType.Page, denial.SubjectType);
         var details = JsonDocument.Parse(denial.DetailsJson!);
-        Assert.Equal("classification:secret", details.RootElement.GetProperty("reason").GetString());
+        // The category, never the value (§15/§21.15) - and never the level, which is
+        // not a reason any more.
+        Assert.Equal("selector:not_granted:FRUIT", details.RootElement.GetProperty("reason").GetString());
     }
 
     // --- Reach: every surface a page's content can escape through -----------------------
 
     [Fact]
-    public async Task Search_NeverReturnsAnOverClassifiedHit_NorItsSnippet()
+    public async Task Search_NeverReturnsAnUngrantedHit_NorItsSnippet()
     {
         var f = await SeedAsync();
-        var client = ClientFor(clearance: null);
+        var client = ClientFor(granted: false);
 
         using var result = await client.PostGraphQLAsync(
             """{ search(query: "nozzle expansion") { totalCount edges { node { snippet page { id title } } } } }""");
@@ -322,30 +380,30 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         var connection = result.RootElement.GetProperty("data").GetProperty("search");
         var hits = connection.GetProperty("edges").EnumerateArray().ToList();
         Assert.DoesNotContain(
-            hits, h => h.GetProperty("node").GetProperty("page").GetProperty("id").GetString() == f.SecretPageId.ToString());
+            hits, h => h.GetProperty("node").GetProperty("page").GetProperty("id").GetString() == f.CompartmentPageId.ToString());
         // Not implied by a count either (§6.7: "no gaps in ordering that imply something
-        // was removed") - the classified page is not among the total.
+        // was removed") - the compartment page is not among the total.
         Assert.Equal(hits.Count, connection.GetProperty("totalCount").GetInt32());
         // Absent entirely, not merely omitted from a list whose snippet was still built:
-        // the sentinels prove the excerpting code never touched the classified content.
+        // the sentinels prove the excerpting code never touched the content.
         var serialized = result.RootElement.ToString();
         Assert.DoesNotContain(SecretSentinelTitle, serialized, StringComparison.Ordinal);
         Assert.DoesNotContain(SecretSentinelBody, serialized, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task PageTree_ShowsAnOverClassifiedPage_AsAProtectedLeaf_WithItsLabel()
+    public async Task PageTree_ShowsAnUngrantedPage_AsAProtectedLeaf_WithItsLabel()
     {
-        // design.md §6.7/§21.8: the tree DISCLOSES a page above the caller's clearance -
-        // a placeholder at its position carrying the marking label and the failed gate -
+        // design.md §6.7/§21.8: the tree DISCLOSES a page the caller is not granted - a
+        // placeholder at its position carrying the marking label and the failed gate -
         // and withholds everything that identifies it: no id, no title, nothing beneath.
         var f = await SeedAsync();
-        var client = ClientFor(clearance: null, nationality: ["UK"]);
+        var client = ClientFor(granted: false, nationality: ["UK"]);
 
         using var result = await client.PostGraphQLAsync($$"""
             { pageTree(spaceId: "{{f.SpaceId}}") {
                 ... on PageTreeNode { id title marking { level eyesOnly ukPrefix label } }
-                ... on ProtectedTreeNode { title sortOrder denial { placeholderTitle noSpaceAccess marking { level label } reasons { gate requiredLevel requiredLevelName } } }
+                ... on ProtectedTreeNode { title sortOrder denial { placeholderTitle noSpaceAccess marking { level label } reasons { gate category value } } }
               } }
             """);
 
@@ -356,22 +414,23 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
         Assert.Contains(f.OpenPageId.ToString(), ids);
         Assert.Contains(f.EyesOnlyPageId.ToString(), ids); // UK national, UK OFFICIAL UK EYES ONLY
-        Assert.DoesNotContain(f.SecretPageId.ToString(), ids);
-        Assert.DoesNotContain(f.SecretPageId.ToString(), body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(f.CompartmentPageId.ToString(), ids);
+        Assert.DoesNotContain(f.CompartmentPageId.ToString(), body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(SecretSentinelTitle, body, StringComparison.Ordinal);
 
-        // The placeholder: the constant title, the label the reader lacks clearance for,
-        // and the one gate that refused them.
+        // The placeholder: the constant title, the label the reader is not granted, and
+        // the one gate that refused them - carrying the selector, so the SPA can say
+        // which compartment, and never the level as a "required" fact.
         var placeholder = Assert.Single(entries, e => e.TryGetProperty("denial", out _));
         Assert.Equal("(protected)", placeholder.GetProperty("title").GetString());
         var denial = placeholder.GetProperty("denial");
         Assert.Equal("(protected)", denial.GetProperty("placeholderTitle").GetString());
         Assert.False(denial.GetProperty("noSpaceAccess").GetBoolean());
-        Assert.Equal("UK SECRET", denial.GetProperty("marking").GetProperty("label").GetString());
+        Assert.Equal("UK SECRET APPLE", denial.GetProperty("marking").GetProperty("label").GetString());
         var reason = Assert.Single(denial.GetProperty("reasons").EnumerateArray());
-        Assert.Equal("CLASSIFICATION", reason.GetProperty("gate").GetString());
-        Assert.Equal("SECRET", reason.GetProperty("requiredLevel").GetString());
-        Assert.Equal("SECRET", reason.GetProperty("requiredLevelName").GetString());
+        Assert.Equal("SELECTOR_GRANT", reason.GetProperty("gate").GetString());
+        Assert.Equal("FRUIT", reason.GetProperty("category").GetString());
+        Assert.Equal("APPLE", reason.GetProperty("value").GetString());
 
         // Every visible node carries its marking, so the tree badge has a data source
         // without a second query per node (design.md §21.9).
@@ -386,12 +445,12 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     {
         // Comments and attachments carry no marking of their own, only the page's - so the
         // page being absent is what makes them absent. If the page ever resolved for an
-        // uncleared caller, this would be the leak.
+        // ungranted caller, this would be the leak.
         var f = await SeedAsync();
-        var client = ClientFor(clearance: null);
+        var client = ClientFor(granted: false);
 
         using var result = await client.PostGraphQLAsync($$"""
-            { page(id: "{{f.SecretPageId}}") { comments { body } attachments { fileName } properties { key value } } }
+            { page(id: "{{f.CompartmentPageId}}") { comments { body } attachments { fileName } properties { key value } } }
             """);
 
         Assert.Equal(JsonValueKind.Null, result.RootElement.GetProperty("data").GetProperty("page").ValueKind);
@@ -399,17 +458,17 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     }
 
     [Fact]
-    public async Task AttachmentDownload_OnAnOverClassifiedPage_Is404_IdenticalToAMissingAttachment()
+    public async Task AttachmentDownload_OnAnUngrantedPage_Is404_IdenticalToAMissingAttachment()
     {
         var f = await SeedAsync();
         Guid attachmentId;
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
-            attachmentId = await db.Attachments.Where(a => a.PageId == f.SecretPageId).Select(a => a.Id).SingleAsync();
+            attachmentId = await db.Attachments.Where(a => a.PageId == f.CompartmentPageId).Select(a => a.Id).SingleAsync();
         }
 
-        var client = ClientFor(clearance: null);
+        var client = ClientFor(granted: false);
 
         var denied = await client.GetAsync($"/attachments/{attachmentId}");
         var missing = await client.GetAsync($"/attachments/{Guid.NewGuid()}");
@@ -417,21 +476,21 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         Assert.Equal(missing.StatusCode, denied.StatusCode);
         Assert.Equal(await missing.Content.ReadAsByteArrayAsync(), await denied.Content.ReadAsByteArrayAsync());
 
-        // ... and a cleared caller gets past the authorization gate (the blob itself is
+        // ... and a granted caller gets past the authorization gate (the blob itself is
         // absent from storage in this fixture, so the interesting fact is that the
-        // response is no longer the not-found shape an uncleared caller sees).
-        var cleared = ClientFor("SECRET");
-        var clearedResponse = await cleared.GetAsync($"/attachments/{attachmentId}");
-        Assert.NotEqual(missing.StatusCode, clearedResponse.StatusCode);
+        // response is no longer the not-found shape an ungranted caller sees).
+        var granted = ClientFor(granted: true);
+        var grantedResponse = await granted.GetAsync($"/attachments/{attachmentId}");
+        Assert.NotEqual(missing.StatusCode, grantedResponse.StatusCode);
     }
 
     [Fact]
-    public async Task McpGetPage_OnAnOverClassifiedPage_ReturnsNothing()
+    public async Task McpGetPage_OnAnUngrantedPage_ReturnsNothing()
     {
         var f = await SeedAsync();
-        var client = ClientFor(clearance: null);
+        var client = ClientFor(granted: false);
 
-        var body = await McpToolCallAsync(client, "get_page", "{\"pageId\":\"" + f.SecretPageId + "\"}");
+        var body = await McpToolCallAsync(client, "get_page", "{\"pageId\":\"" + f.CompartmentPageId + "\"}");
 
         // The tool really ran and really refused (not a transport error that happens
         // to omit the sentinels): the constant not-found text is in the body.
@@ -439,9 +498,9 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         Assert.DoesNotContain(SecretSentinelTitle, body, StringComparison.Ordinal);
         Assert.DoesNotContain(SecretSentinelBody, body, StringComparison.Ordinal);
 
-        // ... and a cleared caller reads it through the same call.
-        var clearedBody = await McpToolCallAsync(ClientFor("SECRET"), "get_page", "{\"pageId\":\"" + f.SecretPageId + "\"}");
-        Assert.Contains(SecretSentinelBody, clearedBody, StringComparison.Ordinal);
+        // ... and a granted caller reads it through the same call.
+        var grantedBody = await McpToolCallAsync(ClientFor(granted: true), "get_page", "{\"pageId\":\"" + f.CompartmentPageId + "\"}");
+        Assert.Contains(SecretSentinelBody, grantedBody, StringComparison.Ordinal);
     }
 
     /// <summary>One raw JSON-RPC tools/call against /mcp. The Accept header is what makes
@@ -473,9 +532,9 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     public async Task ClassificationScheme_ReturnsEveryLevelInSchemeOrder_WithItsUkWrittenForm()
     {
         // The picker's data source. Without it the SPA would hard-code four display
-        // spellings AND their order - a second implementation of both, and the order it
-        // would be duplicating is the access comparison itself (§21.1).
-        var client = ClientFor(clearance: null);
+        // spellings AND their order - a second implementation of both (§21.1). The level
+        // is presentational, so every caller sees all four and none is "above" them.
+        var client = ClientFor(granted: false);
 
         using var result = await client.PostGraphQLAsync("{ classificationScheme { level name } }");
 
@@ -510,7 +569,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         // GraphQL enum there would put a machine identifier (OFFICIAL_SENSITIVE) in front
         // of a human as though it were a marking.
         var f = await SeedAsync();
-        var editor = ClientFor("TOP_SECRET");
+        var editor = ClientFor(granted: true);
 
         using var set = await editor.PostGraphQLAsync($$"""
             mutation {
@@ -538,7 +597,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     public async Task SetPageMarking_RaisesTheMarking_AndTheAuditRowNamesTheAction()
     {
         var f = await SeedAsync();
-        var client = ClientFor("SECRET");
+        var client = ClientFor(granted: true);
 
         using var result = await client.PostGraphQLAsync($$"""
             mutation {
@@ -562,14 +621,44 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     }
 
     [Fact]
-    public async Task SetPageMarking_AboveYourOwnClearance_ReturnsATypedErrorAndChangesNothing()
+    public async Task SetPageMarking_ToAnyLevel_IsAllowed_ByACallerWithNoAttributesAtAll()
     {
+        // The retired self-lockout case, inverted over the wire: "above your own
+        // clearance" used to be a typed Forbidden. There is no clearance now and the
+        // level is presentational (§21.12), so a caller with nothing but the space's
+        // grants may set TOP SECRET - and can still read the result.
         var f = await SeedAsync();
-        var client = ClientFor("OFFICIAL");
+        var client = ClientFor(granted: false);
 
         using var result = await client.PostGraphQLAsync($$"""
             mutation {
               setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: TOP_SECRET, eyesOnly: [], selectors: [], ukPrefix: true }) {
+                marking { level label }
+                error { kind message }
+              }
+            }
+            """);
+
+        var payload = result.RootElement.GetProperty("data").GetProperty("setPageMarking");
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("error").ValueKind);
+        Assert.Equal("TOP_SECRET", payload.GetProperty("marking").GetProperty("level").GetString());
+
+        using var read = await client.PostGraphQLAsync($$"""{ page(id: "{{f.OpenPageId}}") { id } }""");
+        Assert.Equal(f.OpenPageId.ToString(), read.RootElement.GetProperty("data").GetProperty("page").GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task SetPageMarking_ToASelectorYouAreNotGranted_ReturnsATypedErrorAndChangesNothing()
+    {
+        // The self-lockout rule (§21.6) as it now reads: a selector you are not granted
+        // here, or a caveat that excludes you. Forbidden, not validation - the input is
+        // well-formed, the caller is simply not entitled to the result.
+        var f = await SeedAsync();
+        var client = ClientFor(granted: false);
+
+        using var result = await client.PostGraphQLAsync($$"""
+            mutation {
+              setPageMarking(input: { pageId: "{{f.OpenPageId}}", level: OFFICIAL, eyesOnly: [], selectors: [{ category: "FRUIT", value: "APPLE" }], ukPrefix: true }) {
                 marking { level }
                 error { kind message }
               }
@@ -579,12 +668,11 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         var payload = result.RootElement.GetProperty("data").GetProperty("setPageMarking");
         Assert.Equal(JsonValueKind.Null, payload.GetProperty("marking").ValueKind);
         Assert.Equal("Forbidden", payload.GetProperty("error").GetProperty("kind").GetString());
+        Assert.Equal("selector:not_granted:FRUIT", payload.GetProperty("error").GetProperty("message").GetString());
 
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
-        Assert.Equal(
-            ClassificationLevel.Official,
-            await db.PageMarkings.Where(m => m.PageId == f.OpenPageId).Select(m => m.Level).SingleAsync());
+        Assert.Empty(await db.PageMarkingSelectors.Where(s => s.PageId == f.OpenPageId).ToListAsync());
     }
 
     [Fact]
@@ -594,7 +682,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
         // NationalCaveatCountry input enum - so a token outside it never reaches the
         // service. Hot Chocolate answers a document that fails validation with 400.
         var f = await SeedAsync();
-        var client = ClientFor("SECRET", nationality: ["UK"]);
+        var client = ClientFor(granted: true, nationality: ["UK"]);
 
         var response = await client.PostAsJsonAsync("/graphql", new
         {
@@ -615,11 +703,11 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
 
     /// <summary>
     /// Restrictions accumulate down the tree; markings do not (§21.5). So a caller can
-    /// legitimately view an OFFICIAL child whose parent is SECRET — the design says so
-    /// outright ("such a child stays reachable by id and through search") — and the two
-    /// surfaces that render a page's ANCESTOR restriction chain by name, the §6.6
-    /// inspector and the manage-gated restrictions listing, were handing that parent's
-    /// title over with it.
+    /// legitimately view a plain child whose parent carries a selector they lack — the
+    /// design says so outright ("such a child stays reachable by id and through search")
+    /// — and the two surfaces that render a page's ANCESTOR restriction chain by name, the
+    /// §6.6 inspector and the manage-gated restrictions listing, were handing that
+    /// parent's title over with it.
     ///
     /// <para>The parent is a page this caller cannot open, cannot find by search, and
     /// cannot see in the tree. §6.4.1 already treats titles as the sensitive part of a
@@ -628,7 +716,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
     /// expression, and whether the caller passed it — still travels.</para>
     /// </summary>
     [Fact]
-    public async Task AnAncestorAboveTheCallersClearance_ContributesItsRuleButNeverItsTitle()
+    public async Task AnAncestorTheCallerIsNotGranted_ContributesItsRuleButNeverItsTitle()
     {
         const string ancestorSentinel = "ZZANCESTORTITLEZZ";
         Guid parentId;
@@ -682,9 +770,11 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
             };
             db.Pages.Add(child);
 
-            // The parent sits above the child's level - the ordinary way this arises,
-            // since re-marking a parent never re-marks its subtree (§21.5).
-            db.PageMarkings.Add(NewMarking(parent.Id, ClassificationLevel.Secret));
+            // The parent carries a selector the child does not - the ordinary way this
+            // arises, since re-marking a parent never re-marks its subtree (§21.5).
+            var parentMarking = NewMarking(parent.Id, ClassificationLevel.Secret);
+            parentMarking.Selectors.Add(new PageMarkingSelector { PageId = parent.Id, Category = "FRUIT", Value = "APPLE" });
+            db.PageMarkings.Add(parentMarking);
             db.PageMarkings.Add(NewMarking(child.Id, ClassificationLevel.Official));
 
             // A restriction the caller PASSES, so it cannot be what hides the parent -
@@ -701,7 +791,7 @@ public sealed class ProtectiveMarkingApiTests(RocketWikiApiFactory factory) : IC
             childId = child.Id;
         }
 
-        var client = ClientFor(clearance: null); // resolves to OFFICIAL (§21.3)
+        var client = ClientFor(granted: false); // no grant in this space confers APPLE
 
         // Premises: the child is readable, the parent is not. Without both, the
         // assertions below would prove nothing.

@@ -1,35 +1,39 @@
+using System.Text.Json;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Identity;
-using RocketWiki.Core.Access;
-using RocketWiki.Core.Enums;
 using RocketWiki.Data;
 
 namespace RocketWiki.Api.GraphQL;
 
 /// <summary>
-/// One person's profile page (design.md §6.2, product decision of 2026-09-03): the three
-/// <see cref="UserRef"/> facts, whether the account is a sync shadow, and the clearance
-/// and selector eligibility <b>recorded at their last request</b> — resolved through the
-/// gates, never re-derived. A view record with an explicit GraphQL name, like
+/// One person's profile page (design.md §6.2): the three <see cref="UserRef"/> facts,
+/// whether the account is a sync shadow, and the group memberships <b>recorded at their
+/// last request</b>. A view record with an explicit GraphQL name, like
 /// <c>SelectorCategoryView</c>, so the schema type is <c>UserProfile</c> without a C#
 /// type shadowing the <c>Query.UserProfile</c> resolver.
 ///
+/// <para><b>The shape changed, by product decision.</b> The page used to show a clearance
+/// and a per-category selector eligibility, both re-derived through the gates from the
+/// mirrored claims. Those gates are gone — this deployment carries neither a clearance
+/// nor per-category selector attributes in Keycloak — so there is nothing to derive and
+/// nothing to show; what a colleague can usefully see about a person now is which groups
+/// they were in at their last sign-in, which is what every access grant and restriction
+/// is written against (§6.3). Groups are recorded raw and shown raw: there is no gate to
+/// re-run over them, so the profile reads the mirrored list and nothing interprets it.</para>
+///
 /// <para><b>The fields are the whole list, on purpose.</b> Nationality, email and
 /// last-seen are not here and must not be added without the decision §6.2 records for
-/// the two that are: nationality is sensitive personal data (admin-only, §6.2), and email
+/// the one that is: nationality is sensitive personal data (admin-only, §6.2), and email
 /// and last-seen together make a surveillance surface (§15's reasoning, the same one
 /// that keeps them off <c>userDirectory</c>). No timestamp of the recording either — the
 /// page says "as of your last sign-in" in words; a time would be a last-seen field by
 /// another name.</para>
 /// </summary>
-/// <param name="ClearanceName">The UK written form of <paramref name="Clearance"/>
-/// (<c>OFFICIAL-SENSITIVE</c>, <c>TOP SECRET</c>), from the one place any level's display
-/// spelling comes from (<c>ProtectiveMarking.LevelName</c>, §21.1).</param>
-/// <param name="SelectorEligibility">Every configured category, in catalog (display)
-/// order, each with the gate's answer for this person. Not only the eligible ones: the
-/// page's job is to show a status per category, and "not eligible" is a status.</param>
+/// <param name="Groups">The group memberships the subject's token carried at their last
+/// request, in ordinal order. Empty for a shadow account (nothing was ever recorded) and
+/// for a person whose token carried no groups.</param>
 [GraphQLName("UserProfile")]
 public sealed record UserProfileView(
     Guid Id,
@@ -39,49 +43,33 @@ public sealed record UserProfileView(
         "A shadow account created by sync; it has never signed in here, so nothing below was recorded.")]
     bool IsExternal,
     [property: GraphQLDescription(
-        "Resolved exactly as the clearance gate resolves it from the recorded claim (absent/unrecognised => OFFICIAL_SENSITIVE).")]
-    ClassificationLevel Clearance,
-    string ClearanceName,
-    [property: GraphQLDescription(
-        "False when no recognised clearance claim was recorded - the floor above is the gate's default, not a recorded fact.")]
-    bool ClearanceRecorded,
-    IReadOnlyList<SelectorEligibilityStatus> SelectorEligibility);
-
-/// <summary>
-/// One configured selector category's eligibility for the profiled person (design.md
-/// §21.15's E gate, rendered): <see cref="RequiresAttribute"/> mirrors
-/// <c>SelectorCategory.requiresAttribute</c> so the page can say "everyone is eligible"
-/// rather than "eligible" for a claim-less category, and <see cref="Eligible"/> is
-/// <c>SelectorGate</c>'s own answer over the mirrored principal. The claim name is not
-/// here for the reason <c>selectorCategories</c> withholds it.
-/// </summary>
-public sealed record SelectorEligibilityStatus(string Category, bool RequiresAttribute, bool Eligible);
+        "The group memberships recorded at this user's last sign-in, in ordinal order - the same groups claim access rules are written against.")]
+    IReadOnlyList<string> Groups);
 
 public partial class Query
 {
     /// <summary>
-    /// The profile page: any authenticated caller may read any user's clearance and
-    /// selector eligibility as recorded at that user's last request.
+    /// The profile page: any authenticated caller may read any user's group memberships
+    /// as recorded at that user's last request.
     ///
     /// <para><b>This is a widening, and it is deliberate.</b> <c>userDirectory</c>'s doc
     /// refuses to carry any rule-engine attribute because a directory of them is a
-    /// who-holds-what-clearance census; this field is precisely that census, one person
-    /// at a time, and it exists because the product owner decided (design.md §6.2,
-    /// 2026-09-03) that colleagues seeing each other's clearance and compartment
-    /// eligibility is worth more than denying an insider that map. The directory itself
-    /// is unchanged — still <c>UserRef</c> only — so enumerating the census still costs
-    /// one request per person and an id from somewhere; nationality, email and last-seen
-    /// remain admin-only on <c>users</c>. Anyone extending this type should read §6.2's
-    /// trade-off paragraph first, because that is the decision being extended.</para>
+    /// who-holds-what census; this field is precisely that census, one person at a time,
+    /// and it exists because the product owner decided (design.md §6.2) that colleagues
+    /// seeing each other's group memberships is worth more than denying an insider that
+    /// map. The directory itself is unchanged — still <c>UserRef</c> only — so
+    /// enumerating the census still costs one request per person and an id from
+    /// somewhere; nationality, email and last-seen remain admin-only on <c>users</c>.
+    /// Anyone extending this type should read §6.2's trade-off paragraph first, because
+    /// that is the decision being extended.</para>
     ///
-    /// <para><b>Resolved through the gates over a mirrored principal</b>
-    /// (<see cref="MirroredPrincipal"/>): <c>ClearanceGate.ResolveClearance</c> and
-    /// <c>SelectorGate.ResolveEligibleCategories</c> run unchanged over a Principal
-    /// rebuilt from the row's <c>AttributesJson</c>, so the page shows what the gate
-    /// would have decided from those claims — the same discipline <c>me</c> follows for
-    /// the caller's own values. <c>clearanceRecorded</c> uses the gate's parser too: it
-    /// is "some recorded clearance value is one the gate recognises", so the floor is
-    /// reported as a floor rather than as a fact about the person.</para>
+    /// <para><b>Read straight from the mirror.</b> The row's <c>AttributesJson</c> holds
+    /// the <c>groups</c> claim as JIT provisioning recorded it
+    /// (<see cref="JitUserProvisioningMiddleware"/>); this reads that list back, sorts it
+    /// ordinally, drops duplicates, and interprets nothing. There used to be a rebuilt principal here so
+    /// the clearance and eligibility gates could run over the recorded claims; with those
+    /// gates gone there is no rule to keep a single implementation of, and a mirror that
+    /// cannot be parsed simply reads as no groups.</para>
     ///
     /// <para><b>One row, projected in the database</b>: exactly this user's
     /// <c>AttributesJson</c> is fetched, never a list of them (the directory keeps that
@@ -94,12 +82,11 @@ public partial class Query
     /// stays what §6.1 says it is. The gates on every content path still evaluate the
     /// token.</para>
     /// </summary>
-    [NoAudit("Reads one user's display-safe facts plus the clearance and selector eligibility recorded at their last sign-in - no wiki content, no page, and no per-subject access decision, the same reasoning that leaves userDirectory, display-name resolution and the emoji vocabulary unaudited (design.md §7). What changed, stated plainly: clearance and selector eligibility are now shown to every signed-in user by product decision (design.md §6.2, 2026-09-03) - precisely the who-holds-what census userDirectory's doc refused for the directory. The directory itself is unchanged (UserRef only); nationality, email and last-seen remain admin-only on `users`, which IS audited.")]
+    [NoAudit("Reads one user's display-safe facts plus the group memberships recorded at their last sign-in - no wiki content, no page, and no per-subject access decision, the same reasoning that leaves userDirectory, display-name resolution and the emoji vocabulary unaudited (design.md §7). What it discloses, stated plainly: group membership is shown to every signed-in user by product decision (design.md §6.2) - precisely the who-holds-what census userDirectory's doc refused for the directory. The directory itself is unchanged (UserRef only); nationality, email and last-seen remain admin-only on `users`, which IS audited.")]
     public async Task<UserProfileView?> UserProfile(
         Guid id,
         [Service] ICurrentPrincipalAccessor principalAccessor,
         [Service] RocketWikiDbContext db,
-        [Service] SelectorCatalog catalog,
         CancellationToken cancellationToken)
     {
         if (principalAccessor.Current is null)
@@ -114,7 +101,6 @@ public partial class Query
             .Select(u => new
             {
                 u.Id,
-                u.Subject,
                 u.DisplayName,
                 u.IsExternal,
                 u.AttributesJson,
@@ -127,28 +113,45 @@ public partial class Query
             return null;
         }
 
-        var mirrored = MirroredPrincipal.Build(row.Subject ?? row.Id.ToString("D"), row.AttributesJson, catalog);
-
-        var clearance = ClearanceGate.ResolveClearance(mirrored);
-        var clearanceRecorded =
-            mirrored.Attributes.TryGetValue(ClearanceGate.ClearanceAttributeKey, out var recordedClearance)
-            && recordedClearance.Any(value => ClearanceGate.TryParseLevel(value, out _));
-
-        // Catalog order, every category - the page renders a status per row, and the
-        // order is the display order every picker and label uses (§21.15).
-        var eligible = SelectorGate.ResolveEligibleCategories(mirrored, catalog);
-        var eligibility = catalog.Categories
-            .Select(c => new SelectorEligibilityStatus(c.Name, c.RequiresClaim, eligible.Contains(c.Name)))
-            .ToList();
-
         return new UserProfileView(
             row.Id,
             row.DisplayName,
             row.HasAvatar,
             row.IsExternal,
-            clearance,
-            ProtectiveMarking.LevelName(clearance),
-            clearanceRecorded,
-            eligibility);
+            MirroredGroups(row.AttributesJson));
+    }
+
+    /// <summary>
+    /// The <c>groups</c> list out of a mirror, ordinal-sorted for a stable page. Malformed
+    /// JSON, a missing key, a non-list value or null elements (none of which JIT
+    /// provisioning writes; all of which a hand edit could) read as no groups rather than
+    /// as an error — a profile read must not turn into a 500 over a mirror row, and
+    /// "nothing recorded" is the honest reading of a mirror that cannot be read.
+    /// </summary>
+    private static IReadOnlyList<string> MirroredGroups(string? attributesJson)
+    {
+        if (string.IsNullOrWhiteSpace(attributesJson))
+        {
+            return [];
+        }
+
+        try
+        {
+            var mirror = JsonSerializer.Deserialize<Dictionary<string, string[]?>>(attributesJson);
+            if (mirror is null || !mirror.TryGetValue(JitUserProvisioningMiddleware.GroupsClaimName, out var groups) || groups is null)
+            {
+                return [];
+            }
+
+            return groups
+                .Where(g => g is not null)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(g => g, StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 }

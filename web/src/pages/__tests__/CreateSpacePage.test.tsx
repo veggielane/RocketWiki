@@ -17,12 +17,12 @@ function renderPage({ meId = 'sub-1' as string | null } = {}) {
             me: {
               id: meId, email: null, name: 'Chris', groups: [], isAuthenticated: true,
               isInstanceAdmin: true, localUserId: 'user-1', hasAvatar: false,
-              clearance: 'SECRET', nationality: ['UK'], selectorEligibility: ['FRUIT'],
+              nationality: ['UK'],
             },
           }
     if (name === 'RuleVocabulary') return { groups: ['engineering'], attributeRegistry: [] }
     if (name === 'SelectorCategories')
-      return { selectorCategories: [{ name: 'FRUIT', description: null, requiresAttribute: true, values: ['APPLE', 'BANANA'] }] }
+      return { selectorCategories: [{ name: 'FRUIT', description: null, values: ['APPLE', 'BANANA'] }] }
     if (name === 'CreateSpace') return { createSpace: { space: { id: 'space-new', key: 'ENG', name: 'Engineering' }, error: null } }
     return undefined
   })

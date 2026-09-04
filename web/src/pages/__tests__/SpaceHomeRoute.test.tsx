@@ -54,7 +54,7 @@ const denial = {
   placeholderTitle: '(protected)',
   noSpaceAccess: false,
   marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK TOP SECRET' },
-  reasons: [{ gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'TOP SECRET' }],
+  reasons: [{ gate: 'RESTRICTION', passed: false, ruleId: 'rule-1', inherited: false }],
 }
 
 function renderHome({
@@ -101,7 +101,7 @@ describe('SpaceHomeRoute', () => {
   })
 
   it('falls back to the browser when the default page is withheld from this caller, not to the protected screen', async () => {
-    // A space whose default page is above this caller's clearance behaves like
+    // A space whose default page is withheld from this caller behaves like
     // a space with no default page — never a dead end where the space used to
     // be. The tree beneath the browser still shows the page as protected.
     renderHome({ homepageId: 'page-1', access: 'denied' })

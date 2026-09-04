@@ -19,7 +19,7 @@ namespace RocketWiki.Core.Access;
 /// silently matching some — which is the fail-closed reading §6.3 asks for.</para>
 ///
 /// <para><b>What this does and does not filter.</b> The principal side
-/// (<see cref="ClearanceGate.ResolveNationalities"/>) drops unknown claim values. The
+/// (<see cref="CaveatGate.ResolveNationalities"/>) drops unknown claim values. The
 /// marking side does NOT: <see cref="ProtectiveMarking.Create"/> keeps a legacy token
 /// such as <c>GB</c> on a row that already carries it, where it matches nobody, and the
 /// <c>setPageMarking</c> mutation refuses to write a new one. A marking must read back as

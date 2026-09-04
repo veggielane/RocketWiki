@@ -16,13 +16,6 @@ export interface ProtectedPageDenial {
 
 export interface ProtectedPageScreenProps {
   denial: ProtectedPageDenial
-  /**
-   * The display spelling of the caller's own clearance, when the caller can
-   * supply it (`me.clearance` looked up in `classificationScheme`). Lets the
-   * clearance sentence say what they hold as well as what is needed. Null
-   * or absent leaves the sentence without it — the SPA owns no spelling.
-   */
-  heldLevelName?: string | null
 }
 
 /**
@@ -39,8 +32,14 @@ export interface ProtectedPageScreenProps {
  * server's label, verbatim, through the same banner a readable page uses)
  * and every failing gate as a sentence. Without it, one sentence and nothing
  * else — the marking is withheld and so is everything a marking would say.
+ * A page whose marking is missing takes the first shape with no banner: the
+ * gate list says why, and there is no label to show.
+ *
+ * Every sentence comes from the denial alone. Nothing here reads anything
+ * about the caller to say what they "hold": no gate is about a level, so
+ * there is nothing of theirs to name beside what the page needs.
  */
-export function ProtectedPageScreen({ denial, heldLevelName = null }: ProtectedPageScreenProps) {
+export function ProtectedPageScreen({ denial }: ProtectedPageScreenProps) {
   useDocumentTitle(PROTECTED_PAGE_TITLE)
 
   return (
@@ -66,7 +65,7 @@ export function ProtectedPageScreen({ denial, heldLevelName = null }: ProtectedP
                   </ListItemIcon>
                   <ListItemText
                     primary={accessGateTitle(reason.gate)}
-                    secondary={describeAccessGate(reason, { heldLevelName })}
+                    secondary={describeAccessGate(reason)}
                     slotProps={{ primary: { sx: { fontWeight: 600 } } }}
                   />
                 </ListItem>

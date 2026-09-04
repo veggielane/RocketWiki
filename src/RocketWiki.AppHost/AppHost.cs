@@ -84,13 +84,14 @@ builder.AddContainer("drawio", "jgraph/drawio", "31.3.2")
 
 // Dev-only Keycloak instance. Production points RocketWiki.Api at an existing
 // realm via configuration instead (design.md §15 "Production"). The `rocketwiki`
-// realm — clients, groups, protocol mappers for `groups`/`nationality`/
-// `clearance`/`fruit`, and dev users covering the rule engine's and the marking
-// gates' edge cases — is seeded from ./keycloak on every fresh start (see
-// keycloak/README.md for exactly what's in it, why, and what production needs
-// to reproduce by hand). AddKeycloakContainer always
-// passes --import-realm, so this is a no-op when the folder is empty and a real
-// import once it isn't.
+// realm — clients, groups, protocol mappers for `groups`/`nationality`/`roles`
+// plus the API audience, and dev users covering the rule engine's and the
+// eyes-only caveat's edge cases — is seeded from ./keycloak on every fresh
+// start (see keycloak/README.md for exactly what's in it, why, and what
+// production needs to reproduce by hand). It carries no clearance and no
+// selector-eligibility claim: neither is a token concern (design.md §21).
+// AddKeycloakContainer always passes --import-realm, so this is a no-op when
+// the folder is empty and a real import once it isn't.
 var keycloak = builder.AddKeycloakContainer("keycloak")
     .WithDataVolume()
     .WithImport(Path.Combine(builder.AppHostDirectory, "keycloak"), isReadOnly: true);
@@ -139,27 +140,24 @@ var api = builder.AddProject<Projects.RocketWiki_Api>("api")
     .WithEnvironment("FileStorage__S3__AccessKey", MinioRootUser)
     .WithEnvironment("FileStorage__S3__SecretKey", MinioRootPassword)
     // Dev-only protective-marking selector vocabulary (design.md §21.15): the
-    // categories the marking control offers and a space admin can grant. FRUIT is
-    // gated by a Keycloak attribute — the realm in ./keycloak emits a `fruit`
-    // claim, `yes` for the users who are eligible (see keycloak/README.md) — and
-    // REGION has no claim, so everyone is eligible and the space grant alone
-    // decides. It is the same catalog every test tier fixes on, and that is
-    // exactly why it lives here and not in appsettings.Development.json:
+    // categories, and the values under each, that the marking control offers
+    // and a space admin grants from. That is all a category is — vocabulary.
+    // Nothing about it is gated by a token claim: a reader sees a page
+    // carrying APPLE only when a space access grant that matches them carries
+    // APPLE, and the realm in ./keycloak emits no claim named after any of
+    // these (there is no ClaimName key any more — see keycloak/README.md). It
+    // is the same catalog every test tier fixes on, and that is exactly why
+    // it lives here and not in appsettings.Development.json:
     // WebApplicationFactory runs the API as Development and would silently
     // inherit the categories, while the integration tests configure their own
     // catalog on purpose. Unset means NO categories (docs/CONFIGURATION.md
     // "Protective markings"), so nothing outside `aspire run` picks these up.
-    // REGION's claim name is stated empty rather than omitted so the rendered
-    // environment says "everyone is eligible" out loud; absent and empty mean
-    // the same thing to the API.
     .WithEnvironment("ProtectiveMarking__SelectorCategories__0__Name", "FRUIT")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__0__Description", "Fruit programme compartments")
-    .WithEnvironment("ProtectiveMarking__SelectorCategories__0__ClaimName", "fruit")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__0__Values__0", "APPLE")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__0__Values__1", "BANANA")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__1__Name", "REGION")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__1__Description", "Regional releasability")
-    .WithEnvironment("ProtectiveMarking__SelectorCategories__1__ClaimName", "")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__1__Values__0", "NORTH")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__1__Values__1", "SOUTH")
     // WithReference wires configuration; it does NOT imply waiting. Without these the

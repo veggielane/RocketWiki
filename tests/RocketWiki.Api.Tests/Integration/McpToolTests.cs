@@ -129,10 +129,10 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
     /// transport makes is an authenticated request — exactly how a real client's
     /// bearer token would ride along.</summary>
     private async Task<McpClient> CreateMcpClientAsync(
-        string sub, string[]? nationality = null, string? clearance = null)
+        string sub, string[]? nationality = null, string[]? groups = null)
     {
         var httpClient = factory.CreateClient();
-        httpClient.SetTestUser(sub: sub, nationality: nationality, clearance: clearance);
+        httpClient.SetTestUser(sub: sub, nationality: nationality, groups: groups);
 
         var transport = new HttpClientTransport(new HttpClientTransportOptions
         {
@@ -643,7 +643,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         await MarkAsync(f.PageAId, ClassificationLevel.Secret, "UK");
 
         await using var client = await CreateMcpClientAsync(
-            $"mcp-mark-{Guid.NewGuid()}", nationality: ["UK"], clearance: "SECRET");
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["UK"]);
 
         var result = await client.CallToolAsync("get_page",
             new Dictionary<string, object?> { ["pageId"] = f.PageAId.ToString() });
@@ -658,10 +658,10 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         var f = await SeedAsync();
         await MarkAsync(f.PageBId, ClassificationLevel.Secret); // the US-restricted page
 
-        // A US national cleared to SECRET sees both the OFFICIAL page and the SECRET one,
-        // so the aggregate is genuinely higher than any single hit's baseline.
+        // A US national sees both the OFFICIAL page and the SECRET one (the level gates
+        // nobody), so the aggregate is genuinely higher than any single hit's baseline.
         await using var client = await CreateMcpClientAsync(
-            $"mcp-mark-{Guid.NewGuid()}", nationality: ["US"], clearance: "SECRET");
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["US"]);
 
         var result = await client.CallToolAsync("search",
             new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
@@ -688,7 +688,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         await MarkAsync(f.PageBId, ClassificationLevel.Secret);
 
         await using var client = await CreateMcpClientAsync(
-            $"mcp-mark-{Guid.NewGuid()}", nationality: ["NZ"], clearance: "TOP_SECRET");
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["NZ"]);
 
         var result = await client.CallToolAsync("search",
             new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
@@ -700,22 +700,23 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
     }
 
     [Fact]
-    public async Task Clearance_AloneHidesAPageFromEveryMcpTool()
+    public async Task ASelector_AloneHidesAPageFromEveryMcpTool()
     {
         // §21.9 names MCP explicitly, and every other MCP visibility test here hides its
-        // page behind a NATIONALITY restriction — one even hands the caller TOP_SECRET so
-        // the marking cannot be what excludes it. So the clearance gate itself, on the
+        // page behind a NATIONALITY restriction. So the marking gate itself, on the
         // channel whose client is typically an LLM, had no MCP coverage at all.
         //
         // Here the page carries no restriction whatsoever: the ONLY thing between the
-        // caller and the content is the classification level against their clearance.
+        // caller and the content is a selector no grant confers on them. (This used to be
+        // the level against a clearance; the level gates nobody now - §21.12 - and the
+        // SECRET stays on the page to prove it.)
         var f = await SeedAsync();
         await MarkAsync(f.PageAId, ClassificationLevel.Secret);
+        await MarkWithSelectorAsync(f.PageAId, f.SpaceId, "FRUIT", "APPLE", grantedToGroup: "apple-readers");
 
-        // No clearance claim at all — §21's fail-closed default admits OFFICIAL only.
-        await using var uncleared = await CreateMcpClientAsync($"mcp-uncleared-{Guid.NewGuid()}", nationality: ["UK"]);
+        await using var ungranted = await CreateMcpClientAsync($"mcp-ungranted-{Guid.NewGuid()}", nationality: ["UK"]);
 
-        var search = await uncleared.CallToolAsync("search",
+        var search = await ungranted.CallToolAsync("search",
             new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
         var hitIds = SingleJson(search).GetProperty("hits").EnumerateArray()
             .Select(h => h.GetProperty("pageId").GetGuid()).ToList();
@@ -723,25 +724,53 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
 
         // Absent, not redacted (§6.7): reading it directly is the same "not found" as a
         // page that does not exist.
-        var direct = await uncleared.CallToolAsync("get_page",
+        var direct = await ungranted.CallToolAsync("get_page",
             new Dictionary<string, object?> { ["pageId"] = f.PageAId.ToString() });
         Assert.Equal(true, direct.IsError);
 
-        var tree = await uncleared.CallToolAsync("get_page_tree",
+        var tree = await ungranted.CallToolAsync("get_page_tree",
             new Dictionary<string, object?> { ["spaceKey"] = f.SpaceKey });
         Assert.DoesNotContain(f.PageAId.ToString(), SingleJson(tree).GetRawText(), StringComparison.Ordinal);
 
         // The controlling half: the SAME page, same restrictions (none), reached by a
-        // caller whose clearance admits it. Without this, the absences above could just
-        // as easily mean the page was never seeded.
-        await using var cleared = await CreateMcpClientAsync(
-            $"mcp-cleared-{Guid.NewGuid()}", nationality: ["UK"], clearance: "SECRET");
+        // caller a grant admits. Without this, the absences above could just as easily
+        // mean the page was never seeded.
+        await using var granted = await CreateMcpClientAsync(
+            $"mcp-granted-{Guid.NewGuid()}", nationality: ["UK"], groups: ["apple-readers"]);
 
-        var clearedSearch = await cleared.CallToolAsync("search",
+        var grantedSearch = await granted.CallToolAsync("search",
             new Dictionary<string, object?> { ["query"] = "turbopump", ["spaceKey"] = f.SpaceKey });
-        var clearedIds = SingleJson(clearedSearch).GetProperty("hits").EnumerateArray()
+        var grantedIds = SingleJson(grantedSearch).GetProperty("hits").EnumerateArray()
             .Select(h => h.GetProperty("pageId").GetGuid()).ToList();
-        Assert.Contains(f.PageAId, clearedIds);
+        Assert.Contains(f.PageAId, grantedIds);
+    }
+
+    /// <summary>Puts a selector on a page and adds an access grant, matching only
+    /// <paramref name="grantedToGroup"/>, that confers it - the pair a selector-gated
+    /// fixture needs (design.md §21.15).</summary>
+    private async Task MarkWithSelectorAsync(Guid pageId, Guid spaceId, string category, string value, string grantedToGroup)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+
+        var marking = await db.PageMarkings.Include(m => m.Selectors).SingleAsync(m => m.PageId == pageId);
+        marking.Selectors.Add(new PageMarkingSelector { PageId = pageId, Category = category, Value = value });
+
+        var creator = await db.Users.FirstAsync();
+        var grant = new AccessRule
+        {
+            Kind = AccessRuleKind.AccessGrant,
+            SpaceId = spaceId,
+            ExpressionJson = RuleExpressionSerializer.Serialize(new GroupCondition(grantedToGroup)),
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = creator.Id,
+            UpdatedAtUtc = DateTime.UtcNow,
+            UpdatedByUserId = creator.Id,
+        };
+        grant.Selectors.Add(new AccessRuleSelector { AccessRuleId = grant.Id, Category = category, Value = value });
+        db.AccessRules.Add(grant);
+
+        await db.SaveChangesAsync();
     }
 
     [Fact]
@@ -753,7 +782,7 @@ public sealed class McpToolTests(RocketWikiApiFactory factory) : IClassFixture<R
         await MarkAsync(f.PageDId, ClassificationLevel.Secret, "UK");
 
         await using var client = await CreateMcpClientAsync(
-            $"mcp-mark-{Guid.NewGuid()}", nationality: ["UK"], clearance: "SECRET");
+            $"mcp-mark-{Guid.NewGuid()}", nationality: ["UK"]);
 
         var result = await client.CallToolAsync("get_page_tree",
             new Dictionary<string, object?> { ["spaceKey"] = f.SpaceKey });

@@ -7,7 +7,7 @@ const denial: ProtectedLeafDenial = {
   placeholderTitle: '(protected)',
   noSpaceAccess: false,
   marking: { label: 'UK OFFICIAL BANANA', level: 'OFFICIAL' },
-  reasons: [{ gate: 'SELECTOR_ELIGIBILITY', passed: false, category: 'FRUIT' }],
+  reasons: [{ gate: 'SELECTOR_GRANT', passed: false, category: 'FRUIT', value: 'BANANA' }],
 }
 
 function renderLeaf(d: ProtectedLeafDenial = denial) {
@@ -41,7 +41,7 @@ describe('ProtectedTreeLeaf', () => {
     expect(why).toHaveAttribute('aria-expanded', 'false')
     fireEvent.click(why)
     expect(why).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByText('Eligibility: Not eligible for FRUIT material.')).toBeVisible()
+    expect(screen.getByText('Selector grant: BANANA is not granted to you in this space.')).toBeVisible()
     fireEvent.click(why)
     expect(why).toHaveAttribute('aria-expanded', 'false')
   })

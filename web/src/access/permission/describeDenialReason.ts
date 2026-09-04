@@ -1,20 +1,24 @@
+import { MARKING_UNAVAILABLE } from '../denial/protectedCopy'
+
 /**
  * Human-readable text for the denial-reason tokens
  * `EffectivePermissionCalculator` produces
  * (`RocketWiki.Core/Access/EffectivePermissionCalculator.cs`) — the audit's
  * first-failing-gate token, one per gate on the ladder: `no-space-access`,
- * `classification:{level}`, `selector:not_eligible:{CATEGORY}`,
- * `selector:unknown:{CATEGORY}`, `selector:not_granted:{CATEGORY}`,
- * `caveat:eyes_only`, `restriction:{pageId}:{ruleId}`, then the edit-only
- * `replica-read-only` and `insufficient-space-role`. Kept as a pure
- * function, separate from the display component, so the mapping is
- * unit-testable without mounting anything.
+ * `marking:unavailable`, `selector:unknown:{CATEGORY}`,
+ * `selector:not_granted:{CATEGORY}`, `caveat:eyes_only`,
+ * `restriction:{pageId}:{ruleId}`, then the edit-only `replica-read-only`
+ * and `insufficient-space-role`. Kept as a pure function, separate from the
+ * display component, so the mapping is unit-testable without mounting
+ * anything.
  *
  * A token this build does not know falls back to the raw string: a server
  * ahead of this client still gets its reason shown rather than swallowed.
- * The classification token carries the wire name of the level, and it is
- * rendered as such — the SPA owns no display spelling, and this is a
- * diagnostic line beside a page whose own marking banner spells it properly.
+ * That is also where `classification:{level}` and
+ * `selector:not_eligible:{CATEGORY}` land now: neither is minted any more —
+ * this deployment compares no level against a person and gates a selector by
+ * grant alone — so an old audit row carrying one shows its raw token, which
+ * is the honest reading of a reason the ladder no longer has.
  */
 export function describeDenialReason(reason: string | null): string | null {
   if (reason === null) {
@@ -22,6 +26,9 @@ export function describeDenialReason(reason: string | null): string | null {
   }
   if (reason === 'no-space-access') {
     return 'No access grant in this space matches this user.'
+  }
+  if (reason === 'marking:unavailable') {
+    return MARKING_UNAVAILABLE
   }
   if (reason === 'replica-read-only') {
     // The "(design.md §12)" this used to carry pointed at a document nobody
@@ -35,14 +42,6 @@ export function describeDenialReason(reason: string | null): string | null {
   }
   if (reason === 'caveat:eyes_only') {
     return "This page's national caveat admits none of this user's nationalities."
-  }
-  const classification = /^classification:(.+)$/.exec(reason)
-  if (classification) {
-    return `This page's classification (${classification[1]}) is above this user's clearance.`
-  }
-  const notEligible = /^selector:not_eligible:(.+)$/.exec(reason)
-  if (notEligible) {
-    return `This user is not eligible for ${notEligible[1]} material.`
   }
   const unknownSelector = /^selector:unknown:(.+)$/.exec(reason)
   if (unknownSelector) {

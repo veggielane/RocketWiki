@@ -428,7 +428,11 @@ internal static class SyncOutboxWriter
             collection = entry.Collection,
             data = entry.Data,
             version = entry.Version,
-            level = ProtectiveMarking.LevelWireName(entry.Level),
+            // An unknown marking (PageEntry.IsUnavailable) crosses as a null level, which
+            // the import side reads as "no marking" and lands unavailable - never as the
+            // sentinel's TOP SECRET, which would arrive as an ordinary marking that gates
+            // nobody (§21.12). Same rule as BundleExportService.MarkingPayload.
+            level = entry.IsUnavailable ? null : ProtectiveMarking.LevelWireName(entry.Level),
             eyesOnly = entry.Countries.Select(c => c.CountryValue).OrderBy(c => c, StringComparer.Ordinal).ToArray(),
             prefix = entry.Prefix,
             // Needed on import to apply the tombstone, not inferred from a blank payload -

@@ -165,6 +165,15 @@ export type LoadFailureReason =
    */
   | 'SELECTOR_GRANTS'
   /**
+   * The classification scheme (design.md §21.1): the levels with their
+   * display spellings, in order. The level picker has no other source —
+   * spelling or ordering them client-side would be a second implementation
+   * of the display form — so without it no level can be offered, and the
+   * control says so rather than showing an empty picker. Says what still
+   * works: the rest of the marking does not depend on the scheme.
+   */
+  | 'CLASSIFICATION_SCHEME'
+  /**
    * The disclosing page read (`pageAccess`) failed at the transport. Distinct
    * from PAGE, which is what a null answer — no such page — reads as: this is
    * the absence of an answer, and a reader told "couldn't load this page" for
@@ -245,6 +254,11 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
       }
     case 'SELECTOR_GRANTS':
       return { summary: "Couldn't load which selector values you hold in this space.", pointsToSettings: false }
+    case 'CLASSIFICATION_SCHEME':
+      return {
+        summary: "Couldn't load the classification levels, so the level cannot be changed right now. The rest of the marking still can.",
+        pointsToSettings: false,
+      }
     case 'PAGE_ACCESS':
       return { summary: "Couldn't check your access to this page.", pointsToSettings: false }
     case 'NOTIFICATIONS':

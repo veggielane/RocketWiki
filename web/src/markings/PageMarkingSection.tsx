@@ -31,20 +31,16 @@ import {
 import { asReadOnlyReplica, describeMutationError } from '../graphql/mutationError'
 import { describeLoadFailure, describeWriteFailure } from '../feedback/unavailableCopy'
 import { NATIONAL_CAVEAT_COUNTRIES, isNationalCaveatCountry } from './caveatCountries'
+import { LEVEL_IS_DISPLAY_NOTE, MARKING_SECTION_DESCRIPTION, SELECTOR_RULE_NOTE } from './markingCopy'
 import {
-  ABOVE_CLEARANCE_REASON,
-  CLASSIFICATION_LADDER,
   NOT_GRANTED_REASON,
   canonicalCountries,
   describeMarkingRefusal,
-  levelIsWithinClearance,
   markingRefusal,
-  notEligibleReason,
-  selectorEligible,
   selectorGranted,
+  type MarkingViewer,
   type SelectorValue,
-  type ViewerClearance,
-} from './clearance'
+} from './markingRefusal'
 import { MarkingBanner } from './MarkingBanner'
 
 export interface PageMarkingSectionProps {
@@ -124,18 +120,26 @@ function isDirty(draft: MarkingDraft, marking: PageMarkingFragment): boolean {
  * table and never a row in it: a property is admin-defined metadata beside
  * the page (§20), while a marking gates who may read the page at all.
  *
- * **It prevents rather than refuses.** §21.6's rule — no resulting marking
- * you could not then read — is mirrored from `me.clearance`,
- * `me.nationality`, `me.selectorEligibility` and the space's
- * `viewerSelectorGrants` through markings/clearance.ts, so an unavailable
- * level, category or value is visibly unavailable with its reason attached
- * instead of being offered and rejected. The server is still the authority:
- * a refusal that arrives anyway (a clearance or a grant changed mid-session,
- * say) is shown as the server sent it, never swallowed.
+ * **It prevents rather than refuses.** The server refuses a marking its
+ * author could not then read — a selector value they are not granted in this
+ * space, or an eyes-only set holding none of their own nationalities — and
+ * both are mirrored from `me.nationality` and the space's
+ * `viewerSelectorGrants` through markings/markingRefusal.ts, so an
+ * unavailable value is visibly unavailable with its reason attached instead
+ * of being offered and rejected. The server is still the authority: a
+ * refusal that arrives anyway (a grant changed mid-session, say) is shown as
+ * the server sent it, never swallowed.
  *
- * The vocabulary is all the server's: level spellings from the scheme,
- * caveat countries pinned to the schema's enum, selector categories and
- * values from instance configuration. Nothing here is typed by hand.
+ * **Every level is offered, to everyone.** This deployment carries no
+ * clearance attribute, so the classification is display — compared against
+ * nobody, exactly like the UK prefix — and any editor may set any level.
+ * Nothing here greys a level, and nothing should: a level check with no
+ * server gate behind it could only ever disagree with the server.
+ *
+ * The vocabulary is all the server's: level spellings and their order from
+ * the scheme, caveat countries pinned to the schema's enum, selector
+ * categories and values from instance configuration. Nothing here is typed
+ * by hand.
  */
 export function PageMarkingSection({
   pageId,
@@ -153,45 +157,41 @@ export function PageMarkingSection({
   // Every read here exists only to shape the editing affordances, so a viewer
   // pays for none of them.
   const [{ data: meData }] = useCurrentUserQuery({ pause: !canEdit })
-  // §21.1: the levels with their DISPLAY spellings. A picker holds no marking,
-  // so it cannot use `levelName` — it must name all four before one is chosen,
-  // and spelling them here would be the second implementation of the display
-  // form that §21.1's "one method each" exists to prevent.
-  const [{ data: schemeData }] = useClassificationSchemeQuery({ pause: !canEdit })
+  // §21.1: the levels with their DISPLAY spellings, in scheme order. A picker
+  // holds no marking, so it cannot use `levelName` — it must name all four
+  // before one is chosen — and spelling or ordering them here would be the
+  // second implementation of the display form that §21.1's "one method each"
+  // exists to prevent. The scheme is the only source: nothing client-side
+  // ranks a level, because nothing compares one against a person.
+  const [{ data: schemeData, error: schemeError }] = useClassificationSchemeQuery({ pause: !canEdit })
   // §21.15: the categories and values this instance configures — the whole
   // selector vocabulary. Empty is the ordinary state on an instance without
   // selectors, and then there is simply nothing to pick.
   const [{ data: categoriesData, error: categoriesError }] = useSelectorCategoriesQuery({ pause: !canEdit })
   // The values the caller is GRANTED in this space (§6.4's union over their
-  // access grants) — the per-space half of the selector gate.
+  // access grants) — the whole of the selector gate.
   const [{ data: grantsData, error: grantsError }] = useSpaceSelectorGrantsQuery({
     variables: { key: spaceKey },
     pause: !canEdit,
   })
 
-  // Spelling from the server, ORDER from the ladder — deliberately not from
-  // the returned array, even though the server returns scheme order. The order
-  // options render in must be the same order the greying-out comparison uses
-  // (clearance.ts), or an option could sit above another while claiming to be
-  // below it. The ladder is compile-time exhaustive, so every level renders
-  // even if this query fails; a level the scheme did not name falls back to its
-  // wire name, which is ugly but never wrong.
-  const levelOptions = CLASSIFICATION_LADDER.map((level) => ({
-    level,
-    name: schemeData?.classificationScheme.find((entry) => entry.level === level)?.name ?? level,
-  }))
+  // Spelling AND order from the server, as returned. The page's own level
+  // stays offered even when the scheme does not name it (a server ahead of
+  // this client), under the server's own spelling for it — so what the page
+  // carries can be seen and kept, never silently dropped. Until the scheme
+  // has answered there is nothing to offer; a failed read says so below.
+  const schemeLevels = schemeData?.classificationScheme
+  const levelOptions =
+    schemeLevels === undefined
+      ? []
+      : schemeLevels.some((entry) => entry.level === marking.level)
+        ? schemeLevels
+        : [...schemeLevels, { level: marking.level, name: marking.levelName }]
 
   // Null grants while the read has not answered: the comparison then claims
-  // no grant refusal (clearance.ts), and the server decides.
+  // no grant refusal (markingRefusal.ts), and the server decides.
   const grants: readonly SelectorValue[] | null = grantsData?.space?.viewerSelectorGrants ?? null
-  const viewer: ViewerClearance | null = meData?.me
-    ? {
-        clearance: meData.me.clearance,
-        nationality: meData.me.nationality,
-        selectorEligibility: meData.me.selectorEligibility,
-        selectorGrants: grants,
-      }
-    : null
+  const viewer: MarkingViewer | null = meData?.me ? { nationality: meData.me.nationality, selectorGrants: grants } : null
 
   const categories = categoriesData?.selectorCategories ?? []
   const stored = draftFrom(marking)
@@ -200,10 +200,7 @@ export function PageMarkingSection({
   // caveat with what the picker holds. Said up front rather than discovered.
   const legacyCaveat = canonicalCountries(marking.eyesOnly).filter((value) => !isNationalCaveatCountry(value))
 
-  const refusal = markingRefusal(
-    { level: draft.level, eyesOnly: draft.eyesOnly, selectors: selectorList(draft.selectors) },
-    viewer,
-  )
+  const refusal = markingRefusal({ eyesOnly: draft.eyesOnly, selectors: selectorList(draft.selectors) }, viewer)
   const dirty = isDirty(draft, marking)
 
   const handleSave = async () => {
@@ -251,9 +248,7 @@ export function PageMarkingSection({
         Protective marking
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 2 }}>
-        A UK Government classification, optional selectors, an optional eyes-only caveat, and a UK prefix. The
-        classification, the selectors and the eyes-only caveat decide who may read this page; the prefix does
-        not. This is not one of the key/value properties below — it is a single value, replaced as a whole.
+        {MARKING_SECTION_DESCRIPTION}
       </Typography>
 
       <Box sx={{ mb: 2 }}>
@@ -268,6 +263,10 @@ export function PageMarkingSection({
 
       {canEdit && (
         <Stack spacing={2}>
+          {schemeError !== undefined && (
+            <Alert severity="info">{describeLoadFailure('CLASSIFICATION_SCHEME').summary}</Alert>
+          )}
+
           <FormControl>
             <FormLabel id="marking-level-label">Classification</FormLabel>
             <RadioGroup
@@ -275,44 +274,24 @@ export function PageMarkingSection({
               value={draft.level}
               onChange={(e) => setDraft((prev) => ({ ...prev, level: e.target.value as ClassificationLevel }))}
             >
-              {levelOptions.map(({ level, name }) => {
-                // §21.6: a level above your own clearance is a marking you
-                // could not then read, so it is never offered — the reason
-                // travels with the option instead of arriving after a refusal.
-                const unavailable = viewer !== null && !levelIsWithinClearance(level, viewer.clearance)
-                return (
-                  <FormControlLabel
-                    key={level}
-                    value={level}
-                    disabled={unavailable || busy}
-                    control={<Radio size="small" />}
-                    // MUI greys a disabled label to `text.disabled`, which is
-                    // below 4.5:1 — and the reason a level is unavailable is
-                    // exactly the text a user needs to be able to read.
-                    sx={{ '& .MuiFormControlLabel-label.Mui-disabled': { color: 'text.secondary' } }}
-                    label={
-                      <Box component="span" sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 1 }}>
-                        <Box component="span" sx={{ fontWeight: 600 }}>
-                          {name}
-                        </Box>
-                        {unavailable && (
-                          <>
-                            {/* An explicit space: both spans are inline, so
-                                without it the accessible name concatenates to
-                                "OFFICIAL_SENSITIVEAbove your clearance". The
-                                flex gap swallows it visually. */}
-                            {' '}
-                            <Typography component="span" variant="caption" color="text.secondary">
-                              {ABOVE_CLEARANCE_REASON}
-                            </Typography>
-                          </>
-                        )}
-                      </Box>
-                    }
-                  />
-                )
-              })}
+              {levelOptions.map(({ level, name }) => (
+                // Every level, to everyone: there is no clearance in this
+                // deployment for a level to sit above, so none is greyed and
+                // none carries a reason.
+                <FormControlLabel
+                  key={level}
+                  value={level}
+                  disabled={busy}
+                  control={<Radio size="small" />}
+                  label={
+                    <Box component="span" sx={{ fontWeight: 600 }}>
+                      {name}
+                    </Box>
+                  }
+                />
+              ))}
             </RadioGroup>
+            <FormHelperText sx={{ ml: 0 }}>{LEVEL_IS_DISPLAY_NOTE}</FormHelperText>
           </FormControl>
 
           {categoriesError !== undefined && (
@@ -323,19 +302,11 @@ export function PageMarkingSection({
           {categories.length > 0 && (
             <FormControl component="fieldset" sx={{ display: 'block' }}>
               <FormLabel component="legend">Selectors</FormLabel>
-              <FormHelperText sx={{ ml: 0, mb: 1 }}>
-                At most one value per category. A reader must be eligible for the category and granted the value
-                in this space.
-              </FormHelperText>
+              <FormHelperText sx={{ ml: 0, mb: 1 }}>{SELECTOR_RULE_NOTE}</FormHelperText>
               <Stack spacing={1.5}>
                 {categories.map((category) => {
                   const current = draft.selectors[category.name] ?? null
                   const storedValue = stored.selectors[category.name] ?? null
-                  // §21.15's eligibility gate: a category this caller's token
-                  // does not qualify them for is a marking they could not then
-                  // read, whatever value it held — so the whole picker is
-                  // unavailable, with the reason where the values would be.
-                  const eligible = viewer === null || selectorEligible(category.name, viewer.selectorEligibility)
                   // The page's own value stays offered even where the catalog
                   // no longer lists it, so what the page carries can be seen
                   // and cleared.
@@ -349,7 +320,7 @@ export function PageMarkingSection({
                       size="small"
                       label={category.name}
                       value={current ?? NO_VALUE}
-                      disabled={busy || !eligible}
+                      disabled={busy}
                       onChange={(e) =>
                         setDraft((prev) => ({
                           ...prev,
@@ -359,14 +330,8 @@ export function PageMarkingSection({
                           },
                         }))
                       }
-                      helperText={
-                        !eligible
-                          ? notEligibleReason(category.name)
-                          : (category.description ?? 'None means this page carries no selector in this category.')
-                      }
-                      // Same reason as the level labels: the reason a picker is
-                      // unavailable has to stay readable.
-                      sx={{ maxWidth: 420, '& .MuiFormHelperText-root.Mui-disabled': { color: 'text.secondary' } }}
+                      helperText={category.description ?? 'None means this page carries no selector in this category.'}
+                      sx={{ maxWidth: 420 }}
                     >
                       <MenuItem value={NO_VALUE}>None</MenuItem>
                       {values.map((value) => {

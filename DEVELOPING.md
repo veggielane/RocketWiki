@@ -59,13 +59,15 @@ receives all OpenTelemetry (traces/metrics/logs) automatically.
 
 The AppHost also injects the **dev selector catalog**
 (`ProtectiveMarking:SelectorCategories`, design.md §21.15) into the API: two
-categories, `FRUIT` (claim `fruit`; values `APPLE`, `BANANA`) and `REGION`
-(no claim, so everyone is eligible; values `NORTH`, `SOUTH`). The realm's
-`fruit` user attribute — `yes` on some dev users and not others, per
-`src/RocketWiki.AppHost/keycloak/README.md` — is what makes a user eligible
-for FRUIT-marked pages; a space's access grants decide which values they then
-hold. It lives in `AppHost.cs` rather than `appsettings.Development.json` so
-the `WebApplicationFactory` test tier never picks it up by accident.
+categories, `FRUIT` (values `APPLE`, `BANANA`) and `REGION` (values `NORTH`,
+`SOUTH`). A category names no Keycloak attribute: a space's access grants
+alone decide which values a user holds there, so to read a FRUIT-marked page
+a dev user needs an access grant carrying that value and nothing on their
+account. (The realm's `fruit` attribute and the per-category eligibility gate
+it fed were removed on 2026-09-04 — see
+`src/RocketWiki.AppHost/keycloak/README.md`.) It lives in `AppHost.cs` rather
+than `appsettings.Development.json` so the `WebApplicationFactory` test tier
+never picks it up by accident.
 
 **The GraphQL IDE.** Nitro (Hot Chocolate's built-in IDE) is served at the API's
 `/graphql` in Development — open that URL in a browser and you get a schema
@@ -205,24 +207,27 @@ Marking fixtures in the API tier (design.md §21.15), worth knowing before
 you write a test that touches a selector:
 
 - `RocketWikiApiFactory` configures its own selector catalog — the dev pair
-  `FRUIT` (claim `fruit`; `APPLE`, `BANANA`) and `REGION` (no claim; `NORTH`,
-  `SOUTH`) plus a third, claim-less `SENTINEL` category whose only value is
-  the telemetry-hygiene sentinel `ZZSENTINELSELECTORZZ`, so a page nobody is
-  granted can exist for the hygiene sweeps. The factory stamps the catalog
-  into the DbContext options itself (`UseSelectorCatalog`), because its
-  replacement `AddDbContext` registration bypasses `Program.cs`'s wiring.
-- `SetTestUser(..., selectorClaims: ["fruit"])` emits each named claim as
-  `(claim, "yes")`; the `claims:` parameter is the escape hatch for any other
-  value.
+  `FRUIT` (`APPLE`, `BANANA`) and `REGION` (`NORTH`, `SOUTH`) plus a third,
+  `SENTINEL` category whose only value is the telemetry-hygiene sentinel
+  `ZZSENTINELSELECTORZZ`, so a page nobody is granted can exist for the
+  hygiene sweeps. The factory stamps the catalog into the DbContext options
+  itself (`UseSelectorCatalog`), because its replacement `AddDbContext`
+  registration bypasses `Program.cs`'s wiring.
+- `SetTestUser(...)` takes `groups:`, `nationality:` and `roles:`; the
+  `claims:` parameter is the escape hatch for any other claim. There is no
+  clearance and no selector-claim parameter any more — nothing on the token
+  gates a level or a category — so the way to give a test user a selector is
+  an access grant carrying it, and the way to deny them one is to withhold
+  that grant (design.md §21.15).
 - A raw MCP POST in a test must send `Accept: application/json,
   text/event-stream`, or the server answers a JSON-RPC "Not Acceptable"
   before any tool runs and an "the sentinel is absent" assertion passes
   vacuously — one such test was found that way.
-- `KeycloakClaimParityTests` reads every `ClaimName` the dev AppHost
-  configures (`ProtectiveMarking__SelectorCategories__N__ClaimName` in
-  `AppHost.cs`) and fails unless the dev realm has a mapper emitting each,
-  so a new gated category needs its mapper in `rocketwiki-realm.json` in the
-  same change.
+- `KeycloakClaimParityTests` pins the dev realm to exactly the three claims
+  the API reads — `groups`, `nationality` and `roles` — and fails if a mapper
+  for any of them is missing from `rocketwiki-realm.json`. It no longer reads
+  `AppHost.cs`: a selector category names no claim, so adding one needs no
+  mapper.
 
 ## Changing the GraphQL schema
 
@@ -335,9 +340,10 @@ kind of waste. Action versions are kept current by `.github/dependabot.yml`
   structurally. Set `ProtectiveMarking:SelectorCategories` (see
   `docs/CONFIGURATION.md`) to match what the AppHost injects, e.g.
   `ProtectiveMarking__SelectorCategories__0__Name=FRUIT`,
-  `…__0__ClaimName=fruit`, `…__0__Values__0=APPLE`, `…__0__Values__1=BANANA`.
-  Invalid values fail the host at startup rather than silently configuring
-  nothing.
+  `…__0__Values__0=APPLE`, `…__0__Values__1=BANANA`. There is no `ClaimName`
+  key — a category names no Keycloak attribute (design.md §21.15) — and a
+  leftover one from an older environment binds to nothing. Invalid values
+  fail the host at startup rather than silently configuring nothing.
 
 ## Deployment
 

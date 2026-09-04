@@ -179,18 +179,18 @@ public class CoreTelemetryTests
     [InlineData("no-space-access", "no-space-access")]
     [InlineData("replica-read-only", "replica-read-only")]
     [InlineData("insufficient-space-role", "insufficient-space-role")]
-    // design.md §21's marking reasons collapse the same way, and the level is dropped
-    // rather than kept as a bounded four-value tag: a "denials by classification level"
-    // series would be a census of how much SECRET and TOP SECRET content exists and how
-    // hard it is being probed, published to whatever audience the dashboard has.
-    [InlineData("classification:top_secret", "classification")]
-    [InlineData("classification:official_sensitive", "classification")]
+    // design.md §21's marking reasons collapse the same way. The missing-row token is
+    // the one marking series worth a dashboard: a non-zero count is a bug losing rows.
+    [InlineData("marking:unavailable", "marking-unavailable")]
     [InlineData("caveat:eyes_only", "caveat")]
-    // design.md §21.15: the three selector tokens collapse to one word, and the category
-    // name is dropped for the same census reason the level is.
-    [InlineData("selector:not_eligible:FRUIT", "selector")]
+    // design.md §21.15: the two selector tokens collapse to one word, and the category
+    // name is dropped: a per-category series would be a census of which compartments
+    // exist and how hard each is probed, published to whatever audience the dashboard has.
     [InlineData("selector:unknown:FRUIT", "selector")]
     [InlineData("selector:not_granted:FRUIT", "selector")]
+    // The level no longer gates, so its token is no longer minted; were one to arrive
+    // (an old row replayed through some future path) it must not sprout a series either.
+    [InlineData("classification:top_secret", "other")]
     [InlineData(null, "none")]
     [InlineData("something-new-nobody-mapped", "other")]
     public void CategorizeDenialReason_CollapsesToABoundedVocabulary(string? reason, string expected) =>
@@ -199,16 +199,17 @@ public class CoreTelemetryTests
     [Fact]
     public void CategorizeDenialReason_NeverLetsAMarkingLevelOrCountryReachAMetricTag()
     {
-        // The countries never appear in a reason string at all (ClearanceGate.EyesOnlyReason
-        // is a constant), and the level is collapsed away here. Together that is what keeps
-        // the marking's contents out of every metric dimension (design.md §15).
-        Assert.Equal("classification", CoreTelemetry.CategorizeDenialReason("classification:top_secret"));
+        // The countries never appear in a reason string at all (CaveatGate.EyesOnlyReason
+        // is a constant), the level appears in none since it stopped gating, and a stray
+        // level token is collapsed to "other" rather than given a series. Together that is
+        // what keeps the marking's contents out of every metric dimension (design.md §15).
         Assert.DoesNotContain("secret", CoreTelemetry.CategorizeDenialReason("classification:top_secret"));
         Assert.DoesNotContain("GB", CoreTelemetry.CategorizeDenialReason("caveat:eyes_only"));
+        Assert.DoesNotContain("FRUIT", CoreTelemetry.CategorizeDenialReason("selector:not_granted:FRUIT"));
     }
 
     [Fact]
-    public void PermissionCheck_OnAClassificationDenial_TagsOnlyTheCollapsedCategory()
+    public void PermissionCheck_OnACaveatDenial_TagsOnlyTheCollapsedCategory()
     {
         using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
 
@@ -220,12 +221,33 @@ public class CoreTelemetryTests
             Principal());
 
         var check = Assert.Single(checks.GetMeasurementSnapshot());
-        Assert.Equal("classification", check.Tags[CoreTelemetry.DenialReasonTag]);
+        Assert.Equal("caveat", check.Tags[CoreTelemetry.DenialReasonTag]);
         foreach (var tag in check.Tags)
         {
             Assert.DoesNotContain("SENTINELCOUNTRY", $"{tag.Key}={tag.Value}", StringComparison.OrdinalIgnoreCase);
+            // The level rides on the marking and never reaches a tag - it is not even
+            // a reason any more.
             Assert.DoesNotContain("top_secret", $"{tag.Key}={tag.Value}", StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    [Fact]
+    public void PermissionCheck_OnAnUnavailableMarking_TagsTheMissingRowSeries()
+    {
+        // The one marking series an operator should alert on: a page with no marking row
+        // is a bug losing rows, and the tag says so without naming the page.
+        using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
+
+        Compute(
+            [AccessGrant("""{ "everyone": true }""")],
+            [],
+            isReplicaSpace: false,
+            ProtectiveMarking.FailClosed,
+            Principal());
+
+        var check = Assert.Single(checks.GetMeasurementSnapshot());
+        Assert.Equal("marking-unavailable", check.Tags[CoreTelemetry.DenialReasonTag]);
+        Assert.Equal(false, check.Tags[CoreTelemetry.CanViewTag]);
     }
 
     [Fact]
@@ -248,8 +270,7 @@ public class CoreTelemetryTests
     {
         // design.md §15/§21.15: a selector category is bounded configured vocabulary, but a
         // per-category series would be a census of which compartments exist and how hard
-        // each is probed. Neither the category, the value, nor the eligibility claim's
-        // value may reach a metric tag.
+        // each is probed. Neither the category nor the value may reach a metric tag.
         using var checks = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.permission_checks");
         using var evaluations = new MetricCollector<long>(CoreTelemetry.Meter, "rocketwiki.access.rule_evaluations");
 
@@ -257,11 +278,11 @@ public class CoreTelemetryTests
             [AccessGrant("""{ "everyone": true }""")],
             [],
             isReplicaSpace: false,
-            ProtectiveMarking.Create(ClassificationLevel.Official, null, [TestCatalogs.Apple]),
-            Principal(attributes: new() { [TestCatalogs.FruitClaim] = ["SENTINEL-CLAIM"] }));
+            ProtectiveMarking.Create(ClassificationLevel.Official, null, [new SelectorValue("FRUIT", "SENTINEL-VALUE")]),
+            Principal(attributes: new() { ["nationality"] = ["SENTINEL-CLAIM"] }));
 
         Assert.False(permission.CanView);
-        Assert.Equal("selector:not_eligible:FRUIT", permission.ViewDenialReason);
+        Assert.Equal("selector:not_granted:FRUIT", permission.ViewDenialReason);
 
         var check = Assert.Single(checks.GetMeasurementSnapshot());
         Assert.Equal("selector", check.Tags[CoreTelemetry.DenialReasonTag]);

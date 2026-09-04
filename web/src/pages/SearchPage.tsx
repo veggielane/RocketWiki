@@ -313,7 +313,7 @@ export function SearchPage() {
                       ))}
                     </Breadcrumbs>
                   )}
-                  {/* design.md §21: results are already clearance-filtered
+                  {/* design.md §21: results are already permission-filtered
                       server-side, so the badge is not a gate — it tells a
                       reader scanning a list how sensitive each hit is before
                       they open it. The level only; the page's own banners

@@ -31,20 +31,17 @@ namespace RocketWiki.Api.Tests.Integration;
 /// than relying on execution order.
 ///
 /// <para><b>The selector catalog</b> (design.md §21.15) is the one every tier shares —
-/// <c>FRUIT</c> (<c>APPLE</c>, <c>BANANA</c>) gated by the <c>fruit</c> claim and
-/// <c>REGION</c> (<c>NORTH</c>, <c>SOUTH</c>) gated by nobody, the same vocabulary as
-/// Core.Tests' <c>TestCatalogs</c> and the dev AppHost — plus a third, claim-less
-/// <see cref="SentinelSelectorCategory"/> whose only value is a telemetry-hygiene
-/// sentinel: a page carrying it is readable by nobody (no grant confers it), so its
-/// placeholder label travels through every disclosing surface and the §15 sweep has
-/// something to find if a selector value ever reaches a span or a metric tag.</para>
+/// <c>FRUIT</c> (<c>APPLE</c>, <c>BANANA</c>) and <c>REGION</c> (<c>NORTH</c>,
+/// <c>SOUTH</c>), the same vocabulary as Core.Tests' <c>TestCatalogs</c> and the dev
+/// AppHost — plus a third, <see cref="SentinelSelectorCategory"/>, whose only value is a
+/// telemetry-hygiene sentinel: a page carrying it is readable by nobody (no grant confers
+/// it), so its placeholder label travels through every disclosing surface and the §15
+/// sweep has something to find if a selector value ever reaches a span or a metric tag.
+/// No category names a claim: a selector is decided by the space's grant alone.</para>
 /// </summary>
 public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
 {
-    /// <summary>The claim gating <c>FRUIT</c> eligibility, as the dev realm's mapper names it.</summary>
-    public const string FruitClaim = "fruit";
-
-    /// <summary>The claim-less category that carries only the hygiene sentinel value.</summary>
+    /// <summary>The category that carries only the hygiene sentinel value.</summary>
     public const string SentinelSelectorCategory = "SENTINEL";
 
     /// <summary>A selector value that must never appear in telemetry (design.md §15/§21.8).</summary>
@@ -95,17 +92,14 @@ public sealed class RocketWikiApiFactory : WebApplicationFactory<Program>
                 // ProtectiveMarkingConfiguration exactly as a deployment's environment is.
                 ["ProtectiveMarking:SelectorCategories:0:Name"] = "FRUIT",
                 ["ProtectiveMarking:SelectorCategories:0:Description"] = "Fruit programme compartments",
-                ["ProtectiveMarking:SelectorCategories:0:ClaimName"] = FruitClaim,
                 ["ProtectiveMarking:SelectorCategories:0:Values:0"] = "APPLE",
                 ["ProtectiveMarking:SelectorCategories:0:Values:1"] = "BANANA",
                 ["ProtectiveMarking:SelectorCategories:1:Name"] = "REGION",
                 ["ProtectiveMarking:SelectorCategories:1:Description"] = "Regional releasability",
-                ["ProtectiveMarking:SelectorCategories:1:ClaimName"] = "",
                 ["ProtectiveMarking:SelectorCategories:1:Values:0"] = "NORTH",
                 ["ProtectiveMarking:SelectorCategories:1:Values:1"] = "SOUTH",
                 ["ProtectiveMarking:SelectorCategories:2:Name"] = SentinelSelectorCategory,
                 ["ProtectiveMarking:SelectorCategories:2:Description"] = "Telemetry hygiene sentinel",
-                ["ProtectiveMarking:SelectorCategories:2:ClaimName"] = "",
                 ["ProtectiveMarking:SelectorCategories:2:Values:0"] = SentinelSelectorValue,
             });
         });

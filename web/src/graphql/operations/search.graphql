@@ -38,7 +38,7 @@ query SearchPages($query: String!, $spaceKey: String, $labels: [String!], $first
           id
           title
           spaceKey
-          # design.md §21: results are already post-filtered by clearance, so
+          # design.md §21: results are already post-filtered by access, so
           # every hit here is one the caller may read — the level is carried
           # so a reader scanning results knows how sensitive each hit is
           # without opening it. Only `level` is used in a list (§21.4's label

@@ -39,7 +39,7 @@ import { parseRuleNode, serializeRuleNode } from '../access/ruleSerializer'
 import type { AttributeOption } from '../access/attributeOption'
 import type { ValidationResult } from '../access/builderState'
 import type { RuleNode } from '../access/ruleTypes'
-import type { SelectorValue } from '../markings/clearance'
+import type { SelectorValue } from '../markings/markingRefusal'
 
 const ROLE_LABELS: Record<SpaceRole, string> = { EDITOR: 'Editor', SPACE_ADMIN: 'Space admin' }
 

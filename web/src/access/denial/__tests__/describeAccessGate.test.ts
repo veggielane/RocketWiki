@@ -10,12 +10,16 @@ const passing = (gate: AccessGate, detail: Partial<GateCheck> = {}): GateCheck =
  * put beside each gate. Pinned word for word: the help text names them, and
  * a reader is meant to recognise the same sentence on the protected screen,
  * on a tree leaf and in the inspector.
+ *
+ * No sentence mentions a clearance or an eligibility, because no gate is
+ * about one: the ladder is space access, the marking being present, the
+ * selector grant, the national caveat and restrictions, then replica and
+ * role for editing.
  */
 describe('accessGateTitle', () => {
   it('names every gate on the ladder', () => {
     expect(accessGateTitle('SPACE_ACCESS')).toBe('Space access')
-    expect(accessGateTitle('CLASSIFICATION')).toBe('Clearance')
-    expect(accessGateTitle('SELECTOR_ELIGIBILITY')).toBe('Eligibility')
+    expect(accessGateTitle('MARKING_UNAVAILABLE')).toBe('Marking')
     expect(accessGateTitle('SELECTOR_GRANT')).toBe('Selector grant')
     expect(accessGateTitle('NATIONAL_CAVEAT')).toBe('National caveat')
     expect(accessGateTitle('RESTRICTION')).toBe('Restriction')
@@ -33,24 +37,21 @@ describe('describeAccessGate — failing', () => {
     expect(describeAccessGate(failing('SPACE_ACCESS'))).toBe('You have no access to this space.')
   })
 
-  it('names the required clearance, and what the reader holds when that is known', () => {
-    expect(
-      describeAccessGate(failing('CLASSIFICATION', { requiredLevelName: 'SECRET' }), { heldLevelName: 'OFFICIAL-SENSITIVE' }),
-    ).toBe('Needs SECRET clearance; you hold OFFICIAL-SENSITIVE.')
-    expect(describeAccessGate(failing('CLASSIFICATION', { requiredLevelName: 'SECRET' }))).toBe('Needs SECRET clearance.')
-    // The inspector's rows carry no level detail; the sentence still stands.
-    expect(describeAccessGate(failing('CLASSIFICATION'))).toBe('Above your clearance.')
+  it('says a missing marking shuts everyone out, as a fact about the page rather than the reader', () => {
+    expect(describeAccessGate(failing('MARKING_UNAVAILABLE'))).toBe(
+      "This page's marking is missing, so nobody can read it until it is restored.",
+    )
   })
 
-  it('names the category for eligibility and the value for a grant', () => {
-    expect(describeAccessGate(failing('SELECTOR_ELIGIBILITY', { category: 'FRUIT' }))).toBe(
-      'Not eligible for FRUIT material.',
-    )
+  it('names the value for a grant, or the category when that is all it has', () => {
     expect(describeAccessGate(failing('SELECTOR_GRANT', { category: 'FRUIT', value: 'APPLE' }))).toBe(
       'APPLE is not granted to you in this space.',
     )
     expect(describeAccessGate(failing('SELECTOR_GRANT', { category: 'FRUIT' }))).toBe(
       'No FRUIT value is granted to you in this space.',
+    )
+    expect(describeAccessGate(failing('SELECTOR_GRANT'))).toBe(
+      'A selector value on this page is not granted to you in this space.',
     )
   })
 
@@ -75,18 +76,27 @@ describe('describeAccessGate — failing', () => {
     )
     expect(describeAccessGate(failing('ROLE'))).toBe('Needs a role grant in this space.')
   })
+
+  it('never mentions a clearance or an eligibility, in either state, whatever detail arrives', () => {
+    const gates: AccessGate[] = ['SPACE_ACCESS', 'MARKING_UNAVAILABLE', 'SELECTOR_GRANT', 'NATIONAL_CAVEAT', 'RESTRICTION', 'REPLICA', 'ROLE']
+    const detail = { category: 'FRUIT', value: 'APPLE', countries: ['AUS'], ruleId: 'rule-9', inherited: true, requiredRole: 'EDITOR' as const }
+    for (const gate of gates) {
+      expect(describeAccessGate(failing(gate, detail))).not.toMatch(/clearance|eligib/i)
+      expect(describeAccessGate(passing(gate, detail))).not.toMatch(/clearance|eligib/i)
+      expect(accessGateTitle(gate)).not.toMatch(/clearance|eligib/i)
+    }
+  })
 })
 
 describe('describeAccessGate — passing (the inspector)', () => {
   it('says what the reader holds, gate by gate', () => {
     expect(describeAccessGate(passing('SPACE_ACCESS'))).toBe('You hold an access grant in this space.')
-    expect(
-      describeAccessGate(passing('CLASSIFICATION', { requiredLevelName: 'SECRET' }), { heldLevelName: 'TOP SECRET' }),
-    ).toBe('SECRET clearance required; you hold TOP SECRET.')
-    expect(describeAccessGate(passing('CLASSIFICATION'))).toBe('Your clearance covers this page.')
-    expect(describeAccessGate(passing('SELECTOR_ELIGIBILITY', { category: 'FRUIT' }))).toBe('Eligible for FRUIT material.')
+    expect(describeAccessGate(passing('MARKING_UNAVAILABLE'))).toBe("This page's marking is present.")
     expect(describeAccessGate(passing('SELECTOR_GRANT', { category: 'FRUIT', value: 'APPLE' }))).toBe(
       'APPLE is granted to you in this space.',
+    )
+    expect(describeAccessGate(passing('SELECTOR_GRANT'))).toBe(
+      'Every selector value on this page is granted to you in this space.',
     )
     expect(describeAccessGate(passing('NATIONAL_CAVEAT', { countries: ['AUS', 'NZ'] }))).toBe(
       'Releasable to AUS/NZ; you qualify.',

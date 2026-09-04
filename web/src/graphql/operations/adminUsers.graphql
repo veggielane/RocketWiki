@@ -1,8 +1,8 @@
 # The account roster for the site-admin users screen (instance-admin only,
 # and reading it is itself audited as `admin.users.view`).
 #
-# **Identity and activity, and nothing else.** There is no clearance,
-# nationality or group field to select: those are ephemeral token claims,
+# **Identity and activity, and nothing else.** There is no nationality or
+# group field to select: those are ephemeral token claims,
 # never stored per user, so the roster cannot become a second, stale copy of
 # who is allowed what. A screen that listed them would be answering a question
 # the wiki is deliberately not the authority on.

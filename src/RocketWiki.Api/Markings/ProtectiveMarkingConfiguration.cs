@@ -8,7 +8,7 @@ namespace RocketWiki.Api.Markings;
 /// Wires the protective-marking configuration (design.md §21.15): the
 /// <c>ProtectiveMarking:SelectorCategories</c> section becomes ONE validated
 /// <see cref="SelectorCatalog"/>, registered as a singleton for the GraphQL vocabulary
-/// query, the principal builder and every formatter, and stamped into the DbContext
+/// query and every formatter, and stamped into the DbContext
 /// options (<c>UseSelectorCatalog</c>) for every gate the data layer runs. One object,
 /// both consumers — the formatter and the gate cannot read two vocabularies.
 ///
@@ -47,7 +47,7 @@ public static class ProtectiveMarkingConfiguration
                 "ProtectiveMarking:SelectorCategories is invalid; see the startup exception for the failing category.")
             .ValidateOnStart();
 
-        // One instance for the process: the GraphQL vocabulary, the principal builder,
+        // One instance for the process: the GraphQL vocabulary,
         // every formatter and (through ConfigureDbContext below) every gate read this
         // same object. SelectorCatalog.Create throws on the first invalid definition,
         // naming the category — the same rule ValidateOnStart already enforced.
@@ -67,5 +67,5 @@ public static class ProtectiveMarkingConfiguration
     /// validation happen in <see cref="SelectorCatalog.TryCreate"/>, not here.</summary>
     public static IEnumerable<SelectorCategory> ToDefinitions(ProtectiveMarkingOptions options) =>
         (options.SelectorCategories ?? []).Select(c =>
-            new SelectorCategory(c.Name ?? string.Empty, c.Description, c.ClaimName, c.Values ?? []));
+            new SelectorCategory(c.Name ?? string.Empty, c.Description, c.Values ?? []));
 }

@@ -27,12 +27,14 @@ public class PageEntryServiceTests : SqliteTestBase
 
     private static Principal Caller() => Principal.Create("caller-sub", []);
 
-    /// <summary>A principal cleared to SECRET. Clearance is a registered attribute, read
-    /// by ClearanceGate.ResolveClearance — not a role.</summary>
-    private static Principal ClearedCaller(string clearance) =>
+    /// <summary>A principal holding a nationality — the one principal-side fact an entry's
+    /// marking is compared against (the eyes-only caveat, §21.4). The plain
+    /// <see cref="Caller"/> holds none, so a UK EYES ONLY entry is out of its reach; the
+    /// level alone puts nothing out of anyone's reach.</summary>
+    private static Principal NationalCaller(params string[] nationality) =>
         Principal.Create("caller-sub", [], new Dictionary<string, IReadOnlyList<string>>
         {
-            ["clearance"] = [clearance],
+            ["nationality"] = nationality,
         });
 
     private async Task<(RocketWikiDbContext Context, Page Page, User Actor)> SeedAsync(
@@ -125,15 +127,15 @@ public class PageEntryServiceTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task List_PrunesEntriesAboveTheCallersClearance_AndSaysNothingAboutThem()
+    public async Task List_PrunesEntriesOutOfTheCallersReach_AndSaysNothingAboutThem()
     {
         // THE test. A fully-pruned collection must be indistinguishable from an empty one:
-        // no count, no total, no gap. A number that moved when classified entries existed
+        // no count, no total, no gap. A number that moved when caveated entries existed
         // would report their existence to someone §21 has already decided must not learn it.
         var (context, page, actor) = await SeedAsync();
         using var _ = context;
         var service = NewService(context);
-        var cleared = ClearedCaller("SECRET");
+        var cleared = NationalCaller("UK");
 
         await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", """{"n":1}"""), Caller(), actor.Id, AuditCtx);
@@ -141,12 +143,12 @@ public class PageEntryServiceTests : SqliteTestBase
         {
             var secret = await service.CreateAsync(
                 new CreatePageEntryRequest(page.Id, "notes", $$"""{"n":{{i}}}""",
-                    ProtectiveMarking.Create(ClassificationLevel.Secret, [], prefix: "UK")),
+                    ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], prefix: "UK")),
                 cleared, actor.Id, AuditCtx);
             Assert.True(secret.IsSuccess, $"{secret.Error}");
         }
 
-        // An OFFICIAL-cleared caller sees exactly the one entry they may read.
+        // A caller with no nationality sees exactly the one entry they may read.
         var official = Assert.IsType<ReadResult<IReadOnlyList<PageEntryView>>.Found>(
             await service.ListAsync(page.Id, "notes", Caller())).Value;
         Assert.Equal("""{"n":1}""", Assert.Single(official).Data);
@@ -169,8 +171,8 @@ public class PageEntryServiceTests : SqliteTestBase
 
         await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "classified", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.Secret, [], prefix: "UK")),
-            ClearedCaller("SECRET"), actor.Id, AuditCtx);
+                ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], prefix: "UK")),
+            NationalCaller("UK"), actor.Id, AuditCtx);
 
         var pruned = Assert.IsType<ReadResult<IReadOnlyList<PageEntryView>>.Found>(
             await service.ListAsync(page.Id, "classified", Caller())).Value;
@@ -182,7 +184,7 @@ public class PageEntryServiceTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task Get_OfAnEntryAboveClearance_IsDeniedNotReturned()
+    public async Task Get_OfAnEntryOutOfTheCallersReach_IsDeniedNotReturned()
     {
         var (context, page, actor) = await SeedAsync();
         using var _ = context;
@@ -190,8 +192,8 @@ public class PageEntryServiceTests : SqliteTestBase
 
         var created = await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.Secret, [], prefix: "UK")),
-            ClearedCaller("SECRET"), actor.Id, AuditCtx);
+                ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], prefix: "UK")),
+            NationalCaller("UK"), actor.Id, AuditCtx);
         Assert.True(created.IsSuccess);
 
         var read = await service.GetAsync(created.Value.Id, Caller());
@@ -211,7 +213,7 @@ public class PageEntryServiceTests : SqliteTestBase
         var result = await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
                 ProtectiveMarking.Create(ClassificationLevel.Official, [], prefix: "UK")),
-            ClearedCaller("SECRET"), actor.Id, AuditCtx);
+            NationalCaller("UK"), actor.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
         Assert.IsType<ValidationError>(result.Error);
@@ -221,17 +223,26 @@ public class PageEntryServiceTests : SqliteTestBase
     public async Task Create_WithAMarkingTheCallerCouldNotThenRead_IsRefused()
     {
         // §21.6's rule, applied per entry: it also stops someone writing a record they
-        // can never afterwards correct.
+        // can never afterwards correct. The caller holds no nationality, so a US EYES
+        // ONLY entry would be out of their reach; the level alone never is (§21.12), so
+        // the same caller may file a TOP SECRET entry with no caveat.
         var (context, page, actor) = await SeedAsync();
         using var _ = context;
 
         var result = await NewService(context).CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.TopSecret, [], prefix: "UK")),
+                ProtectiveMarking.Create(ClassificationLevel.Official, ["US"], prefix: "UK")),
             Caller(), actor.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
         Assert.IsType<ForbiddenError>(result.Error);
+
+        var topSecret = await NewService(context).CreateAsync(
+            new CreatePageEntryRequest(page.Id, "notes", "{}",
+                ProtectiveMarking.Create(ClassificationLevel.TopSecret, [], prefix: "UK")),
+            Caller(), actor.Id, AuditCtx);
+
+        Assert.True(topSecret.IsSuccess, $"{topSecret.Error}");
     }
 
     [Fact]
@@ -243,7 +254,7 @@ public class PageEntryServiceTests : SqliteTestBase
         using var _ = context;
 
         var created = await NewService(context).CreateAsync(
-            new CreatePageEntryRequest(page.Id, "notes", "{}"), ClearedCaller("SECRET"), actor.Id, AuditCtx);
+            new CreatePageEntryRequest(page.Id, "notes", "{}"), NationalCaller("UK"), actor.Id, AuditCtx);
 
         Assert.True(created.IsSuccess, $"{created.Error}");
         Assert.Equal(ClassificationLevel.Secret, created.Value.Marking.Level);
@@ -271,18 +282,18 @@ public class PageEntryServiceTests : SqliteTestBase
     }
 
     [Fact]
-    public async Task Update_OfAnEntryAboveClearance_LooksLikeItDoesNotExist()
+    public async Task Update_OfAnEntryOutOfTheCallersReach_LooksLikeItDoesNotExist()
     {
         // Not a Forbidden: a distinguishable refusal would let a caller discover that an
-        // entry exists at an id, and — because clearance is checked before the version —
+        // entry exists at an id, and — because the marking is checked before the version —
         // would also leak its version through which error came back.
         var (context, page, actor) = await SeedAsync();
         using var _ = context;
         var service = NewService(context);
         var created = await service.CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
-                ProtectiveMarking.Create(ClassificationLevel.Secret, [], prefix: "UK")),
-            ClearedCaller("SECRET"), actor.Id, AuditCtx);
+                ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], prefix: "UK")),
+            NationalCaller("UK"), actor.Id, AuditCtx);
 
         var result = await service.UpdateAsync(
             new UpdatePageEntryRequest(created.Value.Id, 1, """{"x":1}"""), Caller(), actor.Id, AuditCtx);
@@ -354,10 +365,42 @@ public class PageEntryServiceTests : SqliteTestBase
         var result = await NewService(context).CreateAsync(
             new CreatePageEntryRequest(page.Id, "notes", "{}",
                 ProtectiveMarking.Create(ClassificationLevel.Official, [], [TestCatalogs.Apple], "UK")),
-            ClearedCaller("SECRET"), actor.Id, AuditCtx);
+            NationalCaller("UK"), actor.Id, AuditCtx);
 
         Assert.False(result.IsSuccess);
         Assert.Contains("selectors", Assert.IsType<ValidationError>(result.Error).Message, StringComparison.Ordinal);
         Assert.Empty(context.PageEntries.ToList());
+    }
+
+    [Fact]
+    public async Task AnUnavailableEntry_IsDeniedToEveryone_PrunedFromListings_AndLooksAbsentToAnUpdate()
+    {
+        // design.md §21.10: an entry whose row says "unknown" (the sync importer's write
+        // for a payload carrying no marking) reads as FailClosed on every path, for the
+        // most generous caller there is - its TOP SECRET level is the sentinel's
+        // rendering, not what denies. The page itself stays readable.
+        var (context, page, actor) = await SeedAsync();
+        using var _ = context;
+        var service = NewService(context);
+        var created = await service.CreateAsync(
+            new CreatePageEntryRequest(page.Id, "notes", """{"n":1}"""), Caller(), actor.Id, AuditCtx);
+        Assert.True(created.IsSuccess, $"{created.Error}");
+        context.PageEntries.Single(e => e.Id == created.Value.Id).IsUnavailable = true;
+        await context.SaveChangesAsync();
+
+        var everyone = Principal.Create("caller-sub", ["engineering"], new Dictionary<string, IReadOnlyList<string>>
+        {
+            ["nationality"] = ["AUS", "CAN", "NZ", "UK", "US"],
+        });
+
+        var denied = Assert.IsType<ReadResult<PageEntryView>.Denied>(await service.GetAsync(created.Value.Id, everyone));
+        Assert.Equal("marking:unavailable", denied.Reason);
+        Assert.Empty(Assert.IsType<ReadResult<IReadOnlyList<PageEntryView>>.Found>(
+            await service.ListAsync(page.Id, "notes", everyone)).Value);
+
+        var update = await service.UpdateAsync(
+            new UpdatePageEntryRequest(created.Value.Id, 1, """{"n":2}"""), everyone, actor.Id, AuditCtx);
+        Assert.IsType<NotFoundError>(update.Error);
+        Assert.True(context.PageEntries.Single(e => e.Id == created.Value.Id).IsUnavailable);
     }
 }

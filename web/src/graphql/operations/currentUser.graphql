@@ -14,21 +14,18 @@ query CurrentUser {
     isInstanceAdmin
     localUserId
     hasAvatar
-    # design.md §21: the caller's OWN clearance, nationality and selector
-    # eligibility, resolved server-side through the same gate paths
-    # enforcement uses. They exist so the marking control can PREVENT rather
-    # than refuse — a level above this clearance, an eyes-only set holding
-    # none of these nationalities, or a selector in a category this caller is
-    # not eligible for, is a marking §21.6 would reject and the UI therefore
-    # never offers. Affordance data, never a decision: the server enforces.
+    # design.md §21: the caller's OWN nationality, canonicalised server-side
+    # on the same path the caveat gate reads. It exists so the marking
+    # control can PREVENT rather than refuse — an eyes-only set holding none
+    # of these nationalities is a marking the caller could not then read,
+    # which the server rejects and the UI therefore warns about before the
+    # save. Affordance data, never a decision: the server enforces.
     #
-    # `clearance` is never absent: a token without a usable value resolves to
-    # OFFICIAL_SENSITIVE (§21.3's floor), and this is that resolved value.
-    # `selectorEligibility` lists CATEGORY names — every category with no
-    # attribute gate, plus the gated ones this token satisfies — in the
-    # instance's configured order.
-    clearance
+    # No clearance and no selector eligibility, and that is the access model
+    # rather than an omission: this deployment carries neither attribute, so
+    # nothing compares a classification level against a person (any editor
+    # may set any level) and a selector is gated by the per-space grants
+    # alone (`Space.viewerSelectorGrants`).
     nationality
-    selectorEligibility
   }
 }

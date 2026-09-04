@@ -230,9 +230,7 @@ Built per request from the validated access token:
 Principal {
   userId:     sub claim
   groups:     groups claim            (managed in Keycloak)
-  attributes: { nationality: "NZ",    (from registered claims, see 6.2)
-                clearance: "SECRET",  (well-known key, §21.3)
-                fruit: "yes", … }     (one claim per configured selector category, §21.15)
+  attributes: { nationality: ["NZ"] } (the one registered claim — see 6.2 and §21.4)
 }
 ```
 
@@ -240,17 +238,19 @@ Rules always evaluate against the **token**, never the local mirror — a change
 in Keycloak takes effect on the user's next token refresh, not next login.
 The local `User` row mirrors claims at each request for display/admin UI only.
 
-The selector claims are the one attribute family that is **not** declared in the
-registry (§6.2): `PrincipalBuilder` maps every `ClaimName` the configured
-selector catalog names. JIT provisioning (§11.3) mirrors those same claims
-into the `User` row beside nationality and clearance — raw values, never a
-derived "eligible" — since the profile page (§6.2, 2026-09-03) began showing
-each person's eligibility; the mirror is display data for that page and the
-admin roster, and it is never an authorization input — the gate reads the
-token. Eligibility is the literal value `yes` (trimmed, compared
-case-insensitively) and nothing else: a boolean-shaped claim leaves nothing to
-misparse, so `true`, `1` or a list of codewords cannot be read as consent by a
-mapper that emits them by accident.
+**Groups and nationality are the whole of it, and that is a reversal.**
+`PrincipalBuilder` is a static with a compile-time claim list — `groups` and
+`nationality` — so a claim nobody listed there can never become an attribute a
+rule or a gate matches on by accident. It briefly carried two more: a
+`clearance` attribute, compared against a page's classification level, and one
+claim per configured selector category, whose literal `yes` made the holder
+eligible for that category. Both went on 2026-09-04, with the gates that read
+them (§21.2), because this deployment's Keycloak carries neither attribute: a
+gate that compares against a claim nobody emits protects nothing — it denies
+everyone on a made-up floor, or, given a default, calls the default a control.
+The JIT mirror (§11.3) records `nationality` (for the admin roster) and
+`groups` (for the profile page, §6.2), raw and never interpreted; it is display
+data and never an authorization input — the gate reads the token.
 
 ### 6.2 Attribute registry
 
@@ -266,36 +266,47 @@ A small config table declaring which claims become rule-usable attributes:
 Attributes are stored and managed in **Keycloak** (single source of truth);
 RocketWiki only declares which ones exist and mirrors current values.
 Nationality is sensitive personal data: its mirrored values are visible to
-instance admins only, and only registered attributes and the configured
-selector claims (§21.15) are ever stored.
+instance admins only. The mirror records registered attributes and the
+`groups` claim (§11.3) and nothing else — `nationality` is the only attribute
+the marking side reads (§21.4), and the selector categories (§21.15) are
+deployment configuration that names no claim at all.
 
 **The profile page, and the census it accepts (product decision,
-2026-09-03).** Every user has a profile page, readable by every signed-in
-user (`userProfile(id)`, §8), showing the **clearance** and the **selector
-eligibility** per configured category that the person's claims carried at
-their last sign-in. Both are resolved through the same gate functions
-enforcement runs — over a `Principal` rebuilt from the mirror — so the page
-says what the gate would have decided from those claims, never a friendlier
-reading of them: an unrecognised clearance shows "Not recorded" — the API still resolves it to the
-OFFICIAL-SENSITIVE floor with `clearanceRecorded: false`, and the page shows that
-flag rather than the floor as a clearance they hold; a `fruit` claim that is not `yes` shows not
-eligible. The page says "as of their last sign-in" in words and carries no
-timestamp. This is a deliberate widening of what `userDirectory` refused, and
-it is recorded here so nobody mistakes it for an oversight: the directory
-carries no rule-engine attribute because a directory of them is a
-who-holds-what-clearance census, and a profile page is exactly that census
-one person at a time — an insider with one ordinary account can learn,
-profile by profile, whose credentials would reach a given level or
-compartment. The product owner accepted that exposure on 2026-09-03; the
-everyday use is a colleague checking whether a person may be shown a level
-or a compartment before sharing it. Two bounds hold the widening where it
-is. The directory itself is unchanged (`UserRef` only), so a census is still
-one profile request per person rather than one list — a rate, not a barrier,
-and it is stated as such rather than counted as a control; and **nationality,
-email and last-seen remain admin-only** on the audited `users` roster —
-nationality because it is sensitive personal data, email and last-seen
-because together they are a surveillance surface (§15's reasoning). The
-mirror is still never read for an authorization decision (§6.1).
+2026-09-03; reshaped 2026-09-04).** Every user has a profile page, readable
+by every signed-in user (`userProfile(id)`, §8), showing the **group
+memberships** the person's token carried at their last sign-in — the same
+`groups` claim every access grant, role grant and restriction is written
+against (§6.3). It is read straight from the mirror, sorted ordinally, and
+interpreted by nothing: there is no gate to re-run over a group name. The page
+says "as of their last sign-in" in words and carries no timestamp. This is a
+deliberate widening of what `userDirectory` refused, and it is recorded here
+so nobody mistakes it for an oversight: the directory carries no rule-engine
+attribute because a directory of them is a who-holds-what census, and a
+profile page is exactly that census one person at a time — an insider with
+one ordinary account can learn, profile by profile, who is in which group, and
+therefore whose account a given grant admits. The product owner accepted that
+exposure on 2026-09-03; the everyday use is a colleague checking which groups
+a person is in before writing a grant or a restriction meant to include them.
+Two bounds hold the widening where it is. The directory itself is unchanged
+(`UserRef` only), so a census is still one profile request per person rather
+than one list — a rate, not a barrier, and it is stated as such rather than
+counted as a control; and **nationality, email and last-seen remain
+admin-only** on the audited `users` roster — nationality because it is
+sensitive personal data, email and last-seen because together they are a
+surveillance surface (§15's reasoning). The mirror is still never read for an
+authorization decision (§6.1).
+
+*What the page showed for one day, and why it stopped.* As first shipped the
+profile showed the person's **clearance** and their **selector eligibility**
+per category, both re-derived through the gates from the mirrored claims so
+that the page said what the gate would have decided. Those gates left the
+engine on 2026-09-04 (§21.2: this deployment carries neither attribute in
+Keycloak), so there was nothing left to derive — the page would have shown a
+floor nobody holds and an eligibility nobody has. Group membership replaced
+them because it is the fact that actually decides access here, and the census
+argument above was re-weighed for it rather than assumed to carry over:
+knowing who is in `export-cleared` is closer to knowing whom a grant admits
+than a clearance ever was, and the owner accepted that on the same reasoning.
 
 **The registry is rule-builder vocabulary, not marking vocabulary.** The
 `nationality` row's allowed values once doubled as the eyes-only caveat's
@@ -339,11 +350,12 @@ strings never reach a rule in normal use.
 
 Two confined departures from ordinal matching exist, both inside the marking
 gate (§21) and neither in an `attr` condition: the eyes-only caveat's country
-tokens (§21.4), and a selector's category and value tokens together with the
-`yes` eligibility value (§21.15), are trimmed and compared case-insensitively.
-The reason is the same in both places and is spelled out in §21.4 — the two
-sides come from different systems that were never guaranteed to agree on case,
-and failing closed on a casing difference is an outage, not security.
+tokens (§21.4), and a selector's category and value tokens (§21.15), are
+trimmed and compared upper-cased. The reason is the same in both places and is
+spelled out in §21.4 — the two sides come from different systems that were
+never guaranteed to agree on case, and failing closed on a casing difference
+is an outage, not security. (A third, the literal `yes` of the
+selector-eligibility claim, went with that claim on 2026-09-04 — §21.15.)
 
 ### 6.4 Access grants, role grants and page restrictions
 
@@ -369,7 +381,7 @@ Three kinds of `AccessRule`, with different semantics:
 nothing else. The earlier model had one grant kind whose roles nested
 `space-admin ⊃ editor ⊃ viewer`, so a role *implied* visibility: "who may read"
 and "who may act" were one dial. Export-control audiences need them to be two.
-A space's administrator is routinely not cleared for its content; an editor
+A space's administrator is routinely outside its content's audience; an editor
 for one compartment must not see another's; and a reader granted `APPLE`
 material holds no opinion about who may edit it. Separating the two kinds makes
 each question answerable on its own, and makes the answer to the first one
@@ -381,8 +393,7 @@ Effective permission:
 
 ```
 canView(page)   = S: some access grant in the space matches
-                  AND C: clearance ≥ page's level                          [§21.3]
-                  AND E: eligible for every selector's category            [§21.15]
+                  AND the page's marking row exists                        [§21.5]
                   AND G: every selector granted by a matched access grant  [§21.15]
                   AND N: caveat empty, or nationality ∩ caveat ≠ ∅         [§21.4]
                   AND R: every view-restriction on page + ancestors passes
@@ -393,15 +404,19 @@ canManage(space) = space-admin role grant OR instance admin — needs no access
 comment         = requires canView
 ```
 
-The four conjuncts C, E, G and N are the **protective marking** (§21): every
-page carries a UK Government classification, zero or more additional selectors
-and an optional eyes-only caveat, and the marking gates view access rather than
-merely being displayed. It is a third kind of thing on top of grants and
-restrictions, not a variant of either, and its defining property is that it can
-only ever **subtract** — no grant, no restriction, and no role widens a marking.
-It is applied inside the same `EffectivePermissionCalculator` gate walk that
-evaluates S and R, so every read path inherits it structurally rather than by
-remembering. Full treatment in §21.
+The conjuncts G and N, with the availability check ahead of them, are the
+**protective marking** (§21): every page carries a UK Government
+classification, zero or more additional selectors and an optional eyes-only
+caveat. The selectors and the caveat gate view access; the classification and
+the national prefix are presentational — they say what the content is and are
+compared against nobody (§21.12). The marking is a third kind of thing on top
+of grants and restrictions, not a variant of either, and its defining property
+is that it can only ever **subtract** — no grant, no restriction, and no role
+widens a marking. It is applied inside the same `EffectivePermissionCalculator`
+gate walk that evaluates S and R, so every read path inherits it structurally
+rather than by remembering. Until 2026-09-04 the ladder had two more rungs, C
+(clearance ≥ level) and E (eligible for every selector's category); §21.2
+records why they went. Full treatment in §21.
 
 On a **replica space** (§12), `canEdit` is unconditionally false — the
 read-only invariant of one-way sync beats every grant and restriction. All
@@ -470,14 +485,16 @@ access), but every rule change is audited (who, when, before/after), so
 widening access always leaves a trace.
 
 **Nor do they bypass a protective marking (§21).** The same rule, applied to the
-marking conjuncts of `canView`: an instance admin without the clearance,
-eligibility or nationality a page's marking demands sees that page exactly as
+marking conjuncts of `canView`: an instance admin without the selector grant
+or the nationality a page's marking demands sees that page exactly as
 everyone else without it does — as a `(protected)` placeholder, or not at all
 (§6.7). Unlike a rule, an admin cannot edit their way past it either: re-marking
 a page requires `canEdit`, which already includes the marking gate against the
 page's current marking, so a page you cannot see is a page you cannot re-mark
-downward. Clearance, nationality and selector eligibility all live in Keycloak,
-not in RocketWiki, which is what keeps that door shut.
+downward. Nationality lives in Keycloak, not in RocketWiki, and a selector
+value is conferred only by an access grant in the space — which an admin can
+write for themselves, but only as an audited rule change (§6.5.2). Both doors
+open by leaving a trace, or not at all.
 
 **Nor do they hold space access by virtue of the role.** `canManage` needs no
 access grant and an access grant confers no management (§6.4), and the instance
@@ -576,11 +593,12 @@ Rule systems fail in the UI, not the engine:
   whether an access grant admits the subject (`hasSpaceAccess`), the space
   role (role grants only, and reported even when access is absent, so a
   manager can see why they may manage what they cannot read), **every gate**
-  as a structured pass/fail list — S, C, E, G, N, R for view; replica, role
-  and the edit chain for edit — and each restriction with pass/fail per
-  condition. A selector gate row carries the category and value in question;
-  the classification and caveat rows carry no level or country set of their
-  own, because the page's `marking` sits beside them.
+  as a structured pass/fail list — S, marking availability, G, N, R for view;
+  replica, role and the edit chain for edit — and each restriction with
+  pass/fail per condition. A selector gate row carries the category and value
+  in question; the caveat row carries no country set of its own on the
+  inspector, because the page's `marking` sits beside it; the availability
+  row carries nothing, because nothing about the subject is in it.
   Note this needs a **non-short-circuiting** evaluation path: the enforcement
   gate stops at the first failing gate (correct and cheap), but an
   inspector that stops there can only ever show one reason, which is the
@@ -698,26 +716,28 @@ indistinguishable from a nonexistent one on *every* read path, and it was
 right about the leak it prevented: existence, and often a title, disclosed to
 someone with no right to know. What it got wrong was the audience. A reader
 who holds access to a space and meets a gap in its tree, or a link that goes
-nowhere, cannot tell whether the page was deleted, moved, or is above their
-clearance — and "ask a space admin for a grant" is only possible if you know
-there is something to ask for. Inside a space, existence is already half
-disclosed by links, breadcrumbs and conversation; what the placeholder adds
-is an honest name for the gap and the reason for it, so that the fix (a
-clearance, an eligibility attribute, a selector grant) can be requested
-instead of guessed at. Outside the space, nothing changes: no marking, no
+nowhere, cannot tell whether the page was deleted, moved, or carries a
+selector they are not granted — and "ask a space admin for a grant" is only
+possible if you know there is something to ask for. Inside a space, existence
+is already half disclosed by links, breadcrumbs and conversation; what the
+placeholder adds is an honest name for the gap and the reason for it, so that
+the fix (a selector grant, a corrected nationality, a restriction revisited)
+can be requested instead of guessed at. Outside the space, nothing changes: no
+marking, no
 position, no tree. The line is drawn at the access grant because that is
 where the system already decides who is "inside".
 
 **Always on, not a toggle.** An earlier plan (`docs/RESTRICTED-PLACEHOLDERS-PLAN.md`,
 now deleted — this section supersedes it) proposed an opt-in instance setting
-showing placeholders for restriction denials only, never for classification.
+showing placeholders for restriction denials only, never for marking denials
+(the plan called them classification denials; the level gated then).
 Both halves were rejected. A per-instance switch means an "absent" answer has
 two meanings — "does not exist" or "you may not see it and the operator chose
 not to say" — and every test, help page, MCP client and audit reviewer would
 have to know which instance they were looking at; one behaviour is the only
 thing an auditor can be told. And disclosing restriction denials while hiding
-classification ones makes the *gap itself* a signal: no placeholder would
-mean "classified", which is precisely the disclosure the distinction was
+marking ones makes the *gap itself* a signal: no placeholder would
+mean "compartmented", which is precisely the disclosure the distinction was
 trying to avoid. Disclosing every gate, uniformly, to everyone inside the
 space, with no gate silently privileged, is the honest version.
 
@@ -737,7 +757,8 @@ that returns bare `null` makes denial auditing impossible — that is the
 anti-pattern to avoid.
 
 **The recorded reason is deterministic.** A denial's audit reason names the
-*first failing gate* in the fixed order S, C, E, G, N, R (§21.2) — the
+*first failing gate* in the fixed order S, marking availability, G, N, R
+(§21.2) — the
 placeholder lists every failing gate, the audit row names one — and within R
 the *first failing restriction*, so "first" has to mean something stable:
 restrictions are always evaluated **root-most ancestor first, the page's own
@@ -1065,8 +1086,8 @@ sortOrder, denial }` (no id, slug, icon, labels or children — the union makes
 a placeholder structurally unable to carry them); `Page.linkTargets:
 [PageLinkTarget { id, page, denial }]` and `Page.parentDenial`; `AccessDenial
 { placeholderTitle, noSpaceAccess, marking, reasons: [GateResult] }` over
-`AccessGate { SPACE_ACCESS, CLASSIFICATION, SELECTOR_ELIGIBILITY,
-SELECTOR_GRANT, NATIONAL_CAVEAT, RESTRICTION, REPLICA, ROLE }`, the last two
+`AccessGate { SPACE_ACCESS, MARKING_UNAVAILABLE, SELECTOR_GRANT,
+NATIONAL_CAVEAT, RESTRICTION, REPLICA, ROLE }`, the last two
 reachable only through the inspector's new `viewGates`/`editGates`. Grants:
 `AccessRuleKind { ACCESS_GRANT, ROLE_GRANT, PAGE_RESTRICTION }` (`SPACE_GRANT`
 gone) and `SpaceRole { EDITOR, SPACE_ADMIN }` (`VIEWER` **removed, not
@@ -1078,23 +1099,30 @@ discriminator, manage-gated. Markings: `PageMarkingView.ukPrefix: Boolean!`
 and `selectors` (`prefix` removed); `SetPageMarkingRequestInput { ukPrefix!,
 eyesOnly: [NationalCaveatCountry!]!, selectors }` — the caveat enum is on the
 *input* only, the output stays `[String!]!` so a legacy token can never break
-serialisation; `Query.selectorCategories` (names, descriptions, values and
-whether an attribute is required — never the claim name, which is deployment
-plumbing an attacker would otherwise be told to forge);
-`CurrentUser.selectorEligibility`. MCP is unchanged in shape and keeps
+serialisation; `Query.selectorCategories` (names, descriptions and values — nothing about
+any claim, because a category names none). MCP is unchanged in shape and keeps
 omitting on every tool; `get_page_tree` drops placeholders before mapping.
 
 **The profile page (§6.2, 2026-09-03) adds `userProfile(id: UUID!):
-UserProfile`** — `id`, `displayName`, `hasAvatar`, `isExternal`, `clearance`
-with `clearanceName` and `clearanceRecorded` (false when no recognised
-clearance claim was recorded, so the floor reads as a floor), and
-`selectorEligibility: [SelectorEligibilityStatus { category,
-requiresAttribute, eligible }]` over every configured category in catalog
-order. Readable by any signed-in user; anonymous and unknown id are both null,
-like `page`. Unaudited on `userDirectory`'s reasoning, with the widening
-stated plainly in the field's own `[NoAudit]` declaration. Resolved through
-the gates over the mirrored claims (§6.2), fetching exactly one row's mirror.
-`userDirectory` is unchanged.
+UserProfile`** — `id`, `displayName`, `hasAvatar`, `isExternal` and
+`groups: [String!]!`, the memberships recorded at the person's last sign-in,
+in ordinal order. Readable by any signed-in user; anonymous and unknown id are
+both null, like `page`. Unaudited on `userDirectory`'s reasoning, with the
+widening stated plainly in the field's own `[NoAudit]` declaration. Read
+straight from one row's mirror (§6.2); nothing is derived. `userDirectory` is
+unchanged.
+
+**Dropping the clearance and eligibility gates (§21.2, 2026-09-04) is a
+fourth breaking batch, and it removes rather than adds.** `CurrentUser` loses
+`clearance` and `selectorEligibility` and keeps `nationality`; `UserProfile`
+loses `clearance`, `clearanceName`, `clearanceRecorded` and
+`selectorEligibility` (the `SelectorEligibilityStatus` type goes with them)
+and gains `groups`; `SelectorCategory` loses `requiresAttribute`; `GateResult`
+loses `requiredLevel` and `requiredLevelName`, since no gate has a level to
+require; `AccessGate` loses `CLASSIFICATION` and `SELECTOR_ELIGIBILITY` and
+gains `MARKING_UNAVAILABLE` (§21.5). The server refuses a document that still
+selects a removed field, which is the honest failure — a client quietly
+handed a null clearance would draw a floor that no longer exists.
 
 ```
 POST /attachments/{pageId}   multipart upload
@@ -1649,11 +1677,16 @@ and hit the same bearer-token validation — one auth path for every channel.
 ### 11.3 JIT user provisioning
 
 On each authenticated request, middleware upserts the local `User` row from
-claims (JIT provisioning), including registered attributes (§6.2) and, since
-the profile page (§6.2, 2026-09-03), every configured selector claim (§21.15)
-— the raw claim values, so that eligibility is derived at read time, through
-the gate, against the catalog current then. The mirror feeds the admin roster
-and the profile page; the gate still reads the token (§11.4).
+claims (JIT provisioning). The attribute mirror records exactly two claims:
+`nationality` (the registered attribute, §6.2, for the admin roster) and
+`groups` (for the profile page, §6.2) — the same two `PrincipalBuilder` maps,
+so the mirror and the principal cannot disagree about which claims exist.
+Raw values, in token order, every key present (an empty list when the token
+carried no such claim), so "recorded as none" is distinguishable from "never
+recorded". It briefly also recorded the clearance claim and every configured
+selector claim, so the profile could re-run those gates over them; the gates
+went on 2026-09-04 (§21.2) and the claims stopped being recorded with them.
+The gate still reads the token (§11.4).
 
 ### 11.4 The request principal
 
@@ -1663,22 +1696,31 @@ for authorization decisions.
 
 ### 11.5 Keycloak realm requirements
 
-Keycloak setup required: a `groups` protocol mapper and one mapper per
-registered attribute (e.g. `nationality`) on the RocketWiki client, so the
-claims actually appear in access tokens.
+Keycloak setup required: three protocol mappers on the RocketWiki client —
+`groups`, `nationality` and the realm `roles` — so the claims actually appear
+in access tokens, plus an audience mapper naming the API client. That is the
+whole list: `KeycloakClaimParityTests` pins the dev realm to exactly it, and
+`src/RocketWiki.AppHost/keycloak/README.md` says what production must
+reproduce.
 
-Three of those mappers have a fixed contract on the marking side (§21):
+Two of those claims have a fixed contract:
 
 - `nationality` must emit tokens from the fixed caveat set `AUS`, `CAN`, `NZ`,
   `UK`, `US` (§21.4). Any other token is ignored by canonicalisation, so a
   mapper still emitting `GB` leaves the user with **no** nationality — every
   eyes-only page denied, visible as an empty `me.nationality` — rather than a
-  silent partial match.
-- `clearance` emits a wire name (§21.3); absent or unrecognised resolves to
-  OFFICIAL-SENSITIVE.
-- One **single-valued string mapper per configured selector category** that
-  names a `ClaimName` (§21.15), whose value is exactly `yes` for eligible
-  users. A category with no `ClaimName` needs no mapper — everyone is eligible.
+  silent partial match. It is the only attribute the marking side reads.
+- `roles` must be a flat claim (Keycloak's nested `realm_access.roles` is
+  never flattened by the bearer handler); it is what the instance-admin check
+  reads (§6.5).
+
+**Two mappers this section used to require are gone, and production must not
+add them back.** A `clearance` mapper emitting a level's wire name, and one
+single-valued mapper per configured selector category whose `yes` marked the
+holder eligible, fed the C and E gates (§21.2). Those gates were removed on
+2026-09-04 because this deployment carries neither attribute in Keycloak; a
+claim by either name is now read by nothing, so mapping one would be inert at
+best and, at worst, a promise to an operator that a control exists.
 
 ---
 
@@ -1863,7 +1905,7 @@ Defense in depth: the one-way guarantee is the whole point of the design.
 | Attachments (bytes + metadata) | Audit log — each side keeps its own |
 | Comments made on low | Users and logins — each side has its own Keycloak |
 | Page **restrictions** (fail closed: a group/attribute unknown on high matches nobody) | Search index + embeddings — recomputed locally on import (§9.4) |
-| Page **protective markings** (§21) — a page that is SECRET on low is SECRET wherever it lands, **selector values included** (they cross verbatim with the marking; bundle format 3, §21.10). Same fail-closed reading as restrictions: an eyes-only country outside the fixed set, or a selector whose category or value the high side has not configured, matches nobody, so the page arrives *more* restricted — visible to nobody until a high-side operator configures the category and a high-side admin grants the value. A page can never land unmarked — an upsert carrying no marking creates the row at TOP SECRET | Clearance, nationality and selector **eligibility** — each side's Keycloak decides who holds what (§21.3, §21.15), exactly as it decides group membership; and selector **grants** — the high side's access grants decide which values its readers hold in the replica, exactly as they decide who may see it at all |
+| Page **protective markings** (§21) — a page that is SECRET on low is SECRET wherever it lands, **selector values included** (they cross verbatim with the marking; bundle format 3, §21.10). Same fail-closed reading as restrictions: an eyes-only country outside the fixed set, or a selector whose category or value the high side has not configured, matches nobody, so the page arrives *more* restricted — visible to nobody until a high-side operator configures the category and a high-side admin grants the value. A page can never land unmarked — an upsert carrying no marking creates the row in the recorded *unavailable* state, readable by nobody until the origin sends a declared marking (§21.10); it is that recorded state that denies, not the level, which is presentational (§21.12) | Nationality — each side's Keycloak decides who holds which (§21.4), exactly as it decides group membership; and selector **grants** — the high side's access grants decide which values its readers hold in the replica, exactly as they decide who may see it at all (§21.15). There is no clearance and no selector eligibility on either side to stay local: the level is presentational everywhere (§21.12) |
 | | Space **lifecycle and identity** — name, description, archived state, and the default page (`HomepageId`). Spaces aren't a sync event type: import creates the replica row from the space key alone, so renaming, archiving or re-pointing a replica's default page is legitimate local curation (like grants), not a blocked content write. The default page has a second reason of its own: it is a page *reference*, and each side holds a different subset of pages — a low-side homepage could name a page the high side has no row for. Page ids survive sync, so a replica's admin picks from what actually landed there |
 | | Custom emoji **definitions** (§19) — content carrying `:name:` syncs as plain text and degrades to literal text on an instance whose registry lacks the name. Syncing the registry is a flagged future decision (collision question: same name, different image, different instances). User avatars likewise never travel |
 
@@ -2386,12 +2428,15 @@ Data-layer outcomes ungroupable alongside every other area's.
   `restriction:{pageId}:{ruleId}`; as a metric dimension that becomes one
   series per rule, so it collapses to `restriction`. The audit log keeps the
   specific reason, which is where it belongs. The marking gates collapse the
-  same way (§21.8): `classification:{level}` to `classification`,
+  same way (§21.8): `marking:unavailable` to `marking-unavailable`,
   `caveat:eyes_only` to `caveat`, every `selector:*` token to a single
   `selector` — never per category and never per value, because a
   denials-by-codeword series is a map of the compartmented estate —
   and `no-space-access` as itself. An unmapped token lands in `other` rather
-  than minting a series.
+  than minting a series. That is also what keeps the retired
+  `classification:{level}` mapping from coming back by accident: the token is
+  never minted now (§21.12), and were one ever to appear it would land in
+  `other` rather than reopen a per-level series.
 - **A marking never reaches a tag.** Not the label, not a level, not a caveat
   country, not a selector category or value (§21.8, §21.13). The selector
   catalog's startup log line prints the *count* of configured categories and
@@ -2555,8 +2600,12 @@ grants, whose DDL is not yet written (§7, §14). The k3s deployment (milestone
       fence, edited via the diagrams.net iframe embed protocol against a
       self-hosted instance. No schema/API changes; diagrams are ordinary
       page Markdown to everything but the SPA.
-- [ ] Which attributes beyond nationality? (clearance level, employer/contractor
-      status?) Each needs a Keycloak attribute + protocol mapper.
+- [ ] Which attributes beyond nationality? (employer/contractor status?) Each
+      needs a Keycloak attribute + protocol mapper. Clearance is *off* this
+      list: it was built as one and removed on 2026-09-04, because this
+      deployment's Keycloak carries no such attribute (§21.12 records the
+      reversal). Bringing it back means bringing back a gate, not adding a
+      registry row.
 - [ ] Audit retention: how long must events be kept, and where do archived
       partitions go (cheap SQL table, object storage, SIEM)? Note audit is
       now the sole record of access-rule history (§7), so its retention
@@ -3016,12 +3065,18 @@ Every page carries a **protective marking**, in four parts: an optional national
 an optional *eyes-only* caveat naming the countries the page is releasable to —
 together, `UK SECRET APPLE NORTH AUS/NZ EYES ONLY`.
 
-Three of the four gate access. The prefix does not, at all, ever (§21.12).
+Two of the four gate access: the selectors (§21.15) and the caveat (§21.4).
+The prefix does not, at all, ever, and since 2026-09-04 neither does the
+classification (§21.12) — this deployment carries no clearance attribute for a
+level to be compared against, so the level says what the content *is* and
+decides nothing about who may read it.
 
-**It enforces.** A marking is not a banner the author draws and the reader
-respects; it gates who can view the page, on every read path, exactly as a page
-restriction does. That is the whole reason it exists, and every other decision
-in this section follows from it.
+**The parts that gate, enforce.** A selector or a caveat is not a banner the
+author draws and the reader respects; it gates who can view the page, on every
+read path, exactly as a page restriction does. That is the reason those parts
+exist, and every other decision in this section follows from it. The
+classification is the honest exception: a statement, carried and rendered with
+the same rigour, whose whole job is to be read.
 
 ### 21.1 The scheme
 
@@ -3031,23 +3086,31 @@ Fixed, ordered, and not configurable:
 OFFICIAL  <  OFFICIAL_SENSITIVE  <  SECRET  <  TOP_SECRET
 ```
 
-The ordering **is** the comparison — a principal may view a page when their
-clearance is at or above the page's level — so the four values are hard-coded as
-a `ClassificationLevel` enum with load-bearing numeric values (`tinyint` in the
-database, so the comparison is numeric on every provider). The scheme is set by
-policy, not by an admin, which is precisely what makes hard-coding it safe: there
-is no fifth level to insert, and a member inserted in the middle would silently
-re-rank everything below it. Numbering starts at **1**, so
+The ordering is the **display order**, and the order §21.13's aggregate takes
+its maximum by — and until 2026-09-04 it was the access comparison too: a
+principal could view a page when their clearance was at or above its level.
+That comparison is gone (§21.12 records the reversal); the ordering stays,
+because a picker lists the four in scheme order and a compilation is marked at
+the highest level of its sources, and both are facts about the scheme rather
+than about any reader. So the four values remain hard-coded as a
+`ClassificationLevel` enum with load-bearing numeric values (`tinyint` in the
+database, so the maximum is numeric on every provider). The scheme is set by
+policy, not by an admin, which is precisely what makes hard-coding it safe:
+there is no fifth level to insert, and a member inserted in the middle would
+silently re-rank everything below it. Numbering starts at **1**, so
 `default(ClassificationLevel)` is not a valid level and an uninitialized value
 can never read as OFFICIAL.
 
 Three spellings of a level exist and they are deliberately different things: the
-**wire name** (`OFFICIAL_SENSITIVE`) is what the `clearance` claim, the sync
-payload, the audit `DetailsJson` and the GraphQL enum all use; the **display
-name** (`OFFICIAL-SENSITIVE`, `TOP SECRET`) is the UK Government's own written
-form and appears only in the rendered marking; the **reason token**
-(`official_sensitive`) appears only in denial reasons. One method each, in
-`ProtectiveMarking`, so they cannot drift.
+**wire name** (`OFFICIAL_SENSITIVE`) is what the sync payload, the audit
+`DetailsJson` and the GraphQL enum all use (and what the retired `clearance`
+claim used); the **display name** (`OFFICIAL-SENSITIVE`, `TOP SECRET`) is the
+UK Government's own written form and appears only in the rendered marking; the
+**reason token** (`official_sensitive`) was the spelling denial reasons
+carried, and no denial reason names a level any more (§21.8) — the method
+survives, called by no gate, so that the spelling still has exactly one home
+if anything ever needs it. One method each, in `ProtectiveMarking`, so they
+cannot drift.
 
 "So they cannot drift" is only true if clients can *get* the display name, and
 two surfaces need a level's spelling on its own rather than a whole marking — a
@@ -3063,15 +3126,16 @@ are served from the server, from the same `ProtectiveMarking.LevelName`:
   but it is still wrong, which is why the two fields are named to be hard to
   confuse.
 - `Query.classificationScheme` — every level in **scheme order** with its display
-  name, for the picker, which has no marking in hand. The list order is the scheme
-  order, so a client never encodes that OFFICIAL sorts below SECRET. Deliberately
-  no numeric rank: the only use for one is comparing levels client-side, and the
-  comparisons that matter (may I read this, may I set this) are decisions the
-  server already makes and returns typed errors for.
+  name, for the picker, which has no marking in hand and offers all four to
+  every editor (§21.6). The list order is the scheme order, so a client never
+  encodes that OFFICIAL sorts below SECRET. Deliberately no numeric rank: the
+  only use for one is comparing levels client-side, and the level is compared
+  against nobody (§21.12) — a rank would be an invitation to invent a
+  comparison the server does not make.
 
 Without those two fields a client hard-codes four spellings and their order, which
 is exactly the second implementation this paragraph exists to forbid — and the
-order it would duplicate is the access comparison itself.
+order it would duplicate is the one §21.13's aggregate label takes its maximum by.
 
 **The label grammar** is one token stream, single-spaced, with no brackets:
 
@@ -3096,21 +3160,62 @@ Effective view access becomes:
 
 ```
 canView(page) = S: some access grant in the space matches                 [§6.4]
-                AND C: clearance ≥ level                                  [§21.3]
-                AND E: eligible for every selector's category             [§21.15]
+                AND the page's marking row exists (not FailClosed)        [§21.5]
                 AND G: every selector granted by a matched access grant   [§21.15]
                 AND N: caveat empty, or nationality ∩ caveat ≠ ∅          [§21.4]
                 AND R: every view-restriction on page + ancestors passes
 ```
 
-The marking is C, E, G and N together, and `MarkingGate` is their composition
-— the **one** entry point every marking check in the system goes through: the
-calculator, the tree walk, the self-lockout check when a marking is set
-(§21.6), the inspector's ancestor-title withholding (§6.6), page entries, and
-the notification fan-out. A source sweep pins that nothing outside Core calls
-`ClearanceGate.Check` or `SelectorGate.Check` directly — and inside Core only
-the composition and the gates themselves do — so a new call site cannot check
-the level and forget the selectors.
+The marking's gates are the availability check, G and N together, and
+`MarkingGate` is their composition — the **one** entry point every marking
+check in the system goes through: the calculator, the tree walk, the
+self-lockout check when a marking is set (§21.6), the inspector's
+ancestor-title withholding (§6.6), page entries, and the notification fan-out.
+A source sweep pins that nothing outside Core calls `CaveatGate.Check` or
+`SelectorGate.Check` directly — and inside Core only the composition and the
+gates themselves do — so a new call site cannot check the caveat and forget
+the selectors.
+
+**Two rungs came out of this ladder on 2026-09-04, and that reverses what
+this section argued for at length.** The ladder read S, C, E, G, N, R: C
+compared the principal's `clearance` attribute against the page's level, and
+E required a per-category Keycloak claim to say `yes` before the space's grant
+was even consulted. Both were removed — not defaulted, not parked behind a
+flag — because this deployment's Keycloak carries neither attribute. A gate
+that reads a claim nobody emits has two possible behaviours, and both are
+wrong. Deny everyone: E, as built, made every category that named a claim
+eligible to nobody, and C without a floor would have emptied every page above
+OFFICIAL for every user — an outage wearing a security badge, which pressures
+whoever is on call into switching the control off. Or default everyone: the
+OFFICIAL-SENSITIVE floor the retired §21.3 spent a page justifying, which on
+an instance with no mapper at all is not a floor but the whole population's
+permanent value — a comparison that partitions nobody, a control in name
+only. A control whose input does not exist is not a control, and keeping the
+code so that it "would work if the attribute arrived" is exactly the dormant,
+untestable branch this document refuses everywhere else. The old reasoning
+was not wrong about clearance in general; it assumed an identity provider
+that states clearances, and this one does not. The level is presentational
+now, like the prefix, and §21.12's argument covers both; selectors gate once,
+through the space's grants (§21.15). If a future deployment does carry a
+clearance attribute, the gate comes back as a gate — with the floor argument
+re-read for that deployment, not resurrected.
+
+**What replaced C at the front of the ladder is not a gate on the marking's
+content but on its existence.** `ProtectiveMarking.FailClosed`, the stand-in
+for a page whose marking is missing or recorded as unknown (§21.5, §21.10),
+used to deny by *being* TOP SECRET — the level was the gate, and TOP SECRET
+sat above every clearance. With the level presentational, a TOP SECRET
+marking with no selectors and no caveat would deny **nobody**: the bug that
+lost a page's marking row, or the sync import that had none to apply, would
+have quietly made that page readable by everyone with space access, the exact
+inversion of what "fail closed" means. So "marking unknown" is a distinct
+state carried by an explicit flag, `IsUnavailable`, never inferable from the
+level: true on the sentinel the read side substitutes for a missing row, and
+on the sentinel a row recorded as unknown reads back as. `MarkingGate` checks
+it first and denies everyone with its own reason, `marking:unavailable`
+(§21.8), before any selector or caveat is looked at. A real page legitimately
+marked TOP SECRET reads `false` there and is readable by whoever its selectors
+and caveat admit. §21.5 has the rest.
 
 **Nothing grants around it.** An access grant, a passing page restriction, an
 `editor` or `space-admin` role grant, the instance `admin` role — none of them
@@ -3120,8 +3225,8 @@ the check lives inside `EffectivePermissionCalculator`'s one gate walk, the
 computation every read path already funnels through, and there is no
 parameter, overload, or flag by which a caller can obtain a `canView` that
 skipped it. `canEdit` is reached only by falling through `canView`, so an
-editor who fails clearance loses edit too without the gate knowing edit
-exists. Note that G's input — the union of selector values over the access
+editor who is not granted a page's selector loses edit too without the gate
+knowing edit exists. Note that G's input — the union of selector values over the access
 grants the principal matches — is computed by the same walk that decides S,
 so a grant can only ever contribute values to a principal it also admits; a
 role grant contributes nothing to either.
@@ -3135,88 +3240,67 @@ batch — search post-filters hundreds of candidates, and an N+1 sitting on the
 hot path of the control itself would be the thing that gets the control turned
 off.
 
-Ordering inside the computation — S, then C, E, G, N, then R — affects only
-which reason a denial *reports*, never the verdict: every gate is a conjunct.
-S is reported first because "this principal may not see anything in this
-space" is the whole answer, and because it is what decides whether the
-marking is disclosed at all (§6.7). The marking gates are reported ahead of a
-failing restriction because "this principal has no business reading this page
-at all" is the more actionable answer for a reviewer, and because they are the
-cheaper checks, so a page the caller cannot be cleared for costs no rule
-evaluations. `Compute` stops at the first failure; `Explain` (§6.6) walks the
+Ordering inside the computation — S, then availability, G, N, then R —
+affects only which reason a denial *reports*, never the verdict: every gate is
+a conjunct. S is reported first because "this principal may not see anything
+in this space" is the whole answer, and because it is what decides whether the
+marking is disclosed at all (§6.7). Availability comes next because there is
+nothing to evaluate G or N against when it fails, and the marking gate then
+reports that single entry in both forms rather than listing vacuous selector
+and caveat passes. The marking
+gates are reported ahead of a failing restriction because "this principal has
+no business reading this page at all" is the more actionable answer for a
+reviewer, and because they are the cheaper checks, so a page whose selectors
+the caller is not granted costs no rule evaluations. `Compute` stops at the
+first failure; `Explain` (§6.6) walks the
 same ladder with short-circuiting off — one walk, one flag, so the order the
 placeholder lists gates in (§21.8) and the order the audit row names one in
 cannot drift apart.
 
-### 21.3 Clearance, and every fail-closed choice in it
+### 21.3 Clearance, and every fail-closed choice in it — retired 2026-09-04
 
-Clearance is an ordinary **principal attribute** (§6.1/§6.2) under the well-known
-key `clearance`, resolved per request from the token, never from the local `User`
-mirror. Expected claim values are the four wire names. Being an ordinary
-registered attribute is the point: it inherits §6.1's "evaluate the token" rule
-for free rather than needing its own plumbing.
+This section is left as a stub rather than renumbered away, in the document's
+habit of recording a reversal where it happened. It described the clearance
+gate: `clearance` as a well-known principal attribute holding a level's wire
+name; the OFFICIAL-SENSITIVE floor an absent or unrecognised claim resolved to
+(argued, at length, as the deliberate middle between "no clearance sees
+everything" and an outage that gets the control switched off); closed ordinal
+parsing of the four wire names; the highest-recognised rule for a multi-valued
+claim; and the normalization of an undefined stored level to TOP SECRET,
+because a `0` compared below every clearance and would have opened the page to
+everybody.
 
-- **Absent, unrecognised, or malformed clearance grants OFFICIAL-SENSITIVE —
-  and nothing above.** This is a deliberate middle, not a compromise. "No
-  clearance = see everything" is obviously wrong. "No clearance = see nothing"
-  is wrong in a subtler way: an unconfigured claim mapper would empty the entire
-  wiki for every user, which is an outage dressed as security and, worse, an
-  outage that pressures whoever is on call into turning the check off. The
-  floor began at OFFICIAL and moved **one notch**, for the same reason it
-  exists at all: OFFICIAL and OFFICIAL-SENSITIVE are the two everyday tiers of
-  the scheme — the material an organisation's ordinary staff handle without a
-  vetting decision ever being made about them — and a wiki whose clearance
-  mapper is unconfigured should leave both readable, exactly as they were
-  before markings existed. Stopping at OFFICIAL made routine
-  OFFICIAL-SENSITIVE content vanish for every user of such an instance, which
-  is the outage this bullet is written to avoid. SECRET is where a vetting
-  decision starts, and that is where the floor stops: absent clearance still
-  denies everything a clearance actually exists to protect. The doctrine is
-  unchanged — a missing attribute matches no condition
-  (`Attr_MissingAttribute_FailsClosed`), the principal gets nothing from the
-  attribute, and OFFICIAL-SENSITIVE is what nothing is worth. The floor is one
-  constant, `ClearanceGate.DefaultClearance`; `me.clearance` for an anonymous
-  or claimless caller echoes that same constant, so the affordance and the gate
-  cannot disagree about it. The floor is what an *absent or unrecognised*
-  claim is worth, not a minimum: a claim that says `OFFICIAL` is honoured as
-  OFFICIAL, one notch below it, because rounding a stated clearance up would
-  widen what the identity provider actually said.
-- **Parsing is closed and ordinal.** Only the four wire names parse.
-  `Enum.TryParse` is deliberately not used: it accepts the C# member spellings,
-  can be made case-insensitive, and — the reason it is disqualified — happily
-  parses `"4"` into `TOP_SECRET`, so a numeric claim value would grant the top of
-  the ladder.
-- **A multi-valued clearance claim takes the highest recognised value**, mirroring
-  §6.4's "your role is the highest whose expression you satisfy". Unrecognised
-  values are ignored rather than poisoning the result, so garbage can never raise
-  clearance and can never lower it below the OFFICIAL-SENSITIVE floor.
-- **A stored level outside the ladder becomes TOP SECRET.** `Level` is a tinyint,
-  so a hand-edited row, a botched restore or a future migration bug can present a
-  value the enum does not define, and the two failure directions are not
-  symmetric: a value *above* the ladder denies everyone (noisy but harmless),
-  while `0` — what an uninitialized tinyint is — compares as less than every
-  clearance and would make the page readable by **everybody**. That is a silent
-  bypass of the entire control, so `ProtectiveMarking.Create` normalizes an
-  undefined level at the one constructor rather than trusting it at each
-  comparison. Relatedly, the level-naming methods answer TOP SECRET for an
-  unknown value instead of throwing: an exception on a read path is a 500, a 500
-  is distinguishable from a not-found, and that is exactly the §6.7 leak the
-  denial design exists to prevent.
+The gate is gone, and with it the attribute, the floor, the multi-value rule
+and the SPA's affordance ladder (`web/src/markings/clearance.ts`, deleted).
+§21.2 records why: this deployment's Keycloak carries no clearance attribute,
+and a gate on a claim nobody emits is either an outage or a default
+masquerading as a control. The floor argument in particular does not survive
+re-reading in that light — it was a good answer to "what should an
+unconfigured mapper be worth" on an instance that *had* a mapper to configure,
+and here it would have been the whole population's permanent value. What was
+still load-bearing moved rather than vanished:
 
-  **The SPA does not match this exactly, on purpose — change both together.** Its
-  affordance ladder (`web/src/markings/clearance.ts`) ranks an unknown level
-  *above* TOP SECRET rather than normalizing it *to* TOP SECRET, so a TOP SECRET
-  principal is offered the page here and not there. The gap is only reachable when
-  the server knows a level the client does not, and on that path the affordance
-  should be the stricter side: a greyed-out level the server would have allowed
-  costs a click, while offering one it refuses is the failure the affordance
-  exists to prevent. Both sides pin their own direction by test. If this
-  normalization is ever revisited, revisit that one in the same change — the two
-  are deliberately a notch apart, which is exactly the kind of difference someone
-  later "fixes" into agreement without knowing it was chosen. The *floor*, by
-  contrast, is matched exactly: the SPA ranks an unknown clearance at
-  OFFICIAL-SENSITIVE as the server does, because there the two must agree or the
-  picker greys out a level the server would accept.
+- **The closed parser** lives on as `ProtectiveMarking.TryParseLevelWireName`,
+  because the sync importer still needs it (§21.10): a bundle may not smuggle a
+  level in through `Enum.TryParse`'s tolerance of `"4"` or the C# member
+  spellings, whether or not the level gates.
+- **Normalizing an undefined stored level to TOP SECRET** stays in
+  `ProtectiveMarking.Create`, no longer as an access-bypass fix but as an
+  honesty one: a marking is a statement about what the content is, and one
+  that rendered as nothing, or dragged a §21.13 aggregate down to an undefined
+  minimum, would misstate it on every surface. The naming methods still answer
+  TOP SECRET rather than throw for an undefined value, for §6.7's reason — a
+  500 on a read path is distinguishable from a not-found.
+- **The level-0 trap** — a value that reads as "nothing here" when it should
+  read as "everything here" — did not go away; it moved to the missing-row
+  sentinel, which used to deny by being TOP SECRET and now denies by an
+  explicit flag (§21.5). §21.13's empty-intersection argument cites it by that
+  description.
+
+Nothing else in this section is current. The level is presentational, like
+the prefix (§21.12); `me.clearance`, `UserProfile.clearance`,
+`GateResult.requiredLevel`, the `CLASSIFICATION` gate and the
+`classification:{level}` reason token no longer exist (§8, §21.8).
 
 ### 21.4 The eyes-only caveat
 
@@ -3260,8 +3344,8 @@ token rather than dropping it — a legacy `GB` row, or a bundle from an instanc
 with its own idea of the vocabulary, stays on the marking and **matches
 nobody**, which is the fail-closed reading; the mutation refuses one with a
 `ValidationError` naming the fixed set; and the principal side ignores unknown
-claim values (§21.3's "garbage can never raise clearance", applied to
-nationality).
+claim values — a foreign token holds nothing rather than poisoning the values
+beside it, so garbage can never widen what a principal holds.
 
 That upper-casing is a **documented, deliberate departure from §6.3's "matching
 is exact (ordinal), no case folding"**, confined to the marking comparisons
@@ -3305,29 +3389,62 @@ one. Such a child stays reachable by id and through search, both of which check
 it on its own.
 
 The invariant is enforced at the **persistence seam**: `RocketWikiDbContext`
-materializes an OFFICIAL marking for any `Page` being inserted without one, so an
+materializes an OFFICIAL marking for any `Page` being inserted without one —
+or its parent's, when the parent is in the same unit of work, and that
+includes the parent's *unavailability* (§21.10): a child that read as OFFICIAL
+beneath a parent nobody can read would be exactly the widening the seam exists
+to prevent — so an
 unmarked page cannot be committed through any code path — present or future —
 that goes through the context. This is the write-side twin of putting the
-clearance gate inside the calculator: an invariant that lives in one structural
+marking gate inside the calculator: an invariant that lives in one structural
 place cannot be lost one call site at a time. It is a backstop, not the feature —
 `PageService` sets the marking explicitly with real parent inheritance, and the
 sync importer sets it explicitly too — and it touches the database not at all, so
 it costs nothing on every write.
 
-**A page found at read time with no marking row is treated as TOP SECRET.** Belt
-and braces against a future code path that forgets, and the substitution has
-exactly two implementations (`PermissionContextLoader` and its batch sibling) so
-no consumer ever holds a nullable marking it could decide to ignore. Note the
-asymmetry with the insert-time default, which is intentional: a missing marking
-on *read* means something went wrong, and the answer to that is the top of the
-scheme; a missing marking on *insert* means nobody said, and defaulting that to
-TOP SECRET would classify content nobody asked to classify and lock its own
-author out of it. That fail-closed value carries **no selector**, for the same
-reason it carries no prefix (§21.12): TOP SECRET alone already denies all but
-the highest-cleared, and a sentinel selector would put a token into enforcement
-that nobody configured. A missing row can never be *less* restrictive than a
-real marking on selectors, because a real marking's selectors only subtract
-further.
+**A page found at read time with no marking row is readable by nobody.** Belt
+and braces against a future code path that forgets: the read side substitutes
+`ProtectiveMarking.FailClosed`, and the substitution has exactly two
+implementations (`PermissionContextLoader` and its batch sibling) so no
+consumer ever holds a nullable marking it could decide to ignore. Note the
+asymmetry with the insert-time default, which is intentional: a missing
+marking on *read* means something went wrong, and the answer to that is
+"nobody, until somebody puts the row back"; a missing marking on *insert*
+means nobody said, and defaulting that to a refusal would lock a page's own
+author out of it.
+
+**What denies is a flag, not the level — the subtle consequence of the level
+becoming presentational (§21.12).** `FailClosed` used to deny by *being* TOP
+SECRET: the level was the gate, TOP SECRET sat above every clearance, and
+"treated as TOP SECRET" was a complete description of the behaviour. Once the
+level is compared against nobody, a TOP SECRET marking with no selectors and
+no caveat denies **nobody** — so the same sentinel, unchanged, would have
+turned "a bug lost this page's marking row" into "everyone with space access
+can read it": fail-*open*, silently, while every label on every surface still
+said TOP SECRET. That inversion is why "marking unknown" is now a distinct
+state, `ProtectiveMarking.IsUnavailable`: true only on the one `FailClosed`
+instance — which the read side substitutes for a missing row, and which a row
+*recorded* as unknown reads back as (`IsUnavailable` on `PageMarkings` and
+`PageEntries`, `AddMarkingUnavailableFlag`: set by the sync importer for a
+payload that carries no usable marking, cleared by any write that states a
+real marking, §21.10) — never on anything `Create` builds, and part of
+equality so the sentinel is never equal to a real TOP SECRET
+marking. `MarkingGate` checks it before anything else and denies with its own
+reason, `marking:unavailable` (§21.8), which reaches the wire as the
+`MARKING_UNAVAILABLE` gate and the metric as `marking-unavailable` (§15) — a
+diagnosis addressed to whoever restores the row, not to the reader, which is
+why the SPA says the same sentence to everyone. The sentinel still *renders*
+as a bare `TOP SECRET`: the most restrictive spelling in the scheme is the
+right visual signal that something is wrong, and it is the value a §21.13
+aggregate must take when a missing row is among its sources. It carries **no
+selector and no caveat**, for the same reason it carries no prefix (§21.12):
+the flag already refuses everyone, and a sentinel selector or country would
+put a token into enforcement that nobody configured. The general lesson is
+worth stating: a fail-closed default that works by *being the strictest value
+on a scale* stops working the moment that scale stops being compared, and it
+fails in the quiet direction. Pinned by test — the calculator denies a
+missing-row page to a space admin holding every selector, and a real TOP
+SECRET page with no selectors and no caveat is readable with space access.
 
 ### 21.6 Changing a marking
 
@@ -3340,7 +3457,10 @@ field stated, none defaulted.
 - Requires **`canEdit` on that page**, beneath the replica invariant (§12), which
   refuses first and beneath every grant. `canEdit` already includes the marking
   gate against the page's *current* marking, so a page you cannot see is a page
-  you cannot re-mark — including re-marking it downward to make it readable.
+  you cannot re-mark — including re-marking it downward to make it readable,
+  and including a page whose marking is recorded as unknown (§21.10), which
+  nobody can read and therefore nobody can re-mark here; a declared marking
+  from its origin is the only way out, by construction rather than by rule.
 - **The input must be well-formed against the vocabularies**, else a
   `ValidationError` naming the offending part: a level outside the ladder, a
   country outside the fixed set (§21.4), a selector whose category or value is
@@ -3350,49 +3470,60 @@ field stated, none defaulted.
   validation error (HTTP 400); the service's own check stays for every other
   caller.
 - **You may not set a marking you could not then read.** Enforced as the
-  resulting marking *as a whole* — level, each selector's eligibility *and*
-  grant, and caveat, checked through `MarkingGate` against the caller's own
-  clearance, eligibility, nationality and the selector values their access
-  grants confer *in this space* — because that is what mechanizes the stated
-  reason: marking a page `APPLE` when no access grant you match carries
-  `APPLE`, or `SECRET US EYES ONLY` as a UK-national editor, loses you the page
-  just as completely as over-classifying it does. Refused as a
-  `ForbiddenError` whose message is the gate's reason token — the input is
-  well-formed, the caller is simply not entitled to the result.
+  resulting marking *as a whole* — each selector's grant, and the caveat,
+  checked through `MarkingGate` against the caller's own nationality and the
+  selector values their access grants confer *in this space* — because that is
+  what mechanizes the stated reason: marking a page `APPLE` when no access
+  grant you match carries `APPLE`, or `SECRET US EYES ONLY` as a UK-national
+  editor, loses you the page. Refused as a `ForbiddenError` whose message is
+  the gate's reason token — the input is well-formed, the caller is simply not
+  entitled to the result. **The level is unconstrained**: any editor may set
+  any level, because the gate does not read it (§21.12) and there is no level
+  a caller could lose a page by choosing. Until 2026-09-04 "a level above your
+  clearance" was the first item in this list; it went with the clearance gate
+  (§21.2), and it went *for free* — the rule is `MarkingGate.Check` on the
+  resulting marking, so when the gate stopped reading the level the constraint
+  stopped existing, exactly as §21.12 says of the prefix.
 
 **The UI prevents rather than refuses, and that is affordance data, not
-authorization.** `me.clearance`, `me.nationality` and `me.selectorEligibility`
-echo the caller's own resolved attributes, and `Space.viewerSelectorGrants` the
-union their access grants confer there, so the marking picker can grey out a
-level above their clearance, a category they are not eligible for, and a value
-not granted to them in this space, and warn about an eyes-only set that
-excludes their own nationality, instead of offering a choice the server will
-reject. Three properties make that safe rather than a second access-control
-implementation:
+authorization.** `me.nationality` echoes the caller's own resolved
+nationality, and `Space.viewerSelectorGrants` the union their access grants
+confer there, so the marking picker can grey out a value not granted to them
+in this space and warn about an eyes-only set that excludes their own
+nationality, instead of offering a choice the server will reject. Every level
+is offered to everyone: there is nothing about the caller a level could be
+greyed out against. (`me.clearance` and `me.selectorEligibility` used to feed
+a greyed-out level and a greyed-out category; both fields went with their
+gates, §8.) Three properties make the affordance safe rather than a second
+access-control implementation:
 
 - **It is the caller's own token, echoed back.** Same category as `groups`, which
   `me` already returned; it discloses nothing the caller did not present. The
   grants field discloses only what the caller already holds.
-- **Every one of those fields resolves through the gates, not the raw claim** —
-  `ClearanceGate` and `SelectorGate`, the same paths enforcement uses.
-  `ResolveClearance` so a garbage claim reads as OFFICIAL-SENSITIVE here exactly
-  as it does at the gate; `ResolveNationalities` so the values are
-  *canonicalized* against the fixed set; `ResolveEligibleCategories` so the
-  literal-`yes` rule is applied once. The canonicalization is load-bearing: a
-  marking's country set is always canonical, so a token saying `uk` is admitted
-  to a `UK` marking by the server, and a client comparing against the raw claim
-  would have concluded the opposite and warned the author out of a marking that
-  would have worked. It is §21.4's case-mismatch trap one layer up, closed the
-  same way — one canonicalizer, both sides.
+- **The nationality resolves through the gate, not the raw claim** —
+  `CaveatGate.ResolveNationalities`, the same path enforcement uses, so the
+  values are *canonicalized* against the fixed set. The canonicalization is
+  load-bearing: a marking's country set is always canonical, so a token saying
+  `uk` is admitted to a `UK` marking by the server, and a client comparing
+  against the raw claim would have concluded the opposite and warned the
+  author out of a marking that would have worked. It is §21.4's case-mismatch
+  trap one layer up, closed the same way — one canonicalizer, both sides; the
+  SPA folds selector tokens the same way before comparing them with the
+  grants.
 - **The server decides regardless.** `PageMarkingService` re-checks the resulting
   marking through `MarkingGate` and returns a typed error; a stale, spoofed, or
   simply wrong client-side comparison changes nothing but the polish.
 
 **Downgrading is permitted but audited distinctly.** A change is a *downgrade*
-when it makes the page readable by someone it was not readable by before: the
-level drops, the caveat is cleared, the caveat gains a country it did not
-admit, **a selector is removed, or a selector's value is swapped within its
-category**. Swapping `{UK}` for `{US}` counts, even though UK also loses access
+when it makes the page readable by someone it was not readable by before, or
+lowers what the content is declared to be: the level drops, the caveat is
+cleared, the caveat gains a country it did not admit, **a selector is removed,
+or a selector's value is swapped within its category**. The level is listed on
+purpose even though lowering it moves no access line on this deployment
+(§21.12): a declassification is still the judgement a reviewer's
+`page.marking.downgrade` query exists to find, wherever the content is later
+read, and dropping it from the definition would hide exactly that. Swapping
+`{UK}` for `{US}` counts, even though UK also loses access
 — somebody who could not read the page yesterday can read it today, which is
 the fact a reviewer is looking for; swapping `APPLE` for `BANANA` counts by the
 same reasoning, since it removes `APPLE` and everybody granted `BANANA` but not
@@ -3451,8 +3582,9 @@ boundary is drawn once, here; the reasoning is §6.7's.
 identifies the page.** Its title is a server constant; its marking is the
 page's full label (level, selectors, caveat, prefix); its reasons are every
 failing view gate with the detail each already implies once the marking is
-shown — the level required, the selector's category and value, the caveat's
-countries, a failing restriction's rule id and whether it is inherited. Never
+shown — the selector's category and value, the caveat's countries, a failing
+restriction's rule id and whether it is inherited; nothing for the
+availability gate, which has nothing about the page to add. Never
 its id, real title, slug, timestamps, author, labels, child count, subtree, or
 a rule's expression (which says who *can* read the page — information about
 the protected audience, withheld on the same reasoning as §6.6's title rule).
@@ -3464,9 +3596,10 @@ placeholder `inherited` is false by construction — an ancestor whose rule the
 caller fails is itself the placeholder, and nothing beneath it is walked,
 so a placeholder's failing restrictions are its own — whereas `pageAccess`,
 `linkTargets`, `parentDenial` and the inspector compute it from the subject
-page's id; and the level and country set a classification or caveat row
-carries come from the marking in hand, so on the inspector's `viewGates` they
-are null, the page's own `marking` sitting beside them. The list itself holds
+page's id; and the country set a caveat row carries comes from the marking in
+hand, so on the inspector's `viewGates` it is null, the page's own `marking`
+sitting beside it (the `requiredLevel` a classification row once carried went
+with that gate, §8). The list itself holds
 only *failed* gates — `passed` is always false inside a denial — and is
 meaningful as pass/fail only on the inspector's `viewGates`/`editGates`.
 
@@ -3493,17 +3626,19 @@ self-lockout message:
 | Reason | Gate | Meaning |
 |---|---|---|
 | `no-space-access` | S | no access grant in the space matches the principal |
-| `classification:{level}` | C | clearance below the page's level, e.g. `classification:top_secret` |
-| `selector:not_eligible:{CATEGORY}` | E | the principal's token does not answer `yes` for the category's claim |
-| `selector:unknown:{CATEGORY}` | E | the category is not configured on this instance (§21.15) |
+| `marking:unavailable` | availability | the page's marking row is missing; nobody reads it until it is restored (§21.5) |
+| `selector:unknown:{CATEGORY}` | G | the category is not configured on this instance (§21.15) — a misconfiguration, not a missing grant |
 | `selector:not_granted:{CATEGORY}` | G | no access grant the principal matches carries the page's value |
 | `caveat:eyes_only` | N | the eyes-only set and the principal's nationalities do not intersect |
 | `restriction:{pageId}:{ruleId}` | R | the named restriction fails (§6.7) |
 | `replica-read-only` | edit: replica | the space is a replica (§12); never in a placeholder, which lists view gates only |
 | `insufficient-space-role` | edit: role | no role grant of `editor` or above matches (§6.4); likewise edit-only |
 
-The audit row names the **first** failing gate in the order S, C, E, G, N, R;
-the placeholder lists them all. A selector token names the **category, never
+The audit row names the **first** failing gate in the order S, availability,
+G, N, R; the placeholder lists them all. Two tokens this table no longer has:
+`classification:{level}` (C) and `selector:not_eligible:{CATEGORY}` (E) went
+with their gates on 2026-09-04 (§21.2) and are never minted — an audit row
+carrying either predates that day. A selector token names the **category, never
 the value**, and the caveat token names **no country**, deliberately: category
 names are bounded configuration vocabulary like a level, whereas a value is the
 compartment's codeword and a country set is the marking's content, and a reason
@@ -3512,24 +3647,25 @@ dimension. The structured gate result carries the value where it is disclosed
 on purpose (the placeholder, the inspector); the token does not.
 
 **Telemetry (§15).** `CoreTelemetry.CategorizeDenialReason` collapses
-`classification:{level}` to `classification`, `caveat:eyes_only` to `caveat`,
-and every `selector:*` token to a single `selector` — not per category, not per
-value — and keeps `no-space-access` as itself. Keeping the level would be
-tempting — it is a bounded four-value tag — and is dropped on purpose: a
-"denials by classification level" time series is a census of how much SECRET
-and TOP SECRET content exists and how hard it is being probed, published to
-whatever audience the dashboard has. A "denials by codeword" series is the same
-census of the compartmented estate, which is why a category name reaches a
-token but never a tag. That is exactly the second, unregulated record of
-who-reads-what §15 exists to prevent, and the audit table already holds the
-specific level, category and rule for anyone entitled to ask.
+`marking:unavailable` to `marking-unavailable`, `caveat:eyes_only` to
+`caveat`, and every `selector:*` token to a single `selector` — not per
+category, not per value — and keeps `no-space-access` as itself. The
+`classification` category went with its token; a stray one would land in
+`other`, pinned by test, so no per-level series can reappear. The argument
+that kept the level out of a tag while it *was* a gate still governs the
+selector: a "denials by codeword" series is a census of the compartmented
+estate and how hard it is being probed, published to whatever audience the
+dashboard has, which is why a category name reaches a token but never a tag.
+That is exactly the second, unregulated record of who-reads-what §15 exists to
+prevent, and the audit table already holds the specific category and rule for
+anyone entitled to ask.
 
 ### 21.9 Reach
 
 Enforcement is inherited, not reimplemented, everywhere `canView` is already
 computed through `PermissionContextLoader`: page reads, `parent`/`children`,
 revision history, search (keyword and vector — the post-filter is the same
-batch), Ask-the-wiki retrieval (a page above the asker's clearance never enters
+batch), Ask-the-wiki retrieval (a page the asker fails a marking gate for never enters
 the prompt, not merely the citation list), MCP tools, attachments, comments,
 labels, page properties, watch state, the notification read model, the co-editing
 hub's join check, and the §6.6 permission inspector (whose non-short-circuiting
@@ -3610,7 +3746,8 @@ marking is a property *of the content*.
   bundle and lands with no selectors. A *malformed* `selectors` (not an object,
   a non-string value, an over-long or ill-formed token) makes the **whole
   marking** unparseable, which is the existing "unparseable level" rule
-  extended: a new page lands at TOP SECRET, an existing row is left alone.
+  extended: a new page lands in the recorded unknown state, readable by nobody
+  (below); an existing row is left alone.
   Dropping only the bad selector and applying the rest would widen, which is
   the one direction sync never takes. An **unknown** category or value — one
   this instance has not configured — is well-formed and is kept verbatim,
@@ -3634,11 +3771,61 @@ marking is a property *of the content*.
   page arrives **more** restricted — exactly as "a group/attribute unknown on
   high matches nobody" already works for restrictions. Dropping it would be
   the one unsafe direction.
-- **A page cannot land on the high side unmarked.** A payload with no marking and
-  no local row creates the row at **TOP SECRET**; a payload with no marking for a
-  page the high side already holds a marking for leaves it alone (silence must
-  never re-classify, in either direction). An unparseable level reads as absent,
-  not as OFFICIAL.
+- **A page cannot land on the high side unmarked — and "unmarked" is a
+  recorded state, not a guessed level.** A payload with no marking and no
+  local row creates the row **unavailable**: `IsUnavailable`, a bit on
+  `PageMarkings` and `PageEntries` (`AddMarkingUnavailableFlag`,
+  data-model.md), copied by every writer from the value it persists and true
+  on exactly one value, `ProtectiveMarking.FailClosed` — which is what the
+  importer applies when the payload carries no usable marking. A row with the
+  bit set reads back as that sentinel (§21.5), so the page is readable by
+  **nobody** — every reader, admins included, gets the `(protected)`
+  placeholder whose one reason is that its marking is missing
+  (`marking:unavailable`, §21.8) — until a **declared marking arrives from
+  the origin**, which clears the bit because the marking it is copied from
+  was built by `Create`. Nothing on the high side clears it locally: a replica
+  is read-only, and `setPageMarking` needs `canEdit`, which needs `canView`,
+  which the unavailable gate refuses (§21.6) — so the remedy is the one this
+  bullet exists to force, a reviewed marking on the low side that then
+  crosses. A payload with no marking for a page the high side already holds a
+  marking for leaves it alone (silence must never re-classify, in either
+  direction). The unknown state itself crosses as *no marking*: an
+  unavailable page re-exported, or included in a baseline, carries a null
+  marking rather than the sentinel's parts, so it lands unavailable again
+  instead of as a bare TOP SECRET that would gate nobody. An unparseable
+  level reads as absent, not as OFFICIAL, and the parser is the closed one —
+  `ProtectiveMarking.TryParseLevelWireName`, the inverse of `LevelWireName`,
+  kept from the retired §21.3 for exactly this reason: only the four wire
+  names parse, never `Enum.TryParse`'s member spellings or `"4"`.
+
+  **Rows written before the flag existed are not backfilled, and that is
+  stated rather than hidden.** The older importer wrote an unmarked arrival as
+  a bare, prefix-less TOP SECRET with no actor — byte-identical to a genuine
+  TOP SECRET marking an editor set with the prefix toggled off — so the
+  migration cannot tell the two apart, and guessing would either lock a real
+  page away from everyone or leave an old unknown readable. No instance is
+  known to hold such a row; an operator inheriting a database from before
+  `AddMarkingUnavailableFlag` runs the review query in the migration's
+  comment, confirms each candidate against its origin, and either re-syncs a
+  declared marking or sets the bit by hand.
+
+  **Why a recorded state, and not "create the row at TOP SECRET".** That is
+  what this bullet used to say, and it was a real control while the level
+  gated reads: TOP SECRET sat above every clearance, so an unmarked arrival
+  was visible to nobody but the highest-cleared. With the level presentational
+  (§21.12) the same row would gate *nothing* — a persisted TOP SECRET marking
+  with no selectors and no caveat reads back through
+  `ProtectiveMarking.Create` as an ordinary, available marking, and the page
+  would be readable by everyone the replica's access grants admit, wearing the
+  scheme's strictest label the whole time. That is the fail-open §21.5
+  describes, reached through the persistence seam instead of through a lost
+  row, and it is why "unknown" had to become something the row itself records
+  rather than something the read side infers from a level. The force of the
+  refusal comes from the recorded state and from nothing about how high TOP
+  SECRET is; the sentinel still *renders* as a bare `TOP SECRET`, for the
+  display reasons §21.5 gives, and a reader who sees that label beside the
+  missing-marking reason is looking at a page whose origin has not yet stated
+  what it is.
 - Marking rows applied by import have no `SetByUserId` — the payload carries no
   actor, and a replica is read-only to users anyway.
 
@@ -3658,13 +3845,26 @@ real risk: the marking looks like a reviewed judgement and is not one.
 `PageMarkings` is the query that finds every page nobody has yet looked at.
 
 Backfilling to TOP SECRET was considered and rejected once, with reasons: it
-would make every page invisible to everyone below TOP SECRET the moment the
-migration ran — the wiki would lock itself out of itself, including out of the
-admin pages describing how to fix it, and including on instances where nobody has
-a clearance claim configured at all (who resolve to OFFICIAL by §21.3's default).
-The recovery would be a hand-written `UPDATE` against a production database,
-which is the one operation this whole design exists to avoid. An access control
-that has to be switched off to be adopted does not get adopted.
+would have made every page invisible to everyone below TOP SECRET the moment
+the migration ran — the wiki would have locked itself out of itself, including
+out of the admin pages describing how to fix it. The recovery would have been
+a hand-written `UPDATE` against a production database, which is the one
+operation this whole design exists to avoid. An access control that has to be
+switched off to be adopted does not get adopted.
+
+That lockout argument no longer applies to the *level* — since 2026-09-04 it
+gates nothing (§21.12), so a TOP SECRET backfill would lock nobody out — and
+the decision stands on its other leg: a marking is a statement about what the
+content *is*, and stamping TOP SECRET on a back catalogue nobody has reviewed
+would invent a fact on every page, the same objection §21.13 raises to marking
+an empty answer. The state that *would* lock the wiki out of itself today is
+the recorded "marking unknown" state of §21.10, and the backfill does not use
+it for the same reason it never used TOP SECRET: "nobody said" on a page this
+instance already held is OFFICIAL by decision, while "we do not know what it
+said" is reserved for content that arrived without a marking. OFFICIAL is
+still the pragmatic, unreviewed call, and the review sweep above is still
+owed; what changed is that the risk is now purely one of misstatement, not of
+access.
 
 ### 21.12 The national prefix
 
@@ -3686,18 +3886,18 @@ nothing about who can read a page moved.
 **It is presentational, and that is a hard boundary, not a phase.** The prefix
 has *no access-control considerations whatsoever*:
 
-- `MarkingGate` does not read it, and neither `ClearanceGate` nor
-  `SelectorGate` beneath it does. The gates' entire input is the level, the
-  selectors and the eyes-only set; `ProtectiveMarking.Prefix` is never touched
-  by any of them. (The proof was mechanical when the prefix arrived: that commit
-  had a **zero-line diff** on `ClearanceGate.cs` and on
+- `MarkingGate` does not read it, and neither `CaveatGate` nor `SelectorGate`
+  beneath it does. The gates' entire input is the selectors, the eyes-only set
+  and the availability flag; `ProtectiveMarking.Prefix` is never touched by any
+  of them. (The proof was mechanical when the prefix arrived: that commit had a
+  **zero-line diff** on the caveat gate — then `ClearanceGate.cs` — and on
   `EffectivePermissionCalculator.cs`; the selector gate was written after it
   and takes no prefix.)
 - It never appears in a denial reason. The tokens of §21.8 are unchanged by it,
   so nothing about a prefix can reach an audit reason or — via
   `CategorizeDenialReason` — a metric tag.
-- It changes no verdict. Pinned by test at two tiers: `ClearanceGateTests` sweeps
-  every level × caveat × principal combination and asserts the decision **and the
+- It changes no verdict. Pinned by test at two tiers: `CaveatGateTests` sweeps
+  every caveat × principal combination and asserts the decision **and the
   reason** are byte-identical with and without a prefix, and `PageMarkingTests`
   repeats it through the real permission loader against a real database.
 - It is outside "you may not set a marking you could not then read" (§21.6),
@@ -3705,14 +3905,47 @@ has *no access-control considerations whatsoever*:
   `MarkingGate.Check(resultingMarking, …)`, and the gate does not read the
   prefix, so there is no prefix a caller can be refused for.
 
-If you are reading this because you were about to give the prefix access
-semantics "for completeness": don't. There is nothing to compare it against. A
-principal has no "national prefix" claim, and inventing one would silently
-duplicate the nationality attribute the eyes-only caveat already uses — with
-different values, a different vocabulary, and no registry behind it. Note also
-that the prefix and the caveat countries are independent: `UK SECRET US EYES
-ONLY` is an ordinary marking, and reading the leading `UK` as a releasability
-statement would be exactly backwards.
+**The classification joined it on 2026-09-04, and every bullet above now holds
+for the level word for word.** This reverses the position this document held
+from §21's first line ("it enforces") through §21.3, and it is recorded as a
+reversal. The level was the C gate — `clearance ≥ level`, with a floor for the
+claimless. It stopped being a gate because this deployment's Keycloak carries
+no clearance attribute; §21.2 has the full argument for removing rather than
+defaulting it. The consequence is that the level is now exactly what the
+prefix has always been — a statement about the content, rendered with full
+rigour, compared against nobody:
+
+- `MarkingGate` does not read `ProtectiveMarking.Level`; the gates' input is
+  listed above and the level is not in it. Level-invariance sweeps in
+  `CaveatGateTests` and `MarkingGateTests`, and a sweep over the whole §21.15
+  truth table, pin that every verdict and every reason is byte-identical at
+  every rung.
+- No denial reason names it: `classification:{level}` is never minted, the
+  `CLASSIFICATION` gate and `GateResult.requiredLevel` are gone from the wire
+  (§8), and `CategorizeDenialReason` has no `classification` category left to
+  fall into (§15).
+- Any editor may set any level (§21.6): the self-lockout rule is the gate on
+  the resulting marking, and the gate does not read the level, so there is no
+  level a caller can be refused for — the same "for free" the prefix gets.
+  The picker offers all four to everyone.
+- What the ordering is still for: the picker's display order and §21.13's
+  aggregate maximum (§21.1), and the downgrade audit (§21.6), where a lowered
+  level still counts because a declassification is a reviewer's fact whether or
+  not this instance ever gated on it.
+- What it forced elsewhere: the missing-row sentinel could no longer deny by
+  being TOP SECRET, so it denies by an explicit flag (§21.5) — the one place
+  the level's retirement needed new code rather than deleted code.
+
+If you are reading this because you were about to give the prefix — or, now,
+the level — access semantics "for completeness": don't. There is nothing to
+compare either against. A principal has no "national prefix" claim and no
+clearance claim; inventing the first would silently duplicate the nationality
+attribute the eyes-only caveat already uses — with different values, a
+different vocabulary, and no registry behind it — and inventing the second
+would be a gate on a value every reader holds identically, which partitions
+nobody (§21.2). Note also that the prefix and the caveat countries are
+independent: `UK SECRET US EYES ONLY` is an ordinary marking, and reading the
+leading `UK` as a releasability statement would be exactly backwards.
 
 **It defaults to `UK`.** New markings, markings inherited from a parent, and —
 via the `AddPageMarkingPrefix` migration — every row that predated the feature.
@@ -3769,10 +4002,12 @@ before-and-after prefix in the details. Counting it as a downgrade would dilute
 the one query that exists to find real widenings.
 
 **`ProtectiveMarking.FailClosed` carries no prefix**, unlike `Baseline`. That
-value means "this page's marking row is missing and we do not know what it
-said", so asserting a national qualifier on its behalf would be inventing a
-fact. It renders a bare `TOP SECRET`, which is also a quiet visual signal that
-something is wrong — every marking the application actually writes carries one.
+value means "this page's marking is missing, or was recorded as unknown, and
+we do not know what it said" (§21.5, §21.10), so asserting a national
+qualifier on its behalf would be inventing a fact. It renders a bare
+`TOP SECRET`, which is also a quiet visual signal that something is wrong —
+every marking the application actually writes carries one. What denies the
+page is the sentinel's unavailable flag, not that spelling (§21.5).
 
 **The migration is a second one** (`AddPageMarkingPrefix`), not an edit to
 `AddPageMarkings`. That one is already applied on real SQL Server, and editing an
@@ -3786,7 +4021,7 @@ asserting `UK` on a page nobody has reviewed cannot change who can read it.
 A search result list, an MCP payload and — above all — an Ask-the-wiki answer are
 **compilations**. Standard doctrine: a compilation carries the classification of
 its most sensitive constituent. Before this, an answer synthesized from a
-`UK SECRET` page arrived with no marking at all, and a cleared reader could
+`UK SECRET` page arrived with no marking at all, and a reader could
 legitimately paste it somewhere that was not. The model launders the marking off
 the content; this puts it back on. Two rules, together:
 
@@ -3799,13 +4034,13 @@ the content; this puts it back on. Two rules, together:
 the whole subsection rests on. `AggregateMarkingLabel` is deliberately not a
 `ProtectiveMarking`, is never stored, and gates nothing — *enforcement already
 happened, per source, before it was computed*. Retrieval and search run under the
-caller's own principal, so every contributing page individually passed `canView`
-and the clearance gate; a page the caller cannot see contributes nothing because
+caller's own principal, so every contributing page individually passed `canView`,
+marking gates included; a page the caller cannot see contributes nothing because
 it never reached retrieval (§6.7), which is verified by test rather than assumed.
 The aggregate exists to tell a human what the text in front of them *is*.
 
 That is structural rather than promised: the type lives in **`RocketWiki.Api`**,
-and neither `RocketWiki.Core` (where `ClearanceGate` and
+and neither `RocketWiki.Core` (where `MarkingGate` and
 `EffectivePermissionCalculator` live) nor `RocketWiki.Data` (where every gated
 read service lives) references `RocketWiki.Api`. No enforcement code *can* consult
 it — the same argument that keeps `PermissionContextLoader` internal to
@@ -3844,8 +4079,8 @@ different ones, and there is no honest single set:
   is **empty**, and an empty eyes-only set in this model means *no caveat at all* —
   so the two most restrictive inputs available would produce the least restrictive
   possible output, silently, while the label looked perfectly correct. That is the
-  level-0 trap of §21.3 wearing a different hat: a value that reads as "nothing
-  here" when it should read as "everything here".
+  fail-open trap §21.5 records wearing a different hat: a value that reads as
+  "nothing here" when it should read as "everything here".
 
 So distinct source sets are **listed**, comma-separated:
 `UK SECRET UK EYES ONLY, US EYES ONLY`, meaning a reader needs both. The comma
@@ -3946,8 +4181,8 @@ set is allowed to appear.
   keeps that from being a silent read-around. The child stays reachable by id
   and through search, checked on its own.
 - **Page entries carry no selectors yet.** An entry's marking goes through the
-  same `MarkingGate` as a page's, so eligibility and grant are enforced on the
-  page that contains it, but `PageEntries` has no selector table and an entry
+  same `MarkingGate` as a page's, so the selector grant and the caveat are
+  enforced on the page that contains it, but `PageEntries` has no selector table and an entry
   cannot carry a selector of its own: an entry marking that names one is
   **refused** with a `ValidationError`, never silently stripped, because a
   marking applied minus a part of itself would be a widening the author never
@@ -3962,9 +4197,11 @@ set is allowed to appear.
   is absent entirely, not a redacted row and not implied by a count (§6.7).
 - **Markings do not re-mark a subtree.** Changing a parent's marking leaves its
   children exactly as they are; there is no cascade and no bulk re-mark tool.
-- **Clearance, nationality and selector eligibility are not managed in
-  RocketWiki.** Like every other attribute, they live in Keycloak (§6.2, §11.5).
-  RocketWiki declares what it reads and reads it.
+- **Nationality and group membership are not managed in RocketWiki.** Like
+  every other attribute, they live in Keycloak (§6.2, §11.5). RocketWiki
+  declares what it reads and reads it. (Clearance and selector eligibility are
+  not managed anywhere: neither is an attribute this deployment has, and the
+  gates that read them are gone — §21.2.)
 - **No declassification schedule, no review dates, no marking expiry.**
 - **An aggregate marking (§21.13) is never stored, never enforced, and never
   written back to a page.** It is computed per response from the sources of that
@@ -3990,12 +4227,13 @@ category**.
 
 **Categories are instance configuration, not a registry.** The catalog is
 `ProtectiveMarking:SelectorCategories`, a list of
-`{ Name, Description, ClaimName, Values[] }` validated at startup
+`{ Name, Description, Values[] }` validated at startup
 (`docs/CONFIGURATION.md`): names and values canonical upper-case tokens of
-`[A-Z0-9_-]`, at most 32 characters, unique; at least one value per category;
-`ClaimName` blank or a claim name that is not one of the well-known keys
-(`groups`, `sub`, `clearance`, `nationality` — a selector claim named
-`clearance` would test the clearance values for `yes`). Invalid configuration
+`[A-Z0-9_-]`, at most 32 characters, unique; at least one value per category.
+A category names **no claim**: it used to carry a `ClaimName` as well, under a
+rule that the name could not be one of the well-known keys, and both went with
+the eligibility gate below (a stale `ClaimName` in an old environment binds to
+nothing and is ignored). Invalid configuration
 **fails the host**, in the same family as every other fail-closed setting in
 `docs/CONFIGURATION.md`. The configured order is the display order. §6.2 says
 why a vocabulary that gates access lives in a diff rather than a table. Core
@@ -4010,55 +4248,64 @@ its own configuration said otherwise; production reads the same values either
 way. A context with no catalog holds `SelectorCatalog.Empty`, which knows
 nothing and therefore — by the rules below — admits nobody to any
 selector-bearing page. Absence fails closed. Clients read the catalog through
-`Query.selectorCategories` — name, description, values and whether an
-attribute is required, never the claim name — which is unaudited like
-`classificationScheme` (vocabulary, no subject, no decision) and empty for an
-anonymous caller.
+`Query.selectorCategories` — name, description and values — which is
+unaudited like `classificationScheme` (vocabulary, no subject, no decision)
+and empty for an anonymous caller.
 
-**Two gates per selector, in order: eligibility, then grant.**
+**One gate per selector: the grant.** This was two, and the reduction is a
+reversal recorded here rather than made quietly.
 
-- **E — eligibility** is site-wide and lives in Keycloak (§11.5). A category
-  with no `ClaimName` is one everyone is eligible for. Otherwise the
-  principal's attribute of that name must equal `yes` (trimmed, case-insensitive
-  — §6.3's confined departure). An unknown category — one this instance has not
-  configured, whether it arrived by sync or was removed from the config — is
-  eligible to **nobody**, with its own reason (`selector:unknown:`, §21.8) so
-  the diagnosis is one audit row away. E answers "may this person *ever* see
-  this material", and it belongs with clearance and nationality: a per-category
-  claim keeps that decision in the identity provider, alongside every other
-  fact about a person that RocketWiki reads and never writes. JIT provisioning
-  (§11.3) now mirrors the claim into the `User` row — raw, for the profile
-  page (§6.2), which derives eligibility from it through this same gate at
-  read time; the gate itself still reads the token, never the mirror.
 - **G — grant** is per space and lives in the access grants (§6.4). Every
   selector on the page must be in the union of selector values over the access
   grants the principal matches in that space. G answers "has this space's
-  administrator let them", and it is the space's decision alone: an eligible
-  reader with no grant is denied, and a grant to an ineligible reader confers
-  nothing, because neither the identity provider nor the space administrator
-  can widen the other's decision. G consults no catalog — a grant can only
-  carry catalog values at write time, and a value whose category was later
-  removed fails E first. The union is deliberate: grants add (§6.4), so a
-  person matched by two grants holds both audiences' compartments, exactly as
-  they would hold the higher of two roles.
+  administrator let them", and it is the space's decision alone. The union is
+  deliberate: grants add (§6.4), so a person matched by two grants holds both
+  audiences' compartments, exactly as they would hold the higher of two roles.
+  G consults the catalog for **diagnosis only**: a category this instance has
+  not configured — whether it arrived by sync or was removed from the
+  configuration — is reported with its own reason, `selector:unknown:`
+  (§21.8), rather than as ungranted, so the audit row says "misconfiguration"
+  rather than "ask the space admin". It cannot change the verdict: the grant
+  writers refuse a value the catalog does not define, so no grant can carry
+  one, and an unknown category is granted to nobody either way. There is no
+  branch in which an unconfigured category passes.
+- **E — eligibility, retired 2026-09-04.** It was site-wide and lived in
+  Keycloak: a category could name a `ClaimName`, and the principal's attribute
+  of that name had to equal `yes` before the space's grant was consulted. It
+  answered "may this person *ever* see this material", and the argument for it
+  was that such a decision belongs in the identity provider beside clearance
+  and nationality, where RocketWiki reads and never writes. That argument
+  assumed an identity provider that states per-category eligibility, and this
+  deployment's carries no such attribute — so E, as built, made every category
+  that named a claim eligible to nobody, which is not a control but an outage
+  with a security-shaped excuse (§21.2). It was removed rather than defaulted
+  to eligible: a default `yes` is a gate every principal passes, which is no
+  gate, and leaving the code path in place would have been a dormant branch
+  nobody could test against a real token. With it went the `ClaimName`, the
+  reserved-claim-name rule, the `yes` value and its confined case-folding
+  (§6.3), `me.selectorEligibility`, `SelectorCategory.requiresAttribute`, the
+  `SELECTOR_ELIGIBILITY` gate and the `selector:not_eligible:` token (§8,
+  §21.8). The profile page, which derived eligibility from the mirrored claim,
+  shows group membership instead (§6.2).
 
-Across a marking with several selectors the gate reports **every E check,
-then every G check** — not E-then-G per selector — each within the marking's
-canonical category order. Eligibility is a fact about the principal and the
-instance, the grant a fact about the space, and reporting the coarser fact
-first is the same choice the ladder makes between S and the rest: a principal
-not eligible for one category is never told what the space would have
-granted them in another.
+Whether a person may read `APPLE` material in a space is therefore the space
+administrator's decision, made by writing `APPLE` onto an access grant that
+matches them, and nothing about the person's account widens or narrows it.
+That is a real narrowing of who decides — before, the identity provider held
+a veto — and it is accepted with eyes open: an access grant is an audited rule
+change (§7), the grant editor offers only catalog values, and a compartment
+that must stay closed to someone is a compartment no grant matching them
+carries.
 
-Neither gate substitutes for the others. A TOP SECRET, `fruit=yes`, `APPLE`-
-granted, UK-national reader is denied `UK OFFICIAL BANANA` on G; their
-`fruit`-less colleague granted `BANANA` is denied it on E; and a page with no
-selectors asks neither question. The 64-row truth table over S, C, E, G, N and
-R — verdict, first-failing token, complete failing set — is pinned in Core
-(every one of the 64 view rows, plus the edit rows), and in the API as
-persona × page through the real mutations, where `pageAccess` and MCP
-`get_page` must agree on every cell; the live verification walks the
-confirmed Alice/Bob/Carol/Dave rows by hand against the dev stack.
+Across a marking with several selectors the gate reports every G check in the
+marking's canonical category order, so the first failing reason is stable
+(§7); a page with no selectors asks no question at all. The truth table over
+S, G, N and R — verdict, first-failing token, complete failing set — is pinned
+in Core (every one of the 16 view rows, plus the edit rows, plus a sweep
+asserting the level changes no row), and in the API as persona × page through
+the real mutations, where `pageAccess` and MCP `get_page` must agree on every
+cell. It was 64 rows over S, C, E, G, N and R; the live walk-through of
+2026-09-03 (README) exercised the E rows and predates their removal.
 
 **Canonical form and storage.** Selector tokens are trimmed and upper-cased on
 every path (mutation, import, grant editor), stored sorted by category, and
@@ -4075,7 +4322,7 @@ them as an object keyed by category (§21.10); audit writes them in full
 sees neither (§21.8, §15).
 
 **Removing a category from the configuration is safe, and stated.** Pages and
-grants keep their rows; every reader fails E on the affected pages with
+grants keep their rows; every reader fails G on the affected pages with
 `selector:unknown:`; `setPageMarking` cannot re-assert the now-unknown value
 but can remove it, which is a downgrade and audited as one (§21.6). Nothing
 widens, and nothing needs a migration to shrink.
@@ -4086,10 +4333,12 @@ appears in reason tokens, the picker and the inspector; the value is the
 codeword, appears in the label because the label is the marking, and appears
 nowhere a marking would not (§21.8).
 
-**The development catalog** — `FRUIT` (claim `fruit`; `APPLE`, `BANANA`) and
-`REGION` (no claim; `NORTH`, `SOUTH`) — is injected by the AppHost and matched
-by the dev realm's `fruit` user attribute (`DEVELOPING.md`), so every gate
-above has one dev user who fails it.
+**The development catalog** — `FRUIT` (`APPLE`, `BANANA`) and `REGION`
+(`NORTH`, `SOUTH`) — is injected by the AppHost (`DEVELOPING.md`). The dev
+realm carries no per-category attribute, so what a dev user lacks for a
+FRUIT-marked page is a grant, which any space admin can write and any test can
+withhold. (The realm's `fruit` attribute, which fed E, went with it —
+`src/RocketWiki.AppHost/keycloak/README.md`.)
 
 ---
 
@@ -4194,7 +4443,10 @@ looking like it worked.
 `marking`, `classification`, `level`, `eyesOnly`, `caveat`, `prefix`,
 `restricted`, `restriction`, `permission`, `clearance`, `group`, `nationality`
 (and their plural and underscore spellings) are **refused by name**, with their
-own error code and message.
+own error code and message. `clearance` stays on the list even though nobody
+holds one any more (§21.12): a refused name teaches the rule once, whereas an
+"unknown field" answer would invite exactly the respelling retry the third
+property below forbids.
 
 The reason is §21.8's, applied to a query box. A filter over classification is a
 **census of the classified estate**: `marking = SECRET` run against a
@@ -4261,8 +4513,8 @@ oracle. It is pinned by test, on raw response bytes.
 4. **Post-filter every candidate through `canView`**, per page, against its own
    ancestor restriction chain and its own protective marking, via
    `PermissionContextLoader.LoadBatchAsync` — the same shape search and
-   `GetPagesByLabelAsync` use (§6.4.2/§6.7/§9.3). Clearance and eyes-only arrive
-   free through `EffectivePermissionCalculator.Compute`; §21's gate is not
+   `GetPagesByLabelAsync` use (§6.4.2/§6.7/§9.3). The selector and caveat
+   gates arrive free through `EffectivePermissionCalculator.Compute`; §21's gate is not
    reimplemented here. **The query decides which candidates are considered; it
    never decides which permission check runs.**
 5. **Cap**, at both ends.

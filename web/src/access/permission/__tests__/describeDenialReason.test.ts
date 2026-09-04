@@ -26,15 +26,23 @@ describe('describeDenialReason', () => {
     expect(describeDenialReason('insufficient-space-role')).not.toMatch(/viewer/i)
   })
 
-  it('describes the classification token with the level it carries', () => {
-    expect(describeDenialReason('classification:SECRET')).toMatch(/SECRET/)
-    expect(describeDenialReason('classification:SECRET')).toMatch(/above this user's clearance/)
+  it('describes marking:unavailable as a fact about the page, not about the user', () => {
+    expect(describeDenialReason('marking:unavailable')).toBe(
+      "This page's marking is missing, so nobody can read it until it is restored.",
+    )
   })
 
-  it('describes the three selector tokens by category', () => {
-    expect(describeDenialReason('selector:not_eligible:FRUIT')).toBe('This user is not eligible for FRUIT material.')
+  it('describes the two selector tokens by category', () => {
     expect(describeDenialReason('selector:unknown:FRUIT')).toMatch(/FRUIT.*does not configure.*nobody/)
     expect(describeDenialReason('selector:not_granted:FRUIT')).toMatch(/No access grant.*FRUIT value/)
+  })
+
+  it('shows the retired classification and eligibility tokens raw — neither is minted any more', () => {
+    // An old audit row could still carry one. The raw token is the honest
+    // rendering of a reason the ladder no longer has; a sentence about a
+    // clearance would describe a check this deployment does not make.
+    expect(describeDenialReason('classification:SECRET')).toBe('classification:SECRET')
+    expect(describeDenialReason('selector:not_eligible:FRUIT')).toBe('selector:not_eligible:FRUIT')
   })
 
   it('describes the caveat token', () => {

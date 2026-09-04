@@ -47,8 +47,8 @@ namespace RocketWiki.Api.Markings;
 /// means <i>no caveat at all</i> — so the two most restrictive inputs available would
 /// produce the least restrictive possible output, silently. That is exactly the shape of
 /// the level-0 trap <see cref="ProtectiveMarking.Create(ClassificationLevel, IEnumerable{string}?, IEnumerable{SelectorValue}?, string?)"/>
-/// normalizes away (an uninitialized tinyint compares below every clearance and makes a
-/// page readable by everybody): a value that reads as "nothing here" when it should read
+/// normalizes away (an uninitialized tinyint would render as nothing and drag every
+/// aggregate down to it): a value that reads as "nothing here" when it should read
 /// as "everything here".</item>
 /// </list>
 /// So the caveat is a <b>truthful conjunction</b>: distinct source sets are LISTED —

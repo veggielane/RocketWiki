@@ -7,7 +7,7 @@ import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../../test/axe'
 
 /**
- * design.md §21: results are already clearance-filtered server-side (§21.9's
+ * design.md §21: results are already permission-filtered server-side (§21.9's
  * post-filter), so the classification on a row is not a gate — it is the fact
  * a reader scanning a list needs before deciding which hit to open.
  */

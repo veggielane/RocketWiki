@@ -42,31 +42,30 @@ public sealed class JitProvisioningTests(RocketWikiApiFactory factory) : IClassF
     }
 
     /// <summary>
-    /// design.md §6.2 (2026-09-03): the mirror now records every configured selector
-    /// claim, raw, so the profile page can derive eligibility through the gate at read
-    /// time — and it records ONLY the configured ones. The allowlist is the same one the
-    /// principal builder maps (nationality, clearance, the catalog's claim names); a
-    /// claim nobody configured, however much it looks like a selector claim, is not
-    /// stored. Mirror every claim on the token and this goes red on <c>vegetable</c>.
+    /// design.md §6.2: the mirror records the <c>groups</c> claim, raw and in token order,
+    /// for the profile page — and beside it only <c>nationality</c>. It used to record a
+    /// clearance claim and every configured selector claim for the gates that read them;
+    /// those gates are gone, and a claim off the list, however much it looks like one of
+    /// them, is not stored. Mirror every claim on the token and this goes red on
+    /// <c>vegetable</c>; mirror the old list and it goes red on <c>clearance</c>.
     /// </summary>
     [Fact]
-    public async Task JitProvisioning_MirrorsConfiguredSelectorClaims_AndNothingElse()
+    public async Task JitProvisioning_MirrorsGroupsAndNationality_AndNothingElse()
     {
-        var subject = $"jit-selectors-{Guid.NewGuid()}";
+        var subject = $"jit-groups-{Guid.NewGuid()}";
         var client = factory.CreateClient();
         client.SetTestUser(
             sub: subject,
-            email: "jit.selectors@example.test",
-            groups: ["engineering"],
+            email: "jit.groups@example.test",
+            groups: ["propulsion", "engineering"],
             nationality: ["NZ"],
-            clearance: "SECRET",
             roles: ["user"],
             claims:
             [
-                // The configured claim, with the raw shape a realm mapper might emit: the
-                // mirror must keep it verbatim, not reduce it to "eligible".
-                (RocketWikiApiFactory.FruitClaim, " Yes "),
-                // Looks exactly like a selector claim; no configured category names it.
+                // The claims the removed gates used to read, and one that merely looks
+                // like one: none is an attribute now, none is mirrored.
+                ("clearance", "SECRET"),
+                ("fruit", " Yes "),
                 ("vegetable", "yes"),
             ]);
 
@@ -77,12 +76,30 @@ public sealed class JitProvisioningTests(RocketWikiApiFactory factory) : IClassF
         var user = await db.Users.SingleAsync(u => u.Subject == subject);
 
         var attributes = JsonSerializer.Deserialize<Dictionary<string, string[]>>(user.AttributesJson)!;
-        Assert.Equal(
-            ["clearance", RocketWikiApiFactory.FruitClaim, "nationality"],
-            attributes.Keys.OrderBy(k => k, StringComparer.Ordinal));
-        Assert.Equal([" Yes "], attributes[RocketWikiApiFactory.FruitClaim]);
-        Assert.Equal(["SECRET"], attributes["clearance"]);
+        Assert.Equal(["groups", "nationality"], attributes.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        // Token order, verbatim: the profile page sorts for display; the mirror interprets nothing.
+        Assert.Equal(["propulsion", "engineering"], attributes["groups"]);
         Assert.Equal(["NZ"], attributes["nationality"]);
+    }
+
+    [Fact]
+    public async Task JitProvisioning_RecordsAnEmptyGroupsList_WhenTheTokenCarriesNone()
+    {
+        // Every key is present, empty when the token had no such claim, so a reader can
+        // tell "recorded as none" from "never recorded by this build".
+        var subject = $"jit-nogroups-{Guid.NewGuid()}";
+        var client = factory.CreateClient();
+        client.SetTestUser(sub: subject);
+
+        await client.PostGraphQLAsync("{ me { id } }");
+
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+        var user = await db.Users.SingleAsync(u => u.Subject == subject);
+
+        var attributes = JsonSerializer.Deserialize<Dictionary<string, string[]>>(user.AttributesJson)!;
+        Assert.Empty(attributes["groups"]);
+        Assert.Empty(attributes["nationality"]);
     }
 
     [Fact]

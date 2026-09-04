@@ -7,8 +7,8 @@ import type { FormFieldType } from '../graphql/generated/graphql'
  * querying server-side because an RQL predicate selects from every page that
  * exists, so the filter itself is the disclosure — run it client-side and you
  * would have had to ship the rows first. Here the opposite is true: the block has
- * already been handed one collection on one page, permission- and
- * clearance-filtered by the server, and it is narrowing rows it is already
+ * already been handed one collection on one page, permission-filtered by
+ * the server, and it is narrowing rows it is already
  * entitled to read. Filtering them locally reveals nothing it did not already
  * have, and moving it to the server would buy nothing but a round trip.
  *

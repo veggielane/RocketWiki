@@ -17,16 +17,18 @@ namespace RocketWiki.Core.Access;
 /// through this calculator at all — there is nothing here for a caller to bypass with.
 ///
 /// <para><b>One ladder.</b> canView is the conjunction, in <i>reporting</i> order, of
-/// space access (S), classification (C), selector eligibility (E), selector grant (G),
-/// national caveat (N) and the view-restriction chain (R); canEdit adds the replica
-/// invariant, a role grant of Editor or above, and the edit-restriction chain
-/// (§6.4/§21.2). Both <see cref="Compute"/> and <see cref="Explain"/> walk the same
-/// ladder through the same private method — the enforcement form stops at the first
-/// failure, the inspector form evaluates everything — so the two can never disagree about
-/// a verdict or about which reason names it. The order changes no verdict (every gate is
-/// a conjunct); it decides which token an audit row carries, and the rule is "the coarser
-/// fact first": a principal no grant admits is not told what level, selector, caveat or
-/// restriction they would also have failed (§6.7).</para>
+/// space access (S), the marking's availability, selector grant (G), national caveat (N)
+/// and the view-restriction chain (R); canEdit adds the replica invariant, a role grant
+/// of Editor or above, and the edit-restriction chain (§6.4/§21.2). Both
+/// <see cref="Compute"/> and <see cref="Explain"/> walk the same ladder through the same
+/// private method — the enforcement form stops at the first failure, the inspector form
+/// evaluates everything — so the two can never disagree about a verdict or about which
+/// reason names it. The order changes no verdict (every gate is a conjunct); it decides
+/// which token an audit row carries, and the rule is "the coarser fact first": a
+/// principal no grant admits is not told what selector, caveat or restriction they would
+/// also have failed (§6.7). The ladder used to hold two more rungs — clearance against
+/// the level, and a per-category eligibility claim — both reading Keycloak attributes
+/// this deployment does not carry; see <see cref="MarkingGate"/> for why they went.</para>
 ///
 /// <para><b>Two grant kinds, two questions.</b> An access grant answers "may this
 /// principal see the space" (<see cref="ComputeSpaceAccess"/>) and carries the selector
@@ -39,7 +41,7 @@ namespace RocketWiki.Core.Access;
 ///
 /// <para>design.md §21: the marking gates are applied HERE, inside the one computation
 /// every read path already funnels through, rather than at each call site — which is what
-/// makes "classification can only subtract, never grant" a structural property. There is
+/// makes "a marking can only subtract, never grant" a structural property. There is
 /// no parameter, overload, or flag by which a caller can obtain a canView that skipped
 /// them, for the same reason there is no admin flag; and the catalog arrives inside
 /// <see cref="PermissionInputs"/> so a caller cannot forget it.</para>
@@ -213,8 +215,8 @@ public static class EffectivePermissionCalculator
     }
 
     /// <summary>
-    /// The view ladder after S — C, E, G, N through <see cref="MarkingGate"/>, then the
-    /// view restrictions in <paramref name="restrictions"/> — as one list of gate checks.
+    /// The view ladder after S — availability, G, N through <see cref="MarkingGate"/>, then
+    /// the view restrictions in <paramref name="restrictions"/> — as one list of gate checks.
     /// Exactly the view half of the ladder <see cref="Compute"/> runs, exposed so the
     /// tree walk can decide each node with the same gates (§21.9): the walk carries
     /// ancestor restrictions down the recursion and so passes a node's <i>own</i> rules,
@@ -241,7 +243,7 @@ public static class EffectivePermissionCalculator
         // change any verdict. Reporting the marking ahead of a failing restriction is the
         // more actionable answer for a reviewer ("this principal has no business reading
         // this page at all" outranks "and also rule 7 said no"), and it is the cheaper
-        // check, so a page the caller cannot be cleared for costs no rule evaluations.
+        // check, so a page the caller is not granted costs no rule evaluations.
         var checks = new List<GateCheck>(MarkingGate.Evaluate(marking, principal, catalog, access.GrantedSelectors, shortCircuit));
         if (shortCircuit && checks.Any(c => !c.Passed))
         {
@@ -271,7 +273,7 @@ public static class EffectivePermissionCalculator
     ///
     /// <para>Note what CANNOT be expressed here: there is no branch in which a grant, a
     /// role, or a passing restriction causes a marking gate to be skipped. An editor or
-    /// space-admin who fails clearance gets (false, false) like anyone else, and canEdit's
+    /// space-admin who fails a selector gets (false, false) like anyone else, and canEdit's
     /// own marking constraint (you may not mark a page you could not then read) is
     /// enforced in <c>PageMarkingService</c> on top of this through the same
     /// <see cref="MarkingGate"/>.</para>

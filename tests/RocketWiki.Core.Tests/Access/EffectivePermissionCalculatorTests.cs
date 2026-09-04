@@ -498,9 +498,11 @@ public class EffectivePermissionCalculatorTests
         ProtectiveMarking.Create(ClassificationLevel.Official, null, [TestCatalogs.Apple]);
 
     [Fact]
-    public void Compute_SelectorGrantedAndEligible_AllowsView()
+    public void Compute_SelectorGranted_AllowsView()
     {
-        var principal = MakePrincipal(groups: ["engineering"], attributes: new() { [TestCatalogs.FruitClaim] = ["yes"] });
+        // Nothing about the principal beyond the grant they match decides a selector:
+        // no claim, no attribute. The grant carries APPLE, so the page is readable.
+        var principal = MakePrincipal(groups: ["engineering"]);
         var grants = new[] { AccessGrant(Engineering, TestCatalogs.Apple) };
 
         var result = Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, AppleMarking, principal);
@@ -509,22 +511,9 @@ public class EffectivePermissionCalculatorTests
     }
 
     [Fact]
-    public void Compute_SelectorNotEligible_DeniesWithTheCategoryToken_BeforeTheGrantIsConsulted()
-    {
-        // The grant carries APPLE, so G would pass; E fails first and is what is named.
-        var principal = MakePrincipal(groups: ["engineering"]);
-        var grants = new[] { AccessGrant(Engineering, TestCatalogs.Apple) };
-
-        var result = Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, AppleMarking, principal);
-
-        Assert.False(result.CanView);
-        Assert.Equal("selector:not_eligible:FRUIT", result.ViewDenialReason);
-    }
-
-    [Fact]
     public void Compute_SelectorNotGranted_DeniesWithTheCategoryToken()
     {
-        var principal = MakePrincipal(groups: ["engineering"], attributes: new() { [TestCatalogs.FruitClaim] = ["yes"] });
+        var principal = MakePrincipal(groups: ["engineering"]);
         var grants = new[] { AccessGrant(Engineering, TestCatalogs.Banana), RoleGrant(SpaceRole.SpaceAdmin, Engineering) };
 
         var result = Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, AppleMarking, principal);
@@ -538,10 +527,10 @@ public class EffectivePermissionCalculatorTests
     public void Compute_UnknownSelectorCategory_DeniesEveryone_WithTheUnknownToken()
     {
         // §12: a selector configured only on the instance a bundle came from matches nobody
-        // here, and says so distinctly from "not eligible".
+        // here, and says so distinctly from "not granted".
         var codeword = new SelectorValue("CODEWORD", "ZEBRA");
         var marking = ProtectiveMarking.Create(ClassificationLevel.Official, null, [codeword]);
-        var principal = MakePrincipal(groups: ["engineering"], attributes: new() { [TestCatalogs.FruitClaim] = ["yes"] });
+        var principal = MakePrincipal(groups: ["engineering"]);
         var grants = new[] { AccessGrant(Engineering, codeword) };
 
         var result = Compute(grants, Array.Empty<AccessRule>(), isReplicaSpace: false, marking, principal);
@@ -553,8 +542,8 @@ public class EffectivePermissionCalculatorTests
     [Fact]
     public void Compute_AnEmptyCatalog_FailsClosedOnEverySelector()
     {
-        // SelectorCatalog.Empty is the fail-closed value, not a way to skip the gates.
-        var principal = MakePrincipal(groups: ["engineering"], attributes: new() { [TestCatalogs.FruitClaim] = ["yes"] });
+        // SelectorCatalog.Empty is the fail-closed value, not a way to skip the gate.
+        var principal = MakePrincipal(groups: ["engineering"]);
         var inputs = new PermissionInputs(
             [AccessGrant(Engineering, TestCatalogs.Apple)], [], false, AppleMarking, SelectorCatalog.Empty);
 
@@ -570,7 +559,7 @@ public class EffectivePermissionCalculatorTests
     public void EvaluateViewGates_ShortCircuitStopsAtTheFirstFailure_FullFormListsEveryGate()
     {
         var pageId = Guid.NewGuid();
-        var principal = MakePrincipal(); // OFFICIAL_SENSITIVE floor, no fruit claim, no groups
+        var principal = MakePrincipal(); // no nationality, no groups
         var marking = ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], [TestCatalogs.Apple]);
         var restrictions = new[] { PageRestriction(pageId, PageAction.View, Engineering) };
 
@@ -580,14 +569,38 @@ public class EffectivePermissionCalculatorTests
             SpaceAccess.WithoutSelectors, marking, restrictions, TestCatalogs.Fruit, principal, shortCircuit: false);
 
         var only = Assert.Single(stopped);
-        Assert.Equal(GateKind.Classification, only.Kind);
-        Assert.Equal("classification:secret", only.Reason);
+        Assert.Equal(GateKind.SelectorGrant, only.Kind);
+        Assert.Equal("selector:not_granted:FRUIT", only.Reason);
 
         Assert.Equal(
-            [GateKind.Classification, GateKind.SelectorEligibility, GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
+            [GateKind.SelectorGrant, GateKind.NationalCaveat, GateKind.ViewRestriction],
             full.Select(g => g.Kind));
         Assert.All(full, g => Assert.False(g.Passed));
         // Same first failure either way - the full form is a superset, never a different answer.
         Assert.Equal(only.Reason, full[0].Reason);
+    }
+
+    [Fact]
+    public void EvaluateViewGates_AnUnavailableMarking_IsTheOnlyMarkingGateListed_AndFails()
+    {
+        // The tree walk's per-node form sees the missing-row sentinel the same way the
+        // full ladder does: one failed availability gate, no selector or caveat entries,
+        // and (in the full form) the restrictions still listed after it for the inspector.
+        var pageId = Guid.NewGuid();
+        var principal = MakePrincipal(groups: ["engineering"], attributes: new() { ["nationality"] = ["UK"] });
+        var restrictions = new[] { PageRestriction(pageId, PageAction.View, Engineering) };
+        var everything = new SpaceAccess(new HashSet<SelectorValue> { TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South });
+
+        var stopped = EffectivePermissionCalculator.EvaluateViewGates(
+            everything, ProtectiveMarking.FailClosed, restrictions, TestCatalogs.Fruit, principal, shortCircuit: true);
+        var full = EffectivePermissionCalculator.EvaluateViewGates(
+            everything, ProtectiveMarking.FailClosed, restrictions, TestCatalogs.Fruit, principal, shortCircuit: false);
+
+        var only = Assert.Single(stopped);
+        Assert.Equal(GateKind.MarkingUnavailable, only.Kind);
+        Assert.Equal("marking:unavailable", only.Reason);
+        Assert.Equal([GateKind.MarkingUnavailable, GateKind.ViewRestriction], full.Select(g => g.Kind));
+        Assert.False(full[0].Passed);
+        Assert.True(full[1].Passed);
     }
 }

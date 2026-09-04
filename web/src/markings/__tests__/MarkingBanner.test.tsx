@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { MarkingBanner } from '../MarkingBanner'
 import { MarkingLevelBadge } from '../MarkingLevelBadge'
-import { CLASSIFICATION_LADDER } from '../clearance'
+import type { ClassificationLevel } from '../../graphql/generated/graphql'
 import { markingTone } from '../markingTone'
+
+/** Every level the tone table covers. A fixture, not a ranking: the SPA orders and compares levels nowhere. */
+const LEVELS = ['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET'] as const satisfies readonly ClassificationLevel[]
 
 /**
  * design.md §21's rendering rules, which are compliance rules rather than
@@ -58,8 +61,8 @@ describe('MarkingLevelBadge', () => {
 })
 
 describe('markingTone — colour is an accent, never the signal (WCAG 1.4.1)', () => {
-  it('gives every level in the ladder a tone in both themes', () => {
-    for (const level of CLASSIFICATION_LADDER) {
+  it('gives every level a tone in both themes', () => {
+    for (const level of LEVELS) {
       for (const mode of ['light', 'dark'] as const) {
         const tone = markingTone(level, mode)
         expect(tone.bg).toMatch(/^#[0-9a-f]{6}$/)
@@ -69,7 +72,7 @@ describe('markingTone — colour is an accent, never the signal (WCAG 1.4.1)', (
   })
 
   it('uses opaque colours only, so the CI contrast check has real pixels to measure', () => {
-    for (const level of CLASSIFICATION_LADDER) {
+    for (const level of LEVELS) {
       for (const mode of ['light', 'dark'] as const) {
         const tone = markingTone(level, mode)
         expect(`${tone.bg}${tone.fg}${tone.border}`).not.toMatch(/rgba|hsla|transparent/)
@@ -77,7 +80,7 @@ describe('markingTone — colour is an accent, never the signal (WCAG 1.4.1)', (
     }
   })
 
-  it('falls back to the loudest tone for a level it cannot place (§21.3s direction)', () => {
+  it('falls back to the loudest tone for a level it cannot place — the loud direction only overstates', () => {
     for (const mode of ['light', 'dark'] as const) {
       expect(markingTone('COSMIC' as never, mode)).toEqual(markingTone('TOP_SECRET', mode))
     }
@@ -95,7 +98,7 @@ describe('markingTone — colour is an accent, never the signal (WCAG 1.4.1)', (
       const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
       return (hi + 0.05) / (lo + 0.05)
     }
-    for (const level of CLASSIFICATION_LADDER) {
+    for (const level of LEVELS) {
       for (const mode of ['light', 'dark'] as const) {
         const tone = markingTone(level, mode)
         expect(ratio(tone.fg, tone.bg)).toBeGreaterThanOrEqual(4.5)

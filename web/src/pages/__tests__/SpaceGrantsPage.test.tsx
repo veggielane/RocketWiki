@@ -32,8 +32,8 @@ function renderPage({ canManageAccess = true, grants = [accessGrant, roleGrant] 
     if (name === 'SelectorCategories')
       return {
         selectorCategories: [
-          { name: 'FRUIT', description: null, requiresAttribute: true, values: ['APPLE', 'BANANA'] },
-          { name: 'REGION', description: null, requiresAttribute: false, values: ['NORTH', 'SOUTH'] },
+          { name: 'FRUIT', description: null, values: ['APPLE', 'BANANA'] },
+          { name: 'REGION', description: null, values: ['NORTH', 'SOUTH'] },
         ],
       }
     if (name === 'CreateAccessRule') {

@@ -52,7 +52,7 @@ public partial class Mutation
 
         // design.md §8: an access change has to reach live sessions, not just the
         // database. A marking is the third input to canView (§21), so a page
-        // re-marked above a joined co-editor's clearance must evict them - otherwise
+        // re-marked out of a joined co-editor's reach must evict them - otherwise
         // they keep receiving UpdateReceived, which is page content in CRDT form.
         await ruleChangeNotifier.NotifyRulesChangedAsync(cancellationToken);
 

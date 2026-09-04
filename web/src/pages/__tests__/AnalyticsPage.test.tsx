@@ -44,7 +44,7 @@ function renderPage({ analytics = report as unknown } = {}) {
 
 describe('AnalyticsPage', () => {
   it('states what the numbers were counted over', async () => {
-    // A report filtered by clearance that presented itself as the whole space
+    // A report filtered by access that presented itself as the whole space
     // would be quietly misleading — two admins legitimately see different totals.
     renderPage()
     expect(await screen.findByText(/Counted over the 12 pages you can view/)).toBeInTheDocument()

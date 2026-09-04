@@ -32,7 +32,7 @@ public partial class Query
     /// subject is supplied as groups/attributes rather than looked up, because
     /// authorization only ever evaluates token-shaped principals (design.md §6.1) and
     /// no other user's token is available here; this doubles as the what-if tester
-    /// §6.6's tooling needs, and a subject's selector eligibility (§21.15) is stated
+    /// §6.6's tooling needs, and a subject's nationality (§21.4) is stated
     /// through the same <c>attributes</c> input as any other claim. The ADMIN must also
     /// pass canView on the page: §6.5's no-read-around is absolute, and an inspector
     /// that showed a non-viewing admin a page's rules and ancestor titles would be
@@ -149,8 +149,8 @@ public partial class Query
 /// The §6.6 inspector's answer, shaped to the SPA's
 /// <c>web/src/access/permission/effectivePermissionTypes.ts</c> contract: the space
 /// access and role computations, the verdict with the calculator's exact denial-reason
-/// vocabulary (<c>no-space-access</c> / <c>classification:{level}</c> /
-/// <c>selector:{not_eligible|unknown|not_granted}:{CATEGORY}</c> /
+/// vocabulary (<c>no-space-access</c> / <c>marking:unavailable</c> /
+/// <c>selector:{unknown|not_granted}:{CATEGORY}</c> /
 /// <c>caveat:eyes_only</c> / <c>restriction:{pageId}:{ruleId}</c> /
 /// <c>replica-read-only</c> / <c>insufficient-space-role</c> — what
 /// describeDenialReason.ts parses), every gate's individual pass/fail, and every
@@ -230,6 +230,6 @@ public sealed record InspectedPrincipalInput(
     IReadOnlyList<InspectedAttributeInput>? Attributes);
 
 /// <summary>One registered attribute (design.md §6.2) on the inspected subject, e.g.
-/// key "nationality", values ["NZ","US"] for a dual national — or a selector claim
-/// (§21.15), key "fruit", values ["yes"], to state eligibility for a what-if.</summary>
+/// key "nationality", values ["NZ","US"] for a dual national. Nationality is the only
+/// attribute the marking gate reads (§21.4); any other key feeds rule expressions alone.</summary>
 public sealed record InspectedAttributeInput(string Key, IReadOnlyList<string>? Values);

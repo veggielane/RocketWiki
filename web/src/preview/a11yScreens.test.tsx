@@ -52,7 +52,7 @@ import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
 import { Box } from '@mui/material'
 import { MarkingBanner } from '../markings/MarkingBanner'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
-import { CLASSIFICATION_LADDER } from '../markings/clearance'
+import type { ClassificationLevel } from '../graphql/generated/graphql'
 import { ColorModeProvider } from '../theme/ColorModeProvider'
 import { createMockUrqlClient } from '../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../test/axe'
@@ -257,7 +257,6 @@ const PROTECTED_DENIAL = {
     label: 'UK TOP SECRET BANANA NORTH NZ/US EYES ONLY',
   },
   reasons: [
-    { gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'TOP SECRET' },
     { gate: 'SELECTOR_GRANT', passed: false, category: 'FRUIT', value: 'BANANA' },
     { gate: 'NATIONAL_CAVEAT', passed: false, countries: ['NZ', 'US'] },
   ],
@@ -335,13 +334,11 @@ function mockClient() {
         me: {
           id: 'sub-chris', email: 'chris@rocketwiki.dev', name: 'Chris', groups: ['propulsion'],
           isAuthenticated: true, isInstanceAdmin: true, localUserId: 'user-chris', hasAvatar: true,
-          // §21.6: SECRET clearance leaves TOP_SECRET visibly unavailable in
-          // the marking control, which is the state worth capturing — the
-          // "Above your clearance" reason has to be readable in both themes.
-          clearance: 'SECRET', nationality: ['UK'],
-          // §21.15: eligible for FRUIT (the token says so) and REGION (no
-          // attribute gate); the marking control's pickers are both live.
-          selectorEligibility: ['FRUIT', 'REGION'],
+          // Nationality is the one thing about the caller the marking control
+          // reads (the caveat warning). No clearance and no eligibility: every
+          // level is offered to everyone, and the selector pickers are gated
+          // by the grants staged below alone.
+          nationality: ['UK'],
         },
       }
     if (name === 'SpaceReplicaBanner')
@@ -480,8 +477,8 @@ function mockClient() {
     if (name === 'SelectorCategories')
       return {
         selectorCategories: [
-          { name: 'FRUIT', description: 'Fruit programme compartments', requiresAttribute: true, values: ['APPLE', 'BANANA'] },
-          { name: 'REGION', description: 'Regional releasability', requiresAttribute: false, values: ['NORTH', 'SOUTH'] },
+          { name: 'FRUIT', description: 'Fruit programme compartments', values: ['APPLE', 'BANANA'] },
+          { name: 'REGION', description: 'Regional releasability', values: ['NORTH', 'SOUTH'] },
         ],
       }
     if (name === 'SpaceSelectorGrants')
@@ -617,7 +614,7 @@ function mockClient() {
       return {
         groups: ['propulsion', 'export-cleared'],
         attributeRegistry: [
-          { key: 'clearance', displayName: 'Clearance', allowedValues: ['itar', 'public'] },
+          { key: 'export-status', displayName: 'Export status', allowedValues: ['itar', 'public'] },
           // §21.4: the eyes-only picker's vocabulary is this attribute's
           // allowedValues and nothing else — there is no ISO list.
           { key: 'nationality', displayName: 'Nationality', allowedValues: ['UK', 'US', 'AU'] },
@@ -632,8 +629,7 @@ function mockClient() {
           // both reach the contrast check.
           viewGates: [
             { gate: 'SPACE_ACCESS', passed: true },
-            { gate: 'CLASSIFICATION', passed: true },
-            { gate: 'SELECTOR_ELIGIBILITY', passed: true, category: 'FRUIT' },
+            { gate: 'MARKING_UNAVAILABLE', passed: true },
             { gate: 'SELECTOR_GRANT', passed: true, category: 'FRUIT', value: 'APPLE' },
             { gate: 'NATIONAL_CAVEAT', passed: true },
             { gate: 'RESTRICTION', passed: true },
@@ -688,7 +684,8 @@ interface Screen {
  * without a prefix on purpose: that is a legal marking, and it is also what
  * the server's fail-closed substitute renders when a marking row is missing.
  */
-const STAGED_MARKINGS: Record<(typeof CLASSIFICATION_LADDER)[number], { label: string; levelName: string }> = {
+const STAGED_LEVELS = ['OFFICIAL', 'OFFICIAL_SENSITIVE', 'SECRET', 'TOP_SECRET'] as const satisfies readonly ClassificationLevel[]
+const STAGED_MARKINGS: Record<(typeof STAGED_LEVELS)[number], { label: string; levelName: string }> = {
   OFFICIAL: { label: 'UK OFFICIAL', levelName: 'OFFICIAL' },
   OFFICIAL_SENSITIVE: { label: 'UK OFFICIAL-SENSITIVE', levelName: 'OFFICIAL-SENSITIVE' },
   SECRET: { label: 'UK SECRET UK/US EYES ONLY', levelName: 'SECRET' },
@@ -867,7 +864,7 @@ const SCREENS: Screen[] = [
       standalone(
         mode,
         <Box sx={{ p: 3, display: 'grid', gap: 3, maxWidth: 720 }}>
-          {CLASSIFICATION_LADDER.map((level) => (
+          {STAGED_LEVELS.map((level) => (
             <Box key={level} sx={{ display: 'grid', gap: 1 }}>
               <MarkingBanner level={level} placement="head" label={STAGED_MARKINGS[level].label} />
               <Box>

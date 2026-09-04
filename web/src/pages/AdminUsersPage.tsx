@@ -16,8 +16,8 @@ type UserRow = NonNullable<NonNullable<AdminUsersQuery['users']>['nodes']>[numbe
  * The account roster (instance admins only, gated at the router and enforced
  * by the server, which also audits the read as `admin.users.view`).
  *
- * **Identity and activity, and nothing else.** There is no clearance,
- * nationality or group column because there is no such field to select:
+ * **Identity and activity, and nothing else.** There is no nationality or
+ * group column because there is no such field to select:
  * those are token claims evaluated per request, never stored per user. A
  * roster that listed them would be a second, stale answer to "who is allowed
  * what" — and the page says so, because an admin who expects to find
@@ -96,7 +96,7 @@ export function AdminUsersPage() {
     <Stack spacing={2}>
       <PageHeader
         title="Users"
-        description="Every account this instance has seen, in alphabetical order. Identity and activity only — group membership, clearance and nationality arrive in a sign-in token and are never stored against an account, so they cannot be listed here; access is decided per request from the token, and rules are written on a space's Grants screen."
+        description="Every account this instance has seen, in alphabetical order. Identity and activity only — group membership and nationality arrive in a sign-in token and are never stored against an account, so they cannot be listed here; access is decided per request from the token, and rules are written on a space's Grants screen."
       />
 
       {/* Inline, heading retained. A failed read is not an empty roster, and

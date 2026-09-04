@@ -32,8 +32,8 @@ public class AggregateMarkingLabelTests
 
     private static readonly SelectorCatalog Catalog = SelectorCatalog.Create(
     [
-        new SelectorCategory("FRUIT", "Fruit compartments", "fruit", ["APPLE", "BANANA"]),
-        new SelectorCategory("REGION", "Regional releasability", null, ["NORTH", "SOUTH"]),
+        new SelectorCategory("FRUIT", "Fruit compartments", ["APPLE", "BANANA"]),
+        new SelectorCategory("REGION", "Regional releasability", ["NORTH", "SOUTH"]),
     ]);
 
     private static readonly SelectorValue Apple = new("FRUIT", "APPLE");

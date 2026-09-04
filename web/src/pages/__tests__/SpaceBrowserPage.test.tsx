@@ -30,7 +30,7 @@ const protectedLeaf = {
     placeholderTitle: '(protected)',
     noSpaceAccess: false,
     marking: { level: 'TOP_SECRET', levelName: 'TOP SECRET', eyesOnly: ['UK'], ukPrefix: true, selectors: [], label: 'UK TOP SECRET UK EYES ONLY' },
-    reasons: [{ gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'TOP SECRET' }],
+    reasons: [{ gate: 'NATIONAL_CAVEAT', passed: false, countries: ['UK'] }],
   },
 }
 
@@ -127,7 +127,7 @@ describe('SpaceBrowserPage', () => {
     expect(within(leaf as HTMLElement).queryByRole('link')).toBeNull()
     const why = within(leaf as HTMLElement).getByRole('button', { name: 'Why is this page protected?' })
     fireEvent.click(why)
-    expect(within(leaf as HTMLElement).getByText('Clearance: Needs TOP SECRET clearance.')).toBeInTheDocument()
+    expect(within(leaf as HTMLElement).getByText('National caveat: Releasable to UK only.')).toBeInTheDocument()
   })
 
   it("draws each page's own icon, and the generic page glyph for one without", async () => {

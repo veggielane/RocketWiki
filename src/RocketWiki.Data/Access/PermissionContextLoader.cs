@@ -69,10 +69,10 @@ internal readonly record struct PermissionSubject(Guid PageId, Guid SpaceId, str
 /// accumulate down the tree: inheritance happens once, when a page is created, and is
 /// then a value that page owns and an editor may override in either direction. So the
 /// marking loaded here is the subject page's own, never its ancestors'. A page id with
-/// no marking row resolves to <see cref="ProtectiveMarking.FailClosed"/> — TOP SECRET —
-/// and that substitution happens HERE, in the loader, so no consumer of a
-/// <see cref="PagePermissionContext"/> ever holds a nullable marking it could decide to
-/// ignore.</para>
+/// no marking row resolves to <see cref="ProtectiveMarking.FailClosed"/> — unavailable,
+/// readable by nobody — and that substitution happens HERE, in the loader, so no
+/// consumer of a <see cref="PagePermissionContext"/> ever holds a nullable marking it
+/// could decide to ignore.</para>
 ///
 /// <para>Fail closed (design.md §6.3): a space with no grant rows yields an empty grant
 /// list, which <see cref="EffectivePermissionCalculator.ComputeSpaceAccess"/> turns into
@@ -123,8 +123,8 @@ internal sealed class PermissionContextLoader
     /// chain — creating a page at the root of a space — has no page to read a marking
     /// from and uses <see cref="ProtectiveMarking.Baseline"/> (OFFICIAL), because that is
     /// precisely the marking the root page being created will receive. Failing closed
-    /// there would make root-page creation impossible for anyone below TOP SECRET, which
-    /// is a bug, not a control.</para>
+    /// there would make root-page creation impossible for everyone, which is a bug, not
+    /// a control.</para>
     /// </summary>
     public async Task<PagePermissionContext> LoadAsync(
         Guid spaceId, IReadOnlyList<Guid> chainPageIds, bool isReplicaSpace, CancellationToken cancellationToken)
@@ -329,9 +329,9 @@ internal sealed class PermissionContextBatch
 
     /// <summary>
     /// THE fail-closed substitution for a page whose marking row is missing (design.md
-    /// §21): TOP SECRET, not "unmarked". It lives here and in
-    /// <see cref="PermissionContextLoader.LoadMarkingAsync"/> and nowhere else, so a
-    /// consumer never gets the chance to decide what a null marking means.
+    /// §21): unavailable — denied to everyone by its own flag — not "unmarked". It lives
+    /// here and in <see cref="PermissionContextLoader.LoadMarkingAsync"/> and nowhere
+    /// else, so a consumer never gets the chance to decide what a null marking means.
     /// </summary>
     public ProtectiveMarking MarkingFor(Guid pageId) =>
         _markingsByPageId.GetValueOrDefault(pageId) ?? ProtectiveMarking.FailClosed;

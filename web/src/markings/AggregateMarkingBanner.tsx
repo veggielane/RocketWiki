@@ -57,7 +57,7 @@ const SCOPE_NOTE: Record<AggregateMarkingPlacement, string | null> = {
  * launders the marking off the content, and this puts it back on.
  *
  * **A display label, not enforcement.** Every contributing page individually
- * passed `canView` and the clearance gate before it reached retrieval, so
+ * passed `canView` before it reached retrieval, so
  * nothing here gates anything; the label exists to tell a human what the text
  * in front of them *is*.
  *

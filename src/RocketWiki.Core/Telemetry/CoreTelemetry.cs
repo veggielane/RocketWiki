@@ -136,17 +136,18 @@ public static class CoreTelemetry
     /// dimension, which would then carry one series per rule. The audit log keeps the
     /// specific reason; this keeps only the shape.
     ///
-    /// <para>design.md §21's marking reasons collapse the same way.
-    /// <c>classification:{level}</c> becomes <c>classification</c> and
-    /// <c>caveat:eyes_only</c> becomes <c>caveat</c>. The level alone would be a bounded
-    /// four-value tag and is therefore tempting to keep — it is dropped deliberately.
-    /// A "denials by classification level" time series is a census of how much SECRET
-    /// and TOP SECRET content exists and how hard it is being probed, published to
-    /// whatever audience the dashboard has; that is exactly the second, unregulated
-    /// record of who-reads-what §15 exists to prevent, and the audit table already holds
-    /// the specific level for anyone entitled to ask. The country set never appears in a
-    /// reason string at all (see <c>ClearanceGate.EyesOnlyReason</c>), so no page id and
-    /// no marking contents can reach a metric tag through this path.</para>
+    /// <para>design.md §21's marking reasons collapse the same way: <c>caveat:eyes_only</c>
+    /// becomes <c>caveat</c>, and <c>marking:unavailable</c> — a page whose marking row is
+    /// missing — becomes <c>marking-unavailable</c>, which is the one marking series an
+    /// operator should watch, because a non-zero count is a bug losing rows. The country
+    /// set never appears in a reason string at all (see <c>CaveatGate.EyesOnlyReason</c>),
+    /// and the level no longer appears in one either — it stopped gating when this
+    /// deployment stopped carrying a clearance attribute — so no page id and no marking
+    /// contents can reach a metric tag through this path. (While the level did gate, its
+    /// token was collapsed away here for the reason the selector's still is: a
+    /// "denials by level" series would have been a census of how much SECRET and TOP
+    /// SECRET content exists and how hard it is being probed, published to whatever
+    /// audience the dashboard has.)</para>
     /// </summary>
     public static string CategorizeDenialReason(string? denialReason) => denialReason switch
     {
@@ -154,14 +155,14 @@ public static class CoreTelemetry
         "no-space-access" => "no-space-access",
         "replica-read-only" => "replica-read-only",
         "insufficient-space-role" => "insufficient-space-role",
+        "marking:unavailable" => "marking-unavailable",
         _ when denialReason.StartsWith("restriction:", StringComparison.Ordinal) => "restriction",
-        _ when denialReason.StartsWith("classification:", StringComparison.Ordinal) => "classification",
         _ when denialReason.StartsWith("caveat:", StringComparison.Ordinal) => "caveat",
-        // design.md §21.15: selector:not_eligible:{CATEGORY}, selector:unknown:{CATEGORY}
-        // and selector:not_granted:{CATEGORY} all collapse to one word. The category
-        // name is bounded configured vocabulary, but a per-category series would still be
-        // a census of which compartments exist and how hard each is probed - the §21.8
-        // argument that keeps the level out, applied to the selector.
+        // design.md §21.15: selector:unknown:{CATEGORY} and selector:not_granted:{CATEGORY}
+        // both collapse to one word. The category name is bounded configured vocabulary,
+        // but a per-category series would still be a census of which compartments exist
+        // and how hard each is probed - the §21.8 argument that kept the level out,
+        // applied to the selector.
         _ when denialReason.StartsWith("selector:", StringComparison.Ordinal) => "selector",
         _ => "other",
     };

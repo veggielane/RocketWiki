@@ -26,6 +26,7 @@ import { accessGateTitle, describeAccessGate } from '../../access/denial/describ
 import {
   GRANT_KINDS_EXPLANATION,
   MANAGE_WITHOUT_ACCESS_NOTE,
+  MARKING_UNAVAILABLE,
   MISSING_LINK_TITLE,
   NO_SPACE_ACCESS,
   PROTECTED_PAGE_TITLE,
@@ -34,22 +35,14 @@ import {
   WHY_PROTECTED_HEADING,
   protectedLinkTitle,
 } from '../../access/denial/protectedCopy'
-import {
-  ABOVE_CLEARANCE_REASON,
-  NOT_GRANTED_REASON,
-  describeMarkingRefusal,
-  notEligibleReason,
-  type MarkingRefusal,
-} from '../../markings/clearance'
+import { NOT_GRANTED_REASON, describeMarkingRefusal, type MarkingRefusal } from '../../markings/markingRefusal'
+import { LEVEL_IS_DISPLAY_NOTE, MARKING_SECTION_DESCRIPTION, SELECTOR_RULE_NOTE } from '../../markings/markingCopy'
 import { describeSave } from '../../editor/describeSave'
 import {
-  CLEARANCE_NOT_RECORDED,
-  CLEARANCE_NOT_RECORDED_DETAIL,
   EXTERNAL_ACCOUNT_NOTE,
-  NO_SELECTOR_CATEGORIES,
+  GROUPS_SECTION_DESCRIPTION,
+  NO_GROUPS_RECORDED,
   PROFILE_RECORDED_CAPTION,
-  SELECTOR_SECTION_DESCRIPTION,
-  describeEligibility,
 } from '../../users/profileCopy'
 import type { AccessGate, AskWikiUnavailableReason, GitLabUnavailableReason } from '../../graphql/generated/graphql'
 
@@ -101,6 +94,7 @@ const LOAD_REASONS: LoadFailureReason[] = [
   'PROPERTY_KEY_REGISTRY',
   'SELECTOR_CATEGORIES',
   'SELECTOR_GRANTS',
+  'CLASSIFICATION_SCHEME',
   'PAGE_ACCESS',
   'SYNC_STATUS',
   'SEARCH',
@@ -115,8 +109,7 @@ const DENIAL_REASONS = [
   'no-space-access',
   'replica-read-only',
   'insufficient-space-role',
-  'classification:SECRET',
-  'selector:not_eligible:FRUIT',
+  'marking:unavailable',
   'selector:unknown:FRUIT',
   'selector:not_granted:FRUIT',
   'caveat:eyes_only',
@@ -125,8 +118,7 @@ const DENIAL_REASONS = [
 /** Every gate, in both states, with the detail each can carry — so every branch of the sentence table is walked. */
 const ACCESS_GATES: AccessGate[] = [
   'SPACE_ACCESS',
-  'CLASSIFICATION',
-  'SELECTOR_ELIGIBILITY',
+  'MARKING_UNAVAILABLE',
   'SELECTOR_GRANT',
   'NATIONAL_CAVEAT',
   'RESTRICTION',
@@ -135,12 +127,10 @@ const ACCESS_GATES: AccessGate[] = [
 ]
 const GATE_DETAILS = [
   {},
-  { requiredLevelName: 'SECRET', category: 'FRUIT', value: 'APPLE', countries: ['AUS', 'NZ'], inherited: true, requiredRole: 'EDITOR' as const },
-  { requiredLevelName: 'SECRET', category: 'FRUIT', countries: [], requiredRole: 'SPACE_ADMIN' as const },
+  { category: 'FRUIT', value: 'APPLE', countries: ['AUS', 'NZ'], inherited: true, requiredRole: 'EDITOR' as const },
+  { category: 'FRUIT', countries: [], requiredRole: 'SPACE_ADMIN' as const },
 ]
 const MARKING_REFUSALS: MarkingRefusal[] = [
-  { kind: 'ABOVE_CLEARANCE', level: 'TOP_SECRET' },
-  { kind: 'SELECTOR_NOT_ELIGIBLE', category: 'FRUIT' },
   { kind: 'SELECTOR_NOT_GRANTED', category: 'FRUIT', value: 'BANANA' },
   { kind: 'EYES_ONLY_EXCLUDES_YOU', viewerHasNoNationality: true },
   { kind: 'EYES_ONLY_EXCLUDES_YOU', viewerHasNoNationality: false },
@@ -167,19 +157,19 @@ function allUserFacingCopy(): { source: string; text: string }[] {
     for (const passed of [true, false]) {
       for (const detail of GATE_DETAILS) {
         add(`describeAccessGate(${gate}, ${passed}, ${JSON.stringify(detail)})`, describeAccessGate({ gate, passed, ...detail }))
-        add(
-          `describeAccessGate(${gate}, ${passed}, held)`,
-          describeAccessGate({ gate, passed, ...detail }, { heldLevelName: 'OFFICIAL-SENSITIVE' }),
-        )
       }
     }
   }
   for (const refusal of MARKING_REFUSALS) add(`describeMarkingRefusal(${refusal.kind})`, describeMarkingRefusal(refusal))
-  add('ABOVE_CLEARANCE_REASON', ABOVE_CLEARANCE_REASON)
   add('NOT_GRANTED_REASON', NOT_GRANTED_REASON)
-  add('notEligibleReason(FRUIT)', notEligibleReason('FRUIT'))
+  // The marking control (markings/markingCopy.ts): the section description
+  // and the two helper lines that say which parts of a marking gate.
+  add('MARKING_SECTION_DESCRIPTION', MARKING_SECTION_DESCRIPTION)
+  add('LEVEL_IS_DISPLAY_NOTE', LEVEL_IS_DISPLAY_NOTE)
+  add('SELECTOR_RULE_NOTE', SELECTOR_RULE_NOTE)
   add('PROTECTED_PAGE_TITLE', PROTECTED_PAGE_TITLE)
   add('NO_SPACE_ACCESS', NO_SPACE_ACCESS)
+  add('MARKING_UNAVAILABLE', MARKING_UNAVAILABLE)
   add('PROTECTED_TREE_NOTE', PROTECTED_TREE_NOTE)
   add('WHY_PROTECTED_HEADING', WHY_PROTECTED_HEADING)
   add('WHY_PROTECTED_BUTTON', WHY_PROTECTED_BUTTON)
@@ -201,17 +191,11 @@ function allUserFacingCopy(): { source: string; text: string }[] {
   add('describeSave(manual)', describeSave({ revisionNumber: 12, contributors: ['Ada'], auto: false }))
   add('describeSave(auto)', describeSave({ revisionNumber: 12, contributors: [], auto: true }))
 
-  // The profile page (users/profileCopy.ts): every sentence it can show,
-  // and each of the three things an eligibility row can say.
+  // The profile page (users/profileCopy.ts): every sentence it can show.
   add('PROFILE_RECORDED_CAPTION', PROFILE_RECORDED_CAPTION)
-  add('CLEARANCE_NOT_RECORDED', CLEARANCE_NOT_RECORDED)
-  add('CLEARANCE_NOT_RECORDED_DETAIL', CLEARANCE_NOT_RECORDED_DETAIL)
+  add('GROUPS_SECTION_DESCRIPTION', GROUPS_SECTION_DESCRIPTION)
+  add('NO_GROUPS_RECORDED', NO_GROUPS_RECORDED)
   add('EXTERNAL_ACCOUNT_NOTE', EXTERNAL_ACCOUNT_NOTE)
-  add('SELECTOR_SECTION_DESCRIPTION', SELECTOR_SECTION_DESCRIPTION)
-  add('NO_SELECTOR_CATEGORIES', NO_SELECTOR_CATEGORIES)
-  add('describeEligibility(everyone)', describeEligibility({ requiresAttribute: false, eligible: true }))
-  add('describeEligibility(eligible)', describeEligibility({ requiresAttribute: true, eligible: true }))
-  add('describeEligibility(not eligible)', describeEligibility({ requiresAttribute: true, eligible: false }))
 
   return out
 }
@@ -227,8 +211,11 @@ describe('shared copy modules never cite the design document', () => {
 
   it('exercised every module, so an empty pass cannot be a vacuous one', () => {
     // A refactor that renamed a reason would otherwise silently shrink the set
-    // this walks, and the test above would keep passing over nothing.
-    expect(allUserFacingCopy().length).toBeGreaterThanOrEqual(150)
+    // this walks, and the test above would keep passing over nothing. The
+    // floor sits just under the honest count (the gate table shrank when the
+    // clearance and eligibility gates left, and lost its "you hold" variant
+    // with them), so a dropped module still trips it.
+    expect(allUserFacingCopy().length).toBeGreaterThanOrEqual(120)
   })
 
   it('still says why a replica cannot be edited, rather than dropping the sentence', () => {

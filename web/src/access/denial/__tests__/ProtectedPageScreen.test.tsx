@@ -17,13 +17,12 @@ const denial: ProtectedPageDenial = {
   noSpaceAccess: false,
   marking: { label: 'UK SECRET APPLE NZ/US EYES ONLY', level: 'SECRET' },
   reasons: [
-    { gate: 'CLASSIFICATION', passed: false, requiredLevelName: 'SECRET' },
     { gate: 'SELECTOR_GRANT', passed: false, category: 'FRUIT', value: 'APPLE' },
     { gate: 'NATIONAL_CAVEAT', passed: false, countries: ['NZ', 'US'] },
   ],
 }
 
-function renderScreen(props: { denial: ProtectedPageDenial; heldLevelName?: string | null }) {
+function renderScreen(props: { denial: ProtectedPageDenial }) {
   const setTitle = vi.fn()
   render(
     <PageTitleContext value={setTitle}>
@@ -51,11 +50,24 @@ describe('ProtectedPageScreen', () => {
   })
 
   it('lists every failing gate as a sentence under "Why you cannot read this page"', () => {
-    renderScreen({ denial, heldLevelName: 'OFFICIAL-SENSITIVE' })
+    renderScreen({ denial })
     expect(screen.getByRole('heading', { level: 2, name: 'Why you cannot read this page' })).toBeInTheDocument()
-    expect(screen.getByText('Needs SECRET clearance; you hold OFFICIAL-SENSITIVE.')).toBeInTheDocument()
     expect(screen.getByText('APPLE is not granted to you in this space.')).toBeInTheDocument()
     expect(screen.getByText('Releasable to NZ/US only.')).toBeInTheDocument()
+    // Nothing about what the reader holds: no gate is about a level, so
+    // there is no clearance to name beside what the page needs.
+    expect(document.body.textContent).not.toMatch(/clearance|eligib/i)
+  })
+
+  it('says the marking is missing, with no banner, when that is the gate that failed', () => {
+    // The server withholds no label here because there is none: the marking
+    // row is gone, and the sentence says so to everyone alike.
+    renderScreen({
+      denial: { noSpaceAccess: false, marking: null, reasons: [{ gate: 'MARKING_UNAVAILABLE', passed: false }] },
+    })
+    expect(screen.getByRole('heading', { level: 2, name: 'Why you cannot read this page' })).toBeInTheDocument()
+    expect(screen.getByText("This page's marking is missing, so nobody can read it until it is restored.")).toBeInTheDocument()
+    expect(document.querySelector('[data-marking-placement]')).toBeNull()
   })
 
   it('says only the space sentence when the caller holds no access grant there — no marking, no gates', () => {

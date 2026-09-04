@@ -23,7 +23,7 @@ public partial class Query
     /// reading habits" is as answerable as "who read the page".</para>
     ///
     /// <para>The report is computed over the caller's own visible set, so two admins
-    /// with different clearances see different totals (§21 subtracts from admins too),
+    /// with different grants see different totals (§21 subtracts from admins too),
     /// and no series anywhere is keyed on classification — see IAnalyticsService.</para>
     /// </summary>
     /// <remarks>

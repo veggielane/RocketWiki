@@ -5,7 +5,7 @@
       "title": "Using RocketWiki",
       "topics": [
         { "slug": "getting-started", "summary": "Spaces, pages, writing and finding things." },
-        { "slug": "classification", "summary": "The parts of a marking, what each needs, and why a page shows as (protected)." },
+        { "slug": "classification", "summary": "The parts of a marking, which of them decide who may read a page, and why a page shows as (protected)." },
         { "slug": "organising", "summary": "The tree, labels, icons, properties, forms and trash." },
         { "slug": "watching-and-notifications", "summary": "Following pages and being told when they change." }
       ]

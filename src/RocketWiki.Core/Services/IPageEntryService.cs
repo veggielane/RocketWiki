@@ -51,7 +51,7 @@ public interface IPageEntryService
         CancellationToken cancellationToken = default);
 
     /// <summary>Updates an entry's data and optionally its marking. Needs `canEdit` on the
-    /// page AND clearance for the entry's current marking — an entry you cannot read is an
+    /// page AND the marking gate for the entry's current marking — an entry you cannot read is an
     /// entry you cannot rewrite, including re-marking it down to make it readable.</summary>
     Task<PageMutationResult<PageEntryView>> UpdateAsync(
         UpdatePageEntryRequest request, Principal principal, Guid actingUserId, AuditContext auditContext,
