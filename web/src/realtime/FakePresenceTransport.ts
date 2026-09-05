@@ -1,7 +1,6 @@
 import type {
   CoEditTransport,
   EditSessionJoin,
-  PointerPosition,
   PresenceTransport,
   PresenceViewer,
   ReseedReason,
@@ -10,10 +9,10 @@ import type {
 /**
  * Stands in for a real presence connection, for tests and for running the
  * SPA without a backend (`VITE_FAKE_REALTIME=true` — see
- * realtime/transports.ts). Tracks joined pages and sent pointer positions
- * so tests can assert teardown actually happens, which is the entire
- * point of this feature ("a leaked hub subscription is a live data leak,
- * not just a memory leak" — design.md §8).
+ * realtime/transports.ts). Tracks joined and left rooms so tests can assert
+ * teardown actually happens, which is the entire point of this feature ("a
+ * leaked hub subscription is a live data leak, not just a memory leak" —
+ * design.md §8).
  *
  * Also stands in for `CoEditTransport` (the real transport is one class on
  * one connection, so the fake mirrors that). By default `joinEditSession`
@@ -24,7 +23,6 @@ import type {
  */
 export class FakePresenceTransport implements PresenceTransport, CoEditTransport {
   private viewerHandlers = new Set<(viewers: PresenceViewer[]) => void>()
-  private pointerHandlers = new Set<(position: PointerPosition) => void>()
   private updateHandlers = new Set<(pageId: string, update: Uint8Array) => void>()
   private awarenessHandlers = new Set<(pageId: string, update: Uint8Array) => void>()
   private reseedHandlers = new Set<(pageId: string, baseRevisionNumber: number, reason: ReseedReason) => void>()
@@ -33,7 +31,6 @@ export class FakePresenceTransport implements PresenceTransport, CoEditTransport
 
   joinedRooms: string[] = []
   leftRooms: string[] = []
-  sentPositions: { roomKey: string; x: number; y: number }[] = []
 
   /** Script for `joinEditSession` — null (default) means refused → solo path. May also be a function for per-call scripting. */
   editSessionJoinResult: EditSessionJoin | null | (() => EditSessionJoin | null) = null
@@ -67,26 +64,10 @@ export class FakePresenceTransport implements PresenceTransport, CoEditTransport
     return () => this.viewerHandlers.delete(handler)
   }
 
-  onPointerMoved(handler: (position: PointerPosition) => void): () => void {
-    this.pointerHandlers.add(handler)
-    return () => this.pointerHandlers.delete(handler)
-  }
-
-  sendPointerPosition(roomKey: string, x: number, y: number): void {
-    this.sentPositions.push({ roomKey, x, y })
-  }
-
   /** Test/dev only: simulates the hub broadcasting an updated viewer list. */
   emitViewers(viewers: PresenceViewer[]): void {
     for (const handler of this.viewerHandlers) {
       handler(viewers)
-    }
-  }
-
-  /** Test/dev only: simulates another viewer's pointer position arriving. */
-  emitPointer(position: PointerPosition): void {
-    for (const handler of this.pointerHandlers) {
-      handler(position)
     }
   }
 

@@ -44,9 +44,9 @@ public class PresenceRoomTests
     public void SpaceScreensShareAuthorizationButAreDifferentRooms()
     {
         // The contract the SPA actually sends. Both screens of one space need the SAME
-        // permission — so the gate reads SpaceKey alone — but a cursor at (0.5, 0.5) on
-        // the browser means nothing on the trash screen, so they must be separate
-        // SignalR groups.
+        // permission — so the gate reads SpaceKey alone — but someone reading the
+        // browser is not "here" on the trash screen, so they must be separate SignalR
+        // groups.
         Assert.True(PresenceRoom.TryParse("space:ENG:browse", out var browse));
         Assert.True(PresenceRoom.TryParse("space:ENG:trash", out var trash));
 
@@ -112,6 +112,10 @@ public class PresenceRoomTests
     [InlineData("page:not-a-guid")]
     [InlineData("space:")]
     [InlineData(":home")]
+    // No prefix. A bare GUID used to parse as the transitional page room, kept only
+    // so a pre-room-key client's pointer call could land; that call is gone, the page
+    // adapters build the prefixed key themselves, and a key with no prefix has no gate.
+    [InlineData("6f9619ff-8b86-d011-b42d-00c04fc964ff")]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData(null)]
@@ -127,20 +131,6 @@ public class PresenceRoomTests
         // Parsing happens before authorization, so an unbounded key would be a
         // memory-growth vector even for a room that is ultimately refused.
         Assert.False(PresenceRoom.TryParse("site:" + new string('a', 5000), out _));
-    }
-
-    [Fact]
-    public void ABareGuidIsTheTransitionalPageRoom()
-    {
-        // SignalR forbids method overloading, so the hub cannot keep both
-        // PointerMove(Guid,…) and PointerMove(string,…). The old client call arrives as a
-        // GUID-shaped JSON string, and this branch is what keeps it landing on the right
-        // room until the SPA sends room keys. Delete it with the adapters.
-        var pageId = Guid.NewGuid();
-
-        Assert.True(PresenceRoom.TryParse(pageId.ToString(), out var room));
-        Assert.Equal(pageId, Assert.IsType<PresenceRoom.Page>(room).PageId);
-        Assert.Equal($"page:{pageId}", room.Key);
     }
 
     /// <summary>

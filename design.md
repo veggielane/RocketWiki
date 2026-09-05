@@ -48,7 +48,7 @@ format, a .NET backend serving GraphQL, and a Vite/React/MUI frontend.
 | Database | SQL Server 2025 | Full-Text Search + native `vector` type (§9) |
 | AI | OpenAI-compatible endpoint | embeddings via `Microsoft.Extensions.AI`; must sit inside the security boundary (§9.4) |
 | MCP | Official MCP C# SDK at `/mcp` | assistants act as the user (OAuth via Keycloak); same rules + audit (§8) |
-| Real-time | SignalR (MessagePack) | notifications, presence + live pointers; future CRDT transport (§8) |
+| Real-time | SignalR (MessagePack) | notifications, presence, CRDT co-editing relay (§8) |
 | Frontend | Vite + React + TypeScript | SPA |
 | UI components | MUI (Material UI) | app shell, forms, dialogs; DataGrid for audit viewer + admin tables; rule builder built from MUI primitives |
 | Editor | TipTap (ProseMirror) + Markdown serialization | See §4 |
@@ -1253,19 +1253,18 @@ so it is subject to the same rules as reading (§6):
   replica — but k3s makes scale-out easy, so this becomes a real decision
   at deployment time rather than a theoretical one (§15).
 
-#### Presence: who's here, pointers, carets
+#### Presence: who's here, carets
 
-Live presence on a page — avatars of everyone viewing, their mouse pointers,
-and their text carets — over the same hub. It divides into two tiers that
-cost very different amounts:
+Live presence on a page — avatars of everyone viewing, and their text
+carets — over the same hub. It divides into two tiers that cost very
+different amounts:
 
 | Tier | Needs | When |
 |---|---|---|
 | **Viewer presence** — avatars, "3 people viewing", who is editing | nothing beyond the hub | v1 |
-| **Mouse pointers** — live cursors with name labels | viewport-relative coordinates only | v1 |
 | **Text carets and selections** — caret inside the document, remote selection highlights | **a shared document state, i.e. CRDT** | with co-editing |
 
-The first two are just ephemeral state broadcast between clients. A **text
+The first is just ephemeral state broadcast between clients. A **text
 caret is different**: a position like "offset 412" only means something if
 every client holds an identical document, and under optimistic concurrency
 (§5) two editors diverge the moment one of them types — a remote caret would
@@ -1285,10 +1284,8 @@ CRDT layer, not a separate one. See the decision note below.
   kicks affected presence groups. Durable, low-frequency notifications keep
   per-user fan-out; ephemeral, high-frequency presence uses groups. The
   difference is deliberate.
-- **Throttled and batched.** Pointer movement is sampled client-side
-  (~20/sec) and coalesced server-side; the hub uses the MessagePack
-  protocol to keep frames small — which the Yjs binary updates will want
-  anyway.
+- **Binary on the wire.** The hub uses the MessagePack protocol, which
+  keeps frames small and is what the Yjs binary updates need anyway.
 - **Leaving a page is a route change, not an unmount.** A single-page router
   reuses the same component instance across `/pages/:id` navigations, so
   presence subscriptions must key on the page id rather than on mount. An
@@ -1327,8 +1324,8 @@ tracks distinct contributors since the last save; the save records them as
 PageRevisionContributor rows in the same transaction (AuthorUserId stays
 "who pressed save"), resolved exclusively from the server's session
 registry — no client-supplied contributor list exists anywhere in the API.
-Replicas refuse co-editing at the join gate (§12); presence and pointers
-still work on a replica — there's just nothing to merge. Live updates are
+Replicas refuse co-editing at the join gate (§12); presence still works on
+a replica — there's just nothing to merge. Live updates are
 content: telemetry sees byte counts only (§15).
 
 ---
@@ -2489,7 +2486,7 @@ caveat below the table.
 | 7 | Semantic search | **done** (fake endpoint; exact-scan vectors) | Heading-boundary chunker over the shared anchor primitives; `PageEmbeddingState`-driven polling background job (covers sync-CLI writes; per-chunk hash re-embed; failure backoff; trash purge); `IEmbeddingGenerator` via Microsoft.Extensions.AI.OpenAI from the Aspire `embeddings` connection string — unconfigured means keyword-only, structurally; hybrid RRF inside the same `search` field (no schema change), canView after fusion, semantic hits deep-link via chunk attribution recomputed post-canView; `rocketwiki.embeddings.*` telemetry with a sentinel hygiene test. Native `vector(1536)` shipped (the AlterPageEmbeddingToNativeVector migration) with in-engine `VECTOR_DISTANCE` scoring, CI-verified by the §14 Testcontainers tier; only the DiskANN index remains deferred, with engine-verified, tripwire-tested blockers (§9.3, data-model.md); SQLite maps the column to a blob and keeps the in-memory cosine fallback |
 | 8 | MCP server | **done** (no live Keycloak/OAuth dance yet) | `/mcp` (streamable HTTP, stateless, in-process) via the official C# SDK; RFC 9728 resource-metadata discovery pointing at Keycloak; four read-only tools over the shared service layer; per-call `mcp`-channel audit incl. client name and denied-read reasons; audit-declaration guard extended to tools; `rocketwiki.mcp.*` telemetry |
 | 9 | k3s deployment | **authored, unexercised** | Dockerfiles + Helm chart in-repo (`deploy/`), migration Job via EF bundle, Traefik ingress with WebSocket upgrade, secrets by reference, probes (TCP until health endpoints get a non-Dev config gate), offline image path. `helm lint`/`template` pass; nothing applied to a cluster; restore drill unrun |
-| 10 | Co-editing | **done** (live hub unexercised) | Relay-only Yjs edit sessions over the existing hub: canEdit-gated join with denied-join auditing, seeder designation + reseed protocol, log cap + empty-session GC, rule-change eviction extended to edit groups, PageRevisionContributor attribution wired through updatePageContent (forgery-proof: server-side session data only), session-scoped audit on the new realtime channel, `rocketwiki.coedit.*` telemetry with sentinel hygiene test. SPA phase 2: SignalR Yjs provider over the shared hub connection (join/seed/replay, batched updates, awareness carets, log-cap auto-save-and-reseed, eviction, documented reconnect), collaborative TipTap mode with solo fallback as the default degradation, session-base saves with contributor attribution surfaced on save, presence pointers on the edit route |
+| 10 | Co-editing | **done** (live hub unexercised) | Relay-only Yjs edit sessions over the existing hub: canEdit-gated join with denied-join auditing, seeder designation + reseed protocol, log cap + empty-session GC, rule-change eviction extended to edit groups, PageRevisionContributor attribution wired through updatePageContent (forgery-proof: server-side session data only), session-scoped audit on the new realtime channel, `rocketwiki.coedit.*` telemetry with sentinel hygiene test. SPA phase 2: SignalR Yjs provider over the shared hub connection (join/seed/replay, batched updates, awareness carets, log-cap auto-save-and-reseed, eviction, documented reconnect), collaborative TipTap mode with solo fallback as the default degradation, session-base saves with contributor attribution surfaced on save |
 
 ### The standing caveat, and what happened when it was lifted
 

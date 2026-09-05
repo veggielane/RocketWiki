@@ -4,7 +4,6 @@ import { getAccessToken } from '../graphql/authToken'
 import type {
   CoEditTransport,
   EditSessionJoin,
-  PointerPosition,
   PresenceTransport,
   PresenceViewer,
   RealtimeConnectionState,
@@ -15,9 +14,9 @@ import type {
  * Real implementation of `PresenceTransport` — and of `CoEditTransport`,
  * because both live on the same hub connection. Presence lives on the same
  * hub as notifications (`/hubs/notifications` — NotificationsHub.cs owns
- * `JoinRoom`/`LeaveRoom`/`PointerMove` and broadcasts `ViewersChanged`/
- * `PointerMoved`), which adopted this frontend's proposed method/event
- * names verbatim. Uses MessagePack (registered server-side via
+ * `JoinRoom`/`LeaveRoom` and broadcasts `ViewersChanged`), which adopted
+ * this frontend's proposed method/event names verbatim. Uses MessagePack
+ * (registered server-side via
  * `AddMessagePackProtocol`) rather than the default JSON protocol, since
  * this is the highest-frequency channel in the app. Token plumbing is the
  * same as SignalRNotificationsTransport: in-memory token via
@@ -123,20 +122,6 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
     return () => this.connection.off('ViewersChanged', handler)
   }
 
-  onPointerMoved(handler: (position: PointerPosition) => void): () => void {
-    this.connection.on('PointerMoved', handler)
-    return () => this.connection.off('PointerMoved', handler)
-  }
-
-  sendPointerPosition(roomKey: string, x: number, y: number): void {
-    // Fire-and-forget: a dropped pointer sample is invisible (the next one
-    // arrives in under 50ms), so this deliberately doesn't await or queue
-    // — awaiting per-call would let a slow connection back up a queue of
-    // increasingly-stale positions. `catch` swallows the rejection a
-    // not-yet-connected invoke produces for the same reason.
-    this.connection.invoke('PointerMove', roomKey, x, y).catch(() => {})
-  }
-
   // ---- CoEditTransport (same connection, design.md §8 co-editing) ----
 
   async joinEditSession(pageId: string): Promise<EditSessionJoin | null> {
@@ -171,16 +156,19 @@ export class SignalRPresenceTransport implements PresenceTransport, CoEditTransp
   }
 
   pushUpdate(pageId: string, update: Uint8Array): Promise<void> {
-    // NOT fire-and-forget, unlike pointer samples: a dropped Yjs update is
-    // missing content on every peer, not a stale cursor. The provider
+    // NOT fire-and-forget, unlike awareness below: a dropped Yjs update is
+    // missing content on every peer, not a stale caret. The provider
     // awaits/handles the rejection (and its reconnect path re-pushes full
     // state, which is what actually closes any gap a drop opened).
     return this.connection.invoke('PushUpdate', pageId, update)
   }
 
   pushAwareness(pageId: string, awarenessUpdate: Uint8Array): void {
-    // Ephemeral like pointer moves: the next caret sample supersedes this
-    // one within a tick, so a dropped frame is invisible.
+    // Fire-and-forget: the next caret sample supersedes this one within a
+    // tick, so a dropped frame is invisible, and awaiting per-call would let
+    // a slow connection back up a queue of increasingly-stale carets. `catch`
+    // swallows the rejection a not-yet-connected invoke produces for the same
+    // reason.
     this.connection.invoke('PushAwareness', pageId, awarenessUpdate).catch(() => {})
   }
 

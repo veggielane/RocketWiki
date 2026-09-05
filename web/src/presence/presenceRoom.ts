@@ -1,9 +1,9 @@
 /**
  * Which presence room a route belongs to.
  *
- * You see the cursors of people looking at the same screen as you, so the room
- * is the screen — and "same screen" has to mean "same layout", or a cursor at
- * (0.5, 0.5) lands on unrelated content for whoever receives it.
+ * You see the people looking at the same screen as you, so the room is the
+ * screen — and "same screen" has to mean "same layout", or "who else is here"
+ * would list people looking at something else.
  *
  * Three kinds of answer:
  *

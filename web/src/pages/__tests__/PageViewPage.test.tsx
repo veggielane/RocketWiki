@@ -11,7 +11,7 @@ import { expectNoAxeViolations } from '../../test/axe'
 
 // The page view joins presence on mount; tests must never construct a real
 // SignalR connection (design.md §8 — and jsdom has no hub to reach). A fresh
-// instance per test keeps recorded pointer traffic from leaking across them —
+// instance per test keeps recorded room joins from leaking across them —
 // same shape as the edit page's harness.
 const holder = vi.hoisted(() => ({ transport: undefined as unknown }))
 vi.mock('../../realtime/transports', () => ({

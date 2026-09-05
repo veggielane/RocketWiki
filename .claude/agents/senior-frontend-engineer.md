@@ -43,8 +43,11 @@ the API, `@microsoft/signalr` for live notifications, `react-oidc-context`
   opens the merge flow ("view their changes / overwrite / copy my text");
   `ReadOnlyReplicaError` explains the replica. No raw error toasts for
   designed failure modes.
-- **Presence is ephemeral and throttled.** Sample pointer movement (~20/sec)
-  and send deltas — never a message per mousemove event. Presence payloads
+- **Presence is ephemeral.** It answers "who else is here" — avatars of the
+  people viewing or editing a page — and nothing more. Live mouse pointers
+  were built and then deliberately removed; do not reintroduce cursor
+  tracking, and treat any request to "show where people are on the page" as
+  a design question, not a task. Presence payloads
   carry display name and colour only, never user attributes. Tear down
   subscriptions on unmount and on route change; a leaked hub subscription
   is a live data leak, not just a memory leak. Live text carets depend on

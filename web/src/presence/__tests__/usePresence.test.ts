@@ -46,7 +46,7 @@ describe('usePresence', () => {
     expect(result.current.viewers).toEqual([{ userId: 'u1', displayName: 'Ada', colour: '#f00', hasAvatar: false }])
   })
 
-  it('resets viewers and pointers to empty when leaving a page — stale presence from the old page must not bleed into the new one', () => {
+  it('resets viewers to empty when leaving a page — stale presence from the old page must not bleed into the new one', () => {
     const transport = new FakePresenceTransport()
     const { result, rerender } = renderHook(({ pageId }) => usePresence(pageId, transport), {
       initialProps: { pageId: 'page-1' },
@@ -54,54 +54,12 @@ describe('usePresence', () => {
 
     act(() => {
       transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00', hasAvatar: false }])
-      transport.emitPointer({ userId: 'u1', displayName: 'Ada', colour: '#f00', x: 0.5, y: 0.5 })
     })
     expect(result.current.viewers).toHaveLength(1)
-    expect(result.current.pointers.size).toBe(1)
 
     rerender({ pageId: 'page-2' })
 
     expect(result.current.viewers).toEqual([])
-    expect(result.current.pointers.size).toBe(0)
-  })
-
-  it("tracks another viewer's pointer by user id (the hub exposes no connection ids)", () => {
-    const transport = new FakePresenceTransport()
-    const { result } = renderHook(() => usePresence('page-1', transport))
-
-    act(() => {
-      transport.emitPointer({ userId: 'u1', displayName: 'Ada', colour: '#f00', x: 0.25, y: 0.75 })
-    })
-
-    expect(result.current.pointers.get('u1')).toEqual({
-      userId: 'u1',
-      displayName: 'Ada',
-      colour: '#f00',
-      x: 0.25,
-      y: 0.75,
-    })
-  })
-
-  it('recordPointer does not call sendPointerPosition synchronously — it goes through the throttled sampler, not straight to the transport', () => {
-    const transport = new FakePresenceTransport()
-    const { result } = renderHook(() => usePresence('page-1', transport))
-
-    result.current.recordPointer(1, 2)
-
-    expect(transport.sentPositions).toEqual([])
-  })
-
-  it('stamps sent pointer positions with the room they belong to — the hub needs the group per sample', async () => {
-    const transport = new FakePresenceTransport()
-    const { result } = renderHook(() => usePresence('page-1', transport))
-
-    await act(async () => {
-      result.current.recordPointer(0.5, 0.5)
-      // The sampler flushes on its ~50ms cadence.
-      await new Promise((resolve) => setTimeout(resolve, 80))
-    })
-
-    expect(transport.sentPositions).toEqual([{ roomKey: 'page-1', x: 0.5, y: 0.5 }])
   })
 
   it('does not leave a page it never joined when unmounted before any effect ran twice (no duplicate leave calls)', () => {
@@ -118,7 +76,7 @@ describe('usePresence', () => {
  * `withAutomaticReconnect` comes back on a NEW ConnectionId, and hub groups are
  * keyed on connection id — so the page group still holds only the dead one. The
  * viewer disappears from everyone else's list and receives no further
- * ViewersChanged/PointerMoved, silently, until they navigate. Nothing leaks
+ * ViewersChanged, silently, until they navigate. Nothing leaks
  * (server-side cleanup is correct); presence just dies. The co-edit provider
  * already rejoined on this signal — this half was simply missing.
  */
@@ -147,22 +105,6 @@ describe('usePresence — rejoin after reconnect', () => {
 
     expect(transport.joinedRooms).toHaveLength(before + 1)
     expect(transport.joinedRooms.at(-1)).toBe('page-2')
-  })
-
-  it('drops the pointers held from before the drop', () => {
-    // They are positions from a connection that no longer exists; the fresh
-    // ViewersChanged that follows the rejoin is the authority.
-    const transport = new FakePresenceTransport()
-    const { result } = renderHook(() => usePresence('page-1', transport))
-    act(() => {
-      transport.emitViewers([{ userId: 'u1', displayName: 'Ada', colour: '#f00', hasAvatar: false }])
-      transport.emitPointer({ userId: 'u1', displayName: 'Ada', colour: '#f00', x: 0.5, y: 0.5 })
-    })
-    expect(result.current.pointers.size).toBe(1)
-
-    act(() => transport.emitReconnected())
-
-    expect(result.current.pointers.size).toBe(0)
   })
 
   it('stops rejoining once unmounted — a torn-down page must not come back', () => {

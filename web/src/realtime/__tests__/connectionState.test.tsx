@@ -21,8 +21,6 @@ function makeTransport() {
     joinRoom: vi.fn(async () => {}),
     leaveRoom: vi.fn(async () => {}),
     onViewersChanged: () => () => {},
-    onPointerMoved: () => () => {},
-    sendPointerPosition: () => {},
     onReconnected: () => () => {},
     onConnectionStateChanged: (handler) => {
       emit = handler
@@ -61,8 +59,6 @@ describe('useRealtimeConnection', () => {
       joinRoom: vi.fn(async () => {}),
       leaveRoom: vi.fn(async () => {}),
       onViewersChanged: () => () => {},
-      onPointerMoved: () => () => {},
-      sendPointerPosition: () => {},
       onReconnected: () => () => {},
     }
     render(<Probe transport={silent} />)
@@ -75,8 +71,6 @@ describe('useRealtimeConnection', () => {
       joinRoom: vi.fn(async () => {}),
       leaveRoom: vi.fn(async () => {}),
       onViewersChanged: () => () => {},
-      onPointerMoved: () => () => {},
-      sendPointerPosition: () => {},
       onReconnected: () => () => {},
       onConnectionStateChanged: () => unsubscribe,
     }

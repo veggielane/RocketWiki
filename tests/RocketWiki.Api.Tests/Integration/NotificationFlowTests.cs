@@ -198,7 +198,8 @@ public sealed class NotificationFlowTests(RocketWikiApiFactory factory) : IClass
 
         Assert.Empty(await RowsForAsync(watcherId));
 
-        // Same fair-window pattern as NotificationsHubTests' PointerMove negative case.
+        // A negative case gets a fair window: give a push a moment to arrive before
+        // asserting it never does.
         var completed = await Task.WhenAny(pushed.Task, Task.Delay(TimeSpan.FromSeconds(1)));
         Assert.NotSame(pushed.Task, completed);
     }

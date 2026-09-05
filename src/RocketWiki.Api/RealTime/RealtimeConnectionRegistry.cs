@@ -34,7 +34,7 @@ public sealed class RealtimeConnectionRegistry : IRealtimeConnectionRegistry
     private readonly ConcurrentDictionary<string, ConnectionInfo> _connections = new();
     /// <summary>
     /// Keyed by ROOM KEY, not page id. Presence began as a page-only feature so the room
-    /// was the page; site-wide cursors make any screen a room (see
+    /// was the page; site-wide presence makes any screen a room (see
     /// <see cref="PresenceRoom"/>), and the registry deliberately knows nothing about what
     /// a key means — the hub authorizes before anything reaches here, so a key in this
     /// dictionary is one that already passed its own gate. Keeping the classification out

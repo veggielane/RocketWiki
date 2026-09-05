@@ -29,9 +29,7 @@ const presence = {
   joinRoom: () => Promise.resolve(),
   leaveRoom: () => Promise.resolve(),
   onViewersChanged: () => () => {},
-  onPointerMoved: () => () => {},
   onReconnected: () => () => {},
-  sendPointerPosition: () => {},
 }
 const notifications = {
   connect: () => Promise.resolve(),

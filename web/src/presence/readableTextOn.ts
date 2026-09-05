@@ -1,6 +1,6 @@
 /**
  * Contrast-guaranteed label text for an arbitrary accent colour (presence
- * pointers, co-edit caret labels, initials avatars). The presence colour is
+ * co-edit caret labels, initials avatars). The presence colour is
  * server-assigned per user and arbitrary in hue — a fixed white label fails
  * WCAG 1.4.3 (4.5:1) on light hues (yellows/light greens at any saturation).
  *

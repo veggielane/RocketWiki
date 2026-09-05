@@ -4,9 +4,9 @@ import { pageRoom, presenceRoomFor } from '../presenceRoom'
 /**
  * Which room a route puts you in.
  *
- * You see the cursors of people on the same screen, so the room IS the screen —
- * and "same screen" has to mean "same layout", or a cursor at (0.5, 0.5) lands
- * on unrelated content for whoever receives it.
+ * You see the people on the same screen, so the room IS the screen — and "same
+ * screen" has to mean "same layout", or "who else is here" would list people
+ * looking at something else.
  */
 describe('page screens name their own room', () => {
   // Their id is not always in the URL — the readable address carries a slug —
@@ -41,8 +41,8 @@ describe('space screens share a room per space', () => {
   })
 
   it('does not put two different screens of one space in the same room', () => {
-    // Same space, different layouts — a cursor over the grants table means
-    // nothing on the trash list.
+    // Same space, different layouts — someone reading the grants table is not
+    // "here" on the trash list.
     expect(presenceRoomFor('/spaces/ENG/-/browse')).not.toBe(presenceRoomFor('/spaces/ENG/-/trash'))
   })
 

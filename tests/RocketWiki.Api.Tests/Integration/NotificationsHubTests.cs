@@ -104,31 +104,6 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
     }
 
     [Fact]
-    public async Task PointerMove_IsDeliveredToOthersInGroup_NotToSelf()
-    {
-        var (_, page) = await SeedViewablePageAsync();
-        await using var mover = await ConnectAsync($"mover-{Guid.NewGuid()}");
-        await using var observer = await ConnectAsync($"observer-{Guid.NewGuid()}");
-
-        var moverGotPointer = new TaskCompletionSource<bool>();
-        mover.On<object>("PointerMoved", _ => moverGotPointer.TrySetResult(true));
-        var observerPointer = new TaskCompletionSource<System.Text.Json.JsonElement>();
-        observer.On<System.Text.Json.JsonElement>("PointerMoved", payload => observerPointer.TrySetResult(payload));
-
-        await mover.InvokeAsync("JoinPage", page.Id);
-        await observer.InvokeAsync("JoinPage", page.Id);
-        await mover.InvokeAsync("PointerMove", page.Id, 12.5, 34.5);
-
-        var payload = await observerPointer.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.Equal(12.5, payload.GetProperty("x").GetDouble());
-
-        // Give the "did mover receive its own broadcast" negative case a fair window
-        // before asserting it never arrives.
-        var completed = await Task.WhenAny(moverGotPointer.Task, Task.Delay(TimeSpan.FromSeconds(1)));
-        Assert.NotSame(moverGotPointer.Task, completed);
-    }
-
-    [Fact]
     public async Task LeavePage_RemovesPresence_AndBroadcastsUpdatedViewersChanged()
     {
         var (_, page) = await SeedViewablePageAsync();
@@ -438,8 +413,8 @@ public sealed class NotificationsHubTests(RocketWikiApiFactory factory) : IClass
     public async Task TwoScreensOfOneSpace_ShareAuthorizationButAreSeparateRooms()
     {
         // The contract the SPA sends. Both screens need the same permission, so one
-        // authorization decision covers both — but a cursor position on the browser
-        // means nothing on the trash screen, so a viewer in one must not appear in the
+        // authorization decision covers both — but someone reading the browser is not
+        // "here" on the trash screen, so a viewer in one must not appear in the
         // other. Getting this wrong in the other direction is what my first cut did:
         // it authorized against "ENG:browse" as if that were a space key, and every
         // space room was refused for everyone.

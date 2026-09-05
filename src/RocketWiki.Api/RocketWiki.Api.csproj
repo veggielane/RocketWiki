@@ -18,9 +18,9 @@
          streamable HTTP at /mcp inside this process, so tools share the exact
          service layer, JIT provisioning, and audit pipeline GraphQL uses. -->
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
-    <!-- design.md §8: SignalR's MessagePack protocol for /hubs/notifications - keeps
-         high-frequency presence frames (pointer moves) small, and is the protocol the
-         eventual Yjs binary co-editing updates will want anyway. -->
+    <!-- design.md §8: SignalR's MessagePack protocol for /hubs/notifications - the
+         binary protocol the Yjs co-editing updates need (byte[] arguments arrive as
+         bytes, not base64 strings), and it keeps presence frames small. -->
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" />
     <!-- design.md §9.2/§16 milestone 7: the OpenAI-compatible embedding client behind
          Microsoft.Extensions.AI's IEmbeddingGenerator abstraction — self-hosted or

@@ -742,8 +742,8 @@ bullet keeps its own sharper caveat where one exists):
   text is documented in the provider, not hidden). A refused or unreachable
   join falls back to the unchanged solo editor — co-editing is progressive
   enhancement. Session saves submit against the session base revision and
-  toast the server-resolved contributors; presence pointers ride along on
-  the edit route. Building it surfaced a real round-trip bug (StarterKit
+  toast the server-resolved contributors. Building it surfaced a real
+  round-trip bug (StarterKit
   v3's trailing-node chrome serialized as a phantom blank paragraph — fixed
   at the serializer, corpus still byte-identical). Two real editors syncing
   over a scripted relay are under test; per the standing caveat, no browser

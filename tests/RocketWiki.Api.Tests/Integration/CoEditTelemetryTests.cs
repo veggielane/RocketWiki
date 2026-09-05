@@ -16,8 +16,8 @@ namespace RocketWiki.Api.Tests.Integration;
 
 /// <summary>
 /// design.md §15 applied to the co-editing relay, TelemetryHygieneTests' method on the
-/// new content-bearing path: CRDT update bytes ARE page content (one §15 tier stricter
-/// than pointer coordinates — the §8 co-editing note), so a sentinel is pushed through
+/// new content-bearing path: CRDT update bytes ARE page content (a §15 tier stricter
+/// than presence, which carries none — the §8 co-editing note), so a sentinel is pushed through
 /// the real hub as an update, an awareness payload, and a join/replay, while every
 /// ActivitySource and every RocketWiki meter in the process is watched. Checked in two
 /// encodings — the raw UTF-8 sentinel and the payload's Base64 (what a byte[] becomes

@@ -84,9 +84,9 @@ import { PageIdContext } from './pageContext'
  *  - Eviction (canEdit revoked mid-session) drops the editor to read-only
  *    with clear copy and no rejoin loop.
  *
- * Presence (viewers + live pointers) mounts here exactly as on the view
- * page — same JoinPage channel, which is canView-gated server-side, and
- * editing implies viewing.
+ * Presence (who else is here) mounts here exactly as on the view page —
+ * same JoinPage channel, which is canView-gated server-side, and editing
+ * implies viewing.
  */
 export function PageEditPage() {
   const { pageId } = useParams<{ pageId: string }>()
@@ -128,11 +128,11 @@ export function PageEditPage() {
   })
   const collabActive = session.status === 'collaborating'
 
-  // Same presence join + pointer overlay as the view page; keyed on pageId
-  // (route reuse — see usePresence.ts).
+  // Same presence join as the view page; keyed on pageId (route reuse — see
+  // usePresence.ts).
   // Same room as the view screen, so a reader and an editor of one page see
-  // each other. The shell owns the surface and the overlay; this only names
-  // the room, because the id is the part the route may not carry.
+  // each other. The shell owns the join; this only names the room, because
+  // the id is the part the route may not carry.
   useSetPresenceRoom(pageId ? pageRoom(pageId) : null)
   const viewers = usePresenceViewers()
   // Whether the hub is actually up — the chip and banner below report it

@@ -2,8 +2,8 @@
  * design.md §8: wire contracts for the SignalR hub (`/hubs/notifications`).
  * These names started as this frontend's proposal and were adopted verbatim
  * by the backend (NotificationsHub.cs documents "adopt or negotiate, never
- * silently diverge") — method names `JoinPage`/`LeavePage`/`PointerMove`,
- * event names `Notification`/`ViewersChanged`/`PointerMoved`.
+ * silently diverge") — method names `JoinPage`/`LeavePage` (now
+ * `JoinRoom`/`LeaveRoom`), event names `Notification`/`ViewersChanged`.
  */
 
 /**
@@ -42,15 +42,15 @@ export interface NotificationsTransport {
 }
 
 /**
- * Ephemeral presence state (design.md §8): "who's here" avatars and live
- * mouse pointers. Never persisted, never audited beyond the page view
- * itself, and payloads carry display name + colour only — **never**
- * attributes (nationality is sensitive, §6.2) and never content.
+ * Ephemeral presence state (design.md §8): the "who's here" avatars. Never
+ * persisted, never audited beyond the page view itself, and payloads carry
+ * display name + colour only — **never** attributes (nationality is
+ * sensitive, §6.2) and never content.
  *
- * Keyed by `userId`, not connection id — the hub's `ViewersChanged` and
- * `PointerMoved` payloads deliberately expose no connection ids
- * (NotificationsHub.ToPublicViews), and the colour is server-assigned so
- * every viewer sees the same one for a given user.
+ * Keyed by `userId`, not connection id — the hub's `ViewersChanged` payload
+ * deliberately exposes no connection ids (NotificationsHub.ToPublicViews),
+ * and the colour is server-assigned so every viewer sees the same one for a
+ * given user.
  */
 export interface PresenceViewer {
   userId: string
@@ -63,21 +63,6 @@ export interface PresenceViewer {
    * never uploaded one.
    */
   hasAvatar: boolean
-}
-
-/**
- * One viewer's live pointer. `x`/`y` are viewport-relative fractions (0..1
- * of the content area's width/height), so a position means the same thing
- * regardless of each viewer's window size. Carries the sender's identity
- * inline (the hub attributes every relayed sample) so rendering never
- * needs to join against the viewer list.
- */
-export interface PointerPosition {
-  userId: string
-  displayName: string
-  colour: string
-  x: number
-  y: number
 }
 
 /**
@@ -147,21 +132,12 @@ export interface PresenceTransport {
    *
    * Joining/leaving must be explicit and paired, and that now matters on every
    * navigation rather than only between pages: a room left behind after the
-   * viewer has moved on is a live data leak — their cursor keeps broadcasting
-   * into a screen they are no longer looking at — not just a resource leak.
+   * viewer has moved on is a live data leak — they stay listed as present on
+   * a screen they are no longer looking at — not just a resource leak.
    */
   joinRoom(roomKey: string): Promise<void>
   leaveRoom(roomKey: string): Promise<void>
   onViewersChanged(handler: (viewers: PresenceViewer[]) => void): () => void
-  onPointerMoved(handler: (position: PointerPosition) => void): () => void
-  /**
-   * Callers must throttle before calling this — the transport sends
-   * whatever it's given, one message per call (see realtime/pointerSampler.ts).
-   * Takes the roomKey because the hub's `PointerMove(roomKey, x, y)` needs to
-   * know which group to relay into (one connection can have joined several
-   * rooms over its lifetime).
-   */
-  sendPointerPosition(roomKey: string, x: number, y: number): void
   /**
    * Fires after the underlying connection auto-reconnects.
    *

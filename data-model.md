@@ -596,10 +596,10 @@ Index `(PageId)` and `(SpaceId)` for recipient lookup at send time.
 Index `(RecipientUserId, CreatedAtUtc)` filtered `ReadAtUtc IS NULL` for the
 unread badge; `(RecipientUserId, CreatedAtUtc)` for the full list.
 
-**Presence has no table.** Who is viewing a page, their pointer position,
-and (later) their caret are ephemeral hub state, held in memory and gone
-when the connection drops. Nothing about live presence is persisted or
-audited (design.md §8).
+**Presence has no table.** Who is viewing a page, and their co-editing
+caret, are ephemeral hub state, held in memory and gone when the
+connection drops. Nothing about live presence is persisted or audited
+(design.md §8).
 
 **Rows exist only for recipients who passed `canView` at send time** — or,
 for recipients with no live token at write time (sync imports, offline

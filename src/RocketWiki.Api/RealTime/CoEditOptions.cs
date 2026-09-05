@@ -8,8 +8,8 @@ namespace RocketWiki.Api.RealTime;
 /// gate; these keep a single client from ballooning hub frames or server memory.
 ///
 /// Rate limiting is deliberately absent in v1: the Yjs provider batches keystrokes
-/// client-side (the same client-side sampling contract pointer moves already rely
-/// on, §8), the per-message and log caps bound the damage a misbehaving client can
+/// and throttles awareness client-side (§8), the per-message and log caps bound the
+/// damage a misbehaving client can
 /// do to memory, and every member already holds canEdit — the ability to write the
 /// page outright. Revisit if relay volume ever shows up in the
 /// rocketwiki.coedit.relay_bytes histogram.

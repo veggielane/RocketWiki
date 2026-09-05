@@ -12,12 +12,11 @@ import { useSetPresenceRoom } from '../../presence/PresenceRoomContext'
  * Presence now belongs to the shell, and this is why that matters.
  *
  * It used to be mounted inside two page components, so seventeen other screens
- * had no cursors at all and the overlay covered one column of the two that did.
- * Moving it up means the shell joins and leaves a room on every navigation —
- * which is the part that has to be right: a room left behind after the reader
- * has moved on keeps broadcasting their cursor into a screen they are not
- * looking at, and that is the "leaked subscription is a live data leak" case,
- * not a resource leak.
+ * had no presence at all. Moving it up means the shell joins and leaves a room
+ * on every navigation — which is the part that has to be right: a room left
+ * behind after the reader has moved on keeps listing them as present on a
+ * screen they are not looking at, and that is the "leaked subscription is a
+ * live data leak" case, not a resource leak.
  */
 // The rail reads the signed-in user for its account menu; nothing here needs a
 // real OIDC client, and constructing one would put a network call in a
@@ -162,55 +161,6 @@ describe('a page’s two addresses are one room', () => {
     fireEvent.click(screen.getByRole('link', { name: 'go to ask' }))
 
     await waitFor(() => expect(transport.currentlyJoinedRooms).toEqual(['site:/ask']))
-  })
-})
-
-describe('the overlay covers every screen, not one column of two', () => {
-  it('draws a remote cursor on a screen that is not a page', async () => {
-    renderShell('/search')
-    await waitFor(() => expect(transport.currentlyJoinedRooms).toEqual(['site:/search']))
-
-    act(() => {
-      transport.emitPointer({ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', x: 0.5, y: 0.5 })
-    })
-
-    expect(await screen.findByText('Zoe')).toBeInTheDocument()
-  })
-
-  it('keeps the overlay decorative wherever it renders', async () => {
-    renderShell('/search')
-    act(() => {
-      transport.emitPointer({ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', x: 0.5, y: 0.5 })
-    })
-
-    const label = await screen.findByText('Zoe')
-    expect(label.closest('[aria-hidden="true"]')).not.toBeNull()
-  })
-
-  it('prunes a cursor when its owner leaves the room', async () => {
-    renderShell('/search')
-    act(() => {
-      transport.emitViewers([{ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', hasAvatar: false }])
-      transport.emitPointer({ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', x: 0.5, y: 0.5 })
-    })
-    expect(await screen.findByText('Zoe')).toBeInTheDocument()
-
-    act(() => transport.emitViewers([]))
-
-    await waitFor(() => expect(screen.queryByText('Zoe')).not.toBeInTheDocument())
-  })
-
-  it('does not carry a cursor across a navigation into the next screen', async () => {
-    // The rooms differ, so the pointer belongs to a screen the reader has left.
-    renderShell('/search')
-    act(() => {
-      transport.emitPointer({ userId: 'user-9', displayName: 'Zoe', colour: 'hsl(9, 70%, 45%)', x: 0.5, y: 0.5 })
-    })
-    expect(await screen.findByText('Zoe')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('link', { name: 'go to ask' }))
-
-    await waitFor(() => expect(screen.queryByText('Zoe')).not.toBeInTheDocument())
   })
 })
 

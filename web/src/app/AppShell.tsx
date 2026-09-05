@@ -10,7 +10,6 @@ import { PageTitleContext, composeDocumentTitle } from './documentTitle'
 import { routeTitleFor } from './routeCrumbs'
 import { useCanonicalSpace } from './useCanonicalSpaceKey'
 import { usePresence } from '../presence/usePresence'
-import { PresenceSurface } from '../presence/PresenceSurface'
 import { PresenceRoomContext } from '../presence/PresenceRoomContext'
 import { presenceRoomFor } from '../presence/presenceRoom'
 import { getDefaultPresenceTransport } from '../realtime/transports'
@@ -95,8 +94,7 @@ export function AppShell() {
    * Presence follows the SCREEN, and the shell is the only thing that sees
    * every screen — which is why it lives here rather than in the two page
    * components it used to be nailed into. Those were the only two routes that
-   * ever had cursors, and even there the overlay covered the content column
-   * alone.
+   * ever showed who else was there.
    *
    * The route names the room, except for page screens: their room is
    * `page:{id}` and the id is not always in the URL (the readable
@@ -106,8 +104,8 @@ export function AppShell() {
    *
    * The override is cleared on every navigation, during render rather than in
    * an effect: an effect would leave one committed frame in which the new
-   * screen is showing while presence still names the old page's room, and that
-   * frame is a pointer sample broadcast into a room the user has left.
+   * screen is showing while presence still names the old page's room, and in
+   * that frame the user is listed as present in a room they have left.
    */
   const [roomOverride, setRoomOverride] = useState<string | null>(null)
   const [roomForPath, setRoomForPath] = useState(pathname)
@@ -116,7 +114,7 @@ export function AppShell() {
     setRoomOverride(null)
   }
   const room = roomOverride ?? presenceRoomFor(pathname)
-  const { viewers, pointers, recordPointer } = usePresence(room, getDefaultPresenceTransport())
+  const { viewers } = usePresence(room, getDefaultPresenceTransport())
   // Identity-stable, so a screen can depend on it in an effect.
   const setRoom = useCallback((next: string) => setRoomOverride(next), [])
   const presenceValue = useMemo(() => ({ viewers, setRoom }), [viewers, setRoom])
@@ -181,18 +179,6 @@ export function AppShell() {
         <Box role="status" aria-live="polite" sx={visuallyHidden}>
           {title}
         </Box>
-        {/* The presence surface wraps the CONTENT, not `<main>` itself.
-            `<main>` is the scroll container, so an overlay pinned to its inset
-            would sit at scroll offset 0 and slide away as the reader scrolls,
-            while pointer fractions were taken from the visible box — two
-            different coordinate spaces. This element is as tall as the content,
-            which makes the fractions and the overlay agree at any scroll
-            position, exactly as they did when the surface wrapped a page's
-            outer box.
-
-            It also leaves `mainRef`, the route-change focus target and the
-            title live-region alone: they are siblings of this, not inside it. */}
-        <PresenceSurface pointers={pointers} recordPointer={recordPointer}>
         <Stack
           spacing={2}
           sx={{
@@ -216,7 +202,6 @@ export function AppShell() {
             </PageTitleContext>
           </Box>
         </Stack>
-        </PresenceSurface>
       </Box>
     </Box>
   )

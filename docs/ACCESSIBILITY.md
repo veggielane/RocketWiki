@@ -121,10 +121,9 @@ changes exist purely to shrink them:
   app-bar/drawer text uncheckable. The theme now flattens Paper
   (`backgroundImage: 'none'`), which matches the app's flat look and puts
   those surfaces back under automated contrast checking.
-- **The presence-pointer overlay**: a full-bleed positioned layer makes axe
-  abstain on everything underneath. `PresencePointers` now renders nothing
-  when no pointers exist, and the captures deliberately stage no pointers.
-  Pointer/caret **label** contrast is guaranteed by construction instead:
+- **Co-edit caret labels**: the captures stage no live edit session, so the
+  name label beside a remote caret is never under axe. Caret **label**
+  contrast is guaranteed by construction instead:
   `web/src/presence/readableTextOn.ts` picks black or white per
   server-assigned colour (mathematically ≥ √21 ≈ 4.58:1 for any
   background), with exhaustive tests sweeping all 360 generator hues and a
@@ -149,7 +148,7 @@ covered" cites an existing behavior test holding that slice in place.
 | 2.4.3 Focus order | Manual. DOM order matches visual order by construction (no CSS reordering); spot-checked. |
 | 2.4.7/2.4.13 Focus visible/appearance | MUI focus rings kept throughout; the custom task-list checkbox draws its own `:focus-visible` outline. Manual spot-check per release. |
 | 2.4.11 Focus not obscured | Nothing is fixed over the top of the scroll container — the header strip scrolls with the content — but the classification banner is fixed across its bottom, so `scroll-padding-bottom` on `main` keeps keyboard-focus targets from landing beneath it, and the drawer reserves the same strip for its account block. Manual verification on long pages. |
-| 2.5.7 Dragging movements | No drag-only operation in the wiki's own UI: table column resize is disabled (`resizable: false`), image drag-drop upload has the attachment-upload button as the non-drag path, presence pointers are output-only. Judged met; re-check when adding drag affordances (tree reordering!). |
+| 2.5.7 Dragging movements | No drag-only operation in the wiki's own UI: table column resize is disabled (`resizable: false`), image drag-drop upload has the attachment-upload button as the non-drag path. Judged met; re-check when adding drag affordances (tree reordering!). |
 | 3.2.6 Consistent help | No help mechanism exists in the SPA, so there is nothing to be inconsistently located. Vacuously met; revisit if a help affordance ships. |
 | 3.3.7 Redundant entry | No multi-step flows re-request information (auth is OIDC redirect; forms are single-step). Judged met. |
 | 1.4.4/1.4.10 Resize / reflow | Manual: 200% zoom and 320 px-wide checks per release. |

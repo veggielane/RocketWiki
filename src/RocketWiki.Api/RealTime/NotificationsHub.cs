@@ -19,10 +19,10 @@ namespace RocketWiki.Api.RealTime;
 /// deliberately: "the same hub is the intended transport for CRDT co-editing later...
 /// one authenticated real-time transport beats two."
 ///
-/// Method and event names below (<c>JoinPage</c>/<c>LeavePage</c>/<c>PointerMove</c>,
-/// <c>Notification</c>/<c>ViewersChanged</c>/<c>PointerMoved</c>) are the frontend's
-/// own proposed contract, adopted as-is — team direction was explicit: adopt or
-/// negotiate, never silently diverge.
+/// Method and event names below (<c>JoinPage</c>/<c>LeavePage</c>, now
+/// <c>JoinRoom</c>/<c>LeaveRoom</c>; <c>Notification</c>/<c>ViewersChanged</c>) are the
+/// frontend's own proposed contract, adopted as-is — team direction was explicit: adopt
+/// or negotiate, never silently diverge.
 ///
 /// Cannot reuse <see cref="ICurrentPrincipalAccessor"/>/<see cref="IActingUserAccessor"/>
 /// here: both are built on <c>IHttpContextAccessor</c>, which is not reliably populated
@@ -237,41 +237,6 @@ public sealed partial class NotificationsHub : Hub
         await Clients.Group(room.Key).SendAsync("ViewersChanged", ToPublicViews(room.Key));
     }
 
-    /// <summary>
-    /// Broadcasts a cursor to the room. <b>Membership is the authorization</b>: the
-    /// pointer is attributed from the registry's own record of this connection's
-    /// presence, so a caller who never joined (or was evicted by a rule change) has
-    /// nothing to attribute and is silently dropped. That is why this does not re-check
-    /// canView — it cannot broadcast under an identity the registry does not already hold.
-    /// </summary>
-    [NoAudit("Ephemeral presence broadcast, never persisted or audited (design.md §8) - see JoinRoom.")]
-    public Task PointerMove(string roomKey, double x, double y)
-    {
-        if (!PresenceRoom.TryParse(roomKey, out var room))
-        {
-            return Task.CompletedTask;
-        }
-
-        var viewer = registry.GetViewers(room.Key).FirstOrDefault(v => v.ConnectionId == Context.ConnectionId);
-        if (viewer is null)
-        {
-            // Never joined this room (or already evicted) - nothing to attribute the
-            // pointer to, and broadcasting under no identity would be exactly the
-            // "content, never attributes, never more than display name/colour" leak
-            // design.md §8 warns against in the other direction.
-            return Task.CompletedTask;
-        }
-
-        return Clients.OthersInGroup(room.Key).SendAsync("PointerMoved", new
-        {
-            userId = viewer.UserId,
-            displayName = viewer.DisplayName,
-            colour = viewer.Colour,
-            x,
-            y,
-        });
-    }
-
     // --- Transitional page-shaped adapters -------------------------------------------
     //
     // The SPA still calls these while it moves to the room API, so they stay working and
@@ -287,13 +252,6 @@ public sealed partial class NotificationsHub : Hub
     /// <inheritdoc cref="LeaveRoom"/>
     [NoAudit("Presence is deliberately unaudited (design.md §8) - see JoinRoom.")]
     public Task LeavePage(Guid pageId) => LeaveRoom(new PresenceRoom.Page(pageId).Key);
-
-    // PointerMove has NO page-shaped adapter, because SignalR does not support
-    // overloading — two methods of one name is a startup exception, not a warning.
-    // The old call still works anyway: a SignalR client sends a GUID argument as a
-    // JSON string, so PointerMove(pageId, x, y) arrives here as the string form, and
-    // PresenceRoom.TryParse accepts a bare GUID as a page room precisely so that call
-    // keeps landing on the right room during the transition.
 
     private object[] ToPublicViews(string roomKey) => registry.GetViewers(roomKey)
         .Select(v => (object)new

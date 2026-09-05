@@ -4,7 +4,7 @@ namespace RocketWiki.Api.RealTime;
 
 /// <summary>
 /// A presence room key, parsed and classified. Presence used to exist only on pages, so
-/// the room WAS the page id; site-wide cursors need any screen to be a room, and a bare
+/// the room WAS the page id; site-wide presence needs any screen to be a room, and a bare
 /// string would make "which authorization applies" a question every call site answers for
 /// itself. This type makes the answer structural: parsing yields one of exactly three
 /// shapes, and the hub has a branch for each.
@@ -48,10 +48,10 @@ internal abstract record PresenceRoom
     ///
     /// <para><b>Authorization keys on the space; room identity keys on space + screen.</b>
     /// The two are deliberately different. Every screen of one space needs the same
-    /// permission, so the gate reads <see cref="SpaceKey"/> alone — but a cursor at
-    /// (0.5, 0.5) on the browser means nothing on the trash screen, so those must be
-    /// separate SignalR groups. Collapsing them into one key would put two layouts in
-    /// one room; collapsing the gate onto the full key would ask whether a space called
+    /// permission, so the gate reads <see cref="SpaceKey"/> alone — but someone reading
+    /// the browser is not "here" on the trash screen, so those must be separate SignalR
+    /// groups. Collapsing them into one key would put two screens in one room;
+    /// collapsing the gate onto the full key would ask whether a space called
     /// "ENG:BROWSE" exists, which it never does — so every space room would fail closed,
     /// with §6.7 firing correctly on a question nobody meant to ask.</para>
     ///
@@ -122,21 +122,12 @@ internal abstract record PresenceRoom
             return false;
         }
 
+        // No prefix, no room. A bare GUID is not a page room either: the page adapters
+        // (JoinPage/LeavePage) build the prefixed key themselves, so nothing legitimate
+        // sends one, and an unprefixed key would be a shape with no gate of its own.
         var separator = raw.IndexOf(':');
         if (separator <= 0 || separator == raw.Length - 1)
         {
-            // A bare GUID is the page room for that page. This is the transitional
-            // shape, and it exists because SignalR forbids method overloading: the hub
-            // cannot have both PointerMove(Guid,...) and PointerMove(string,...), so
-            // the old client call — which arrives as a GUID-shaped JSON string — has to
-            // be understood by the string method or it breaks. Remove this branch when
-            // the SPA sends room keys.
-            if (Guid.TryParse(raw, out var legacyPageId))
-            {
-                room = new Page(legacyPageId);
-                return true;
-            }
-
             return false;
         }
 

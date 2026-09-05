@@ -93,7 +93,7 @@ vi.mock('react-oidc-context', () => ({
 }))
 
 // A handle onto the presence fake so the page-view screen can stage live
-// viewers + pointers (the presence-label contrast surface).
+// viewers (the presence avatar strip).
 const realtime = vi.hoisted(() => ({ presence: undefined as unknown }))
 vi.mock('../realtime/transports', async () => {
   const { FakePresenceTransport } = await import('../realtime/FakePresenceTransport')
@@ -705,13 +705,9 @@ const SCREENS: Screen[] = [
     name: 'page-view',
     render: (mode) => shell(mode, '/pages/page-1', 'pages/:pageId', <PageViewPage />),
     stage: async () => {
-      // Live presence viewers (the header avatar strip). Deliberately NO
-      // staged pointers: the pointer overlay is a full-bleed positioned
-      // layer, and anything axe sees overlapping text makes it ABSTAIN from
-      // contrast checks for the whole page underneath — one staged pointer
-      // would silently blind 1.4.3 coverage of the entire capture. Pointer
-      // LABEL contrast is guaranteed by construction instead:
-      // presence/readableTextOn.ts + its exhaustive contrast tests.
+      // Live presence viewers (the header avatar strip). Initials-on-colour
+      // contrast is guaranteed by construction (presence/readableTextOn.ts +
+      // its exhaustive contrast tests), and the strip is also under axe here.
       const presence = realtime.presence as FakePresenceTransport
       act(() => {
         presence.emitViewers([

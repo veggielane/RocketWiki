@@ -33,11 +33,10 @@ public sealed record EditSessionJoinResult(string Role, int BaseRevisionNumber, 
 /// designated client serializes the doc to Markdown and calls updatePageContent, so
 /// nothing reaches storage, sync, search, or embeddings except through the
 /// already-guarded pipeline (revision + audit + outbox in one transaction, §7/§12).
-/// Live updates are ephemeral content-bearing traffic exactly like pointer moves,
-/// held to one §15 tier stricter: pointer payloads at least appear in code as
-/// coordinates; update bytes are page content in CRDT encoding, so nothing derived
-/// from their CONTENT ever reaches telemetry — only byte counts (see ApiTelemetry's
-/// coedit section).
+/// Live updates are ephemeral traffic like presence but, unlike presence, they carry
+/// content, so they are held to a stricter §15 tier: update bytes are page content in
+/// CRDT encoding, and nothing derived from their CONTENT ever reaches telemetry — only
+/// byte counts (see ApiTelemetry's coedit section).
 ///
 /// <b>Replica spaces refuse co-editing</b> (§12): canEdit is unconditionally false
 /// there, so the join gate below refuses with reason <c>replica-read-only</c> before
@@ -185,8 +184,8 @@ public sealed partial class NotificationsHub
     /// <summary>
     /// Relay one opaque Yjs update to the session (event <c>UpdateReceived</c>) and
     /// append it to the late-joiner log. Membership-gated: a connection that never
-    /// joined (or was evicted) gets the same silent nothing PointerMove gives - there
-    /// is no one to attribute the bytes to and no group it may write into.
+    /// joined (or was evicted) gets the same silent nothing a refused presence join
+    /// gives - there is no one to attribute the bytes to and no group it may write into.
     /// </summary>
     [NoAudit("Per-update audit would be a keystroke log - design.md §7/§8 co-editing replaces per-keystroke " +
         "events with session semantics: the canEdit-consuming act is the audited JoinEditSession, the departure is " +
@@ -224,9 +223,7 @@ public sealed partial class NotificationsHub
     /// <c>AwarenessReceived</c>. Ephemeral by construction: never appended to the
     /// update log (a late joiner gets live awareness from peers within a heartbeat;
     /// replaying stale carets would be wrong, not just wasteful), never persisted,
-    /// never audited — presence rules (§8), on the presence tier. Mouse pointers in
-    /// the editor keep riding the existing PointerMove presence channel unchanged;
-    /// nothing server-side was added for them.
+    /// never audited — presence rules (§8), on the presence tier.
     /// </summary>
     [NoAudit("Ephemeral awareness (carets/selections) - the co-editing equivalent of presence, which design.md §8 " +
         "deliberately leaves unaudited; it is never logged or persisted, so there is no record to keep.")]
