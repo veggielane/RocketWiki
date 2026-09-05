@@ -28,7 +28,10 @@ export interface UnavailableCopy {
 export function describeGitLabUnavailable(reason: GitLabUnavailableReason): UnavailableCopy {
   switch (reason) {
     case 'NOT_CONFIGURED':
-      return { summary: 'GitLab integration is not configured on this instance.', pointsToSettings: false }
+      // "or switched off": the server reports one shape for both (docs/CONFIGURATION.md
+      // "Feature flags" — a disabled feature answers its not-configured state), so the
+      // copy must not claim to know which.
+      return { summary: 'GitLab integration is not configured or has been switched off on this instance.', pointsToSettings: false }
     case 'NO_CREDENTIAL':
       return {
         summary: 'No GitLab token saved for your account — add one in Settings to see live GitLab content.',
@@ -73,7 +76,9 @@ export function describeAskUnavailable(
         pointsToSettings: false,
       }
     case 'NOT_CONFIGURED':
-      return { summary: "The wiki assistant isn't configured on this instance.", pointsToSettings: false }
+      // Same reason as the GitLab copy above: unconfigured and switched off are one
+      // NOT_CONFIGURED to the client, deliberately.
+      return { summary: "The wiki assistant isn't configured or has been switched off on this instance.", pointsToSettings: false }
     case 'QUESTION_TOO_LONG': {
       // Says REFUSED, not trimmed, and that is the whole point of the copy.
       // The server rejects an over-long question outright rather than

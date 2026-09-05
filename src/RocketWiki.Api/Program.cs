@@ -3,14 +3,18 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
+using RocketWiki.Api.Ai;
 using RocketWiki.Api.Assistant;
 using RocketWiki.Api.Attachments;
 using RocketWiki.Api.Audit;
 using RocketWiki.Api.Avatars;
 using RocketWiki.Api.Embeddings;
 using RocketWiki.Api.Emojis;
+using RocketWiki.Api.Features;
 using RocketWiki.Api.GitLab;
 using RocketWiki.Api.GraphQL;
+using RocketWiki.Api.Hosting;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Markings;
 using RocketWiki.Api.Mcp;
@@ -24,10 +28,26 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();
 
-// design.md §12: this instance's identity, read up-front because both the DbContext
-// options below and the mutation services further down need it. See the "Page
-// services" section for the singleton/service wiring.
-var localInstanceId = builder.Configuration["Instance:Id"] ?? "standalone";
+// --- Feature flags (docs/CONFIGURATION.md "Feature flags") ---
+// Evaluated ONCE, here, before anything registers: three registrations below (the chat
+// client, the embedding pipeline, the MCP endpoint) are decided by a flag, and a
+// decision made before Build() needs its input before Build(). Every other surface reads
+// the same snapshot from the container. Unset means on, so a default configuration is
+// unchanged by this; see FeatureFlagConfiguration for the eager-read caveat and how
+// tests set flags, and RocketWikiFeatures for each flag's off-state.
+var features = builder.AddRocketWikiFeatureFlags();
+
+// design.md §12: this instance's identity. It used to be read here, off the builder, and
+// closed over by a dozen service factories and the DbContext options callback — the same
+// eager-read shape the selector catalog had before it moved (ProtectiveMarkingConfiguration
+// says what that cost the test tier). It is now an options family like every other key:
+// bound and validated here, resolved through the InstanceIdentity singleton (see "Page
+// services") and stamped into the DbContext options through the provider-aware hook (see
+// "Database"), so nothing captures it before the configuration in force exists.
+builder.Services.AddOptions<InstanceOptions>()
+    .Bind(builder.Configuration.GetSection(InstanceOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
 
 // --- Protective-marking selector catalog (design.md §21.15) ---
 // One validated vocabulary for the whole process: registered as a singleton for the
@@ -45,11 +65,19 @@ builder.AddRocketWikiProtectiveMarking();
 // AddDbContext/UseSqlServer. UseLocalInstanceId stamps the instance id into the
 // context options (per-deployment config, pool-safe) so the sync outbox writer can
 // verify a space is native before journaling it — design.md §12's "enforced rather
-// than assumed" follow-up; see LocalInstanceDbContextOptionsExtension. The selector
-// catalog is stamped the same way (SelectorCatalogDbContextOptionsExtension), by
-// AddRocketWikiProtectiveMarking above, through the provider-aware hook.
-builder.AddSqlServerDbContext<RocketWikiDbContext>("rocketwiki",
-    configureDbContextOptions: options => options.UseLocalInstanceId(localInstanceId));
+// than assumed" follow-up; see LocalInstanceDbContextOptionsExtension. It is stamped
+// through EF's provider-aware ConfigureDbContext hook, which takes a service provider,
+// so the id is the one InstanceIdentity resolved from options rather than a string
+// captured before Build() — the selector catalog is stamped the same way
+// (SelectorCatalogDbContextOptionsExtension), by AddRocketWikiProtectiveMarking above.
+builder.AddSqlServerDbContext<RocketWikiDbContext>("rocketwiki");
+builder.Services.ConfigureDbContext<RocketWikiDbContext>((sp, options) =>
+    options.UseLocalInstanceId(sp.GetRequiredService<InstanceIdentity>().LocalInstanceId));
+
+// Database:MigrateOnStartup (design.md §15) — bound here, read after Build() where the
+// migration runs. A boolean has nothing to validate, so the chain stops at Bind.
+builder.Services.AddOptions<DatabaseOptions>()
+    .Bind(builder.Configuration.GetSection(DatabaseOptions.SectionName));
 
 // --- File storage (design.md §10) ---
 builder.Services.AddFileStorage(builder.Configuration);
@@ -96,21 +124,28 @@ builder.Services.AddScoped<IUserAvatarService, UserAvatarService>();
 // Authority is derived from the Keycloak connection string the AppHost injects
 // via service discovery (design.md §15 "config by reference, not by hand"),
 // combined with a configurable realm name. Keycloak:Authority is the fallback
-// for running the API standalone, outside Aspire.
-var keycloakBaseUrl = builder.Configuration.GetConnectionString("keycloak");
-var realm = builder.Configuration["Keycloak:Realm"] ?? "rocketwiki";
-var authority = builder.Configuration["Keycloak:Authority"]
-    ?? (keycloakBaseUrl is not null ? $"{keycloakBaseUrl.TrimEnd('/')}/realms/{realm}" : null);
+// for running the API standalone, outside Aspire. The Keycloak:* keys are an options
+// family (KeycloakOptions, validated at start) and the derivation is its
+// ResolveAuthority — the same call the MCP discovery metadata makes, so the two can
+// no longer drift. Consumed lazily inside the bearer options' Configure callback,
+// which runs at first use, rather than read off the builder here.
+builder.Services.AddOptions<KeycloakOptions>()
+    .Bind(builder.Configuration.GetSection(KeycloakOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
+    .AddJwtBearer();
+
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<IOptions<KeycloakOptions>, IConfiguration, IHostEnvironment>((options, keycloak, configuration, environment) =>
     {
-        options.Authority = authority;
-        options.Audience = builder.Configuration["Keycloak:Audience"] ?? "rocketwiki";
+        options.Authority = keycloak.Value.ResolveAuthority(configuration.GetConnectionString("keycloak"));
+        options.Audience = keycloak.Value.Audience;
         // The dev Keycloak container serves plain HTTP; production Keycloak sits
         // inside the network's security boundary behind TLS (design.md §9.4/§15).
-        options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+        options.RequireHttpsMetadata = !environment.IsDevelopment();
 
         // SignalR (design.md §8): a browser cannot set an Authorization header on a
         // WebSocket upgrade request, so the JS client sends the token via the
@@ -169,12 +204,14 @@ builder.Services.AddSingleton<KnownGroupRecorder>();
 builder.Services.AddScoped<IInstanceRoleAccessor, InstanceRoleAccessor>();
 
 // --- Page services (design.md §6.7/§8) ---
-// PageService needs the local InstanceId (read at the top of this file, where the
-// DbContext options also consume it) to tell native spaces from replicas (design.md
-// §12). Same value as a DI-visible singleton, for resolvers that need to distinguish
-// native from replica or report it (Query.SyncStatus) rather than construct services
-// with it.
-builder.Services.AddSingleton(new InstanceIdentity(localInstanceId));
+// PageService needs the local InstanceId to tell native spaces from replicas (design.md
+// §12). One DI-visible singleton, built from the validated InstanceOptions, is the
+// value every service factory below and every resolver that reports it
+// (Query.SyncStatus) reads — resolved from the container, never captured off the
+// builder (see InstanceOptions for why the moment of the read matters).
+builder.Services.AddSingleton(sp =>
+    new InstanceIdentity(sp.GetRequiredService<IOptions<InstanceOptions>>().Value.Id));
+static string InstanceId(IServiceProvider sp) => sp.GetRequiredService<InstanceIdentity>().LocalInstanceId;
 builder.Services.AddScoped<IPageReadService, PageReadService>();
 // Analytics reads through IPageReadService rather than the DbContext for its
 // visible-page set, so the §21 marking gate and §6.4 restrictions are the ones
@@ -184,23 +221,23 @@ builder.Services.AddScoped<IAnalyticsService, AnalyticsService>();
 // restriction listing. Needs the local InstanceId (unlike IPageReadService) because
 // canEdit/canComment honor the replica invariant (design.md §12).
 builder.Services.AddScoped<IPagePermissionReadService>(sp =>
-    new PagePermissionReadService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
-builder.Services.AddScoped<IPageService>(sp => new PageService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
-builder.Services.AddScoped<ICommentService>(sp => new CommentService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
-builder.Services.AddScoped<ILabelService>(sp => new LabelService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+    new PagePermissionReadService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
+builder.Services.AddScoped<IPageService>(sp => new PageService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
+builder.Services.AddScoped<ICommentService>(sp => new CommentService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
+builder.Services.AddScoped<ILabelService>(sp => new LabelService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
 
 // --- Page properties (design.md §20) — admin-defined key registry, per-page values.
 // Needs the local InstanceId like every other page-mutation service: setting or
 // removing a value is a page mutation and sits beneath the replica invariant (§12).
 builder.Services.AddScoped<IPagePropertyService>(sp =>
-    new PagePropertyService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+    new PagePropertyService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
 
 // --- Protective markings (design.md §21) — the classification that gates canView.
 // Needs the local InstanceId for the same reason: re-marking a page is a page mutation
 // and sits beneath the replica invariant (§12). There is no *gated* read service — a
 // marking is resolved off a Page that already passed canView.
 builder.Services.AddScoped<IPageMarkingService>(sp =>
-    new PageMarkingService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+    new PageMarkingService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
 // The DISPLAY-side batch read (design.md §21.13) — markings of pages the caller has
 // already been permitted to see, for badges, MCP payloads and aggregate labels. It makes
 // no access decision and returns none; enforcement reads markings through
@@ -216,10 +253,10 @@ builder.Services.AddScoped<ICustomEmojiService, CustomEmojiService>();
 // --- Attachments (design.md §10) — metadata + IFileStorage (already registered above) ---
 builder.Services.AddScoped<IAttachmentReadService, AttachmentReadService>();
 builder.Services.AddScoped<IAttachmentService>(sp =>
-    new AttachmentService(sp.GetRequiredService<RocketWikiDbContext>(), sp.GetRequiredService<IFileStorage>(), localInstanceId));
+    new AttachmentService(sp.GetRequiredService<RocketWikiDbContext>(), sp.GetRequiredService<IFileStorage>(), InstanceId(sp)));
 
 // --- Spaces and access rules (design.md §6.5/§8) ---
-builder.Services.AddScoped<ISpaceService>(sp => new SpaceService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+builder.Services.AddScoped<ISpaceService>(sp => new SpaceService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
 builder.Services.AddScoped<IAccessRuleService, AccessRuleService>();
 
 // --- Search (design.md §9.1/§9.3, milestones 4 + 7) ---
@@ -238,26 +275,40 @@ builder.Services.AddScoped<ISearchService, SearchService>();
 builder.Services.AddScoped<IPageQueryService>(sp =>
     new PageQueryService(sp.GetRequiredService<RocketWikiDbContext>(), sp.GetRequiredService<TimeProvider>()));
 
+// --- The shared Ai section (design.md §9.2/§9.5) ---
+// One options family for both OpenAI-compatible endpoints' tuning (timeouts, caps, batch
+// size, poll interval), bound and validated once here and resolved lazily by the two
+// feature wirings below. A non-positive cap or timeout fails the host at boot with the
+// key named, configured endpoint or not. See AiOptions for which keys are read eagerly
+// (the endpoint keys, because they decide registration) and which lazily.
+builder.AddRocketWikiAi();
+
 // --- Embedding pipeline (design.md §9.2/§9.3, milestone 7) ---
 // IEmbeddingGenerator over the OpenAI-compatible endpoint from the Aspire "embeddings"
 // connection string / Ai section, the EmbeddingIndexer, and the polling background job
-// that (re-)embeds changed pages. Registers NOTHING when no endpoint is configured —
-// search then degrades to keyword-only and saves are never affected (§9.2). See
-// EmbeddingPipelineConfiguration for config precedence and §9.4's boundary requirement.
-builder.AddRocketWikiEmbeddings();
+// that (re-)embeds changed pages. Registers NOTHING when no endpoint is configured — or
+// when the SemanticSearch feature flag is off — search then degrades to keyword-only and
+// saves are never affected (§9.2). See EmbeddingPipelineConfiguration for config
+// precedence, the flag's place in it, and §9.4's boundary requirement.
+builder.AddRocketWikiEmbeddings(features);
 
 // --- Watches and the persisted notification list (design.md §8, milestone 4b) ---
-builder.Services.AddScoped<IWatchService>(sp => new WatchService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+builder.Services.AddScoped<IWatchService>(sp => new WatchService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
 builder.Services.AddScoped<INotificationReadModelService>(sp =>
-    new NotificationReadModelService(sp.GetRequiredService<RocketWikiDbContext>(), localInstanceId));
+    new NotificationReadModelService(sp.GetRequiredService<RocketWikiDbContext>(), InstanceId(sp)));
 
 // --- MCP server (design.md §8, milestone 8) ---
 // /mcp in this same process/pipeline: OAuth discovery against Keycloak (derived from
 // the same Keycloak:* configuration as the JWT bearer authority above), the same
 // bearer identity and JIT provisioning as GraphQL, read-only tools over the shared
 // service layer, and per-call audit on AuditChannel.Mcp. See McpServerConfiguration
-// for why in-process (and stateless) is load-bearing, not a convenience.
-builder.AddRocketWikiMcp();
+// for why in-process (and stateless) is load-bearing, not a convenience — and for what
+// the Mcp feature flag being off means (not mapped: neither this registration nor the
+// MapRocketWikiMcp call below runs, so /mcp is 404 and no discovery metadata is served).
+if (features.Mcp)
+{
+    builder.AddRocketWikiMcp();
+}
 
 // --- GitLab integration (design.md GitLab section) ---
 // Per-user encrypted PAT storage + typed REST v4 client. GitLab:BaseUrl is
@@ -271,10 +322,11 @@ builder.AddRocketWikiGitLab();
 // principal (ISearchService + IPageReadService — answers only from pages the asker
 // can view, by construction), generation at the OpenAI-compatible chat endpoint from
 // the Aspire "assistant" connection string / Ai:ChatModel. Fail-closed like GitLab
-// and the embeddings endpoint: unconfigured means askWiki answers NOT_CONFIGURED and
-// no client exists. See AssistantConfiguration for config precedence and the
-// telemetry decision; AskWikiService for the enforcement story.
-builder.AddRocketWikiAssistant();
+// and the embeddings endpoint: unconfigured — or the AskWiki feature flag off — means
+// askWiki answers NOT_CONFIGURED and no client exists. See AssistantConfiguration for
+// config precedence, the flag's place in it, and the telemetry decision; AskWikiService
+// for the enforcement story.
+builder.AddRocketWikiAssistant(features);
 
 // --- Real-time: SignalR (design.md §8) ---
 // design.md §15: a Redis backplane is needed once replicas > 1; at one replica (today)
@@ -324,7 +376,7 @@ builder.Services.AddScoped<INotificationDispatcher>(sp =>
         sp.GetRequiredService<RocketWikiDbContext>(),
         sp.GetRequiredService<IRealtimeConnectionRegistry>(),
         sp.GetRequiredService<IHubContext<NotificationsHub>>(),
-        localInstanceId));
+        InstanceId(sp)));
 
 // --- GraphQL (Hot Chocolate, design.md §8) ---
 // Page, Space, Comment/Label/Attachment reads, auditEvents, and search (milestone 4)
@@ -441,8 +493,8 @@ var app = builder.Build();
 // mode from the same `args`, but only *after* everything above it in this file
 // has already run — without this guard, exporting the schema would try to
 // open a SQL Server connection that (in that workflow) has no reason to exist.
-var migrateOnStartup = builder.Configuration.GetValue("Database:MigrateOnStartup", defaultValue: true);
-if (migrateOnStartup && !args.IsGraphQLCommand())
+var databaseOptions = app.Services.GetRequiredService<IOptions<DatabaseOptions>>().Value;
+if (databaseOptions.MigrateOnStartup && !args.IsGraphQLCommand())
 {
     await using var migrationScope = app.Services.CreateAsyncScope();
     await migrationScope.ServiceProvider.GetRequiredService<RocketWikiDbContext>()
@@ -479,8 +531,12 @@ app.MapAvatarEndpoints();
 app.MapCustomEmojiEndpoints();
 
 // design.md §8: MCP at /mcp — anonymous requests are rejected by the endpoint's
-// authorization policy before any tool code runs (McpServerConfiguration).
-app.MapRocketWikiMcp();
+// authorization policy before any tool code runs (McpServerConfiguration). Not mapped
+// at all when the Mcp feature flag is off (same snapshot as the registration above).
+if (features.Mcp)
+{
+    app.MapRocketWikiMcp();
+}
 
 // design.md §8: one hub for both durable per-user notifications and ephemeral
 // page-scoped presence (see NotificationsHub's own doc for why one hub, not two).

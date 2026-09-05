@@ -281,8 +281,8 @@ export function AskWikiPage() {
       ) : (
         <Alert severity="info">
           <AlertTitle>The wiki assistant isn't available on this instance</AlertTitle>
-          Ask the wiki needs an instance-level chat model endpoint, and none is configured here. Keyword search still
-          covers everything you can view —{' '}
+          Ask the wiki needs an instance-level chat model endpoint, and this instance either has none configured or
+          has the assistant switched off. Keyword search still covers everything you can view —{' '}
           <Link component={RouterLink} to="/search">
             go to search
           </Link>

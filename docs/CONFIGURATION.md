@@ -4,11 +4,26 @@ Every configuration key the system reads, with its default, what **unset**
 means, and the owning `design.md` section. Enumerated from source (the "Read
 at" column names the file that actually reads each key), not from memory —
 if this table and the code ever disagree, the code wins and this file has a
-bug. Last verified against source: 2026-09-04 (the API/frontend tables against
+bug. Last verified against source: 2026-09-05 (the API/frontend tables against
 2026-08-24; the web container's nginx runtime env and the operator CLIs'
 connection string against 2026-08-30; the "Protective markings" section
 against 2026-09-04, the day the selector-eligibility and clearance gates left
-the engine).
+the engine; the instance/database, Keycloak and AI tables and the new "Feature
+flags" section against 2026-09-05, the day every remaining key moved onto an
+options class).
+
+**Every key the API reads is bound to an options class** (`AddOptions<T>()
+.Bind(section)`, most with `ValidateDataAnnotations().ValidateOnStart()`), and
+the "Read at" column names it. Two moments of reading exist, and the tables
+say which applies: a key is **eager** when it decides what gets *registered*
+before the host is built (whether an AI client exists at all; the feature
+flags), and is then bound off the builder through the same options class —
+one definition of shape and defaults, read early; every other key is
+**lazy**, resolved through `IOptions<T>` where it is consumed, so a value that
+arrives with the built host (a test host's configuration is the canonical
+case) is the value in force. Connection strings are the one exception to the
+options rule: they stay on `GetConnectionString`, the API Aspire injects them
+through.
 
 Two conventions to know before reading:
 
@@ -30,18 +45,28 @@ configuration binding.
 
 | Key | Default | Unset means | Read at | design.md |
 |---|---|---|---|---|
-| `Instance:Id` | `standalone` | This instance's sync identity is `standalone`; spaces whose `OriginInstanceId` differs are replicas (read-only) | `Program.cs` | §12 |
+| `Instance:Id` | `standalone` | This instance's sync identity is `standalone`; spaces whose `OriginInstanceId` differs are replicas (read-only). **Validated at startup**: an empty value fails the host (`Instance:Id must be a non-empty instance identifier`) — a blank id would compare every space's origin against nothing, the silent fail-open the Helm values schema also refuses | `Identity/InstanceOptions.cs`, bound in `Program.cs`; **lazy** — resolved into the `InstanceIdentity` singleton and stamped into the DbContext options through EF's `ConfigureDbContext` hook, never captured off the builder | §12 |
 | `ConnectionStrings:rocketwiki` | *(none — Aspire-injected)* | No database. With `Database:MigrateOnStartup` true (the default) the API fails **loudly** at startup; with it false, every data query fails | `Program.cs` (`AddSqlServerDbContext`) | §14, §15 |
-| `Database:MigrateOnStartup` | `true` (code default *and* shipped appsettings.json) | n/a (has a default). Set `false` in any multi-replica environment — two pods racing `MigrateAsync()` is a corruption risk; k3s runs migrations as a Job instead | `Program.cs` | §15 |
+| `Database:MigrateOnStartup` | `true` (code default *and* shipped appsettings.json) | n/a (has a default). Set `false` in any multi-replica environment — two pods racing `MigrateAsync()` is a corruption risk; k3s runs migrations as a Job instead | `Hosting/DatabaseOptions.cs`, bound in `Program.cs`; **lazy** — read from the container after the host is built, immediately before the migration would run | §15 |
 
 ## Authentication (Keycloak)
 
+All three `Keycloak:*` keys bind to `Identity/KeycloakOptions.cs` (registered
+and **validated at startup** in `Program.cs`) and are **lazy**: the JWT bearer
+handler reads them inside its options-configure callback at first use, and the
+MCP protected-resource metadata reads them at options-resolution time. Both
+call the one `KeycloakOptions.ResolveAuthority` — explicit `Keycloak:Authority`,
+else the `keycloak` connection string plus `/realms/{Realm}`, else nothing — so
+tokens can no longer validate against one realm while MCP discovery advertises
+another (the two derivations used to be separate copies with a comment asking
+that they be kept in step).
+
 | Key | Default | Unset means | Read at | design.md |
 |---|---|---|---|---|
-| `ConnectionStrings:keycloak` | *(none — Aspire-injected)* | Combined with `Keycloak:Realm` to derive the JWT authority. Unset *and* no `Keycloak:Authority`: no authority — bearer validation cannot fetch JWKS metadata, so no authenticated request succeeds. Fail closed by construction | `Program.cs`, `Mcp/McpServerConfiguration.cs` (both derivations deliberately kept in step — see the comment there) | §11, §15 |
-| `Keycloak:Realm` | `rocketwiki` (code and appsettings.json) | n/a (has a default) | same two files | §11 |
-| `Keycloak:Authority` | *(none)* | Authority is derived from the `keycloak` connection string + realm. Set this only when running standalone outside Aspire | same two files | §11 |
-| `Keycloak:Audience` | code fallback `rocketwiki`; **shipped appsettings.json sets `rocketwiki-api`** (must match the realm's audience mapper — see `src/RocketWiki.AppHost/keycloak/rocketwiki-realm.json`) | The code fallback applies only if appsettings is stripped | `Program.cs` | §11 |
+| `ConnectionStrings:keycloak` | *(none — Aspire-injected)* | Combined with `Keycloak:Realm` to derive the JWT authority. Unset *and* no `Keycloak:Authority`: no authority — bearer validation cannot fetch JWKS metadata, so no authenticated request succeeds. Fail closed by construction | `Program.cs` and `Mcp/McpServerConfiguration.cs`, both through `KeycloakOptions.ResolveAuthority` | §11, §15 |
+| `Keycloak:Realm` | `rocketwiki` (code and appsettings.json) | n/a (has a default). **Validated at startup**: must be non-empty — a blank realm derives an authority ending in `/realms/`, a deployment that boots and then rejects every sign-in | `Identity/KeycloakOptions.cs` | §11 |
+| `Keycloak:Authority` | *(none)* | Authority is derived from the `keycloak` connection string + realm. Set this only when running standalone outside Aspire. **Validated at startup when set**: must be an absolute `http(s)://` URL (`Keycloak:Authority must be an absolute http(s) URL when set.`) | `Identity/KeycloakOptions.cs` | §11 |
+| `Keycloak:Audience` | code fallback `rocketwiki`; **shipped appsettings.json sets `rocketwiki-api`** (must match the realm's audience mapper — see `src/RocketWiki.AppHost/keycloak/rocketwiki-realm.json`) | The code fallback applies only if appsettings is stripped. **Validated at startup**: must be non-empty | `Identity/KeycloakOptions.cs` | §11 |
 
 ## Protective markings
 
@@ -187,26 +212,106 @@ Both endpoints are the same class of dependency: page content travels to
 them, so they must live inside the network boundary (design.md §9.4) — which
 is why both are ⛔ fail-closed with **no default endpoint**. Precedence is
 identical for both: the Aspire connection string first, then the `Ai:*` keys
-per value (`Embeddings/EmbeddingPipelineConfiguration.cs`,
+per value (`Ai/AiConnectionStringParser.cs`, called from
+`Embeddings/EmbeddingPipelineConfiguration.cs` and
 `Assistant/AssistantConfiguration.cs`).
+
+The whole `Ai` section binds to one options class, `Ai/AiOptions.cs`
+(registered and **validated at startup** by `Ai/AiConfiguration.cs`, ahead of
+both features). Its keys fall into the two reading moments described at the
+top of this file:
+
+- **Eager** — the endpoint keys `Ai:BaseUrl`, `Ai:ApiKey`, `Ai:EmbeddingModel`,
+  `Ai:ChatModel`. They decide whether a client, an options object and (for
+  embeddings) a background job are *registered at all*, which has to happen
+  before the host is built; they are bound off the builder through
+  `AiOptions.BindEagerly`. In a `WebApplicationFactory` test host they are
+  therefore reached with `UseSetting` (which travels as a command-line
+  argument), never with `ConfigureAppConfiguration`.
+- **Lazy** — every tuning key below (`Dimensions`, `PollSeconds`,
+  `BatchSize`, `FailureBackoffSeconds`, `MaxAttempts`,
+  `EmbeddingTimeoutSeconds`, `ChatTimeoutSeconds`, `MaxContextChars`,
+  `MaxRetrievedPages`, `MaxQuestionChars`, `MaxOutputTokens`). Resolved from
+  `IOptions<AiOptions>` when `EmbeddingOptions` / `AssistantOptions` are first
+  needed, so late configuration is honoured.
+
+Every tuning key **must be positive**; an explicit `0` or negative fails the
+host at boot naming the key (`Ai:BatchSize must be a positive number of
+pages.`). That replaces the earlier behaviour for `Ai:PollSeconds` and
+`Ai:FailureBackoffSeconds`, where a non-positive value silently fell back to
+the default — a zero poll interval or batch size is a configuration mistake,
+and it is now reported where an operator is looking. Every default satisfies
+its own annotation, so an instance with no `Ai` section at all still boots.
 
 | Key | Default | Unset means | design.md |
 |---|---|---|---|
-| ⛔ `ConnectionStrings:embeddings` | *(none)* | With no `Ai:BaseUrl`/`Ai:EmbeddingModel` fallback either: **keyword-only search, structurally** — no generator, no background job, nothing registers. Shape: `Endpoint=…;Key=…;Model=…;Dimensions=…` (a bare URL is Endpoint-only) | §9.2 |
-| `Ai:BaseUrl` | *(none)* | Fallback endpoint for both AI clients when the connection string doesn't carry one | §9.2 |
-| `Ai:ApiKey` | *(none)* | Keyless gateway — a placeholder credential is sent, which in-boundary gateways ignore | §9.2 |
-| `Ai:EmbeddingModel` | *(none)* | With no `Model=` in the connection string: embeddings not configured (see above) | §9.2 |
-| `Ai:Dimensions` | `1536` | n/a (has a default). Must match the `vector(1536)` column — a contradicting value **fails startup** (`EmbeddingDimensionsStartupCheck`) before a single doomed write | §9.3 |
-| `Ai:PollSeconds` | `30` s (via `EmbeddingOptions.PollIntervalOrDefault`) | n/a. Background job's scan interval; non-positive values fall back to the default | §9.2 |
-| `Ai:BatchSize` | `16` | n/a. Max pages (re-)embedded per job run | §9.2 |
-| `Ai:FailureBackoffSeconds` | `300` s / 5 min (via `FailureBackoffOrDefault`) | n/a. Retry delay for a failed page | §9.2 |
-| ⛔ `ConnectionStrings:assistant` | *(none)* | With no `Ai:ChatModel` fallback either: `askWiki` answers `NOT_CONFIGURED`, structurally — no chat client registers, retrieval is never touched. Shape: `Endpoint=…;Key=…;Model=…` | §9.5 |
-| ⛔ `Ai:ChatModel` | *(none)* | Its absence is what "assistant not configured" *means* | §9.5 |
-| `Ai:ChatTimeoutSeconds` | `30` | n/a. One attempt, no retries; an ask degrades to `UNREACHABLE`, never hangs | §9.5 |
-| `Ai:MaxContextChars` | `24000` | n/a. Cap on context text sent to the model per ask | §9.5 |
-| `Ai:MaxRetrievedPages` | `8` | n/a. Permission-filtered hits retrieval asks `ISearchService` for | §9.5 |
-| `Ai:MaxOutputTokens` | `800` | n/a. Cap on the answer the model may generate; without one the only bound was the 30 s network timeout | §9.5 |
-| `Ai:MaxQuestionChars` | `2000` | n/a. Longest question accepted; over it, `askWiki` answers `QUESTION_TOO_LONG` before retrieval and before anything is sent. **The only key in this table the SPA can read** — `assistantStatus.maxQuestionChars` reports it (null when the assistant is unconfigured), so the ask page can warn while a question is being typed rather than only after it is refused | §9.5 |
+| ⛔ `ConnectionStrings:embeddings` | *(none)* | With no `Ai:BaseUrl`/`Ai:EmbeddingModel` fallback either: **keyword-only search, structurally** — no generator, no background job, nothing registers. Shape: `Endpoint=…;Key=…;Model=…;Dimensions=…` (a bare URL is Endpoint-only). Also nothing registers when the `FeatureManagement:SemanticSearch` flag is off, whatever this says (see "Feature flags") | §9.2 |
+| `Ai:BaseUrl` | *(none)* | Fallback endpoint for both AI clients when the connection string doesn't carry one (eager) | §9.2 |
+| `Ai:ApiKey` | *(none)* | Keyless gateway — a placeholder credential is sent, which in-boundary gateways ignore (eager) | §9.2 |
+| `Ai:EmbeddingModel` | *(none)* | With no `Model=` in the connection string: embeddings not configured (see above) (eager) | §9.2 |
+| `Ai:Dimensions` | `1536` (the `vector(1536)` column's width, applied when neither the connection string's `Dimensions=` nor this key is set) | n/a (has a default). Must match the `vector(1536)` column — a contradicting value **fails startup** (`EmbeddingDimensionsStartupCheck`) before a single doomed write. **Validated at startup**: must be positive | §9.3 |
+| `Ai:PollSeconds` | `30` s (via `EmbeddingOptions.PollIntervalOrDefault`) | n/a. Background job's scan interval. **Validated at startup**: must be positive (a `0` used to fall back to the default silently; it now fails the host) | §9.2 |
+| `Ai:BatchSize` | `16` | n/a. Max pages (re-)embedded per job run. **Validated at startup**: must be positive | §9.2 |
+| `Ai:FailureBackoffSeconds` | `300` s / 5 min (via `FailureBackoffOrDefault`) | n/a. Retry delay for a failed page. **Validated at startup**: must be positive | §9.2 |
+| `Ai:MaxAttempts` | `5` | n/a. Consecutive failures on one revision before it is quarantined and the scan moves on (editing the page re-arms it). **Validated at startup**: must be positive | §9.2 |
+| `Ai:EmbeddingTimeoutSeconds` | `30` s (via `RequestTimeoutOrDefault`) | n/a. Per-call network timeout on the embedding endpoint; no SDK retries. **Validated at startup**: must be positive | §9.2 |
+| ⛔ `ConnectionStrings:assistant` | *(none)* | With no `Ai:ChatModel` fallback either: `askWiki` answers `NOT_CONFIGURED`, structurally — no chat client registers, retrieval is never touched. Shape: `Endpoint=…;Key=…;Model=…`. Also nothing registers when the `FeatureManagement:AskWiki` flag is off, whatever this says | §9.5 |
+| ⛔ `Ai:ChatModel` | *(none)* | Its absence is what "assistant not configured" *means* (eager) | §9.5 |
+| `Ai:ChatTimeoutSeconds` | `30` | n/a. One attempt, no retries; an ask degrades to `UNREACHABLE`, never hangs. **Validated at startup**: must be positive | §9.5 |
+| `Ai:MaxContextChars` | `24000` | n/a. Cap on context text sent to the model per ask. **Validated at startup**: must be positive | §9.5 |
+| `Ai:MaxRetrievedPages` | `8` | n/a. Permission-filtered hits retrieval asks `ISearchService` for. **Validated at startup**: must be positive | §9.5 |
+| `Ai:MaxOutputTokens` | `800` | n/a. Cap on the answer the model may generate; without one the only bound was the 30 s network timeout. **Validated at startup**: must be positive | §9.5 |
+| `Ai:MaxQuestionChars` | `2000` | n/a. Longest question accepted; over it, `askWiki` answers `QUESTION_TOO_LONG` before retrieval and before anything is sent. **Validated at startup**: must be positive. **The only key in this table the SPA can read** — `assistantStatus.maxQuestionChars` reports it (null when the assistant is unconfigured or its flag is off), so the ask page can warn while a question is being typed rather than only after it is refused | §9.5 |
+
+## Feature flags
+
+The six features that are optional by configuration — and only those six —
+also have an explicit off-switch each, read through Microsoft.FeatureManagement
+from the `FeatureManagement` section (`Features/RocketWikiFeatures.cs` names
+them; `Features/FeatureFlagConfiguration.cs` wires them). Environment-variable
+form is the usual double underscore: `FeatureManagement__AskWiki=false`. The
+Helm chart carries them as `api.features.*` (`deploy/README.md`).
+
+Three rules, each enforced by a test (`FeatureFlagTests`,
+`FeatureFlagOffStateTests`, `FeatureFlagNameAgreementTests`):
+
+- **Unset means ON.** The library's own default for a flag the configuration
+  does not mention is *off*; RocketWiki's definition provider inverts that for
+  exactly these six names, so an upgrade onto this version is a no-op on any
+  existing configuration, and a misspelt flag is *ignored* (feature stays on)
+  rather than silently off. Unknown names keep the library's behaviour.
+- **A flag is an additional, independent off-switch; it turns nothing on.**
+  `false` means off regardless of what is configured — a demo can silence the
+  assistant without deleting its connection string. `true` with nothing
+  configured still means not-configured: a flag alone registers no client,
+  maps no endpoint, and sends content nowhere, because there is nowhere for it
+  to go. The flag is checked first and the configuration second, so the two
+  conditions are ANDed.
+- **Off never changes the GraphQL schema.** Every field exists whichever way a
+  flag is set, and a disabled feature answers the *same shape it already
+  answers when unconfigured* (`assistantStatus.configured`,
+  `gitlabStatus.configured`, `syncStatus.enabled` tell the SPA, which hides or
+  explains the surface). `FeatureFlagOffStateTests` compares the SDL served with
+  every flag off against `schema.graphql`.
+
+**Read once, at startup.** All six are evaluated into one snapshot before the
+host is built, because three of them decide what gets *registered* (the chat
+client, the embedding pipeline, the MCP endpoint), and every other surface
+reads that same snapshot — so a flag never flips one surface live while a
+registration decided at boot stays put. Change a flag, restart the API; the
+Helm chart rolls the pod. Write a flag as a plain boolean (or the library's
+explicit `EnabledFor: [{ Name: AlwaysOn }]` form). A definition that uses a
+time-window, percentage or targeting *filter* is refused at boot, naming the
+filter: a switch evaluated once has no honest answer for "until 17:00".
+
+| Key | Default | Unset means | Off means | Read at | design.md |
+|---|---|---|---|---|---|
+| `FeatureManagement:AskWiki` | `true` | On | No chat client or `AssistantOptions` register — the unconfigured container. `askWiki` answers `NOT_CONFIGURED`; `assistantStatus` reports `configured:false`, `maxQuestionChars:null`; the SPA shows its not-available copy. Nothing leaves the process | `Assistant/AssistantConfiguration.cs` (eager, registration) | §9.5 |
+| `FeatureManagement:SemanticSearch` | `true` | On | No embedding generator, indexer, background job or dimension check register — keyword-only search, structurally, and no page content travels to the endpoint. `askWiki` retrieval (if on) is keyword-only too | `Embeddings/EmbeddingPipelineConfiguration.cs` (eager, registration) | §9.2, §9.3 |
+| `FeatureManagement:GitLab` | `true` | On | `GitLabOptions.IsConfigured` is false whatever `GitLab:BaseUrl` says, at the one seam every GitLab field reads: `gitlabStatus` reports `configured:false`, `baseUrl:null`; `gitlabIssue`/`gitlabIssues`/`gitlabFile` answer `NOT_CONFIGURED`; the SPA hides every GitLab affordance. Stored tokens are untouched and the token mutations keep working, as when unconfigured | `GitLab/GitLabOptions.cs`, via `GitLab/GitLabConfiguration.cs` | §18 |
+| `FeatureManagement:Mcp` | `true` | On | **Not mapped**: neither the MCP services nor the `/mcp` route are registered, so `/mcp` answers 404 and the RFC 9728 discovery metadata (`/.well-known/oauth-protected-resource`) is not served — nothing advertises a server that is not there (the HealthEndpoints precedent: absent, not refusing). GraphQL is unaffected | `Program.cs` (eager, registration and mapping) | §8 |
+| `FeatureManagement:CoEditing` | `true` | On | **Refusing, silently**: `JoinEditSession` answers the same `null` every refusal answers, before any permission work, so the SPA falls back to the solo editor; `PushUpdate`/`PushAwareness`/`ReseedEditSession` are membership-gated and therefore no-ops. Not audited (no access decision was made — the not-found arm makes the same call); counted as `rocketwiki.coedit.outcome=disabled`. Presence and notifications share the hub and keep working | `RealTime/NotificationsHub.EditSessions.cs` | §8 |
+| `FeatureManagement:Sync` | `true` | On | `setSpaceExported(exported: true)` refuses with a `Validation` error naming this key; un-flagging stays allowed so sync can be wound down without switching it back on. `syncStatus.enabled` reports false and the admin page says so, while still reporting the durable outbox/import state. **Deliberately unaffected**: the replica read-only invariant (a compliance rule, not a feature), the outbox journal for spaces already flagged exported (stopping it would fork low and high the moment the flag came back), and the `RocketWiki.Sync` CLI — a separate operator tool that reads no API configuration; not scheduling it is the operator's own off-switch for bundles | `GraphQL/Mutation.Spaces.cs`, `GraphQL/Query.SyncStatus.cs` | §12 |
 
 ## Health endpoints and telemetry
 

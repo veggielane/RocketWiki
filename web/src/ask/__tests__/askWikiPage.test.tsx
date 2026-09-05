@@ -373,7 +373,7 @@ describe('AskWikiPage — unavailable payload facts (§18 degradation, never raw
     askQuestion('is anyone there?')
     expect(await screen.findByText(/isn't available on this instance/)).toBeInTheDocument()
     // The transcript keeps the asked question with honest per-entry copy…
-    expect(screen.getByText("The wiki assistant isn't configured on this instance.")).toBeInTheDocument()
+    expect(screen.getByText("The wiki assistant isn't configured or has been switched off on this instance.")).toBeInTheDocument()
     // …the composer is gone…
     expect(screen.queryByLabelText('Ask a question')).not.toBeInTheDocument()
     // …and both entry points disappeared.

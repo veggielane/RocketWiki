@@ -307,6 +307,11 @@ public static class ApiTelemetry
     public const string CoEditJoinNotFound = "not_found";
     public const string CoEditJoinDenied = "denied";
 
+    /// <summary>The CoEditing feature flag is off on this instance (docs/CONFIGURATION.md
+    /// "Feature flags"): the join answered the silent null before any permission work.
+    /// A bounded, content-free value like its siblings.</summary>
+    public const string CoEditJoinDisabled = "disabled";
+
     public const string CoEditKindUpdate = "update";
     public const string CoEditKindAwareness = "awareness";
     /// <summary>A message dropped for exceeding its size cap (CoEditOptions): recorded

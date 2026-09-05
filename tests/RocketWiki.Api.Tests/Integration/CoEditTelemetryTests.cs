@@ -234,7 +234,7 @@ public sealed class CoEditTelemetryTests(RocketWikiApiFactory factory) : IClassF
         var allowed = new Dictionary<string, string[]>
         {
             ["rocketwiki.coedit.kind"] = ["update", "awareness", "oversized"],
-            ["rocketwiki.coedit.outcome"] = ["joined", "no_principal", "no_local_user", "not_found", "denied"],
+            ["rocketwiki.coedit.outcome"] = ["joined", "no_principal", "no_local_user", "not_found", "denied", "disabled"],
             ["rocketwiki.coedit.reset_reason"] = ["cap_reseed", "expired"],
         };
         foreach (var (tagKey, values) in coEditTagValuesSnapshot)

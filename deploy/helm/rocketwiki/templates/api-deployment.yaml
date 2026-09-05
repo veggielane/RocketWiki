@@ -168,6 +168,29 @@ spec:
               value: {{ $value | quote }}
             {{- end }}
             {{- end }}
+            {{- /*
+              Feature flags (docs/CONFIGURATION.md "Feature flags"; values.yaml
+              api.features for the semantics). Rendered UNCONDITIONALLY, like
+              Instance__Id above: the API treats an absent variable as ON, so a `with`
+              guard that dropped a true would be harmless to the app but would hide the
+              switch from the manifest a reviewer reads — stating all six makes "what is
+              on here" a diff-visible fact. One explicit entry per flag rather than a
+              range over the map, so the variable name the API reads is written here
+              verbatim; FeatureFlagNameAgreementTests pins each name to the code and to
+              the values key that feeds it.
+            */}}
+            - name: FeatureManagement__AskWiki
+              value: {{ .Values.api.features.askWiki | quote }}
+            - name: FeatureManagement__SemanticSearch
+              value: {{ .Values.api.features.semanticSearch | quote }}
+            - name: FeatureManagement__GitLab
+              value: {{ .Values.api.features.gitLab | quote }}
+            - name: FeatureManagement__Mcp
+              value: {{ .Values.api.features.mcp | quote }}
+            - name: FeatureManagement__CoEditing
+              value: {{ .Values.api.features.coEditing | quote }}
+            - name: FeatureManagement__Sync
+              value: {{ .Values.api.features.sync | quote }}
             {{- if .Values.api.otel.enabled }}
             # design.md §15 "Telemetry is not audit": presence of this
             # variable is the ONLY thing that enables an exporter

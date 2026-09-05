@@ -10,6 +10,7 @@ using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using RocketWiki.Api.Audit;
+using RocketWiki.Api.Identity;
 using RocketWiki.Api.Telemetry;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;
@@ -34,6 +35,17 @@ namespace RocketWiki.Api.Mcp;
 /// clientInfo during <c>initialize</c>, which stateless mode doesn't retain, so the
 /// audit row's McpClient field is populated only for clients whose protocol carries
 /// clientInfo per request (the 2026-07-28 revision) — and is honestly null otherwise.
+///
+/// <para><b>The <c>Mcp</c> feature flag</b> (docs/CONFIGURATION.md "Feature flags"): with
+/// it off, Program.cs calls neither <see cref="AddRocketWikiMcp"/> nor
+/// <see cref="MapRocketWikiMcp"/>. "Off" therefore means <i>not mapped</i> — <c>/mcp</c>
+/// answers 404 and no McpAuth scheme exists, so the RFC 9728 protected-resource metadata
+/// is not served either and nothing advertises a server that is not there. This is the
+/// HealthEndpoints precedent (an unmapped endpoint, not a refusing one) rather than a
+/// filter inside the pipeline, because a tool pipeline that exists but refuses is still
+/// a pipeline whose refusal must be audited and reasoned about; an absent one is not.
+/// The tool classes still compile and AuditCoverageTests still sweep them — the
+/// declaration rule is about code, not about what is mapped.</para>
 /// </summary>
 public static class McpServerConfiguration
 {
@@ -63,19 +75,22 @@ public static class McpServerConfiguration
         // discovery header. No anonymous tool call ever executes either way.
         builder.Services.AddAuthentication().AddMcp();
 
-        // Bound lazily (an options Configure with an IConfiguration dependency) rather
-        // than read off builder.Configuration up-front, so configuration layered in
-        // after Program's top-level code runs — the WebApplicationFactory
-        // .WithWebHostBuilder test path — still lands in the advertised metadata.
+        // Bound lazily (an options Configure with IOptions<KeycloakOptions> and
+        // IConfiguration dependencies) rather than read off builder.Configuration
+        // up-front, so configuration layered in after Program's top-level code runs —
+        // the WebApplicationFactory .WithWebHostBuilder test path — still lands in the
+        // advertised metadata. The authority is KeycloakOptions.ResolveAuthority — the
+        // same call the JWT bearer handler makes in Program.cs, so tokens can never
+        // validate against one realm while discovery advertises another.
         builder.Services.AddOptions<McpAuthenticationOptions>(McpAuthenticationDefaults.AuthenticationScheme)
-            .Configure<IConfiguration>((mcpOptions, configuration) =>
+            .Configure<IOptions<KeycloakOptions>, IConfiguration>((mcpOptions, keycloak, configuration) =>
             {
                 mcpOptions.ResourceMetadata = new ProtectedResourceMetadata
                 {
                     ResourceName = "RocketWiki",
                 };
 
-                if (ResolveKeycloakAuthority(configuration) is { } authority)
+                if (keycloak.Value.ResolveAuthority(configuration.GetConnectionString("keycloak")) is { } authority)
                 {
                     mcpOptions.ResourceMetadata.AuthorizationServers.Add(authority);
                 }
@@ -106,26 +121,6 @@ public static class McpServerConfiguration
         builder.Services.Configure<McpServerOptions>(AddAuditAndTelemetryFilter);
 
         return builder;
-    }
-
-    /// <summary>
-    /// The same authority derivation Program.cs performs for the JWT bearer handler
-    /// (Keycloak:Authority override, else the Aspire-injected "keycloak" connection
-    /// string + Keycloak:Realm) — duplicated here, with this pointer, because this copy
-    /// must run lazily at options-resolution time while Program's runs at startup.
-    /// If the two ever diverge, tokens would validate against one realm while
-    /// discovery advertises another; keep them in step.
-    /// </summary>
-    private static string? ResolveKeycloakAuthority(IConfiguration configuration)
-    {
-        if (configuration["Keycloak:Authority"] is { Length: > 0 } explicitAuthority)
-        {
-            return explicitAuthority;
-        }
-
-        var keycloakBaseUrl = configuration.GetConnectionString("keycloak");
-        var realm = configuration["Keycloak:Realm"] ?? "rocketwiki";
-        return keycloakBaseUrl is not null ? $"{keycloakBaseUrl.TrimEnd('/')}/realms/{realm}" : null;
     }
 
     public static WebApplication MapRocketWikiMcp(this WebApplication app)

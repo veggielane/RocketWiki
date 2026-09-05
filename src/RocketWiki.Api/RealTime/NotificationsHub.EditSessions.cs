@@ -71,6 +71,22 @@ public sealed partial class NotificationsHub
     [AuditAction(EditSessionAudit.JoinedAction)]
     public async Task<EditSessionJoinResult?> JoinEditSession(Guid pageId)
     {
+        // The CoEditing feature flag (docs/CONFIGURATION.md "Feature flags"), checked
+        // before any permission work: "off" is the same silent null every refusal below
+        // answers, so the SPA falls back to the solo editor exactly as it does for a
+        // denied join (progressive enhancement is its documented contract). Not audited
+        // — no access decision was made, and §7's denied vocabulary names a principal
+        // refused by a rule, which this is not (the NotFound arm makes the same call).
+        // Counted, so an operator can see the feature is off from the metric rather
+        // than from a silence. This is the ONE seam: PushUpdate, PushAwareness and
+        // ReseedEditSession are membership-gated and a session that cannot be joined
+        // has no members.
+        if (!features.CoEditing)
+        {
+            ApiTelemetry.RecordCoEditJoin(ApiTelemetry.CoEditJoinDisabled);
+            return null;
+        }
+
         var principal = PrincipalBuilder.Build(Context.User);
         if (principal is null)
         {

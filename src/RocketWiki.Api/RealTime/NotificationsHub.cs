@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RocketWiki.Api.Audit;
+using RocketWiki.Api.Features;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.Telemetry;
 using RocketWiki.Api.Reads;
@@ -43,6 +44,7 @@ public sealed partial class NotificationsHub : Hub
     private readonly IPageReadService pageReadService;
     private readonly IPagePermissionReadService pagePermissionReadService;
     private readonly IOptions<CoEditOptions> coEditOptions;
+    private readonly FeatureFlagSnapshot features;
     private readonly RocketWikiDbContext db;
 
     public NotificationsHub(
@@ -51,6 +53,7 @@ public sealed partial class NotificationsHub : Hub
         IPageReadService pageReadService,
         IPagePermissionReadService pagePermissionReadService,
         IOptions<CoEditOptions> coEditOptions,
+        FeatureFlagSnapshot features,
         RocketWikiDbContext db)
     {
         this.registry = registry;
@@ -58,6 +61,7 @@ public sealed partial class NotificationsHub : Hub
         this.pageReadService = pageReadService;
         this.pagePermissionReadService = pagePermissionReadService;
         this.coEditOptions = coEditOptions;
+        this.features = features;
         this.db = db;
     }
 

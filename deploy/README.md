@@ -307,6 +307,29 @@ api:
         values: [NORTH, SOUTH] # carrying NORTH is what confers NORTH
 ```
 
+### Feature flags (docs/CONFIGURATION.md "Feature flags")
+
+Also in the values file, not the Secret: `api.features` carries the six
+optional features' off-switches — `askWiki`, `semanticSearch`, `gitLab`,
+`mcp`, `coEditing`, `sync` — each rendering as `FeatureManagement__<Name>` on
+the api container. All default to `true`, which is also what the API assumes
+when the variable is absent, so an untouched values file changes nothing. A
+flag is an off-switch only: `false` silences a feature whatever is configured
+for it (its connection string or URL in the Secret can stay — that is the
+point, a demo instance can hide the assistant without anyone deleting a
+credential), and `true` with nothing configured is still "not configured".
+Off never changes the GraphQL schema; each feature answers the shape it
+already answers when unconfigured. `values.schema.json` refuses unknown keys
+here so a misspelt flag fails `helm lint` rather than rendering a variable the
+API would ignore — and an ignored flag means on. Read once at startup: a
+change rolls the pod.
+
+```yaml
+api:
+  features:
+    askWiki: false        # a demo without the assistant; the connection string stays put
+```
+
 ## Install / upgrade / rollback
 
 ```sh

@@ -3,6 +3,7 @@ using System.Text.Json;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Audit;
+using RocketWiki.Api.Features;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Enums;
 using RocketWiki.Data;
@@ -21,8 +22,17 @@ namespace RocketWiki.Api.GraphQL;
 /// loudly by the RocketWiki.Sync CLI; what this query exposes is the durable state the
 /// admin page renders and compares against ("bundle 41 applied three weeks ago" IS the
 /// warning when bundle 45 just arrived).
+///
+/// <para><see cref="Enabled"/> is the <c>Sync</c> feature flag (docs/CONFIGURATION.md
+/// "Feature flags"), the sibling of <c>assistantStatus.configured</c> and
+/// <c>gitlabStatus.configured</c>: the fact the admin page needs in order to explain
+/// itself rather than a second mechanism. When false, <c>setSpaceExported</c> refuses,
+/// and the rest of this view still reports the durable state honestly — an exported space
+/// with pending events is MORE worth showing on an instance whose sync was just switched
+/// off, not less. Always present in the schema, whichever way the flag is set.</para>
 /// </summary>
 public sealed record SyncStatusView(
+    bool Enabled,
     string LocalInstanceId,
     IReadOnlyList<ExportedSpaceSyncStatusView> ExportedSpaces,
     IReadOnlyList<SyncOriginStatusView> Origins);
@@ -63,6 +73,7 @@ public partial class Query
         [Service] RocketWikiDbContext db,
         [Service] IInstanceRoleAccessor instanceRoleAccessor,
         [Service] InstanceIdentity instanceIdentity,
+        [Service] FeatureFlagSnapshot features,
         [Service] IAuditSink auditSink,
         CancellationToken cancellationToken)
     {
@@ -130,6 +141,7 @@ public partial class Query
             .ToList();
 
         return new SyncStatusView(
+            features.Sync,
             instanceIdentity.LocalInstanceId,
             exportedSpaces
                 .Select(s => new ExportedSpaceSyncStatusView(s.Id, s.Key, s.LastOutboxSequence, s.PendingEventCount, s.LastExportedBundle))

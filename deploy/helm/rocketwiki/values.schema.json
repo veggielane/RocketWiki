@@ -76,6 +76,19 @@
             "enabled": { "type": "boolean" },
             "protocol": { "enum": ["grpc", "http/protobuf"] }
           }
+        },
+        "features": {
+          "type": "object",
+          "description": "Feature flags (docs/CONFIGURATION.md \"Feature flags\"), rendered as FeatureManagement__<Name> on the api container. Each is an independent OFF-switch for a feature that is already optional by configuration: false silences it whatever is configured, true with nothing configured is still not-configured, and unset means on. additionalProperties is false because the API treats an unknown flag name as unset — i.e. ON — so a misspelt key would be a switch that silently does nothing; here it fails lint instead. The six names are pinned against the code by FeatureFlagNameAgreementTests.",
+          "properties": {
+            "askWiki": { "type": "boolean", "description": "Ask the wiki (design.md §9.5). Off: askWiki answers NOT_CONFIGURED; no chat client is registered." },
+            "semanticSearch": { "type": "boolean", "description": "Semantic search and the embedding pipeline (design.md §9.2). Off: keyword-only search, no embedding job, no content leaves for the endpoint." },
+            "gitLab": { "type": "boolean", "description": "GitLab integration (design.md §18). Off: every GitLab field answers NOT_CONFIGURED." },
+            "mcp": { "type": "boolean", "description": "The MCP server (design.md §8). Off: /mcp is not mapped and no OAuth discovery metadata is served." },
+            "coEditing": { "type": "boolean", "description": "CRDT co-editing (design.md §8). Off: JoinEditSession answers null and the SPA edits solo; presence and notifications are unaffected." },
+            "sync": { "type": "boolean", "description": "Low-to-high sync (design.md §12). Off: setSpaceExported refuses to flag a space and syncStatus.enabled is false. Replicas stay read-only, the outbox keeps journalling already-exported spaces, and the RocketWiki.Sync CLI is out of reach of this switch." }
+          },
+          "additionalProperties": false
         }
       },
       "required": ["replicaCount", "existingSecret", "instanceId"]

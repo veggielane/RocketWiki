@@ -1,4 +1,5 @@
 using RocketWiki.Api.Audit;
+using RocketWiki.Api.Features;
 using RocketWiki.Api.Identity;
 using RocketWiki.Api.RealTime;
 using RocketWiki.Core.Entities;
@@ -171,6 +172,7 @@ public partial class Mutation
         [Service] IActingUserAccessor actingUserAccessor,
         [Service] ICurrentAuditContextAccessor auditContextAccessor,
         [Service] IInstanceRoleAccessor instanceRoleAccessor,
+        [Service] FeatureFlagSnapshot features,
         [Service] IAuditSink auditSink,
         CancellationToken cancellationToken)
     {
@@ -179,6 +181,21 @@ public partial class Mutation
         if (unauthenticated is not null)
         {
             return new SetSpaceExportedPayload(null, unauthenticated);
+        }
+
+        // The Sync feature flag (docs/CONFIGURATION.md "Feature flags"): off means no
+        // space can be NEWLY flagged for export — the one user action that starts a sync
+        // stream. Un-flagging stays allowed, so an operator can wind sync down without
+        // switching it back on to do so. A Validation error rather than Forbidden: the
+        // caller may well be the instance admin, and what is absent is the feature, not
+        // their permission — which is also why nothing is audited as a denial here (§7's
+        // denied names a principal refused by a rule; MutationAuthHelper applies the same
+        // rule to every ValidationError). Checked after authentication so an anonymous
+        // caller still gets the anonymous answer, and before the service so no row is read.
+        if (input.Exported && !features.Sync)
+        {
+            return new SetSpaceExportedPayload(null, PageMutationErrorView.From(
+                new ValidationError("Low→high sync is disabled on this instance (FeatureManagement:Sync); no space can be flagged for export.")));
         }
 
         var result = await spaceService.SetExportedAsync(

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using RocketWiki.Api.Features;
 using RocketWiki.Core.Services;
 using RocketWiki.Data.Services;
 
@@ -9,10 +10,13 @@ namespace RocketWiki.Api.GitLab;
 /// encrypted per-user credential storage, and the typed REST v4 client.
 ///
 /// Unlike the embedding pipeline, everything registers even when
-/// <c>GitLab:BaseUrl</c> is unset: the schema (and therefore the SPA contract)
-/// must not change shape with configuration, so the resolvers exist either way
-/// and answer NOT_CONFIGURED themselves. The client is registered but never
-/// called in that state (and throws loudly if it ever is — GitLabHttpClient).
+/// <c>GitLab:BaseUrl</c> is unset — and even when the <c>GitLab</c> feature flag is
+/// off: the schema (and therefore the SPA contract) must not change shape with
+/// configuration, so the resolvers exist either way and answer NOT_CONFIGURED
+/// themselves. The client is registered but never called in that state (and throws
+/// loudly if it ever is — GitLabHttpClient). The flag is applied inside
+/// <see cref="GitLabOptions.From"/>, so "off" and "unconfigured" are literally the same
+/// options instance.
 ///
 /// Options are resolved lazily from the container's <see cref="IConfiguration"/>
 /// rather than read eagerly off the builder: WebApplicationFactory layers test
@@ -28,7 +32,13 @@ public static class GitLabConfiguration
 
     public static void AddRocketWikiGitLab(this WebApplicationBuilder builder)
     {
-        builder.Services.AddSingleton(sp => GitLabOptions.From(sp.GetRequiredService<IConfiguration>()));
+        // The GitLab feature flag folds in here — the one seam every GitLab field reads
+        // (GitLabOptions's doc). The snapshot is the process-wide startup evaluation
+        // (FeatureFlagSnapshot); the base URL is still read from the container's
+        // configuration for the reason the class doc gives.
+        builder.Services.AddSingleton(sp => GitLabOptions.From(
+            sp.GetRequiredService<IConfiguration>(),
+            featureEnabled: sp.GetRequiredService<FeatureFlagSnapshot>().GitLab));
 
         // Data Protection backs the at-rest encryption of stored tokens. Explicit
         // (although the web host usually registers it) because a missing registration

@@ -1095,6 +1095,7 @@ type SyncOriginStatusView {
 }
 
 type SyncStatusView {
+  enabled: Boolean!
   localInstanceId: String!
   exportedSpaces: [ExportedSpaceSyncStatusView!]!
   origins: [SyncOriginStatusView!]!

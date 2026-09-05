@@ -1,8 +1,10 @@
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 using OpenAI;
 using RocketWiki.Api.Ai;
+using RocketWiki.Api.Features;
 
 namespace RocketWiki.Api.Assistant;
 
@@ -16,9 +18,9 @@ namespace RocketWiki.Api.Assistant;
 /// 1. The Aspire-injected <c>assistant</c> connection string
 ///    (<c>Endpoint=…;Key=…;Model=…</c>, bare URL accepted as Endpoint-only) — the
 ///    AppHost's <c>AddConnectionString("assistant")</c>, §15 "config by reference".
-/// 2. The <c>Ai</c> section for anything the connection string doesn't carry:
-///    <c>Ai:ChatModel</c> names the model, and the endpoint/key fall back to §9.2's
-///    shared <c>Ai:BaseUrl</c>/<c>Ai:ApiKey</c> — one gateway serving both the
+/// 2. The <c>Ai</c> section (<see cref="AiOptions"/>) for anything the connection string
+///    doesn't carry: <c>Ai:ChatModel</c> names the model, and the endpoint/key fall back
+///    to §9.2's shared <c>Ai:BaseUrl</c>/<c>Ai:ApiKey</c> — one gateway serving both the
 ///    embedding and chat models is the expected deployment, so the second model
 ///    should be one config key, not a duplicated section.
 ///
@@ -29,6 +31,14 @@ namespace RocketWiki.Api.Assistant;
 /// retrieval or the network. There is no default endpoint: the question and
 /// viewable page content travel to this URL, so guessing one would be a
 /// content-exfiltration bug, not a convenience.
+///
+/// <b>The <c>AskWiki</c> feature flag is a second, independent way to be absent</b>
+/// (docs/CONFIGURATION.md "Feature flags"): flag off produces exactly the unconfigured
+/// container — no options, no client — regardless of what is configured, so a demo can
+/// silence the assistant without deleting its connection string. The flag is checked
+/// FIRST and the configuration second; a flag alone registers nothing, because there is
+/// nothing for it to point a client at. Same schema either way; the SPA reads
+/// <c>assistantStatus.configured</c> and hides the surface.
 ///
 /// Resilience: one attempt, bounded timeout, no retries — the GitLab reasoning
 /// (a user-facing request retrying against a down endpoint at exactly the wrong
@@ -50,54 +60,67 @@ namespace RocketWiki.Api.Assistant;
 /// </summary>
 public static class AssistantConfiguration
 {
-    public static void AddRocketWikiAssistant(this WebApplicationBuilder builder)
+    public static void AddRocketWikiAssistant(this WebApplicationBuilder builder, FeatureFlagSnapshot features)
     {
         // Always registered, configured or not — the resolver answers NOT_CONFIGURED
         // through this service's null options/client (optional ctor parameters, the
         // same DI pattern SearchService uses for the optional embedding generator).
         builder.Services.AddScoped<AskWikiService>();
 
+        if (!features.AskWiki)
+        {
+            return; // Flag off: the unconfigured shape, whatever is configured. See class doc.
+        }
+
         // Connection string first, Ai section as per-value fallback — the shared rule
         // (AiConnectionStringParser); the keys this feature reads are the class doc's
         // list: Ai:BaseUrl / Ai:ApiKey (shared with the embedding endpoint, since one
         // gateway serving both models is the expected deployment) and Ai:ChatModel.
         //
-        // Read EAGERLY off the builder, unlike GitLabConfiguration which deliberately
-        // resolves its options from the container instead. The difference is real and
-        // worth stating rather than leaving as an apparent inconsistency: GitLab must
-        // register its resolvers either way (the schema cannot change shape with
-        // configuration), so it needs a value that can still be decided after
-        // WebApplicationFactory layers test configuration in during Build(). Here the
-        // configuration decides whether to register AT ALL, which has to happen before
-        // Build() by definition — and the test tier does not exercise this path anyway:
-        // AskWikiApiFixture injects IChatClient and AssistantOptions straight into the
-        // container, precisely because "is it configured" is not what those tests are
-        // about. If that ever changes, this needs the GitLab treatment (a wrapper type
-        // holding a nullable client/options, resolved from IConfiguration) rather than a
-        // second eager read somewhere else.
+        // The ENDPOINT keys are read EAGERLY off the builder, unlike GitLabConfiguration
+        // which deliberately resolves its options from the container instead. The
+        // difference is real and worth stating rather than leaving as an apparent
+        // inconsistency: GitLab must register its resolvers either way (the schema
+        // cannot change shape with configuration), so it needs a value that can still be
+        // decided after WebApplicationFactory layers test configuration in during
+        // Build(). Here the configuration decides whether to register AT ALL, which has
+        // to happen before Build() by definition. The test tier reaches this path with
+        // UseSetting (which travels as a command-line argument and is visible here —
+        // FeatureFlagOffStateTests), and AskWikiApiFixture bypasses it by injecting
+        // IChatClient and AssistantOptions straight into the container, because "is it
+        // configured" is not what those tests are about.
+        //
+        // The TUNING keys (timeout, caps) are not needed to decide anything, so they are
+        // resolved lazily from IOptions<AiOptions> in the factories below — the one
+        // registration AiConfiguration binds and validates — not captured here.
+        var ai = AiOptions.BindEagerly(builder.Configuration);
         var (endpoint, key, model, _) = AiConnectionStringParser.Resolve(
-            builder.Configuration, connectionName: "assistant", modelConfigKey: "Ai:ChatModel");
+            builder.Configuration, connectionName: "assistant", ai, o => o.ChatModel);
         if (endpoint is null || model is null)
         {
             return; // Not configured: feature absent, fail closed. See class doc.
         }
 
-        var options = new AssistantOptions(
-            ChatModel: model,
-            Timeout: TimeSpan.FromSeconds(builder.Configuration.GetValue("Ai:ChatTimeoutSeconds", 30)),
-            MaxContextChars: builder.Configuration.GetValue("Ai:MaxContextChars", 24_000),
-            MaxRetrievedPages: builder.Configuration.GetValue("Ai:MaxRetrievedPages", 8),
-            MaxQuestionChars: builder.Configuration.GetValue("Ai:MaxQuestionChars", 2000),
-            MaxOutputTokens: builder.Configuration.GetValue("Ai:MaxOutputTokens", 800));
-
-        builder.Services.AddSingleton(options);
+        builder.Services.AddSingleton(sp =>
+        {
+            var tuning = sp.GetRequiredService<IOptions<AiOptions>>().Value;
+            return new AssistantOptions(
+                ChatModel: model,
+                Timeout: tuning.ChatTimeout,
+                MaxContextChars: tuning.MaxContextChars,
+                MaxRetrievedPages: tuning.MaxRetrievedPages,
+                MaxQuestionChars: tuning.MaxQuestionChars,
+                MaxOutputTokens: tuning.MaxOutputTokens);
+        });
 
         // Same construction as the embedding generator (§9.2): official OpenAI 2.x
         // client at the configured in-boundary endpoint, surfaced through
         // Microsoft.Extensions.AI so the provider stays pure config. Keyless
         // gateways get the same "unused" placeholder.
-        builder.Services.AddSingleton<IChatClient>(_ =>
-            new OpenAIClient(
+        builder.Services.AddSingleton<IChatClient>(sp =>
+        {
+            var options = sp.GetRequiredService<AssistantOptions>();
+            return new OpenAIClient(
                     new ApiKeyCredential(string.IsNullOrEmpty(key) ? "unused" : key),
                     new OpenAIClientOptions
                     {
@@ -108,7 +131,7 @@ public static class AssistantConfiguration
                         RetryPolicy = new ClientRetryPolicy(maxRetries: 0),
                     })
                 .GetChatClient(options.ChatModel)
-                .AsIChatClient());
+                .AsIChatClient();
+        });
     }
-
 }

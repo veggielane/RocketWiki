@@ -108,6 +108,17 @@
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
   </ItemGroup>
 
+  <!-- Feature flags (docs/CONFIGURATION.md "Feature flags"). The official .NET feature
+       management library: the six optional features read their on/off switch from the
+       FeatureManagement configuration section through its FeatureManager, so the
+       section's full schema (booleans and EnabledFor filters) is the library's, not a
+       hand-rolled parser's. RocketWiki adds only a definition provider that defaults
+       its own known flags to ON when the section says nothing - see
+       Features/RocketWikiFeatureDefinitionProvider. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.FeatureManagement.AspNetCore" Version="4.7.0" />
+  </ItemGroup>
+
   <!-- Storage and image processing (design.md §10, §19). -->
   <ItemGroup>
     <PackageVersion Include="AWSSDK.S3" Version="4.0.102.4" />

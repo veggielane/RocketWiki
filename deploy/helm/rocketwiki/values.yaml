@@ -250,6 +250,40 @@ api:
     #    description: Regional releasability
     #    values: [NORTH, SOUTH]
 
+  # Feature flags (docs/CONFIGURATION.md "Feature flags"): the six optional
+  # features' independent off-switches, rendered as FeatureManagement__<Name> on
+  # the api container. ALL default to true — which is also what the API does when
+  # the variable is absent — so an untouched values file changes nothing.
+  #
+  # A flag is an additional off-switch, never an on-switch. `false` silences a
+  # feature whatever is configured for it (its connection string or URL in
+  # api.existingSecret can stay, which is the point: a demo instance can hide
+  # the assistant without anyone deleting a credential). `true` with nothing
+  # configured is still "not configured" — nothing is turned on by a flag alone.
+  #
+  # Off never changes the GraphQL schema; each feature answers the shape it
+  # already answers when unconfigured: askWiki NOT_CONFIGURED, search
+  # keyword-only, every GitLab field NOT_CONFIGURED, /mcp not mapped (404, and no
+  # OAuth discovery metadata), JoinEditSession the solo-editor fallback,
+  # setSpaceExported a Validation refusal with syncStatus.enabled=false. What
+  # `sync: false` deliberately does NOT do: it never makes a replica writable,
+  # never stops the outbox journalling spaces already flagged exported (a gap
+  # there would fork low and high), and cannot reach the RocketWiki.Sync CLI,
+  # which is a separate operator tool — not scheduling it is the operator's own
+  # off-switch for bundles.
+  #
+  # Rendered unconditionally (like Instance__Id) so the reviewed manifest states
+  # every switch, and values.schema.json refuses unknown keys so a misspelt flag
+  # fails `helm lint` rather than rendering a variable the API would ignore — an
+  # ignored flag means ON. Read once at startup; changing one rolls the pod.
+  features:
+    askWiki: true
+    semanticSearch: true
+    gitLab: true
+    mcp: true
+    coEditing: true
+    sync: true
+
   # design.md §15 "Telemetry is not audit": OFF by default, fail-closed —
   # when disabled the OTEL_EXPORTER_OTLP_ENDPOINT env var is simply absent,
   # and ServiceDefaults registers NO exporter at all (Extensions.cs gates the

@@ -28,6 +28,10 @@
          the Ai section). Brings Microsoft.Extensions.AI.Abstractions (which
          RocketWiki.Data consumes) and the official OpenAI 2.x client transitively. -->
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+    <!-- Feature flags for the six optional features (docs/CONFIGURATION.md "Feature
+         flags"): FeatureManagement:<Name> switches, evaluated once at startup through
+         the library's FeatureManager (Features/FeatureFlagConfiguration). -->
+    <PackageReference Include="Microsoft.FeatureManagement.AspNetCore" />
     <!-- Official Aspire client integration: AddSqlServerDbContext wires
          RocketWikiDbContext to the "rocketwiki" connection string injected by
          the AppHost via service discovery, plus health checks, retry, and

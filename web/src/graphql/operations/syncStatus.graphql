@@ -2,9 +2,13 @@
 # position, pending event count and last drained bundle; per origin the
 # last bundle applied, its manifest hash (the link the next bundle must
 # chain from), the import time, and per-space applied sequences. Admin-only
-# server-side, audited as `sync.status`.
+# server-side, audited as `sync.status`. `enabled` is the instance's Sync
+# feature flag (docs/CONFIGURATION.md "Feature flags"): false means no space
+# can be newly flagged for export, and the page says so; the durable state
+# below is still reported either way.
 query SyncStatus {
   syncStatus {
+    enabled
     localInstanceId
     exportedSpaces {
       spaceId

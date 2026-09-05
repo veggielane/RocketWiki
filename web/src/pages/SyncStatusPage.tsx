@@ -105,6 +105,17 @@ export function SyncStatusPage() {
           user who refreshed landed on a document with no heading at all. */}
       {error && <Alert severity="info">{describeLoadFailure('SYNC_STATUS').summary}</Alert>}
 
+      {/* The instance's Sync feature flag (docs/CONFIGURATION.md "Feature flags"),
+          the sibling of assistantStatus.configured. Said here, above the tables
+          rather than instead of them: an exported space with pending events is
+          MORE worth seeing on an instance whose sync was just switched off. */}
+      {!error && status && !status.enabled && (
+        <Alert severity="warning">
+          Low → high sync is switched off on this instance (FeatureManagement:Sync). No space can be newly flagged for
+          export; the outbox and import records below are still reported as they stand.
+        </Alert>
+      )}
+
       {!error && (
         <>
           <Stack spacing={1}>
