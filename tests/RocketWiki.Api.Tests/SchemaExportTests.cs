@@ -83,4 +83,41 @@ public class SchemaExportTests
 
         Assert.Fail(message.ToString());
     }
+
+    /// <summary>
+    /// Page entries and the forms built on them were removed (the design survives only
+    /// as a future ticket-creation front end in docs/PLATFORM-PLAN.md). The drift test
+    /// above proves the checked-in SDL matches the code; this proves the code has
+    /// nothing of the feature left to export — a stray partial-class file re-adding a
+    /// root field would otherwise be a schema change that only a reader of the SDL
+    /// diff would notice.
+    /// </summary>
+    [Fact]
+    public async Task Schema_ExposesNoPageEntryOrFormType()
+    {
+        var services = new ServiceCollection();
+        var schema = await services.AddGraphQLServer().AddRocketWikiGraphQL().BuildSchemaAsync();
+
+        var retiredTypes = schema.Types
+            .Select(t => t.Name)
+            .Where(n => n.StartsWith("PageEntry", StringComparison.Ordinal)
+                || n.StartsWith("PageForms", StringComparison.Ordinal)
+                || n.StartsWith("FormDefinition", StringComparison.Ordinal)
+                || n.StartsWith("FormField", StringComparison.Ordinal))
+            .ToList();
+        Assert.True(retiredTypes.Count == 0, "Retired entry/form types are still in the schema: " + string.Join(", ", retiredTypes));
+
+        var rootFields = schema.QueryType.Fields.Select(f => f.Name)
+            .Concat(schema.MutationType?.Fields.Select(f => f.Name) ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var retired in new[] { "pageEntries", "pageForms", "createPageEntry", "updatePageEntry", "deletePageEntry" })
+        {
+            Assert.DoesNotContain(retired, rootFields);
+        }
+
+        // Page PROPERTIES are a different, narrower feature (design.md §20) and stay.
+        // Named here so a future sweep cannot mistake them for the retired one.
+        Assert.Contains("setPageProperty", rootFields);
+        Assert.Contains("pagePropertyKeys", rootFields);
+    }
 }

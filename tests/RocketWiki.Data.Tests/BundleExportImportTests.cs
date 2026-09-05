@@ -7,7 +7,6 @@ using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
 using RocketWiki.Core.Sync;
-using RocketWiki.Core.Tests.Access;
 using RocketWiki.Data.Services;
 using RocketWiki.Storage;
 using Xunit;
@@ -39,16 +38,6 @@ public class BundleExportImportTests : SqliteTestBase
     private static readonly AuditContext AuditCtx = new(AuditChannel.Sync, "sync-job-1", "127.0.0.1");
 
     private static Principal EditorPrincipal(params string[] groups) => Principal.Create("editor-sub", groups);
-
-    /// <summary>An editor who also holds a nationality. Needed wherever a test writes a
-    /// caveated marking: §21.6 refuses one you could not then read, and the plain
-    /// EditorPrincipal holds no nationality at all — so it can never write an eyes-only
-    /// caveat. (The level needs nothing: it is presentational, §21.12.)</summary>
-    private static Principal NationalEditorPrincipal(params string[] nationalities) =>
-        Principal.Create("editor-sub", [], new Dictionary<string, IReadOnlyList<string>>
-        {
-            ["nationality"] = nationalities,
-        });
 
     private static AccessRule EditorGrant(Guid spaceId) => new()
     {
@@ -460,127 +449,37 @@ public class BundleExportImportTests : SqliteTestBase
     }
 
     /// <summary>
-    /// docs/ENTRIES-AND-FORMS-PLAN.md: entries are a page's structured content, so they
-    /// cross with it — including their own markings, which is the whole reason they are
-    /// worth syncing rather than leaving local.
+    /// A bundle from a full-featured origin may still carry <c>PageEntry</c> lines. Page
+    /// entries were removed from this build, but an origin that has not been upgraded
+    /// keeps draining its outbox, and rows of that type sit in its bundles beside the
+    /// page changes this side needs. The enum member is kept as a reserved, retired wire
+    /// value precisely so <c>ParseEventType</c> still recognises the NAME — and the
+    /// importer then skips the line rather than refusing the bundle, which would strand
+    /// every other change in it behind a feature this side no longer has.
     ///
-    /// <para>Both directions in one round trip, because the second is what makes the
-    /// first load-bearing: the import assigns every field it reads, so a payload that
-    /// merely FAILED to carry a change would be indistinguishable from one that cleared
-    /// it. That is the shape of the bug page icons shipped with.</para>
+    /// <para>Skipped, not absorbed: the page beside it lands, the per-space sequence
+    /// advances over BOTH lines so the next bundle's gap check starts after the skipped
+    /// one, and the import is recorded as a success. The payload is the exact shape the
+    /// full-featured writer produced, so this stays a test of a real bundle.</para>
     /// </summary>
     [Fact]
-    public async Task Incremental_AnEntryAndItsMarking_BothReachTheReplica()
-    {
-        var actor = TestData.NewUser();
-        var space = NewExportedSpace();
-
-        using var lowContext = CreateContext();
-        lowContext.Users.Add(actor);
-        lowContext.Spaces.Add(space);
-        lowContext.AccessRules.AddRange(TestData.AccessGrantMirroring(EditorGrant(space.Id)), EditorGrant(space.Id));
-        lowContext.SaveChanges();
-
-        var pageService = new PageService(lowContext, LowInstanceId);
-        var page = await pageService.CreatePageAsync(
-            new CreatePageRequest(space.Id, null, "home", "Home", "# Welcome"),
-            EditorPrincipal(), actor.Id, AuditCtx);
-        Assert.True(page.IsSuccess);
-
-        var entryService = new PageEntryService(lowContext, LowInstanceId);
-        var entry = await entryService.CreateAsync(
-            new CreatePageEntryRequest(page.Value.Id, "incident-report", """{"severity":"high"}"""),
-            EditorPrincipal(), actor.Id, AuditCtx);
-        Assert.True(entry.IsSuccess, $"{entry.Error}");
-
-        var storage = CreateFileStorage(out var storageDir);
-        var outputDir = CreateBundleOutputDir();
-        try
-        {
-            var exportService = new BundleExportService(lowContext, storage);
-            var first = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
-            Assert.NotNull(first);
-
-            var (highConnection, highContext) = CreateSecondaryDatabase();
-            using (highConnection)
-            using (highContext)
-            {
-                var importService = new BundleImportService(highContext, storage);
-                Assert.True((await importService.ImportAsync(first!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
-
-                var landed = highContext.PageEntries.Include(e => e.Countries).Single(e => e.Id == entry.Value.Id);
-                Assert.Equal("incident-report", landed.Collection);
-                Assert.Equal("""{"severity":"high"}""", landed.Data);
-                Assert.Equal(ClassificationLevel.Official, landed.Level);
-
-                // Raising the marking and editing the data at once: both must land, and
-                // neither may be silently reset by the other travelling in the same payload.
-                var raised = await entryService.UpdateAsync(
-                    new UpdatePageEntryRequest(entry.Value.Id, 1, """{"severity":"critical"}""",
-                        ProtectiveMarking.Create(ClassificationLevel.Secret, ["UK"], prefix: "UK")),
-                    NationalEditorPrincipal("UK"), actor.Id, AuditCtx);
-                Assert.True(raised.IsSuccess, $"{raised.Error}");
-
-                var second = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
-                Assert.NotNull(second);
-                Assert.True((await importService.ImportAsync(second!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
-
-                var updated = highContext.PageEntries.Include(e => e.Countries).Single(e => e.Id == entry.Value.Id);
-                Assert.Equal("""{"severity":"critical"}""", updated.Data);
-                Assert.Equal(ClassificationLevel.Secret, updated.Level);
-                Assert.Equal("UK", Assert.Single(updated.Countries).CountryValue);
-
-                // And a delete crosses as a tombstone rather than as an absence — an entry
-                // that simply stopped being mentioned would live forever on the replica.
-                // Deleting it needs the clearance too: an entry you cannot read is an
-                // entry you cannot remove.
-                Assert.True((await entryService.DeleteAsync(
-                    new DeletePageEntryRequest(entry.Value.Id, 2), NationalEditorPrincipal("UK"), actor.Id, AuditCtx)).IsSuccess);
-
-                var third = await exportService.ExportIncrementalAsync(outputDir, LowInstanceId);
-                Assert.NotNull(third);
-                Assert.True((await importService.ImportAsync(third!.BundleFilePath, LowInstanceId, AuditCtx)).IsSuccess);
-
-                Assert.True(highContext.PageEntries.IgnoreQueryFilters().Single(e => e.Id == entry.Value.Id).IsDeleted);
-            }
-        }
-        finally
-        {
-            if (Directory.Exists(storageDir)) Directory.Delete(storageDir, recursive: true);
-            if (Directory.Exists(outputDir)) Directory.Delete(outputDir, recursive: true);
-        }
-    }
-
-    /// <summary>
-    /// An entry arriving with no declared marking lands UNKNOWN (<c>PageEntry.IsUnavailable</c>)
-    /// and readable by nobody, not at OFFICIAL — the same fail-closed reading a page gets
-    /// (§21.10). Content from a lower instance without a classification is exactly the
-    /// case where guessing the bottom of the ladder would be a cross-boundary disclosure;
-    /// and since the level gates nobody (§21.12), landing it at the TOP of the ladder — the
-    /// old behaviour — would have been the same disclosure wearing a stricter label. The
-    /// assertion is through the real entry gate for the most generous caller there is.
-    /// </summary>
-    [Fact]
-    public async Task Import_AnEntryWithNoMarking_LandsUnreadableByEveryone_NotAsAPlainTopSecret()
+    public async Task Import_ARetiredPageEntryLine_IsSkipped_AndTheRestOfTheBundleLands()
     {
         var webOptions = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
-        var entryId = Guid.NewGuid();
         var pageId = Guid.NewGuid();
         var spaceId = Guid.NewGuid();
-        var payload = System.Text.Json.JsonSerializer.Serialize(new
+        var entryPayload = System.Text.Json.JsonSerializer.Serialize(new
         {
-            entryId,
+            entryId = Guid.NewGuid(),
             pageId,
             collection = "incident-report",
-            data = "{}",
+            data = """{"severity":"high"}""",
             version = 1,
+            level = "OFFICIAL",
+            eyesOnly = Array.Empty<string>(),
+            prefix = "UK",
             isDeleted = false,
-            // No level, no eyesOnly, no prefix - a bundle written before entries were
-            // marked, or by a build that got it wrong.
         }, webOptions);
-        // The page travels first: an entry never arrives without one, and the foreign key
-        // would refuse it anyway. Marked here, so only the ENTRY's missing marking is
-        // under test rather than the page's.
         var pagePayload = System.Text.Json.JsonSerializer.Serialize(new
         {
             pageId,
@@ -598,7 +497,7 @@ public class BundleExportImportTests : SqliteTestBase
             System.Text.Json.JsonSerializer.Serialize(
                 new NdjsonEventRecord("FUT", spaceId, 1, nameof(SyncEventType.PageUpsert), pagePayload, DateTime.UtcNow), webOptions) + "\n"
             + System.Text.Json.JsonSerializer.Serialize(
-                new NdjsonEventRecord("FUT", spaceId, 2, nameof(SyncEventType.PageEntry), payload, DateTime.UtcNow), webOptions) + "\n";
+                new NdjsonEventRecord("FUT", spaceId, 2, nameof(SyncEventType.PageEntry), entryPayload, DateTime.UtcNow), webOptions) + "\n";
         var payloadHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(ndjson)));
 
         var outputDir = CreateBundleOutputDir();
@@ -627,42 +526,14 @@ public class BundleExportImportTests : SqliteTestBase
                 var result = await new BundleImportService(highContext, storage)
                     .ImportAsync(bundlePath, LowInstanceId, AuditCtx);
                 Assert.True(result.IsSuccess, $"{result.Error}");
+                Assert.False(result.Value.WasDuplicate);
 
-                var landed = highContext.PageEntries.Include(e => e.Countries).Single(e => e.Id == entryId);
-                Assert.True(landed.IsUnavailable);
-                Assert.True(landed.ToMarking().IsUnavailable);
-                Assert.Equal(ClassificationLevel.TopSecret, landed.Level); // the sentinel's rendering, not what denies
-
-                // The most generous caller: a Space-admin whose access grant confers every
-                // selector value, holding every nationality. The page itself (OFFICIAL) is
-                // readable to them; the entry is not, and the reason says why.
-                var everySelector = new AccessRule
-                {
-                    Kind = AccessRuleKind.AccessGrant, SpaceId = spaceId,
-                    ExpressionJson = """{ "everyone": true }""",
-                    CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid(), UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = Guid.NewGuid(),
-                };
-                foreach (var selector in new[] { TestCatalogs.Apple, TestCatalogs.Banana, TestCatalogs.North, TestCatalogs.South })
-                {
-                    everySelector.Selectors.Add(new AccessRuleSelector { AccessRuleId = everySelector.Id, Category = selector.Category, Value = selector.Value });
-                }
-
-                highContext.AccessRules.AddRange(everySelector, new AccessRule
-                {
-                    Kind = AccessRuleKind.RoleGrant, SpaceId = spaceId, Role = SpaceRole.SpaceAdmin,
-                    ExpressionJson = """{ "everyone": true }""",
-                    CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = Guid.NewGuid(), UpdatedAtUtc = DateTime.UtcNow, UpdatedByUserId = Guid.NewGuid(),
-                });
-                highContext.SaveChanges();
-
-                var admin = Principal.Create("high-admin", ["engineering"], [new("nationality", NationalCaveatVocabulary.Values.ToArray())]);
-                Assert.IsType<ReadResult<Page>.Found>(await new PageReadService(highContext).GetPageAsync(pageId, admin));
-                var denied = Assert.IsType<ReadResult<PageEntryView>.Denied>(
-                    await new PageEntryService(highContext, LowInstanceId).GetAsync(entryId, admin));
-                Assert.Equal("marking:unavailable", denied.Reason);
-                // And the listing prunes it, saying nothing (§6.7).
-                Assert.Empty(Assert.IsType<ReadResult<IReadOnlyList<PageEntryView>>.Found>(
-                    await new PageEntryService(highContext, LowInstanceId).ListAsync(pageId, "incident-report", admin)).Value);
+                // The page beside the retired line landed.
+                Assert.Equal("Home", highContext.Pages.Single(p => p.Id == pageId).Title);
+                // And the sequence advanced over both lines: skipping a line is not the
+                // same as never having received it, or the next bundle would be refused
+                // as a gap.
+                Assert.Equal(2, highContext.SyncSpaceStates.Single(s => s.SpaceId == spaceId).AppliedSequence);
             }
         }
         finally

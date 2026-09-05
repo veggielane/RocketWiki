@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { InsertFormDialog } from '../forms/InsertFormDialog'
 import { InsertGitLabFileDialog } from '../gitlab/InsertGitLabFileDialog'
 import { InsertGitLabIssueLinkDialog } from '../gitlab/InsertGitLabIssueLinkDialog'
 import { InsertGitLabIssuesDialog } from '../gitlab/InsertGitLabIssuesDialog'
@@ -25,17 +24,6 @@ function clickBackdrop(): void {
 }
 
 describe('a backdrop click cannot discard typed work', () => {
-  it('keeps the form dialog open — it holds an arbitrarily long field list', () => {
-    const onClose = vi.fn()
-    render(<InsertFormDialog open onClose={onClose} onInsert={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText(/Collection/), { target: { value: 'anomalies' } })
-    clickBackdrop()
-
-    expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByLabelText(/Collection/)).toHaveValue('anomalies')
-  })
-
   it('keeps the draw.io dialog open — the iframe holds the only copy of the diagram', () => {
     const onClose = vi.fn()
     render(
@@ -45,15 +33,6 @@ describe('a backdrop click cannot discard typed work', () => {
     clickBackdrop()
 
     expect(onClose).not.toHaveBeenCalled()
-  })
-
-  it('still closes the form dialog on Cancel, which is a deliberate act', () => {
-    const onClose = vi.fn()
-    render(<InsertFormDialog open onClose={onClose} onInsert={vi.fn()} />)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-
-    expect(onClose).toHaveBeenCalled()
   })
 })
 
@@ -95,16 +74,6 @@ describe('a disabled Insert says what it is waiting for', () => {
     expect(screen.getByRole('button', { name: 'Insert' })).toBeEnabled()
   })
 
-  it('names the form dialog’s two headline requirements', () => {
-    render(<InsertFormDialog open onClose={vi.fn()} onInsert={vi.fn()} />)
-
-    expect(screen.getByText('Insert needs a collection name and at least one named field.')).toBeInTheDocument()
-
-    fireEvent.change(screen.getByLabelText(/Collection/), { target: { value: 'anomalies' } })
-
-    expect(screen.getByText('Insert needs at least one named field.')).toBeInTheDocument()
-  })
-
   it('names the missing project in the gitlab-issues dialog', () => {
     render(<InsertGitLabIssuesDialog open onClose={vi.fn()} onInsert={vi.fn()} />)
     expect(screen.getByText('Insert needs a project.')).toBeInTheDocument()
@@ -129,22 +98,6 @@ describe('a disabled Insert says what it is waiting for', () => {
 })
 
 describe('reopening a dialog gives a fresh form', () => {
-  it('clears the form dialog after an insert, not only after a Cancel', () => {
-    const onInsert = vi.fn()
-    const { rerender } = render(<InsertFormDialog open onClose={vi.fn()} onInsert={onInsert} />)
-
-    fireEvent.change(screen.getByLabelText(/Collection/), { target: { value: 'anomalies' } })
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'summary' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Insert' }))
-    expect(onInsert).toHaveBeenCalled()
-
-    rerender(<InsertFormDialog open={false} onClose={vi.fn()} onInsert={onInsert} />)
-    rerender(<InsertFormDialog open onClose={vi.fn()} onInsert={onInsert} />)
-
-    expect(screen.getByLabelText(/Collection/)).toHaveValue('')
-    expect(screen.getByLabelText('Name')).toHaveValue('')
-  })
-
   it('clears the create-page dialog after a successful create', () => {
     // The real bug: both callers keep this mounted and the success path closes
     // it without going through Cancel, so the next "New page" opened onto the

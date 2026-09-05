@@ -27,13 +27,13 @@ const screens = existsSync(screensDir) ? readdirSync(screensDir).filter((f) => f
 test('capture set exists and is complete', () => {
   // Fail loudly if the generation step was skipped or silently produced
   // nothing — a green run over zero files would be a tier that doesn't exist.
-  // 25 screens × 2 themes; update alongside a11yScreens.test.tsx. The generator
+  // 24 screens × 2 themes; update alongside a11yScreens.test.tsx. The generator
   // now clears this directory before writing, so the count is what a CLEAN
   // checkout produces. It previously was not: page-properties was replaced by
   // page-details, nothing deleted its two files, and every local run kept
   // reporting 48 while CI — which starts empty — produced 46. The number looked
   // verified on the one machine that could never reproduce CI.
-  expect(screens.length, `no .html captures found in ${screensDir}`).toBeGreaterThanOrEqual(50)
+  expect(screens.length, `no .html captures found in ${screensDir}`).toBeGreaterThanOrEqual(48)
   const stems = new Set(screens.map((f) => f.replace(/--(light|dark)\.html$/, '')))
   for (const stem of stems) {
     expect(screens, `${stem} is missing a theme variant`).toContain(`${stem}--light.html`)

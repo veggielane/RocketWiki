@@ -8,8 +8,8 @@ import { createContext, useContext } from 'react'
  * `/spaces/{key}/{slug}` the route param is the slug — the id has already been resolved
  * by then and is only held by the view.
  *
- * Null outside a page (the editor's own preview, a test harness), which fences must
- * tolerate rather than assume: a form block with no page to belong to says so instead of
+ * Null outside a page (the editor's own preview, a test harness), which consumers must
+ * tolerate rather than assume: a widget with no page to belong to degrades instead of
  * querying with an empty id.
  *
  * No provider component here on purpose — React 19 renders a context directly, and a

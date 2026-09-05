@@ -153,7 +153,7 @@ describe('code block language', () => {
   it('offers no reserved fence language, which would produce a body the widget cannot parse', async () => {
     renderEditor('```\nx\n```\n')
     const options = Array.from((await picker()).querySelectorAll('option')).map((o) => (o as HTMLOptionElement).value)
-    for (const reserved of ['mermaid', 'drawio', 'page-list', 'form-definition', 'form-list', 'gitlab-file']) {
+    for (const reserved of ['mermaid', 'drawio', 'page-list', 'gitlab-file']) {
       expect(options).not.toContain(reserved)
     }
   })

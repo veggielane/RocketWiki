@@ -181,9 +181,9 @@ problem in the opposite direction.)
 `BinaryCollationOnStringKeys` migration: `Space.Key`, `Page.Slug`,
 `Label.Name`, `KnownGroup.Name` and `AttributeDefinition.Key` are all declared
 `COLLATE Latin1_General_100_BIN2` on SQL Server (applied in
-`RocketWikiDbContext.OnModelCreating`'s provider branch, like
-`PageEntry.Collection`, because the collation *name* is SQL Server's and SQLite
-has never heard of it). Each is both a unique index and a lookup predicate
+`RocketWikiDbContext.OnModelCreating`'s provider branch, because the collation
+*name* is SQL Server's and SQLite has never heard of it). Each is both a unique
+index and a lookup predicate
 translated to SQL, so its case sensitivity used to be the provider's rather
 than the application's: `ENG` and `eng` were two spaces on SQLite and one on
 SQL Server, and `/spaces/eng/x` resolved a page in production that the test
@@ -298,7 +298,7 @@ to `Pages` rather than assume every row belongs to a live page.
 |---|---|---|
 | PageId | uniqueidentifier PK, FK → Page | **the PK is the page id** — 1:1 by construction |
 | Level | tinyint | `ClassificationLevel`: 1 OFFICIAL, 2 OFFICIAL_SENSITIVE, 3 SECRET, 4 TOP_SECRET. **Presentational** since 2026-09-04 (design.md §21.12): no gate reads it and no principal attribute is compared against it; the ordering serves the picker's display order and the §21.13 aggregate maximum |
-| Prefix | nvarchar(16) null | national qualifier — **only `UK` or NULL is writable** (the mutation takes `ukPrefix: Boolean!`; the API exposes `ukPrefix`, not the string). `UK` by default, giving `UK SECRET`; **NULL is legal** and means no prefix (design.md §21.12). The column stays a string rather than a bit so a sync-imported legacy value renders verbatim; `AddMarkingSelectorsAndFixedCaveat` nulled every stored value other than `UK` — on `PageMarkings` and on `PageEntries` alike |
+| Prefix | nvarchar(16) null | national qualifier — **only `UK` or NULL is writable** (the mutation takes `ukPrefix: Boolean!`; the API exposes `ukPrefix`, not the string). `UK` by default, giving `UK SECRET`; **NULL is legal** and means no prefix (design.md §21.12). The column stays a string rather than a bit so a sync-imported legacy value renders verbatim; `AddMarkingSelectorsAndFixedCaveat` nulled every stored value other than `UK` |
 | IsUnavailable | bit, NOT NULL, default 0 | **the marking is unknown.** Set by the sync importer for a page that arrived with no usable marking; cleared by any write that states a real marking — every writer copies it from the `ProtectiveMarking` it persists, and only `FailClosed` carries true. `ToMarking()` returns the unavailable sentinel when set, whatever the other columns say, so the page is readable by nobody (design.md §21.5, §21.10). Never inferred from `Level`. Added by `AddMarkingUnavailableFlag` |
 | SetAtUtc | datetime2(3) | |
 | SetByUserId | uniqueidentifier null FK → User | **null** for a row applied by sync import, or by the every-page-is-marked backstop — no local actor |
@@ -350,8 +350,7 @@ denied all but the highest-cleared, "unknown" and "TOP SECRET" could share a
 representation. With the level presentational (design.md §21.12) a bare TOP
 SECRET row is readable by everyone the space admits, so "we do not know" had
 to become a state the database holds in its own right. `AddMarkingUnavailableFlag`
-adds the bit here and on `PageEntries` — an entry's marking has the same two
-representations and the same fail-open — NOT NULL, default 0, unindexed,
+adds the bit here — NOT NULL, default 0, unindexed,
 because the only enforcement read is the PK lookup. It does **not** backfill:
 a row the older importer wrote (TOP SECRET, no prefix, no countries, no
 selectors, no actor) is byte-identical to a genuine prefix-less TOP SECRET
@@ -658,7 +657,7 @@ application convention only.
 | Id | bigint identity | |
 | SpaceId | uniqueidentifier FK → Space | exported spaces only |
 | SequenceNumber | bigint | **gap-free per space** — see below |
-| EventType | tinyint | page upsert / move / delete / restore, comment, attachment, labels, restrictions, page properties, page marking |
+| EventType | tinyint | page upsert / move / delete / restore, comment, attachment, labels, restrictions, page properties, page marking. **Value 11 (`PageEntry`) is reserved**: it belonged to the removed page-entries feature, nothing produces it, the importer skips it, and it is never reissued — rows carrying it may still sit in a low-side outbox (design.md §12) |
 | PayloadJson | nvarchar(max) | full Markdown, not diffs; attachments by ContentHash. PageUpsert payloads carry no revision data in the journal; the export job attaches the page's revision history (bundle format 2) by joining `(pageId, revisionNumber)` back to PageRevisions at drain time |
 | CreatedAtUtc | | |
 | ExportedInBundle | int null | stamped by the export job |

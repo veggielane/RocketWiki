@@ -302,8 +302,6 @@ export type WriteFailureReason =
   | 'RESTORE_SPACE'
   /** Watching/unwatching a page or space. */
   | 'WATCH'
-  /** Submitting a record through a `form-definition` fence. */
-  | 'FORM_ENTRY'
   /** Reassigning who is accountable for a space (design.md §6.5) — not an access change. */
   | 'SPACE_OWNER'
   /**
@@ -328,8 +326,6 @@ export function describeWriteFailure(reason: WriteFailureReason): UnavailableCop
       return { summary: "Couldn't reach the API — nothing was restored.", pointsToSettings: false }
     case 'WATCH':
       return { summary: "Couldn't reach the API — your watch setting is unchanged.", pointsToSettings: false }
-    case 'FORM_ENTRY':
-      return { summary: "Couldn't reach the API — that record wasn't saved.", pointsToSettings: false }
     case 'SPACE_OWNER':
       // Names who still owns it rather than only what failed: the question
       // behind the retry is 'so who is accountable right now'.

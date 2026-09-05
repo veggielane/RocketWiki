@@ -120,13 +120,12 @@ public sealed partial class ConfluenceStorageConverter
     /// <summary>
     /// design.md §4 gives a handful of fence languages a MEANING rather than a
     /// highlighting hint: the SPA decodes their bodies. <c>drawio</c> is base64 of an
-    /// editable SVG, <c>gitlab-file</c>/<c>gitlab-issues</c>/<c>page-list</c>/
-    /// <c>form-definition</c>/<c>form-list</c> carry structured bodies, and
-    /// <c>mermaid</c> is rendered as a diagram.
+    /// editable SVG, <c>gitlab-file</c>/<c>gitlab-issues</c>/<c>page-list</c> carry
+    /// structured bodies, and <c>mermaid</c> is rendered as a diagram.
     /// </summary>
     private static readonly HashSet<string> ReservedFenceLanguages = new(StringComparer.OrdinalIgnoreCase)
     {
-        "drawio", "mermaid", "gitlab-file", "gitlab-issues", "page-list", "form-definition", "form-list",
+        "drawio", "mermaid", "gitlab-file", "gitlab-issues", "page-list",
     };
 
     private static string RenderCodeMacro(XElement macro, RenderState state)

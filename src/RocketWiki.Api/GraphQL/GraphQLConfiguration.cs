@@ -41,11 +41,6 @@ public static class GraphQLConfiguration
             // which maps the visible nodes only.
             .AddType<PageTreeEntryType>()
             .AddType<PageTreeNodeType>()
-            .AddType<ProtectedTreeNodeType>()
-            // An entry's marking is published as the same PageMarkingView every other
-            // marking uses, so one badge component reads them all — see the extension.
-            .AddTypeExtension<PageEntryViewTypeExtension>()
-            // Binds the discovered ProtectiveMarking type explicitly, keeping the formatter off it — see the type.
-            .AddType<ProtectiveMarkingType>();
+            .AddType<ProtectedTreeNodeType>();
     }
 }

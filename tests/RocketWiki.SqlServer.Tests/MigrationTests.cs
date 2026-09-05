@@ -122,7 +122,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260902222520_AddMarkingSelectorsAndFixedCaveat", applied);
         Assert.Contains("20260902224034_SplitSpaceGrantsIntoAccessAndRole", applied);
         Assert.Contains("20260904230211_AddMarkingUnavailableFlag", applied);
-        Assert.Equal(20, applied.Count);
+        Assert.Contains("20260905113646_DropPageEntries", applied);
+        Assert.Equal(21, applied.Count);
         Assert.Empty(pending);
     }
 
@@ -275,7 +276,6 @@ public sealed class MigrationTests : SqlServerTestBase
         var natoPage = Guid.CreateVersion7();     // NATO prefix, GB caveat -> UK prefix cleared, UK caveat
         var ukPage = Guid.CreateVersion7();       // UK prefix, GB + UK caveat -> one UK row
         var bareFrPage = Guid.CreateVersion7();   // no prefix, FR caveat -> untouched (fails closed, review query)
-        var entryId = Guid.CreateVersion7();      // entry with a free-text prefix and a GB caveat
 
         using (var context = new RocketWikiDbContext(options))
         {
@@ -307,12 +307,6 @@ public sealed class MigrationTests : SqlServerTestBase
                     ('{{ukPage}}', 'GB'),
                     ('{{ukPage}}', 'UK'),
                     ('{{bareFrPage}}', 'FR');
-
-                INSERT INTO PageEntries (Id, PageId, Collection, Data, Version, Level, Prefix, CreatedAtUtc, UpdatedAtUtc, UpdatedByUserId, IsDeleted)
-                VALUES ('{{entryId}}', '{{natoPage}}', 'incident', '{}', 1, 1, 'UK/US', SYSUTCDATETIME(), SYSUTCDATETIME(), NULL, 0);
-
-                INSERT INTO PageEntryCountries (PageEntryId, CountryValue)
-                VALUES ('{{entryId}}', 'GB');
                 """);
 
             migrator.Migrate();
@@ -321,13 +315,11 @@ public sealed class MigrationTests : SqlServerTestBase
         // Prefixes: the toggle has two states, so everything but UK is cleared.
         Assert.Null(await Scalar<string>($"SELECT Prefix FROM PageMarkings WHERE PageId = '{natoPage}'"));
         Assert.Equal("UK", await Scalar<string>($"SELECT Prefix FROM PageMarkings WHERE PageId = '{ukPage}'"));
-        Assert.Null(await Scalar<string>($"SELECT Prefix FROM PageEntries WHERE Id = '{entryId}'"));
 
         // GB -> UK, and the (GB, UK) pair collapses to one UK row rather than violating
         // the primary key.
         Assert.Equal(["UK"], await Column($"SELECT CountryValue FROM PageMarkingCountries WHERE PageId = '{natoPage}'"));
         Assert.Equal(["UK"], await Column($"SELECT CountryValue FROM PageMarkingCountries WHERE PageId = '{ukPage}'"));
-        Assert.Equal(["UK"], await Column($"SELECT CountryValue FROM PageEntryCountries WHERE PageEntryId = '{entryId}'"));
 
         // A token outside the fixed set is left in place — it fails closed rather than
         // being guessed at — and the migration's review query finds it.
@@ -395,7 +387,7 @@ public sealed class MigrationTests : SqlServerTestBase
     /// wrong in production. It belongs in this tier and only this tier: the comparison is
     /// provider-specific (the snapshot is scaffolded on SQL Server via
     /// RocketWikiDbContextFactory, and RocketWikiDbContext deliberately branches its model
-    /// by provider for the vector column and the PageEntry collation), so asking it on
+    /// by provider for the vector column and the BIN2 collations), so asking it on
     /// SQLite would report drift that does not exist.</para>
     ///
     /// <para>If this fails: run <c>dotnet ef migrations add &lt;Name&gt; --project
@@ -490,7 +482,6 @@ public sealed class MigrationTests : SqlServerTestBase
         using var context = CreateContext();
 
         var pageId = Guid.CreateVersion7();
-        var entryId = Guid.CreateVersion7();
         var spaceId = Guid.CreateVersion7();
         var userId = Guid.CreateVersion7();
         await ExecuteNonQueryAsync($$"""
@@ -503,24 +494,23 @@ public sealed class MigrationTests : SqlServerTestBase
             INSERT INTO Pages (Id, SpaceId, AncestorPath, Slug, Title, SortOrder, CurrentRevisionNumber, CurrentContent, IsDeleted, CreatedAtUtc, UpdatedAtUtc)
             VALUES ('{{pageId}}', '{{spaceId}}', '/', 'unavailable', 'Unavailable', 0, 1, '# Unavailable', 0, SYSUTCDATETIME(), SYSUTCDATETIME());
 
-            -- Both rows shaped exactly as the OLDER importer wrote "no marking": TOP SECRET
-            -- (4), no prefix, no countries, no actor — and, being pre-migration rows, they
-            -- do not name IsUnavailable at all. The column default is what fills it.
+            -- Shaped exactly as the OLDER importer wrote "no marking": TOP SECRET (4), no
+            -- prefix, no countries, no actor — and, being a pre-migration row, it does
+            -- not name IsUnavailable at all. The column default is what fills it. (The
+            -- migration added the same bit to PageEntries; that table has since been
+            -- dropped by DropPageEntries, so only the page side can be asserted here.)
             INSERT INTO PageMarkings (PageId, Level, Prefix, SetAtUtc, SetByUserId)
             VALUES ('{{pageId}}', 4, NULL, SYSUTCDATETIME(), NULL);
-
-            INSERT INTO PageEntries (Id, PageId, Collection, Data, Version, Level, Prefix, CreatedAtUtc, UpdatedAtUtc, UpdatedByUserId, IsDeleted)
-            VALUES ('{{entryId}}', '{{pageId}}', 'incident', '{}', 1, 4, NULL, SYSUTCDATETIME(), SYSUTCDATETIME(), NULL, 0);
             """);
 
-        // NOT NULL bit on both tables: "unknown" is a fact every row states, never a
-        // NULL a reader could interpret either way.
-        Assert.Equal(2, await ExecuteScalarAsync<int>("""
+        // NOT NULL bit: "unknown" is a fact every row states, never a NULL a reader
+        // could interpret either way.
+        Assert.Equal(1, await ExecuteScalarAsync<int>("""
             SELECT COUNT(*)
             FROM sys.columns c
             JOIN sys.types t ON t.user_type_id = c.user_type_id
             WHERE c.name = 'IsUnavailable' AND c.is_nullable = 0 AND t.name = 'bit'
-              AND c.object_id IN (OBJECT_ID('dbo.PageMarkings'), OBJECT_ID('dbo.PageEntries'))
+              AND c.object_id = OBJECT_ID('dbo.PageMarkings')
             """));
 
         // Deliberately UNINDEXED (see the migration comment): the only enforcement read
@@ -530,13 +520,12 @@ public sealed class MigrationTests : SqlServerTestBase
             FROM sys.index_columns ic
             JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
             WHERE c.name = 'IsUnavailable'
-              AND ic.object_id IN (OBJECT_ID('dbo.PageMarkings'), OBJECT_ID('dbo.PageEntries'))
+              AND ic.object_id = OBJECT_ID('dbo.PageMarkings')
             """));
 
         // The honest part: a pre-existing row defaults to AVAILABLE, and reads back as an
         // ordinary TOP SECRET, not as the sentinel. No backfill happened.
         Assert.False(await ExecuteScalarAsync<bool>($"SELECT IsUnavailable FROM PageMarkings WHERE PageId = '{pageId}'"));
-        Assert.False(await ExecuteScalarAsync<bool>($"SELECT IsUnavailable FROM PageEntries WHERE Id = '{entryId}'"));
 
         var markingBefore = (await context.Set<PageMarking>()
             .Include(m => m.Countries).Include(m => m.Selectors)
@@ -544,14 +533,8 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.False(markingBefore.IsUnavailable);
         Assert.Equal(ClassificationLevel.TopSecret, markingBefore.Level);
 
-        var entryBefore = (await context.Set<PageEntry>()
-            .Include(e => e.Countries)
-            .SingleAsync(e => e.Id == entryId)).ToMarking();
-        Assert.False(entryBefore.IsUnavailable);
-        Assert.Equal(ClassificationLevel.TopSecret, entryBefore.Level);
-
         // The migration's review query — restricted to this page so a shared database
-        // cannot make the count lie — finds exactly these two candidates.
+        // cannot make the count lie — finds exactly this candidate.
         Assert.Equal(1, await ExecuteScalarAsync<int>($"""
             SELECT COUNT(*)
             FROM PageMarkings m
@@ -563,21 +546,10 @@ public sealed class MigrationTests : SqlServerTestBase
               AND NOT EXISTS (SELECT 1 FROM PageMarkingSelectors s WHERE s.PageId = m.PageId)
               AND m.PageId = '{pageId}'
             """));
-        Assert.Equal(1, await ExecuteScalarAsync<int>($"""
-            SELECT COUNT(*)
-            FROM PageEntries e
-            WHERE e.IsUnavailable = 0
-              AND e.Level = 4 AND e.Prefix IS NULL AND e.UpdatedByUserId IS NULL
-              AND NOT EXISTS (SELECT 1 FROM PageEntryCountries c WHERE c.PageEntryId = e.Id)
-              AND e.Id = '{entryId}'
-            """));
 
         // The prescribed repair, and the proof that the FLAG is what the entity reads:
         // every other column is unchanged, and the row now denies everyone.
-        await ExecuteNonQueryAsync($"""
-            UPDATE PageMarkings SET IsUnavailable = 1 WHERE PageId = '{pageId}';
-            UPDATE PageEntries SET IsUnavailable = 1 WHERE Id = '{entryId}';
-            """);
+        await ExecuteNonQueryAsync($"UPDATE PageMarkings SET IsUnavailable = 1 WHERE PageId = '{pageId}';");
 
         using var fresh = CreateContext();
         var markingAfter = (await fresh.Set<PageMarking>()
@@ -585,12 +557,6 @@ public sealed class MigrationTests : SqlServerTestBase
             .SingleAsync(m => m.PageId == pageId)).ToMarking();
         Assert.True(markingAfter.IsUnavailable);
         Assert.Equal(ProtectiveMarking.FailClosed, markingAfter);
-
-        var entryAfter = (await fresh.Set<PageEntry>()
-            .Include(e => e.Countries)
-            .SingleAsync(e => e.Id == entryId)).ToMarking();
-        Assert.True(entryAfter.IsUnavailable);
-        Assert.Equal(ProtectiveMarking.FailClosed, entryAfter);
     }
 
     [SqlServerFact]
@@ -895,14 +861,12 @@ public sealed class MigrationTests : SqlServerTestBase
         // move silently fail on a constraint nobody remembered.
         Assert.Equal(1, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Pages_Space_Slug' AND has_filter = 1 AND is_unique = 1"));
-        // AddPageEntries: the collection index is filtered, and - the part that only a
-        // real SQL Server can check - the lookup column really is binary-collated. SQLite
-        // cannot catch a missing collation here because its own default is already
-        // case-sensitive, which is exactly the asymmetry the collation exists to remove.
-        Assert.Equal(1, await ExecuteScalarAsync<int>(
-            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_PageEntries_Page_Collection' AND has_filter = 1"));
-        Assert.Equal("Latin1_General_100_BIN2", await ExecuteScalarAsync<string>(
-            "SELECT collation_name FROM sys.columns WHERE object_id = OBJECT_ID('PageEntries') AND name = 'Collection'"));
+        // DropPageEntries: both entry tables are gone from a database migrated from
+        // zero. AddPageEntries still runs earlier in the chain, so this is the one place
+        // that proves the drop actually followed it rather than the table never having
+        // existed - the SQLite tier builds the model directly and never sees either.
+        Assert.Equal(0, await ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM sys.tables WHERE name IN ('PageEntries', 'PageEntryCountries')"));
         Assert.Equal(0, await ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_Pages_Space_Parent_Slug'"));
         Assert.Equal(1, await ExecuteScalarAsync<int>(

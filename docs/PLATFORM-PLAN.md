@@ -378,6 +378,152 @@ travel in sync bundles (§12). A replica materializes what it needs on import.
 Worth deciding explicitly, because the alternative (syncing workflow config)
 means a high-side instance's process being changed by a low-side push.
 
+## Forms on wiki pages — a ticket-creation front end
+
+This section replaces a separate proposal, `ENTRIES-AND-FORMS-PLAN.md`, which
+designed a per-page record store ("entries": JSON objects stored against a
+page, each with its own protective marking) and a ConfiForms-style form on top
+of it. The store was built, reviewed, and removed (the last tree carrying it is
+tagged `full-feature`); what survives of the proposal is re-argued here for its
+new home rather than pasted. The decision that reshaped it: **a form on a wiki
+page raises an issue in the tracker. It stores nothing of its own.**
+
+### What that decision dissolves
+
+Most of the old document was about storage, and a form that files a ticket has
+none. Each point is retired for the reason given rather than silently dropped:
+
+- **The entry table and the collection model.** A submission is an issue (Part
+  1, Phase 1). Its container is the project, its identity is the issue key, and
+  "every record this form ever produced" is an RQL query over issues — the
+  cross-page query the old plan kept out of v1 *because* entries were
+  page-scoped. No new table, no `(PageId, Collection)` index, no size cap or
+  per-page quota of its own, no collation trap to test on two providers.
+- **Per-entry markings, and everything that followed from them.** An issue
+  carries a marking as every tracked item does ("Markings apply per issue",
+  below). So the old Part 2 — a second gate on every read path, the
+  pruned-entry-indistinguishable-from-absent work, keyed cursors over a
+  permission-filtered record list, a per-viewer aggregate banner over a page's
+  records, and the question of an author locked out of their own submission —
+  is the tracker's existing problem, solved once for issues rather than a
+  second time for records on a page.
+- **Entries in search, RAG and sync.** Issues are indexed, retrieved and synced
+  by the tracker (Phases 4 and 5). There is no second content type to keep out
+  of retrieval "for now" and no second sync event type to design. (The retired
+  store's `SyncEventType.PageEntry`, wire value 11, stays reserved and is never
+  reissued — design.md §12.)
+- **The `form-list` display fence.** A table of records rendered into a page is
+  a saved RQL filter over issues, which Part 2 needs anyway for queues. Do not
+  build a second listing widget with its own filter grammar.
+
+### What survives, reframed
+
+**The form definition is a fence, not a table.** The argument has not changed
+and never depended on where submissions went:
+
+~~~
+```form
+project = FACILITIES
+issueType = incident-report
+field = severity: select(low, medium, high), required
+field = summary: text, required
+field = occurredAt: date
+```
+~~~
+
+It round-trips as text, so the definition is versioned by the page's own
+revision history, diffable and restorable for free; it needs no schema
+migration when the field vocabulary grows; and a reserved fence that stays a
+plain `codeBlock` touches nothing in the Markdown round-trip, sync bundles
+(§12) or the importer (§13) — the property every other widget fence already
+has (§4, §18, §22). The trade-off is the same too: the server cannot read a
+definition without parsing page content, so the parser lives in Core and is
+the one grammar — the SPA renders what the server parsed and never re-parses,
+exactly as it does not re-parse RQL.
+
+**Field types.** `text | number | date | select` were the old four, chosen
+because each is a validation rule, an input control and a sort order. They are
+now a *subset* of the issue field types the site admin defines (`text | number
+| date | user | select | multiselect | checkbox`, "Issue types and their
+attributes" above): the form declares which issue attributes it collects and
+how, it does not invent types the issue cannot hold. A field the form names
+that the issue type does not have is a definition error, reported to the author
+with the line, exactly as a malformed field was.
+
+**Display.** The fence renders as the form to fill in. A viewer without the
+right to create an issue in the target project sees the definition and no
+submit control — not a button that fails afterwards. Definition errors are
+shown to the author (which form, which line, what was wrong) rather than making
+the form silently vanish, which was the old parser's rule and is kept.
+
+**What a v1 should not be** — carried over, and the first line now matters
+more than it did:
+
+- **No workflow in the form.** ConfiForms has state transitions and actions;
+  here they belong to the tracker's workflow engine, applied to the issue the
+  form raised. The form is the *creation* step and nothing after it. This was
+  the first line of the old list when the engine was hypothetical; now that the
+  tracker has real workflow, the temptation to let a form "close the ticket
+  too" is a second engine one field away.
+- **No email or webhook on submit.** Automation runs as a defined principal
+  (decided above), and a form is not one.
+- **No file-upload fields.** Attachments go onto the issue afterwards, through
+  the attachment path with its own storage, quota and streaming story.
+- **No per-field markings.** The issue carries one marking.
+- **No submission store of any kind** — not "for a draft", not "in case the
+  tracker is down". A form that cannot raise an issue says so and keeps the
+  typed values in the browser until it can.
+
+### Where it sits in the phasing
+
+After Phase 2 and no earlier (listed there as Phase 2b): it maps fields onto
+*typed* issue attributes, which Phase 1's primitive issue does not have. A
+request type in Part 2 is an issue type plus one of these forms, so Phase 6's
+portal reuses this definition format rather than growing a second one.
+
+### Decide before writing code
+
+1. **Which project, and who chooses it?** The fence names a project (a Space
+   of kind `Tracker`, per the pivotal decision), so the *author* decides where
+   submissions go and the submitter needs create rights there. A form that let
+   the submitter pick would be a project browser with a form attached.
+2. **Which issue type, and how strictly?** Named in the fence. May a form omit
+   a field the issue type marks `required`, and let the issue land incomplete?
+   Recommendation: no — the form must cover every required field, checked when
+   the definition is parsed so the author finds out, not the submitter.
+3. **What does a field map to?** An issue attribute, by name. Free text that is
+   not an attribute — a description — maps to the issue's Markdown description.
+   Whether several fields may be *composed* into the description (a template)
+   is scope creep toward smart-value templating, which Part 1 keeps out of v1.
+4. **What does the submitter see afterwards?** The issue key and a link, if
+   they can view the issue. If they cannot — a form can legitimately file into
+   a project the submitter cannot read; one-way reporting is a real use — a
+   confirmation that says nothing about the issue, not even its key. §6.7
+   applies: "you may not see what you just created" and "it was created, here
+   it is" must differ by nothing but the presence of the link.
+5. **Which marking does the issue get?** The project's default, as for any issue
+   created in it — never derived from the page the form sits on. A form on an
+   OFFICIAL page can collect a SECRET report, and the reviewer of that report is
+   the tracker's, not the page's. Whether a submitter may set a marking they
+   could not then read follows the tracker's rule for issues, whatever it is.
+6. **Audit.** A submission is `issue.create` on the tracker's channel, with the
+   page id in the details so a reviewer can see which form filed it. No
+   separate form audit action.
+7. **The fence name.** `form-definition` was the retired feature's reserved
+   language and is reserved nowhere now. Reusing it is fine, but a page from a
+   `full-feature` tree still carries the OLD grammar (`collection = ...`, no
+   project), and that must parse as a definition error naming the missing
+   project — never as a form aimed at nothing.
+
+### Risks
+
+- **A second definition format.** If Part 2's request types grow their own
+  form schema, there are two ways to describe one form. The fence grammar
+  should *be* the request type's grammar, or one a projection of the other,
+  decided before either ships.
+- **Templating.** Composing fields into a description is where a form stops
+  being a form and starts being a scripting surface.
+
 ## The export-control work with no wiki equivalent
 
 This is the part a generic Jira-replacement plan would miss, and it is where
@@ -446,6 +592,12 @@ declarative conditions/validators/post-functions. New permission verbs
 is exactly the kind of thing §7 exists to record. Scripted post-functions are
 **not** part of this phase: ship the declarative tier, then decide the
 execution model (see "If you still want real code").
+
+**Phase 2b — forms on wiki pages.**
+The ticket-creation front end described in "Forms on wiki pages": a reserved
+fence whose submission raises an issue with typed attributes. Needs Phase 2's
+typed fields and nothing from Phase 3. Cheap because it stores nothing — the
+page holds the definition and the tracker holds the result.
 
 **Phase 3 — links and boards.**
 Issue links with the permission-filtered rendering described above. Kanban board
@@ -569,7 +721,7 @@ rather than early.
 
 | Service desk concept | What it is here |
 |---|---|
-| Request type | An issue type plus a form definition |
+| Request type | An issue type plus a form definition — the wiki-page form of Part 1's "Forms on wiki pages", not a second format |
 | Queue | A saved RQL filter with an ordering |
 | Agent / customer split | Container roles — `agent` is a role, **never a bypass** |
 | Ticket conversation | Comments, already threaded with tombstones |
@@ -577,8 +729,9 @@ rather than early.
 | Deflection | Existing permission-filtered search + Ask |
 | Approvals | A workflow state plus a permission verb |
 
-Genuinely new: the **portal** (a deliberately reduced UI for requesters), **form
-definitions**, **SLAs**, **CSAT**, and **canned responses**.
+Genuinely new: the **portal** (a deliberately reduced UI for requesters),
+**SLAs**, **CSAT**, and **canned responses**. Form definitions are designed once,
+in Part 1's "Forms on wiki pages"; a request type reuses that grammar.
 
 **SLAs are the one substantial new subsystem** — not the timer, which is easy,
 but working calendars (business hours, holidays, timezones), pause conditions

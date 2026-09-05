@@ -16,8 +16,8 @@ public class RocketWikiDbContext : DbContext
     /// key" means the same thing on both providers. SQLite's default is already
     /// case-sensitive for ASCII and it has never heard of this collation name, which is
     /// why it is applied in the provider branch below rather than in an entity
-    /// configuration (see PageEntryConfiguration and SqlServerFileStorage, where the same
-    /// lesson was learned the same way).
+    /// configuration (see SqlServerFileStorage, where the same lesson was learned the
+    /// same way).
     /// </summary>
     private const string BinaryCollation = "Latin1_General_100_BIN2";
 
@@ -78,8 +78,6 @@ public class RocketWikiDbContext : DbContext
     public DbSet<PagePropertyKey> PagePropertyKeys => Set<PagePropertyKey>();
     public DbSet<PageProperty> PageProperties => Set<PageProperty>();
     public DbSet<PageMarking> PageMarkings => Set<PageMarking>();
-    public DbSet<PageEntry> PageEntries => Set<PageEntry>();
-    public DbSet<PageEntryCountry> PageEntryCountries => Set<PageEntryCountry>();
     public DbSet<PageMarkingCountry> PageMarkingCountries => Set<PageMarkingCountry>();
     public DbSet<PageMarkingSelector> PageMarkingSelectors => Set<PageMarkingSelector>();
     public DbSet<User> Users => Set<User>();
@@ -103,23 +101,18 @@ public class RocketWikiDbContext : DbContext
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(RocketWikiDbContext).Assembly);
 
-        // PageEntry.Collection is a lookup string, and the two providers disagree about
-        // case by default: SQL Server folds it, SQLite does not. The column is normalized
-        // on write, but the storage must agree too, or a normalization bug would behave
-        // one way in production and another in the test tier — silently, which is how the
-        // blob store's key column and the property-key registry were both caught. Applied
-        // here rather than in the entity configuration because the collation NAME is
+        // Lookup strings, and the two providers disagree about case by default: SQL
+        // Server folds it, SQLite does not — so a normalization bug would behave one way
+        // in production and another in the test tier, silently, which is how the blob
+        // store's key column and the property-key registry were both caught. Applied
+        // here rather than in an entity configuration because the collation NAME is
         // SQL Server's; SQLite's own default is already case-sensitive, so it needs none.
         if (Database.ProviderName == "Microsoft.EntityFrameworkCore.SqlServer")
         {
-            modelBuilder.Entity<PageEntry>()
-                .Property(e => e.Collection)
-                .UseCollation(BinaryCollation);
-
-            // The same trap, on the five other string natural keys that had neither a
-            // normalized column (PagePropertyKey.KeyNormalized) nor a lowercase-only
-            // grammar (CustomEmoji.Name) to protect them. Each is BOTH a unique index and
-            // a lookup predicate translated to SQL, so its case sensitivity was the
+            // The five string natural keys that had neither a normalized column
+            // (PagePropertyKey.KeyNormalized) nor a lowercase-only grammar
+            // (CustomEmoji.Name) to protect them. Each is BOTH a unique index and a
+            // lookup predicate translated to SQL, so its case sensitivity was the
             // provider's rather than the application's: "ENG" and "eng" were two spaces on
             // SQLite and one on SQL Server, and /spaces/eng/x resolved a page in
             // production that the test tier 404s. Two tiers enforcing different rules,

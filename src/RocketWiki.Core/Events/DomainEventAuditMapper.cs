@@ -109,20 +109,6 @@ public static class DomainEventAuditMapper
         PagePropertyRemovedEvent e => ("page.property.remove", AuditSubjectType.Page, e.PageId, e.SpaceKey,
             JsonSerializer.Serialize(new { key = e.Key })),
 
-        // Page entries (docs/ENTRIES-AND-FORMS-PLAN.md). Subject is the Page, like every
-        // other per-page metadata change - AuditSubjectType is a closed list with no
-        // member for an entry, and the page is the meaningful "what was touched" anyway.
-        // Details carry the entry id and collection but NOT the data or the marking
-        // level: see the events' own doc for why each is left out.
-        PageEntryCreatedEvent e => ("page.entry.create", AuditSubjectType.Page, e.PageId, e.SpaceKey,
-            JsonSerializer.Serialize(new { entryId = e.EntryId, collection = e.Collection })),
-
-        PageEntryUpdatedEvent e => ("page.entry.update", AuditSubjectType.Page, e.PageId, e.SpaceKey,
-            JsonSerializer.Serialize(new { entryId = e.EntryId, collection = e.Collection })),
-
-        PageEntryDeletedEvent e => ("page.entry.delete", AuditSubjectType.Page, e.PageId, e.SpaceKey,
-            JsonSerializer.Serialize(new { entryId = e.EntryId, collection = e.Collection })),
-
         // Protective markings (design.md §21). Subject is the Page, like every other
         // per-page metadata change - AuditSubjectType is a closed list with no member for
         // a marking, and the page whose classification changed is the meaningful "what

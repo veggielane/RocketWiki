@@ -260,12 +260,6 @@ internal static class SyncOutboxWriter
         // is SECRET wherever it lands, and letting the high side rediscover that for
         // itself would be exactly the "arrived unmarked" hole this event closes.
         PageMarkingSetEvent => SyncEventType.PageMarking,
-        // Entries are a page's structured content, so they cross with it. Their
-        // markings cross too, inside the payload, for the same reason a page's does: an
-        // entry that is SECRET on low is SECRET wherever it lands.
-        PageEntryCreatedEvent => SyncEventType.PageEntry,
-        PageEntryUpdatedEvent => SyncEventType.PageEntry,
-        PageEntryDeletedEvent => SyncEventType.PageEntry,
         AttachmentAddedEvent => SyncEventType.Attachment,
         AttachmentDeletedEvent => SyncEventType.Attachment,
         _ => null,
@@ -287,9 +281,6 @@ internal static class SyncOutboxWriter
         AccessRuleChangedEvent e => e.SpaceKey,
         LabelAttachedEvent e => e.SpaceKey,
         LabelDetachedEvent e => e.SpaceKey,
-        PageEntryCreatedEvent e => e.SpaceKey,
-        PageEntryUpdatedEvent e => e.SpaceKey,
-        PageEntryDeletedEvent e => e.SpaceKey,
         PagePropertySetEvent e => e.SpaceKey,
         PagePropertyRemovedEvent e => e.SpaceKey,
         PageMarkingSetEvent e => e.SpaceKey,
@@ -377,22 +368,6 @@ internal static class SyncOutboxWriter
             },
             PayloadOptions),
 
-        // docs/ENTRIES-AND-FORMS-PLAN.md. The whole entry travels every time, including
-        // its marking, and every field is written even when null. That is not verbosity:
-        // the import side assigns what it reads, so a payload that OMITTED a field would
-        // be read as CLEARING it. That exact bug shipped for page icons - the incremental
-        // payload left the field out, and every ordinary edit then stripped an icon the
-        // replica had received in its baseline.
-        //
-        // The level crosses as its WIRE NAME, never the tinyint, so a future renumbering
-        // of the enum cannot silently re-rank a bundle already sitting on a transfer
-        // disk. The country set crosses verbatim: an unrecognised country on the
-        // receiving side matches no principal, so the entry arrives MORE restricted,
-        // which is the only safe direction (§12).
-        PageEntryCreatedEvent e => SerializePageEntry(RequireTrackedEntry(db, e.EntryId)),
-        PageEntryUpdatedEvent e => SerializePageEntry(RequireTrackedEntry(db, e.EntryId)),
-        PageEntryDeletedEvent e => SerializePageEntry(RequireTrackedEntry(db, e.EntryId)),
-
         AttachmentAddedEvent e => SerializeAttachment(RequireTrackedAttachment(db, e.AttachmentId)),
         AttachmentDeletedEvent e => SerializeAttachment(RequireTrackedAttachment(db, e.AttachmentId)),
 
@@ -417,27 +392,6 @@ internal static class SyncOutboxWriter
             sortOrder = page.SortOrder,
             content = page.CurrentContent, // full Markdown, never a diff (design.md §12)
             revisionNumber = page.CurrentRevisionNumber,
-        },
-        PayloadOptions);
-
-    private static string SerializePageEntry(PageEntry entry) => JsonSerializer.Serialize(
-        new
-        {
-            entryId = entry.Id,
-            pageId = entry.PageId,
-            collection = entry.Collection,
-            data = entry.Data,
-            version = entry.Version,
-            // An unknown marking (PageEntry.IsUnavailable) crosses as a null level, which
-            // the import side reads as "no marking" and lands unavailable - never as the
-            // sentinel's TOP SECRET, which would arrive as an ordinary marking that gates
-            // nobody (§21.12). Same rule as BundleExportService.MarkingPayload.
-            level = entry.IsUnavailable ? null : ProtectiveMarking.LevelWireName(entry.Level),
-            eyesOnly = entry.Countries.Select(c => c.CountryValue).OrderBy(c => c, StringComparer.Ordinal).ToArray(),
-            prefix = entry.Prefix,
-            // Needed on import to apply the tombstone, not inferred from a blank payload -
-            // the same reason Comment carries its own IsDeleted.
-            isDeleted = entry.IsDeleted,
         },
         PayloadOptions);
 
@@ -480,11 +434,6 @@ internal static class SyncOutboxWriter
         db.ChangeTracker.Entries<Comment>().Select(e => e.Entity).FirstOrDefault(c => c.Id == commentId)
         ?? throw new InvalidOperationException(
             $"Comment {commentId} is not tracked in this unit of work; the sync outbox writer needs it loaded by the calling service.");
-
-    private static PageEntry RequireTrackedEntry(RocketWikiDbContext db, Guid entryId) =>
-        db.ChangeTracker.Entries<PageEntry>().Select(e => e.Entity).FirstOrDefault(e => e.Id == entryId)
-        ?? throw new InvalidOperationException(
-            $"PageEntry {entryId} is not tracked in this unit of work; the sync outbox writer needs it loaded by the calling service.");
 
     private static Attachment RequireTrackedAttachment(RocketWikiDbContext db, Guid attachmentId) =>
         db.ChangeTracker.Entries<Attachment>().Select(e => e.Entity).FirstOrDefault(a => a.Id == attachmentId)

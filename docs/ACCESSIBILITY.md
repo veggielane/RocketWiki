@@ -70,7 +70,7 @@ stage one marking, so the rungs that are not staged there would otherwise
 never be contrast-checked), a page-list widget — the only screen where
 MUI marking components render inside editor-content's plain-CSS surface, so
 the only place those two colour systems are checked against each other —
-plus page history, analytics, help, forms, the admin index (its `Planned`
+plus page history, analytics, help, the admin index (its `Planned`
 treatment for unbuilt sections) and the **space list**, which is the first
 screen every user sees and the only one rendering the replica chip inside a
 card.

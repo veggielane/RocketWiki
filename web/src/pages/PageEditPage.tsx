@@ -332,12 +332,10 @@ export function PageEditPage() {
   }
 
   return (
-    // The fences rendered inside the editor need the page they sit on, exactly
-    // as they do on the view route — the `form-definition` and `form-list`
-    // widgets read it through `useCurrentPageId()`. Without this the editor's
-    // live preview showed "This form only works on a saved page" on a page that
-    // was, in fact, saved: the forms feature had no working authoring preview
-    // at all, while CodeBlockView promised a side-by-side one.
+    // Anything rendered inside the editor that needs the page it sits on reads
+    // it through `useCurrentPageId()`, exactly as on the view route — the link
+    // dialog does, to keep a page out of its own link picker. Provided here so
+    // the editor's live preview sees the same page the saved view will.
     <PageIdContext value={page.id}>
     <Box>
       <Box sx={{ mb: 2 }}>

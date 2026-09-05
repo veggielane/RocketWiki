@@ -40,8 +40,6 @@ import { PagePermissionsPage } from '../pages/PagePermissionsPage'
 import { SpaceBrowserPage } from '../pages/SpaceBrowserPage'
 import { AnalyticsPage } from '../pages/AnalyticsPage'
 import { HelpPage } from '../pages/HelpPage'
-import { FormDefinitionBlock, FormListBlock } from '../forms/FormBlocks'
-import { PageIdContext } from '../pages/pageContext'
 import { TrashPage } from '../pages/TrashPage'
 import { AuditLogPage } from '../pages/AuditLogPage'
 import { SpaceListPage } from '../pages/SpaceListPage'
@@ -488,45 +486,6 @@ function mockClient() {
           viewerSelectorGrants: [{ category: 'FRUIT', value: 'APPLE' }, { category: 'REGION', value: 'NORTH' }, { category: 'REGION', value: 'SOUTH' }],
         },
       }
-    // The form blocks: a definition plus records at two different markings, so the
-    // browser tier judges the table's badges as well as the form controls.
-    if (name === 'PageForms')
-      return {
-        pageForms: {
-          definitions: [
-            {
-              collection: 'incident-report',
-              fields: [
-                { name: 'severity', type: 'SELECT', required: true, options: ['low', 'medium', 'high'] },
-                { name: 'summary', type: 'TEXT', required: true, options: [] },
-                { name: 'occurredAt', type: 'DATE', required: false, options: [] },
-              ],
-            },
-          ],
-          errors: [],
-        },
-      }
-    if (name === 'PageEntries')
-      return {
-        pageEntries: [
-          {
-            id: 'entry-1',
-            collection: 'incident-report',
-            data: JSON.stringify({ severity: 'high', summary: 'Turbopump inlet pressure sagged', occurredAt: '2026-08-14' }),
-            version: 1,
-            createdAtUtc: '2026-08-14T00:00:00Z',
-            marking: { level: 'OFFICIAL', levelName: 'OFFICIAL', eyesOnly: [], ukPrefix: true, selectors: [], label: 'UK OFFICIAL' },
-          },
-          {
-            id: 'entry-2',
-            collection: 'incident-report',
-            data: JSON.stringify({ severity: 'low', summary: 'Igniter feed transient', occurredAt: '2026-08-15' }),
-            version: 1,
-            createdAtUtc: '2026-08-15T00:00:00Z',
-            marking: { level: 'SECRET', levelName: 'SECRET', eyesOnly: ['UK'], ukPrefix: true, selectors: [], label: 'UK SECRET UK EYES ONLY' },
-          },
-        ],
-      }
     // Analytics is the one screen whose whole content is colour-coded marks, so
     // the browser tier (which alone can judge contrast on painted pixels) needs a
     // populated report rather than an empty state.
@@ -788,23 +747,6 @@ const SCREENS: Screen[] = [
   // Help renders long prose through the read-only editor, so this is also the
   // capture that would catch a body-copy contrast regression in either theme.
   { name: 'help', render: (mode) => shell(mode, '/-/docs/classification', '-/docs/:topic', <HelpPage />) },
-  // Through the shell rather than standalone: the blocks query, so they need the
-  // urql provider the shell supplies. Mounted directly rather than inside the
-  // editor, because staging a real fence would capture TipTap's chrome instead of
-  // the thing under test.
-  {
-    name: 'forms',
-    render: (mode) =>
-      shell(
-        mode,
-        '/pages/page-1',
-        'pages/:pageId',
-        <PageIdContext value="page-1">
-          <FormDefinitionBlock collection="incident-report" />
-          <FormListBlock collection="incident-report" columns={[]} />
-        </PageIdContext>,
-      ),
-  },
   { name: 'trash', render: (mode) => shell(mode, '/spaces/PROP/-/trash', 'spaces/:spaceKey/-/trash', <TrashPage />) },
   { name: 'audit-log', render: (mode) => shell(mode, '/admin/audit', 'admin/audit', <AuditLogPage />) },
   // The LANDING page — the first screen every user sees, and the only one

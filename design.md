@@ -1772,9 +1772,9 @@ bundle-000041.zip
   including revision history), then incrementals.
 
   **"Full snapshot" means the whole *What travels* table below, not just
-  pages.** A baseline emits pages (with their revision history and marking)
-  and page entries, and then — as their own lines, in the same payload shapes
-  the incremental writer produces — every page restriction, label, page
+  pages.** A baseline emits pages (with their revision history and marking),
+  and then — as their own lines, in the same payload shapes the incremental
+  writer produces — every page restriction, label, page
   property, comment and live attachment in the space, with attachment bytes
   packed into `blobs/` exactly as an incremental drain packs them. It did not,
   for a long time, and the gap was not symmetric: a missing comment is a
@@ -1949,6 +1949,14 @@ one holding the partially-applied bundle — and is deliberately not
 `sync.import` with a `denied` outcome: §7's denied names a principal
 refused by a failing restriction, and an integrity refusal has neither; the
 refusal itself is the successfully-completed action being recorded.
+One event type is known and deliberately *skipped* rather than applied or
+refused: `PageEntry` (wire value 11), which belonged to the removed page-entries
+feature. An origin that has not upgraded may still drain rows of that type into
+its bundles; the importer steps over such a line, advancing the per-space
+sequence as for any applied one, so the changes beside it land. The number is
+reserved and never reissued — a low-side outbox may still hold rows carrying
+it, and a reused value would be read there as whatever new meaning it was
+given.
 The admin status data is served by the admin-only `syncStatus` GraphQL query
 (audited as `sync.status`): per exported space the outbox position, pending
 event count and last drained bundle; per origin instance the last bundle
@@ -3167,7 +3175,7 @@ The marking's gates are the availability check, G and N together, and
 `MarkingGate` is their composition — the **one** entry point every marking
 check in the system goes through: the calculator, the tree walk, the
 self-lockout check when a marking is set (§21.6), the inspector's
-ancestor-title withholding (§6.6), page entries, and the notification fan-out.
+ancestor-title withholding (§6.6), and the notification fan-out.
 A source sweep pins that nothing outside Core calls `CaveatGate.Check` or
 `SelectorGate.Check` directly — and inside Core only the composition and the
 gates themselves do — so a new call site cannot check the caveat and forget
@@ -3421,8 +3429,8 @@ can read it": fail-*open*, silently, while every label on every surface still
 said TOP SECRET. That inversion is why "marking unknown" is now a distinct
 state, `ProtectiveMarking.IsUnavailable`: true only on the one `FailClosed`
 instance — which the read side substitutes for a missing row, and which a row
-*recorded* as unknown reads back as (`IsUnavailable` on `PageMarkings` and
-`PageEntries`, `AddMarkingUnavailableFlag`: set by the sync importer for a
+*recorded* as unknown reads back as (`IsUnavailable` on `PageMarkings`,
+`AddMarkingUnavailableFlag`: set by the sync importer for a
 payload that carries no usable marking, cleared by any write that states a
 real marking, §21.10) — never on anything `Create` builds, and part of
 equality so the sentinel is never equal to a real TOP SECRET
@@ -3779,7 +3787,7 @@ marking is a property *of the content*.
 - **A page cannot land on the high side unmarked — and "unmarked" is a
   recorded state, not a guessed level.** A payload with no marking and no
   local row creates the row **unavailable**: `IsUnavailable`, a bit on
-  `PageMarkings` and `PageEntries` (`AddMarkingUnavailableFlag`,
+  `PageMarkings` (`AddMarkingUnavailableFlag`,
   data-model.md), copied by every writer from the value it persists and true
   on exactly one value, `ProtectiveMarking.FailClosed` — which is what the
   importer applies when the payload carries no usable marking. A row with the
@@ -3884,8 +3892,7 @@ the column keep a *string* (`nvarchar(16)`) underneath, for sync: a legacy
 bundle's prefix renders verbatim rather than being reinterpreted as a boolean,
 and `FailClosed` still needs a "no prefix" it can assert. The
 `AddMarkingSelectorsAndFixedCaveat` migration nulled every stored value other
-than `UK` — on pages and on page entries alike — and by this section's own
-argument that needed no review sweep —
+than `UK` — and by this section's own argument that needed no review sweep —
 nothing about who can read a page moved.
 
 **It is presentational, and that is a hard boundary, not a phase.** The prefix
@@ -4188,15 +4195,6 @@ set is allowed to appear.
   `(protected)` placeholder in the tree (§21.8) — not any propagation — that
   keeps that from being a silent read-around. The child stays reachable by id
   and through search, checked on its own.
-- **Page entries carry no selectors yet.** An entry's marking goes through the
-  same `MarkingGate` as a page's, so the selector grant and the caveat are
-  enforced on the page that contains it, but `PageEntries` has no selector table and an entry
-  cannot carry a selector of its own: an entry marking that names one is
-  **refused** with a `ValidationError`, never silently stripped, because a
-  marking applied minus a part of itself would be a widening the author never
-  asked for. An entry is reachable only through its page, whose selectors
-  already gate it, so nothing widens; the follow-up is filed in
-  `docs/ENTRIES-AND-FORMS-PLAN.md`.
 - **No "which pages are marked X" report.** The data model supports one without a
   migration — `PageMarkings` is indexed on `Level` and `PageMarkingCountries` on
   `(CountryValue, PageId)`, which is exactly the access path — but the query

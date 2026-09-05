@@ -34,13 +34,23 @@ public enum SyncEventType : byte
     PageMarking = 10,
 
     /// <summary>
-    /// docs/ENTRIES-AND-FORMS-PLAN.md: a page entry was created, changed or deleted.
-    /// Entries are content — they are a page's structured data, so a replica that
-    /// received the page and not its entries would show a form with no records.
+    /// <b>Retired. Reserved — this number must never be reused.</b>
     ///
-    /// <para>One member for all three actions, with the action named in the payload,
-    /// because all three apply to the same row idempotently: an upsert, or a tombstone.
-    /// Splitting them would create three ways for a replay to arrive out of order.</para>
+    /// <para>Page entries (structured records stored against a page, with a form fence
+    /// on top) were built and then removed; the design survives only as the
+    /// ticket-creation front end sketched in docs/PLATFORM-PLAN.md, which stores nothing
+    /// of its own. Nothing produces this event any more and the import side skips a
+    /// line carrying it (<c>BundleImportService.ApplyEventAsync</c>) rather than
+    /// refusing the bundle — a full-featured instance's outbox may still hold rows of
+    /// this type, and its bundles must go on landing here.</para>
+    ///
+    /// <para>The member stays for two reasons. First, the wire format is this member's
+    /// NAME and <c>ParseEventType</c> only accepts names the enum defines, so deleting
+    /// it would turn every such bundle into a refusal. Second, and the reason the
+    /// NUMBER is pinned by a test: <c>SyncOutboxEvent.EventType</c> is stored as this
+    /// tinyint, and an instance that still holds entry rows in its outbox would read a
+    /// re-issued 11 as whatever new meaning it was given. A reused wire number is how
+    /// two instances silently corrupt each other. The next member is 12.</para>
     /// </summary>
     PageEntry = 11,
 }

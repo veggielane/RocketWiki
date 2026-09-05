@@ -289,14 +289,17 @@ object-level-authorization reasons design.md §6.7/§8 calls for.
 Being explicit about what has and hasn't been checked, rather than letting
 "it builds" stand in for "it works":
 
-**Proposals, written but not built.** Two documents describe work nobody has
-committed to. They are listed here because an unlinked plan is indistinguishable
-from a plan nobody wrote, and each records choices that get expensive later:
-[issue tracking and service desk](docs/PLATFORM-PLAN.md) and
-[page entries and forms on top of them](docs/ENTRIES-AND-FORMS-PLAN.md). (A
-third, restricted-page placeholders, was retired rather than built: the
-overhaul below makes disclosure always-on, and design.md §6.7 records why the
-opt-in toggle it proposed was rejected.)
+**A proposal, written but not built.** One document describes work nobody has
+committed to. It is listed here because an unlinked plan is indistinguishable
+from a plan nobody wrote, and it records choices that get expensive later:
+[issue tracking and service desk](docs/PLATFORM-PLAN.md), which also carries the
+design for forms on wiki pages as a ticket-creation front end. (Two earlier
+proposals are gone. Restricted-page placeholders were retired rather than
+built: the overhaul below makes disclosure always-on, and design.md §6.7
+records why the opt-in toggle it proposed was rejected. Page entries — a
+per-page record store with forms on top — were built and then removed: only the
+form idea survived, re-homed in the platform plan, and the separate store did
+not. The last tree carrying it is tagged `full-feature`.)
 
 **In progress — not yet verified end-to-end:**
 - **The protective-marking and access-model overhaul** (design.md §6.4, §6.7,
@@ -897,10 +900,11 @@ bullet keeps its own sharper caveat where one exists):
   synced one does. (The *baseline*-bundle gap that used to be listed here
   is closed — see the sync note below.)
 - **Baseline sync bundles are complete now, and were not.** Until the
-  engineering-review round, a baseline carried pages and page entries and
-  nothing else: a space flagged for export *after* it already had content
-  delivered that content stripped of its restrictions, comments,
-  attachments, labels and properties. Restrictions were the sharp edge —
+  engineering-review round, a baseline carried pages (and the since-retired
+  page entries) and nothing else: a space flagged for export *after* it
+  already had content delivered that content stripped of its restrictions,
+  comments, attachments, labels and properties. Restrictions were the sharp
+  edge —
   a page restricted on low landed on the high side with no restriction row
   at all, readable by every viewer of the replica, which is fail-*open* and
   the one direction §12 takes nowhere else. All five now cross

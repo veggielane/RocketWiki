@@ -45,8 +45,6 @@ import { InsertGitLabIssuesDialog } from './gitlab/InsertGitLabIssuesDialog'
 import { buildFileFenceBody, buildIssuesFenceBody, type GitLabFileRef, type GitLabIssuesSpec } from '../gitlab/fenceBody'
 import type { GitLabIssueRef } from '../gitlab/issueScheme'
 import { InsertPageListDialog } from './pagelist/InsertPageListDialog'
-import { InsertFormDialog } from './forms/InsertFormDialog'
-import DynamicFormOutlinedIcon from '@mui/icons-material/DynamicFormOutlined'
 import { buildPageListFenceBody, type PageListSpec } from '../pagelist/fenceBody'
 import { EmojiPickerButton } from './emoji/EmojiPickerButton'
 import { InsertLinkDialog, type LinkTarget } from './InsertLinkDialog'
@@ -96,7 +94,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   // Not behind any integration flag, unlike the GitLab menu: RQL (design.md
   // §22) is this instance's own query language, always present.
   const [pageListDialogOpen, setPageListDialogOpen] = useState(false)
-  const [formDialogOpen, setFormDialogOpen] = useState(false)
   const [linkDialogOpen, setLinkDialogOpen] = useState(false)
   const [rowMenuAnchor, setRowMenuAnchor] = useState<HTMLElement | null>(null)
   const [columnMenuAnchor, setColumnMenuAnchor] = useState<HTMLElement | null>(null)
@@ -256,7 +253,7 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
    * branch and the round trip is byte-exact for free.
    */
   const insertFence = (
-    language: 'gitlab-file' | 'gitlab-issues' | 'page-list' | 'form-definition' | 'form-list',
+    language: 'gitlab-file' | 'gitlab-issues' | 'page-list',
     body: string,
   ) => {
     editor
@@ -273,15 +270,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
   const insertGitlabFile = (ref: GitLabFileRef) => insertFence('gitlab-file', buildFileFenceBody(ref))
   const insertGitlabIssues = (spec: GitLabIssuesSpec) => insertFence('gitlab-issues', buildIssuesFenceBody(spec))
   const insertPageList = (spec: PageListSpec) => insertFence('page-list', buildPageListFenceBody(spec))
-
-  // Two fences in one action when the author asked for the table as well. Inserted
-  // in order, so the definition sits above the records it describes — which is the
-  // reading order, and the order the author was thinking in.
-  const insertForm = (fences: { language: 'form-definition' | 'form-list'; body: string }[]) => {
-    for (const fence of fences) {
-      insertFence(fence.language, fence.body)
-    }
-  }
 
   return (
     <Box
@@ -449,16 +437,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
           <FormatListBulletedAddIcon fontSize="small" />
         </IconButton>
       </Tooltip>
-      <Tooltip title="Form">
-        <IconButton
-          size="small"
-          onClick={() => setFormDialogOpen(true)}
-          aria-label="Insert form"
-          aria-haspopup="dialog"
-        >
-          <DynamicFormOutlinedIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
       {/* Hidden when the registry is empty (EmojiPickerButton) — same
           absent-not-disabled posture as the GitLab menu below. */}
       <EmojiPickerButton editor={editor} />
@@ -494,7 +472,7 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
       {/*
         The contextual table controls sit AFTER every fixed control, never
         among them. They used to be inserted next to "Insert table", so putting
-        the caret in a table pushed Callout, Diagram, Page list, Form, Emoji,
+        the caret in a table pushed Callout, Diagram, Page list, Emoji,
         GitLab and Horizontal rule ~200px to the right — and on a wrapping
         toolbar, sometimes onto another row. The user's pointer is over the
         editing surface when that happens and the button they were reaching for
@@ -662,7 +640,6 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
         onClose={() => setPageListDialogOpen(false)}
         onInsert={insertPageList}
       />
-      <InsertFormDialog open={formDialogOpen} onClose={() => setFormDialogOpen(false)} onInsert={insertForm} />
       {gitlabConfigured && (
         <>
           <InsertGitLabIssueLinkDialog
