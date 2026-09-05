@@ -174,7 +174,20 @@ public sealed record AccessDenialView(
                     .ToList());
         }
 
-        var marking = denial.Marking;
+        // An UNAVAILABLE marking is withheld too, for a different reason than the one
+        // above and a sharper one. That sentinel means "this page's marking row is
+        // missing and we do not know what it said"; it renders as a bare `TOP SECRET`
+        // because that is the most restrictive spelling in the scheme, and while the
+        // level still gated reads that string was a fair summary of the consequence.
+        // It no longer gates anything (§21.12), so disclosing it here would tell a
+        // reader that this page IS TOP SECRET — asserting a classification nobody
+        // made, about content nobody has reviewed. That is exactly the reasoning that
+        // already denies the sentinel a national prefix (§21.5: "asserting a national
+        // qualifier on its behalf would be inventing a fact"), and the level has no
+        // claim to an exception now that it carries no force. The MARKING_UNAVAILABLE
+        // gate says everything true that can be said: the marking is missing, and
+        // nobody reads the page until somebody restores it.
+        var marking = denial.Marking is { IsUnavailable: false } available ? available : null;
         return new AccessDenialView(
             NoSpaceAccess: false,
             marking is null ? null : PageMarkingView.From(marking, catalog),

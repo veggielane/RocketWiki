@@ -424,6 +424,58 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
     }
 
     [Fact]
+    public async Task MarkingUnavailable_WithholdsTheMarking_RatherThanAssertingATopSecretNobodySet()
+    {
+        // A page whose marking row says "unknown" (IsUnavailable) denies everyone, and
+        // the placeholder must NOT show a label. The sentinel renders as a bare
+        // `TOP SECRET` - the most restrictive spelling in the scheme - and while the
+        // level still gated reads, showing it was a fair summary of the consequence.
+        // It gates nothing now, so disclosing it would tell a reader this page IS
+        // TOP SECRET: a classification nobody made, about content nobody reviewed.
+        // Same reasoning that already denies the sentinel a prefix. The gate says the
+        // true thing instead.
+        var f = await GetFixtureAsync();
+        var (client, _) = ClientFor(Persona.Alice);
+
+        using (var scope = Factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+            var marking = await db.PageMarkings.FirstAsync(m => m.PageId == f.P0);
+            marking.IsUnavailable = true;
+            await db.SaveChangesAsync();
+        }
+
+        try
+        {
+            using var result = await PageAccessAsync(client, f.P0);
+            var body = result.RootElement.ToString();
+            var access = Data(result, "pageAccess");
+
+            Assert.Equal(JsonValueKind.Null, access.GetProperty("page").ValueKind);
+            var denial = access.GetProperty("denial");
+            Assert.False(denial.GetProperty("noSpaceAccess").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, denial.GetProperty("marking").ValueKind);
+
+            var reason = Assert.Single(denial.GetProperty("reasons").EnumerateArray());
+            Assert.Equal("MARKING_UNAVAILABLE", reason.GetProperty("gate").GetString());
+            Assert.False(reason.GetProperty("passed").GetBoolean());
+
+            // The whole response, not just the marking field: no spelling of the level
+            // may reach a reader by any route.
+            Assert.DoesNotContain("TOP SECRET", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("TOP_SECRET", body, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            using var scope = Factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<RocketWikiDbContext>();
+            var marking = await db.PageMarkings.FirstAsync(m => m.PageId == f.P0);
+            marking.IsUnavailable = false;
+            await db.SaveChangesAsync();
+        }
+    }
+
+    [Fact]
     public async Task Placeholder_CarriesNoIdTitleOrTimestamps()
     {
         // Two halves. The schema half: the three disclosing types expose exactly the

@@ -3434,9 +3434,17 @@ reason, `marking:unavailable` (§21.8), which reaches the wire as the
 `MARKING_UNAVAILABLE` gate and the metric as `marking-unavailable` (§15) — a
 diagnosis addressed to whoever restores the row, not to the reader, which is
 why the SPA says the same sentence to everyone. The sentinel still *renders*
-as a bare `TOP SECRET`: the most restrictive spelling in the scheme is the
-right visual signal that something is wrong, and it is the value a §21.13
-aggregate must take when a missing row is among its sources. It carries **no
+as a bare `TOP SECRET` where the application talks to itself — it is the value
+a §21.13 aggregate must take when a missing row is among its sources, and the
+right visual signal in a log or an admin screen that something is wrong — but
+that string is **never disclosed to a reader**. A denial for this gate
+withholds the marking entirely (`AccessDenialView.From`), exactly as a denial
+for a missing space-access grant does. The reasoning is the one that already
+denies the sentinel a prefix, applied to the level now that the level has no
+force: telling somebody "this page is TOP SECRET" when the row says we do not
+know what it is asserts a classification nobody made, about content nobody has
+reviewed. While the level still gated reads, that string was at least a fair
+summary of the consequence; it is not one any more. It carries **no
 selector and no caveat**, for the same reason it carries no prefix (§21.12):
 the flag already refuses everyone, and a sentinel selector or country would
 put a token into enforcement that nobody configured. The general lesson is
@@ -4007,7 +4015,10 @@ we do not know what it said" (§21.5, §21.10), so asserting a national
 qualifier on its behalf would be inventing a fact. It renders a bare
 `TOP SECRET`, which is also a quiet visual signal that something is wrong —
 every marking the application actually writes carries one. What denies the
-page is the sentinel's unavailable flag, not that spelling (§21.5).
+page is the sentinel's unavailable flag, not that spelling (§21.5). And the
+same "inventing a fact" argument now reaches the level itself: that spelling
+is for the application's own eyes, never disclosed to a reader in a denial
+(§21.5), because it would assert a classification nobody made.
 
 **The migration is a second one** (`AddPageMarkingPrefix`), not an edit to
 `AddPageMarkings`. That one is already applied on real SQL Server, and editing an
