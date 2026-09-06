@@ -790,3 +790,52 @@
 .rw-code-block-wrapper .rw-code-block {
   margin: 0;
 }
+
+/* Printing (web/src/theme/print.ts): complete beats cut. A table wider than
+   the sheet, or an image or diagram wider than it, has no scrollbar on paper
+   — whatever falls past the sheet's right edge is silently gone, which on an
+   export-controlled page is a table quietly missing its right-hand columns.
+   So on paper every table shrinks to the column width with fixed, equal
+   columns and cell text wrapping wherever it must, and every image and every
+   diagram that can scale (an SVG with a viewBox) scales to the column width.
+
+   THE COST IS DELIBERATE: a wide table prints with narrow columns and wrapped,
+   sometimes per-character, cell text, and a wide diagram prints small. That
+   is not a bug; it is the trade. The alternatives were (a) leaving intrinsic
+   widths and losing the right-hand side silently — measured: a 12-column
+   table's last column and a 3000px image's right two-thirds were absent from
+   the PDF — or (b) scaling the whole content region to the sheet, which
+   shrinks every normal page to rescue the rare wide one. Cramped-and-complete
+   was chosen over both (web/a11y/print.spec.ts asserts the completeness on
+   the PDF's text and image geometry).
+
+   Code blocks are left alone: they already wrap and print in full. An SVG
+   without a viewBox cannot be scaled by CSS — shrinking its box crops its
+   content instead — so it is left at its intrinsic width; our diagram
+   renderer always emits one. */
+@media print {
+  .rw-editor-content table {
+    table-layout: fixed;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .rw-editor-content th,
+  .rw-editor-content td {
+    overflow-wrap: anywhere;
+  }
+
+  /* A wrapped row is tall; without this Chromium splits it across sheets,
+     the first lines of every cell on one and their continuations on the
+     next. Whole rows, one sheet each (a row taller than a sheet still
+     splits — nothing is clipped either way). */
+  .rw-editor-content tr {
+    break-inside: avoid;
+  }
+
+  .rw-editor-content img,
+  .rw-editor-content svg[viewBox] {
+    max-width: 100%;
+    height: auto;
+  }
+}

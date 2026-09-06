@@ -111,6 +111,11 @@ protective marking is the first thing on the first sheet and the banner proper
 follows the last line, the rail, header controls and action buttons are hidden
 while the breadcrumb, title and content are not, none of that leaks into
 screen media, and a real PDF render produces more than a handful of sheets.
+Wide content is checked on the PDF itself (text read back with `pdfjs-dist`,
+image widths read from the content stream): a twelve-column table's last
+column and a 3000px image and viewBox SVG all reach the sheet, shrunk to the
+column width by the `@media print` block at the end of `editor-content.css`
+— cramped and complete rather than cut, a deliberate trade recorded there.
 What prints and what does not is decided per control in
 `web/src/theme/print.ts`.
 

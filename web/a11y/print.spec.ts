@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 /**
  * Printing (web/src/theme/print.ts, AppShell.tsx): a page prints in full,
@@ -66,6 +67,42 @@ async function expectPresentButHidden(locator: Locator) {
   // hidden control fails.
   await expect(locator).toBeAttached()
   await expect(locator).toBeHidden()
+}
+
+/**
+ * What a PDF actually carries: its text with all whitespace removed (a cell
+ * wrapped per character comes out as one glyph per line, and the check is
+ * for presence, not typography), and the drawn width of every raster image
+ * in sheet points — the content stream's own units sit under a base
+ * transform, so the full matrix is tracked through save/restore.
+ */
+async function readPdf(pdf: Buffer) {
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(pdf) }).promise
+  let text = ''
+  const images: { sheet: number; drawnWidthPt: number; sheetWidthPt: number }[] = []
+  const mul = (m: number[], n: number[]) => [
+    m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+    m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+    m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
+  ]
+  const paints = new Set([pdfjs.OPS.paintImageXObject, pdfjs.OPS.paintJpegXObject, pdfjs.OPS.paintInlineImageXObject, pdfjs.OPS.paintImageXObjectRepeat])
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i)
+    const content = await page.getTextContent()
+    text += content.items.map((item) => ('str' in item ? item.str : '')).join('')
+    const ops = await page.getOperatorList()
+    const sheetWidthPt = page.getViewport({ scale: 1 }).width
+    let ctm = [1, 0, 0, 1, 0, 0]
+    const stack: number[][] = []
+    for (let k = 0; k < ops.fnArray.length; k++) {
+      const fn = ops.fnArray[k]
+      if (fn === pdfjs.OPS.save) stack.push(ctm)
+      else if (fn === pdfjs.OPS.restore) ctm = stack.pop() ?? ctm
+      else if (fn === pdfjs.OPS.transform) ctm = mul(ctm, ops.argsArray[k] as number[])
+      else if (paints.has(fn)) images.push({ sheet: i, drawnWidthPt: Math.hypot(ctm[0], ctm[1]), sheetWidthPt })
+    }
+  }
+  return { sheets: doc.numPages, text: text.replace(/\s+/g, ''), images }
 }
 
 /** Geometry of the things the print layout is about, in the current media. */
@@ -175,5 +212,77 @@ test.describe('printing a page', () => {
     const sheets = (pdf.toString('latin1').match(/\/Type\s*\/Page(?!s)/g) ?? []).length
     testInfo.annotations.push({ type: 'sheets', description: String(sheets) })
     expect(sheets).toBeGreaterThan(5)
+  })
+
+  // Wide content (editor-content.css, `@media print`): complete beats cut.
+  // A twelve-column table is the realistic cramped case — at twenty-four the
+  // cells wrap one glyph per line and the PDF's text is no longer something a
+  // string search can read, though the columns are all there.
+  test('a wide table prints every column, cramped rather than cut', async ({ page }) => {
+    await open(page, 'page-view--light.html', false)
+    await page.evaluate(() => {
+      const body = document.querySelector('main#main-content .ProseMirror')!
+      const cols = 12
+      const cell = (tag: string, c: number, row: number) =>
+        `<${tag} colspan="1" rowspan="1"><p>${c === cols - 1 ? (row === 0 ? 'HEADSENTINEL' : 'LASTCELLSENTINEL') : `column${String(c + 1).padStart(2, '0')}text`}</p></${tag}>`
+      const row = (tag: string, r: number) => Array.from({ length: cols }, (_, c) => cell(tag, c, r)).join('')
+      // The editor's own table markup: wrapper, min-width, one <col> per column.
+      const wrapper = document.createElement('div')
+      wrapper.className = 'tableWrapper'
+      wrapper.id = 'wide-table'
+      wrapper.innerHTML = `<table style="min-width: ${cols * 25}px"><colgroup>${'<col style="min-width: 25px">'.repeat(cols)}</colgroup><tbody><tr>${row('th', 0)}</tr><tr>${row('td', 1)}</tr></tbody></table>`
+      body.appendChild(wrapper)
+    })
+    // On the sheet itself: the last column, header and body, is printed.
+    const pdf = await readPdf(await page.pdf({ format: 'A4' }))
+    expect(pdf.text).toContain('HEADSENTINEL')
+    expect(pdf.text).toContain('LASTCELLSENTINEL')
+    expect(pdf.text).toContain('column11text')
+    // And the layout that gets it there: fixed columns inside the measure.
+    await page.emulateMedia({ media: 'print' })
+    const layout = await page.evaluate(() => {
+      const table = document.querySelector('#wide-table table')!
+      const main = document.querySelector('main#main-content')!
+      return { tableLayout: getComputedStyle(table).tableLayout, tableRight: table.getBoundingClientRect().right, mainRight: main.getBoundingClientRect().right }
+    })
+    expect(layout.tableLayout).toBe('fixed')
+    expect(layout.tableRight).toBeLessThanOrEqual(layout.mainRight + 1)
+  })
+
+  test('an oversized image and a wide diagram print whole, scaled to the sheet', async ({ page }) => {
+    await open(page, 'page-view--light.html', false)
+    // A real raster (so the PDF carries it as an image object whose drawn
+    // width can be read back), declared 3000px wide; and a diagram-shaped
+    // inline SVG with a viewBox and text at its far right edge.
+    const png = 'data:image/png;base64,' + (await page.screenshot({ clip: { x: 0, y: 0, width: 4, height: 4 } })).toString('base64')
+    await page.evaluate((png) => {
+      const body = document.querySelector('main#main-content .ProseMirror')!
+      const img = document.createElement('img')
+      img.id = 'wide-image'
+      img.width = 3000
+      img.height = 120
+      img.src = png
+      body.appendChild(img)
+      const svg = document.createElement('div')
+      svg.id = 'wide-diagram'
+      svg.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3000 60" width="3000" height="60"><text x="20" y="35" font-size="20">DIAGRAMLEFT</text><text x="2700" y="35" font-size="20">DIAGRAMRIGHTSENTINEL</text></svg>'
+      body.appendChild(svg)
+    }, png)
+    const pdf = await readPdf(await page.pdf({ format: 'A4' }))
+    // The diagram's far-right text reaches the sheet, and the raster image is
+    // drawn no wider than a sheet.
+    expect(pdf.text).toContain('DIAGRAMRIGHTSENTINEL')
+    expect(pdf.images.length).toBeGreaterThanOrEqual(1)
+    for (const image of pdf.images) expect(image.drawnWidthPt).toBeLessThanOrEqual(image.sheetWidthPt)
+    // And the layout that gets them there.
+    await page.emulateMedia({ media: 'print' })
+    const layout = await page.evaluate(() => {
+      const main = document.querySelector('main#main-content')!.getBoundingClientRect()
+      const right = (sel: string) => document.querySelector(sel)!.getBoundingClientRect().right
+      return { mainRight: main.right, imageRight: right('#wide-image'), diagramRight: right('#wide-diagram svg') }
+    })
+    expect(layout.imageRight).toBeLessThanOrEqual(layout.mainRight + 1)
+    expect(layout.diagramRight).toBeLessThanOrEqual(layout.mainRight + 1)
   })
 })

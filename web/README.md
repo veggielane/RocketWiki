@@ -91,7 +91,10 @@ is ever underneath it. Printed, the frame gives up its fixed height and the
 content region its scrolling, so a page prints in full with the marking at the
 head and the foot of the printed document; the rail, the header's controls and
 every screen's action buttons stay off paper (`src/theme/print.ts` says what
-prints and what does not, and `a11y/print.spec.ts` measures it).
+prints and what does not, and `a11y/print.spec.ts` measures it). Tables,
+images and diagrams wider than the sheet shrink to fit on paper rather than
+lose their right-hand side — cramped and complete, a trade recorded where the
+rule lives at the end of `src/editor/editor-content.css`.
 
 None of the template's dashboard content is here — no KPI cards, no charts,
 no sample grid — and none of its four `@mui/x-*` dependencies.
