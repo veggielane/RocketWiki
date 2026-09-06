@@ -126,8 +126,16 @@ public class PageGraphServiceTests : SqliteTestBase
         var graph = await new PageGraphService(context).GetGraphAsync(null, Plain());
 
         Assert.Equal(new[] { f.A.Id, f.B.Id }.Order(), graph.Nodes.Select(n => n.Id).Order());
+        // BOTH sides are ordered by the same key, and that is not fussiness. This
+        // assertion is about WHICH edges survive the filter, not what order they
+        // arrive in, and A and B link to each other, so the pair is a mutual one.
+        // Ordering only the actual against a literal written in creation order
+        // silently assumes creation order equals id order — which for UUIDv7 ids
+        // minted inside the same millisecond is a coin toss. It came up heads
+        // locally every time and tails on CI.
         Assert.Equal(
-            [new PageGraphEdge(f.A.Id, f.B.Id, 0), new PageGraphEdge(f.B.Id, f.A.Id, 0)],
+            new[] { new PageGraphEdge(f.A.Id, f.B.Id, 0), new PageGraphEdge(f.B.Id, f.A.Id, 0) }
+                .OrderBy(e => e.SourcePageId).ThenBy(e => e.TargetPageId),
             graph.Edges.OrderBy(e => e.SourcePageId).ThenBy(e => e.TargetPageId));
         foreach (var hidden in f.HiddenFromPlain)
         {
