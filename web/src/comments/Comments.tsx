@@ -107,6 +107,7 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
             ref={newCommentRef}
             initialMarkdown=""
             showToolbar={false}
+            compact
             pageId={pageId}
             ariaLabel="New comment"
             ariaDescribedBy="comment-composer-hint"
@@ -243,6 +244,7 @@ function CommentItem({
               ref={replyRef}
               initialMarkdown=""
               showToolbar={false}
+              compact
               ariaLabel={`Reply to ${node.authorDisplayName}`}
               ariaDescribedBy={`comment-reply-hint-${node.id}`}
               onSubmitShortcut={() => onSubmitReply(node.id, replyRef)}

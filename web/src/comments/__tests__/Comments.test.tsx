@@ -228,3 +228,46 @@ describe('Comments — author avatars', () => {
     }
   })
 })
+
+/**
+ * The composers open at half height and grow when focused, so an empty box
+ * does not push the page it discusses off screen. The height itself is a CSS
+ * floor (editor-content.css) that jsdom never applies, so what is pinned here
+ * is the wiring: the frame carries the class the rule is scoped to. Without
+ * that class the rule matches nothing and the composers silently stay full
+ * height, which is the failure this guards.
+ */
+describe('Comments — compact composers', () => {
+  it('marks the new-comment composer compact', () => {
+    const { container } = render(
+      <Comments
+        pageId="page-1"
+        comments={[]}
+        canComment
+        currentUserId="me"
+        canManageAccess={false}
+        onAdd={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    )
+    expect(container.querySelectorAll('.rw-editor-compact')).toHaveLength(1)
+  })
+
+  it('marks the reply composer compact, and leaves rendered comment bodies alone', () => {
+    const { container } = render(
+      <Comments
+        pageId="page-1"
+        comments={[comment({ id: 'c1' })]}
+        canComment
+        currentUserId="me"
+        canManageAccess={false}
+        onAdd={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    )
+    // The rendered body is a read-only editor and must never be compact.
+    expect(container.querySelectorAll('.rw-editor-compact')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Reply' }))
+    expect(container.querySelectorAll('.rw-editor-compact')).toHaveLength(2)
+  })
+})

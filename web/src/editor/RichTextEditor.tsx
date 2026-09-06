@@ -93,6 +93,20 @@ export interface RichTextEditorProps {
    */
   onSubmitShortcut?: () => void
   /**
+   * Starts the editing surface at half its usual height and grows it to the
+   * full height once focused. For composers that sit at the bottom of
+   * something else to read — the comment box under a page, the reply box
+   * under a comment — where a full-height empty box pushes the thing being
+   * discussed off screen before anyone has decided to write.
+   *
+   * `min-height` only ever sets a floor, so a collapsed box still grows with
+   * its content and nothing is ever clipped; blurring an empty one returns it
+   * to half height, while one with three lines in it stays three lines tall.
+   * The page editor is deliberately NOT compact: its surface IS the screen,
+   * and there is nothing behind it to keep in view.
+   */
+  compact?: boolean
+  /**
    * Ctrl/Cmd+S. Registered in the keymap for the same reason as the submit
    * shortcut, and it returns `true` so the browser's own Save Page dialog never
    * opens over the editor.
@@ -143,6 +157,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     pageId,
     collab,
     onSubmitShortcut,
+    compact = false,
     onSaveShortcut,
     onDocChanged,
     linkTargets,
@@ -341,7 +356,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   }
 
   return (
-    <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
+    <Paper variant="outlined" className={compact ? 'rw-editor-compact' : undefined} sx={{ overflow: 'hidden' }}>
       {showToolbar && <EditorToolbar editor={editor} />}
       {/* Inline, not a snackbar (web/README.md's feedback rule): a failed
           upload is a state the author has to act on — the image they

@@ -23,6 +23,34 @@
   min-height: 200px;
 }
 
+/*
+ * Compact composers (RichTextEditor's `compact` prop): half height until
+ * focused, full height once someone is actually writing. The comment box sits
+ * under the page it discusses and the reply box under the comment it answers,
+ * and at 200px an empty one pushed that context off screen before anyone had
+ * decided to write anything.
+ *
+ * This is a FLOOR, not a height, so nothing is ever clipped: a collapsed box
+ * still grows with its content, and returning to 100px on blur only shrinks
+ * one that has less than 100px in it. `:focus` on the contenteditable itself
+ * rather than `:focus-within` on the frame — these composers have no toolbar,
+ * so the surface is the only thing in the frame that takes focus.
+ */
+.rw-editor-compact .rw-editor-content[contenteditable='true'] {
+  min-height: 100px;
+  transition: min-height 150ms ease;
+}
+
+.rw-editor-compact .rw-editor-content[contenteditable='true']:focus {
+  min-height: 200px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rw-editor-compact .rw-editor-content[contenteditable='true'] {
+    transition: none;
+  }
+}
+
 .rw-editor-content p {
   margin: 0 0 0.75em;
 }
