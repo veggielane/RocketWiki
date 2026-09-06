@@ -185,7 +185,14 @@ export function AuditLogPage() {
   ] satisfies GridColDef[]).map((column) => ({ ...column, sortable: false }))
 
   return (
-    <Stack spacing={2} sx={{ height: '100%' }}>
+    // No `height: '100%'` here. It was dead when written — the shell's outlet
+    // had no height to resolve it against — and the outlet now has one
+    // (AppShell.tsx), so it would have started pinning this Stack to the
+    // region's height, growing the grid into the leftover on a tall window and
+    // spilling the Load-more button past the banner reservation on a short
+    // one. Filling the region is a decision for this screen to make on
+    // purpose, with the grid told how to behave when it does.
+    <Stack spacing={2}>
       <PageHeader
         title="Audit log"
         description="Every recorded action, newest first, with times shown in UTC to match the stored record. Refused attempts appear alongside successful ones. Filters are part of the address, so a filtered view can be bookmarked or sent to someone."

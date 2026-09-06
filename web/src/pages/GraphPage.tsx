@@ -24,7 +24,7 @@ import { useSearchParamState } from '../app/useSearchParamState'
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 import { GraphCanvas2D } from '../graph/GraphCanvas2D'
 import { GraphTable } from '../graph/GraphTable'
-import { indexGraph, markingLegend, type GraphNode } from '../graph/graphModel'
+import { GRAPH_NODE_LIMIT, indexGraph, markingLegend, type GraphNode } from '../graph/graphModel'
 import { useElementSize } from '../graph/useElementSize'
 import { pageHref, sameSpaceKey } from './pageSlug'
 
@@ -63,12 +63,18 @@ const count = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? '' :
  * The canvas is mouse-only by nature. The table view is the same information
  * as a keyboard-navigable, labelled table, and it is a view of its own rather
  * than an afterthought because on a large graph it is the more useful one.
+ *
+ * On a graph past GRAPH_NODE_LIMIT it is the only one. The simulation is not
+ * started at all above that — it would hold the main thread for seconds and
+ * draw nothing legible — so the table is shown whatever the address asks
+ * for, with a notice saying why and how to narrow the scope. The address is
+ * left alone: the canvas comes back on its own once a smaller space is
+ * chosen.
  */
 export function GraphPage() {
   const [spaceKey, setSpaceKey] = useSearchParamState('space')
   const [focusParam, setFocusParam] = useSearchParamState('focus')
   const [view, setView] = useSearchParamState('view')
-  const tableView = view === 'table'
   const [dimensions, setDimensions] = useState<Dimensions>('2d')
   const navigate = useNavigate()
 
@@ -83,6 +89,10 @@ export function GraphPage() {
     variables: { spaceKey: spaceKey === '' ? null : spaceKey },
   })
   const index = useMemo(() => indexGraph(data?.pageGraph.nodes ?? [], data?.pageGraph.edges ?? []), [data])
+  // A property of the node count, not of the toggle: a link to a focused
+  // page in a huge instance gets the table too, rather than a frozen tab.
+  const tooLarge = index.nodes.length > GRAPH_NODE_LIMIT
+  const tableView = view === 'table' || tooLarge
   const focusNode = focusParam === '' ? undefined : index.byId.get(focusParam)
   const focusId = focusNode?.id ?? null
   const legend = useMemo(() => markingLegend(index.nodes), [index])
@@ -96,7 +106,12 @@ export function GraphPage() {
   const canvasDescription = `Document graph: ${summary}${focusNode ? `, focused on ${focusNode.title}` : ''}. The table view lists the same pages and links.`
 
   return (
-    <Stack spacing={2}>
+    // Fills the height the shell leaves under its header (AppShell.tsx gives
+    // its outlet a definite flexed height for exactly this), so the canvas
+    // below can grow into whatever the toolbar, legend and caption leave —
+    // `min`, not `height`, so a viewport too short for the floor scrolls
+    // rather than squashes.
+    <Stack spacing={2} sx={{ minHeight: '100%' }}>
       <PageHeader
         title="Graph"
         description="Every page you can view, and which pages link to which. Click a page to open it."
@@ -123,7 +138,9 @@ export function GraphPage() {
           }}
           aria-label="View"
         >
-          <ToggleButton value="graph">
+          {/* Disabled, not hidden, above the limit: the control stays where
+              it was and the notice below says why it is off. */}
+          <ToggleButton value="graph" disabled={tooLarge}>
             <HubOutlinedIcon fontSize="small" sx={{ mr: 0.75 }} aria-hidden />
             Graph
           </ToggleButton>
@@ -179,6 +196,13 @@ export function GraphPage() {
             </Stack>
           ) : (
             <>
+              {tooLarge && (
+                <Alert severity="info">
+                  The graph is too large to draw — {count(index.nodes.length, 'page')}, and the canvas stops at{' '}
+                  {GRAPH_NODE_LIMIT}. Showing the table instead; choose a space to narrow it, or use the filter to
+                  find a page.
+                </Alert>
+              )}
               {focusParam !== '' && !focusNode && (
                 <Alert
                   severity="info"
@@ -213,12 +237,24 @@ export function GraphPage() {
                       canvas has no DOM a screen reader could walk, so this is
                       what it is told — what the picture shows, and where the
                       same information is reachable. */}
+                  {/* Sized by the flex layout alone, never by what is drawn in
+                      it: `flexBasis: 0` with `overflow: hidden` means the
+                      canvas element force-graph puts inside — whose pixel size
+                      is set from the measurement of THIS box — cannot feed back
+                      into the box's own size. With `flex-basis: auto` it
+                      would: the first measurement would become the content
+                      height, the content height the box's minimum, and the box
+                      could never shrink below whatever it was first drawn at.
+                      The floor is what a short window falls back to, at which
+                      point the page scrolls (see the root Stack). */}
                   <Box
                     ref={canvasRef}
                     role="img"
                     aria-label={canvasDescription}
                     sx={{
-                      height: 'clamp(420px, 70vh, 900px)',
+                      flexGrow: 1,
+                      flexBasis: 0,
+                      minHeight: 320,
                       border: 1,
                       borderColor: 'divider',
                       borderRadius: 1,

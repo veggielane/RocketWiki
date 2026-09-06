@@ -18,7 +18,7 @@ import CenterFocusStrongOutlinedIcon from '@mui/icons-material/CenterFocusStrong
 import { MarkingLevelBadge } from '../markings/MarkingLevelBadge'
 import { lookupPageIcon } from '../pages/pageIcons'
 import { pageHref } from '../pages/pageSlug'
-import { MAX_TABLE_ROWS, filterRows, graphRows, type GraphIndex, type GraphNode } from './graphModel'
+import { GRAPH_NODE_LIMIT, filterRows, graphRows, type GraphIndex, type GraphNode } from './graphModel'
 
 const pages = (count: number): string => `${count} ${count === 1 ? 'page' : 'pages'}`
 
@@ -68,7 +68,7 @@ export function GraphTable({ index, focusId }: { index: GraphIndex; focusId: str
   const [filter, setFilter] = useState('')
   const rows = useMemo(() => graphRows(index), [index])
   const matching = useMemo(() => filterRows(rows, filter), [rows, filter])
-  const shown = matching.slice(0, MAX_TABLE_ROWS)
+  const shown = matching.slice(0, GRAPH_NODE_LIMIT)
 
   return (
     <Stack spacing={1.5}>

@@ -109,12 +109,23 @@ export function filterRows(rows: readonly GraphRow[], filter: string): GraphRow[
 }
 
 /**
- * The most rows the table renders at once. A whole-instance graph can be
- * thousands of pages, and a table that size is slower to draw than it is
- * useful to read; the row above it says how many were left out and the
- * filter is the way down to them.
+ * The one ceiling on how much of the graph the screen takes on at once: the
+ * most nodes the canvas will simulate, and the most rows the table renders.
+ * One constant on purpose — the table is what the page falls back to when
+ * the canvas will not draw, so the two must never disagree about what "too
+ * many" means, and there is one number to change.
+ *
+ * Measured on a seeded instance of 5010 pages and 19148 links: the server
+ * answered the whole-instance query in about 0.2 s, and the canvas then drew
+ * an unreadable mat of edges while the force simulation held the main thread
+ * — a 0 ms timeout took 105 ms to fire, and the Table toggle took 6.7 s to
+ * take effect. A single space of 50 pages had no measurable lag. Above this
+ * the simulation is not started at all: a hairball that also freezes the tab
+ * is worse than no drawing. A table this long is slower to draw than it is
+ * useful to read, so it stops here too; the row above it says how many were
+ * left out and the filter is the way down to them.
  */
-export const MAX_TABLE_ROWS = 500
+export const GRAPH_NODE_LIMIT = 1000
 
 export interface LegendEntry {
   level: ClassificationLevel

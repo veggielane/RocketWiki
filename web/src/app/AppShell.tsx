@@ -162,6 +162,14 @@ export function AppShell() {
           overflow: 'auto',
           bgcolor: 'background.default',
           outline: 'none',
+          // A flex column, so the Stack below can be told to fill this region's
+          // height (see there). Nothing about scrolling changes: content taller
+          // than the region still overflows it and scrolls, exactly as a block
+          // would. The visually-hidden status box is absolutely positioned and
+          // the progress bar is sticky; neither cares what its parent's
+          // display is.
+          display: 'flex',
+          flexDirection: 'column',
           // WCAG 2.4.11 (focus not obscured): the classification banner is
           // position:fixed over the bottom of this scroll container, so when
           // the browser scrolls a focused element into view it could land
@@ -189,12 +197,33 @@ export function AppShell() {
             // rather than per-route because the banner is viewport-fixed: it
             // overlaps whatever is scrolled to the bottom, marked page or not.
             pb: `${CLASSIFICATION_BANNER_HEIGHT + 32}px`,
+            // Fills the content region top to bottom, and never shrinks below
+            // its content — so a screen that wants the height left under the
+            // header (the graph's canvas) can take it, while every other screen
+            // hugs the top exactly as it did when this was a block. The padding
+            // above is inside the filled height (border-box), which is what
+            // keeps the banner's strip reserved on a screen that fills it.
+            //
+            // Every step from the viewport to the outlet is a definite flex
+            // size (the shell is 100vh, `main` is stretched in it, this Stack
+            // and the outlet Box are flexed inside that), which is exactly the
+            // condition under which a screen's `minHeight: '100%'` resolves —
+            // `min-height: 100%` on the Stack alone would have left the
+            // outlet's height indefinite and that percentage meaningless.
+            // A screen that says `height: '100%'` would also start to resolve,
+            // so none does.
+            flexGrow: 1,
+            flexShrink: 0,
           }}
         >
           <Box sx={{ width: '100%', maxWidth: measureFor(pathname) }}>
             <AppHeader navOpen={navOpen} onToggleNav={toggleNav} />
           </Box>
-          <Box sx={{ width: '100%', maxWidth: measureFor(pathname) }}>
+          {/* `flexGrow`, and still a block inside: a screen's root is laid out
+              as it always was, and the extra height is only there for one that
+              asks (`minHeight: '100%'`). Making this a flex column instead would
+              have re-laid-out every root and every fragment-rooted screen. */}
+          <Box sx={{ width: '100%', maxWidth: measureFor(pathname), flexGrow: 1 }}>
             <PageTitleContext value={registerPageTitle}>
               <PresenceRoomContext value={presenceValue}>
                 <Outlet />

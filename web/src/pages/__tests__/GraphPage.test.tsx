@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { Client, CombinedError, Provider as UrqlProvider, type Exchange, type Operation } from 'urql'
 import { filter, map, pipe } from 'wonka'
 import { GraphPage } from '../GraphPage'
+import { GRAPH_NODE_LIMIT } from '../../graph/graphModel'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../../test/axe'
 
@@ -273,6 +274,17 @@ describe('GraphPage table view — the accessible equivalent', () => {
 })
 
 describe('GraphPage dimensions', () => {
+  it('hands the canvas a nominal size where nothing has a layout', async () => {
+    // jsdom measures every box as 0×0. A 0×0 canvas is nothing the accessors
+    // could be tested against, so the page substitutes its fallback — and in a
+    // browser, where the wrapper has a real size, that size is what is passed
+    // instead (useElementSize.test.tsx covers the measuring).
+    renderGraph()
+    await screen.findByTestId('canvas-2d')
+    expect(canvases.props2d?.width).toBe(800)
+    expect(canvases.props2d?.height).toBe(560)
+  })
+
   it('loads the 3D renderer only when asked for it', async () => {
     renderGraph({ path: '/graph?focus=page-1' })
     await screen.findByTestId('canvas-2d')
@@ -290,4 +302,80 @@ describe('GraphPage dimensions', () => {
     const nodeVal = canvases.props3d?.nodeVal as Accessor<{ id: string }>
     expect(nodeVal({ id: 'page-1' })).toBeGreaterThan(nodeVal({ id: 'page-2' }))
   })
+})
+
+/**
+ * The fallback IS a thousand-row table, and jsdom takes about 2.3 s to build
+ * one on an idle machine; under a loaded CI worker that can pass the 5 s
+ * default. The two tests that render it get a wider budget.
+ */
+const HEAVY_TABLE_TIMEOUT_MS = 20_000
+
+/** `n` pages in one space, unlinked — enough to be counted, cheap enough to table. */
+const manyNodes = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `big-${i}`,
+    title: `Page ${i}`,
+    spaceKey: 'PROP',
+    slug: `page-${i}`,
+    icon: null,
+    marking: marking('OFFICIAL', 'OFFICIAL'),
+  }))
+
+describe('GraphPage size limit', () => {
+  it('falls back to the table above the limit, whichever view the address asks for, and never starts the simulation', async () => {
+    // A link to a focused page in a huge instance: the address asks for the
+    // canvas, and gets the table — the fallback is a property of the node
+    // count, not of the toggle.
+    renderGraph({ path: '/graph?focus=big-7', graph: { nodes: manyNodes(GRAPH_NODE_LIMIT + 1), edges: [] } })
+    expect(
+      await screen.findByText(/The graph is too large to draw — 1001 pages, and the canvas stops at 1000\./),
+    ).toBeInTheDocument()
+
+    // The renderer is not merely hidden; it was never handed a graph.
+    expect(screen.queryByTestId('canvas-2d')).not.toBeInTheDocument()
+    expect(canvases.props2d).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Dimensions' })).not.toBeInTheDocument()
+
+    expect(screen.getByRole('table', { name: 'Pages and their links' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Graph' })).toBeDisabled()
+    expect(screen.getByText('Focused: Page 7')).toBeInTheDocument()
+    // The same number stops the table, and the row says so in its own voice.
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `1001 pages. Showing the first ${GRAPH_NODE_LIMIT} — narrow the filter to reach the rest.`,
+    )
+    // The address is not rewritten, so the canvas returns by itself once the scope is narrowed.
+    expect(location()).toBe('/graph?focus=big-7')
+  }, HEAVY_TABLE_TIMEOUT_MS)
+
+  it('draws the canvas at exactly the limit', async () => {
+    renderGraph({ graph: { nodes: manyNodes(GRAPH_NODE_LIMIT), edges: [] } })
+    expect(await screen.findByTestId('canvas-2d')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Graph' })).toBeEnabled()
+    expect(screen.queryByText(/too large to draw/)).not.toBeInTheDocument()
+  })
+
+  it('brings the canvas back on its own once a smaller scope is chosen', async () => {
+    const mock = createMockUrqlClient((name, op) => {
+      const spaceKey = (op.variables as { spaceKey?: string | null } | undefined)?.spaceKey ?? null
+      if (name === 'PageGraph') {
+        return spaceKey === 'PROP'
+          ? { pageGraph: { nodes, edges } }
+          : { pageGraph: { nodes: manyNodes(GRAPH_NODE_LIMIT + 1), edges: [] } }
+      }
+      if (name === 'SpaceList') return { spaces }
+      return undefined
+    })
+    mount(mock.client, '/graph')
+    await screen.findByText(/too large to draw/)
+    expect(screen.getByRole('button', { name: 'Graph' })).toBeDisabled()
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Space' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Propulsion' }))
+
+    expect(await screen.findByTestId('canvas-2d')).toBeInTheDocument()
+    expect(screen.queryByText(/too large to draw/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Graph' })).toBeEnabled()
+    expect(location()).toBe('/graph?space=PROP')
+  }, HEAVY_TABLE_TIMEOUT_MS)
 })
