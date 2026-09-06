@@ -1,9 +1,9 @@
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Audit;
-using RocketWiki.Api.Content;
 using RocketWiki.Api.Identity;
 using RocketWiki.Core.Access;
+using RocketWiki.Core.Content;
 using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Services;

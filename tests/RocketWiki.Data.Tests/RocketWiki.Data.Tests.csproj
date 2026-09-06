@@ -28,6 +28,9 @@
     <!-- The one selector vocabulary every test tier shares (design.md §21.15), linked
          rather than copied so the tiers cannot drift apart. -->
     <Compile Include="..\RocketWiki.Core.Tests\Access\TestCatalogs.cs" Link="TestCatalogs.cs" />
+    <!-- The one page-link corpus every tier holds its own link-index implementation to
+         (regex scanner, EF maintainer, T-SQL backfill), for the same reason. -->
+    <Compile Include="..\RocketWiki.Core.Tests\Content\PageLinkCorpus.cs" Link="PageLinkCorpus.cs" />
   </ItemGroup>
 
   <ItemGroup>

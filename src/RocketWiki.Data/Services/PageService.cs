@@ -121,6 +121,9 @@ public class PageService : IPageService
             UpdatedAtUtc = now,
         };
         _db.Pages.Add(page);
+        // The link index is written from the same content in the same unit of work, on
+        // every path that sets CurrentContent (see PageLinkIndex).
+        await PageLinkIndex.ReplaceAsync(_db, page, cancellationToken);
 
         // design.md §21: every page is marked, from the moment it exists. A child
         // inherits its parent's marking - inheritance happens ONCE, here, producing a
@@ -278,6 +281,7 @@ public class PageService : IPageService
         page.CurrentContent = request.Content;
         page.CurrentRevisionNumber = newRevisionNumber;
         page.UpdatedAtUtc = now;
+        await PageLinkIndex.ReplaceAsync(_db, page, cancellationToken);
 
         _db.AuditContext = auditContext;
         _db.RaiseDomainEvent(new PageContentUpdatedEvent(
@@ -660,6 +664,8 @@ public class PageService : IPageService
         page.CurrentContent = target.Content;
         page.CurrentRevisionNumber = newRevisionNumber;
         page.UpdatedAtUtc = now;
+        // Restored content is content: the index follows it like any other save.
+        await PageLinkIndex.ReplaceAsync(_db, page, cancellationToken);
 
         _db.AuditContext = auditContext;
         _db.RaiseDomainEvent(new PageRevisionRestoredEvent(page.Id, space.Id, space.Key, actingUserId, target.RevisionNumber));

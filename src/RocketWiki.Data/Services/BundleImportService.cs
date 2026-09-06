@@ -463,6 +463,13 @@ public class BundleImportService : IBundleImportService
         page.UpdatedAtUtc = now;
         page.IsDeleted = false; // an upsert always represents live content
 
+        // The link index never travels in a bundle (data-model.md: derived, rebuilt
+        // locally); it is rebuilt here from the content that did. Page ids survive the
+        // crossing (design.md §12), so the replica's page:// links resolve to the same
+        // targets — including targets that have not arrived yet, which is one of the
+        // reasons the index tolerates dangling targets.
+        await PageLinkIndex.ReplaceAsync(_db, page, cancellationToken);
+
         await ApplyPageRevisionsAsync(pageId, payload, cancellationToken);
         await ApplyPageMarkingAsync(pageId, payload, cancellationToken);
     }

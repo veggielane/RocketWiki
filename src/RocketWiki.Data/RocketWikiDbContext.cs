@@ -71,6 +71,7 @@ public class RocketWikiDbContext : DbContext
     public DbSet<Page> Pages => Set<Page>();
     public DbSet<PageRevision> PageRevisions => Set<PageRevision>();
     public DbSet<PageRevisionContributor> PageRevisionContributors => Set<PageRevisionContributor>();
+    public DbSet<PageLink> PageLinks => Set<PageLink>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
     public DbSet<Comment> Comments => Set<Comment>();
     public DbSet<Label> Labels => Set<Label>();

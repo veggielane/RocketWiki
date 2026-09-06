@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace RocketWiki.Api.Content;
+namespace RocketWiki.Core.Content;
 
 /// <summary>
 /// Finds the pages a page's Markdown links to: every <c>page://{guid}</c> the editor's
@@ -15,6 +15,12 @@ namespace RocketWiki.Api.Content;
 /// so a client can pair targets with anchors positionally. Anything after
 /// <c>page://</c> that is not a well-formed GUID is skipped: it names no page, and
 /// echoing it back would be echoing content.</para>
+///
+/// <para>Lives in Core because it has two readers with one definition between them:
+/// <c>Page.linkTargets</c> scans the content per request, and the page link index
+/// (<see cref="Entities.PageLink"/>) is written from this same output on every content
+/// write and backfilled by migration to match it. Two scanners would be two opinions
+/// about what a page links to.</para>
 /// </summary>
 public static partial class PageLinkScanner
 {

@@ -8,6 +8,7 @@ using RocketWiki.Core.Entities;
 using RocketWiki.Core.Enums;
 using RocketWiki.Core.Events;
 using RocketWiki.Core.Services;
+using RocketWiki.Core.Tests.Content;
 using RocketWiki.Data.Services;
 using Xunit;
 
@@ -123,8 +124,129 @@ public sealed class MigrationTests : SqlServerTestBase
         Assert.Contains("20260902224034_SplitSpaceGrantsIntoAccessAndRole", applied);
         Assert.Contains("20260904230211_AddMarkingUnavailableFlag", applied);
         Assert.Contains("20260905113646_DropPageEntries", applied);
-        Assert.Equal(21, applied.Count);
+        Assert.Contains("20260905200337_AddPageLinks", applied);
+        Assert.Equal(22, applied.Count);
         Assert.Empty(pending);
+    }
+
+    /// <summary>
+    /// <b>The link-index backfill produces exactly what incremental maintenance produces.</b>
+    /// Migrated to the migration BEFORE <c>AddPageLinks</c>, pages written the old way
+    /// (raw SQL — the live model would try to write <c>PageLinks</c> rows of its own),
+    /// one per case of the shared <c>PageLinkCorpus</c>, then migrated up. Every page's
+    /// rows must equal <c>PageLink.FromContent</c> of its content — the one definition the
+    /// EF maintainer writes (pinned per case in the Data tier) — so the T-SQL and the regex
+    /// are held to the same corpus rather than trusted to agree. The corpus includes a
+    /// page with more links than SQL Server's default recursion cap, a <c>PAGE://</c> that
+    /// must NOT match (binary collation), and a braced GUID that <c>TRY_CONVERT</c> alone
+    /// would accept and the scanner does not.
+    ///
+    /// <para>Two extra pages pin the migration's own decisions: a trashed page is
+    /// backfilled (restore does not re-index, so skipping it would silently strand its
+    /// links), and a page in an archived space likewise. The schema assertions at the end
+    /// are the two data-model.md decisions the SQLite tier cannot prove on the real engine:
+    /// the source FK cascades — the one cascade in the schema — and there is exactly one
+    /// FK, i.e. none on the target.</para>
+    /// </summary>
+    [SqlServerFact]
+    public async Task AddPageLinks_BackfillsEveryExistingPage_ExactlyAsTheScannerWould()
+    {
+        var connectionString = _fixture.CreateConnectionString(SqlServerContainerFixture.NewDatabaseName());
+        var options = new DbContextOptionsBuilder<RocketWikiDbContext>()
+            .UseSqlServer(connectionString)
+            .UseLocalInstanceId("local-instance")
+            .Options;
+
+        Task NonQuery(string sql) => ExecuteNonQueryAsync(sql, connectionString);
+        Task<T?> Scalar<T>(string sql) => ExecuteScalarAsync<T>(sql, connectionString);
+
+        var userId = Guid.CreateVersion7();
+        var liveSpaceId = Guid.CreateVersion7();
+        var archivedSpaceId = Guid.CreateVersion7();
+
+        // (page id, content) for every corpus case, plus the trashed and archived-space pages.
+        var pages = PageLinkCorpus.Cases
+            .Select(c => (Id: Guid.CreateVersion7(), c.Content, SpaceId: liveSpaceId, IsDeleted: false, c.Name))
+            .ToList();
+        var trashedId = Guid.CreateVersion7();
+        var archivedPageId = Guid.CreateVersion7();
+        pages.Add((trashedId, PageLinkCorpus.Link(PageLinkCorpus.A), liveSpaceId, true, "trashed"));
+        pages.Add((archivedPageId, PageLinkCorpus.Link(PageLinkCorpus.B), archivedSpaceId, false, "archived-space"));
+
+        using (var context = new RocketWikiDbContext(options))
+        {
+            var migrator = context.GetService<IMigrator>();
+            migrator.Migrate("20260905113646_DropPageEntries");
+
+            await NonQuery($$"""
+                INSERT INTO Spaces (Id, [Key], Name, OriginInstanceId, IsExported, IsDeleted, LastOutboxSequence, CreatedAtUtc, CreatedByUserId, OwnerUserId)
+                VALUES
+                    ('{{liveSpaceId}}', 'LNK', 'Links', 'local-instance', 0, 0, 0, SYSUTCDATETIME(), '{{userId}}', '{{userId}}'),
+                    ('{{archivedSpaceId}}', 'OLD', 'Archived', 'local-instance', 0, 1, 0, SYSUTCDATETIME(), '{{userId}}', '{{userId}}');
+                """);
+
+            // Parameterized per page: corpus content carries newlines and quotes on purpose.
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync();
+            foreach (var page in pages)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    INSERT INTO Pages (Id, SpaceId, ParentPageId, AncestorPath, Slug, Title, SortOrder, CurrentRevisionNumber, CurrentContent, IsDeleted, CreatedAtUtc, UpdatedAtUtc)
+                    VALUES (@Id, @SpaceId, NULL, '/', @Slug, @Slug, 0, 1, @Content, @IsDeleted, SYSUTCDATETIME(), SYSUTCDATETIME());
+                    """;
+                command.Parameters.AddWithValue("@Id", page.Id);
+                command.Parameters.AddWithValue("@SpaceId", page.SpaceId);
+                command.Parameters.AddWithValue("@Slug", page.Name);
+                command.Parameters.AddWithValue("@Content", page.Content);
+                command.Parameters.AddWithValue("@IsDeleted", page.IsDeleted);
+                await command.ExecuteNonQueryAsync();
+            }
+
+            migrator.Migrate();
+        }
+
+        using (var context = new RocketWikiDbContext(options))
+        {
+            var stored = (await context.PageLinks.AsNoTracking().ToListAsync())
+                .GroupBy(l => l.SourcePageId)
+                .ToDictionary(g => g.Key, g => g.OrderBy(l => l.Ordinal).Select(l => (l.TargetPageId, l.Ordinal)).ToArray());
+
+            foreach (var page in pages)
+            {
+                var expected = PageLink.FromContent(page.Id, page.Content).Select(l => (l.TargetPageId, l.Ordinal)).ToArray();
+                Assert.Equal(expected, stored.GetValueOrDefault(page.Id, []));
+            }
+
+            // Nothing invented: every row belongs to one of the seeded pages.
+            Assert.Equal(pages.Sum(p => PageLink.FromContent(p.Id, p.Content).Count), await context.PageLinks.CountAsync());
+            Assert.Equal(PageLinkCorpus.ManyLinkCount, stored[pages.Single(p => p.Name == "many-links-beyond-the-default-recursion-cap").Id].Length);
+            Assert.Single(stored[trashedId]);
+            Assert.Single(stored[archivedPageId]);
+        }
+
+        Assert.Equal(1, await Scalar<int>("""
+            SELECT COUNT(*) FROM sys.foreign_keys
+            WHERE parent_object_id = OBJECT_ID('dbo.PageLinks')
+            """));
+        Assert.Equal(1, await Scalar<int>("""
+            SELECT COUNT(*) FROM sys.foreign_keys
+            WHERE parent_object_id = OBJECT_ID('dbo.PageLinks')
+              AND name = 'FK_PageLinks_Pages_SourcePageId'
+              AND delete_referential_action_desc = 'CASCADE'
+            """));
+        Assert.Equal(1, await Scalar<int>(
+            "SELECT COUNT(*) FROM sys.indexes WHERE name = 'IX_PageLinks_TargetPageId' AND object_id = OBJECT_ID('dbo.PageLinks')"));
+        Assert.Equal(
+            new List<string> { "SourcePageId", "TargetPageId" },
+            await ExecuteColumnAsync("""
+                SELECT c.name
+                FROM sys.indexes i
+                JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+                JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                WHERE i.object_id = OBJECT_ID('dbo.PageLinks') AND i.is_primary_key = 1
+                ORDER BY ic.key_ordinal
+                """, connectionString));
     }
 
     /// <summary>

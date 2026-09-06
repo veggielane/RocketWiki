@@ -23,7 +23,13 @@ Design altitude stays in `design.md`; this file is the table-level truth.
   the exception: it carries `IsDeleted` as a tombstone to preserve thread
   shape and therefore gets **no** global query filter.
 - **No cascade deletes.** All FKs `ON DELETE NO ACTION` — deletion is an
-  explicit, audited operation, never a side effect.
+  explicit, audited operation, never a side effect. **One exception, stated
+  here so it cannot be mistaken for drift:** `PageLink.SourcePageId` cascades.
+  The link index is derived from a page's content — not content, not a record
+  of anything a person did, and rebuildable from `CurrentContent` at any time —
+  so there is nothing a NO ACTION would be protecting; see the `PageLink`
+  section for the full argument, and the `AddPageLinks` migration test for the
+  pin.
 - **Markdown:** `nvarchar(max)` — but reached **by convention** (an unbounded
   `string` with no `HasMaxLength`), never by an explicit
   `HasColumnType("nvarchar(max)")`. The literal type string is SQL Server
@@ -111,6 +117,71 @@ already heavyweight (visibility warning, audit, outbox event). 2600 chars ≈
 
 Indexes: unique `(PageId, RevisionNumber)`. Never updated or deleted
 (history retention is an open question in design.md §17).
+
+### PageLink — the link index (derived, never synced, rebuilt locally)
+
+One row per distinct `page://{guid}` in a page's **live** Markdown
+(`Page.CurrentContent`, never a revision's `Content`), found by
+`PageLinkScanner` — the same scanner `Page.linkTargets` reads, so the index
+and the per-request scan cannot disagree. Feeds the document graph
+(`IPageGraphService`: instance-wide nodes and edges, per-page inbound and
+outbound lists and counts).
+
+| Column | Type | Notes |
+|---|---|---|
+| SourcePageId | uniqueidentifier PK, FK → Page **ON DELETE CASCADE** | the page whose content holds the link |
+| TargetPageId | uniqueidentifier PK, **no FK** | the page the link names — which may not exist |
+| Ordinal | int | first-occurrence position among the source's distinct targets, 0-based, so a client holding the content can pair edges with anchors |
+
+PK `(SourcePageId, TargetPageId)` — a page links to another at most once,
+enforced by the database. Index `(TargetPageId)` for backlinks.
+
+**Maintained at every write that sets `CurrentContent`, in the same unit of
+work** (`PageLinkIndex.ReplaceAsync`): `PageService` create, update-content
+and restore-revision, and `BundleImportService`'s page upsert. The Confluence
+importer writes through `IPageService` and inherits it. The whole set for
+the source page is replaced from the new content; the previous content is
+never consulted. Trash, restore and move do not touch content and do not
+touch the index. Backfilled for every existing page — trashed and
+archived-space pages included, so a later restore does not surface a page
+with no links — by the `AddPageLinks` migration, whose T-SQL is pinned
+row-for-row against `PageLink.FromContent` over a shared corpus of edge cases
+in the SQL Server tier.
+
+**Why no FK on the target (decision).** A link may name a page that does not
+exist: an id pasted from elsewhere that never resolved, a target hard-deleted
+later, or — on a replica — a target whose bundle has not arrived yet. A
+constraint there would either fail a legitimate save (the author's Markdown
+is valid whatever the id names) or force the indexer to drop the row and
+lose the fact that the page says it links somewhere. Dangling targets are
+stored and filtered **at read time**, where the graph service joins every
+endpoint back to a live page anyway. A trashed target is the everyday case:
+its row stays, and restoring the target restores the backlinks — the same
+reason a trashed page keeps its marking, labels and properties.
+
+**Why the source FK cascades (the one exception).** The convention above
+exists so a delete cannot silently destroy something worth keeping; an index
+row is worth nothing apart from its page and is rebuilt from the page's
+content whenever the content is saved. The product never hard-deletes a page
+(pages are trashed; the trash keeps the row), so the cascade is a statement
+about what the row *is* rather than a path anything exercises. Pinned on the
+real engine by the `AddPageLinks` migration test.
+
+**No global query filter**, matching PageLabel and PageMarking, and **no
+navigation properties** on either side: a `Page` navigation on an index row
+would be a Page-shaped route around object-level authorization (design.md
+§6.7). The graph service resolves every endpoint through the batched
+permission path and never through this row.
+
+**Read posture (design.md §6.7 / §21.8): an omitting surface.** The graph
+shows only pages the caller can view; a denied page is absent — no
+placeholder, and no edge to or from it, since an edge to an omitted node
+would disclose that the node exists. Inbound lists and counts are filtered to
+visible sources for the same reason: a count including hidden backlinks says
+how many pages the caller cannot see link here. Trashed pages and pages in
+archived spaces are never nodes. Never synced: a bundle carries content, and
+the replica's upsert rebuilds the index from it (page ids survive the
+crossing, design.md §12, so `page://` links resolve on high).
 
 ### Attachment
 
@@ -856,6 +927,12 @@ we have given up.
    child `AccessRuleSelectors` table**, rather than a separate grants table or a
    packed selector column — one grants query, one check constraint, one audit
    snapshot, and selector values queryable as data (design.md §6.4, §21.15).
+9. **`PageLink` is a derived index with a cascading source FK and no target
+   FK**, maintained at every content write and backfilled by migration, rather
+   than re-scanning content per request (which cannot answer "what links
+   here" without reading every page) or constraining the target (which would
+   refuse links to pages that do not exist yet or any more). The cascade is
+   the schema's one exception to the no-cascade rule, argued in the section.
 
 ## Open items
 
