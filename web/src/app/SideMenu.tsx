@@ -26,7 +26,6 @@ import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from 'react-oidc-context'
 import { UserAvatar } from '../avatars/UserAvatar'
 import { useCurrentUserQuery } from '../graphql/generated/graphql'
-import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
 import { SpaceTreeNav } from './SpaceTreeNav'
 import { RecentSpaces } from './RecentSpaces'
 import { clearRecentSpaces } from '../spaces/recentSpaces'
@@ -102,11 +101,17 @@ export function SideMenu({
         '& .MuiDrawer-paper': {
           width: SIDE_MENU_WIDTH,
           boxSizing: 'border-box',
-          // The classification banner is fixed across the whole viewport
-          // bottom, rail included, so the account block has to reserve its
-          // strip the same way the content region does — the alternative is a
-          // security marking sitting on top of the signed-in user's name.
-          paddingBottom: `${CLASSIFICATION_BANNER_HEIGHT}px`,
+          // MUI fixes the paper to the viewport for every variant, top to
+          // bottom. Positioned within the shell's row instead (AppShell.tsx
+          // makes that row the containing block), so the rail spans exactly
+          // the height beside the content region and ends where it does —
+          // above the classification banner, which is the row below. The rail
+          // used to reserve the banner's strip as bottom padding so the
+          // marking never sat on top of the signed-in user's name; with
+          // nothing under the banner there is nothing to reserve. The
+          // temporary overlay keeps MUI's fixed paper: it is a modal, and
+          // like every modal it sits above the banner rather than beside it.
+          ...(temporary ? {} : { position: 'absolute' }),
         },
       }}
     >

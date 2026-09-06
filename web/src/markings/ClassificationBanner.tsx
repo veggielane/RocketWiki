@@ -17,11 +17,14 @@ export interface ClassificationBannerProps {
   /** Styling only (markingTone) — the meaning is all in `label`. */
   level: ClassificationLevel
   /**
-   * ICDS's `inline` prop. False (the default) fixes the banner to the bottom of
-   * the viewport, which is the pattern's whole point: the classification of what
-   * you are looking at stays on screen while you scroll. True renders it in the
-   * flow, for a marking that describes a *part* of the page — a search result
-   * set, a page-list widget — rather than the page itself.
+   * ICDS's `inline` prop. False (the default) is the banner for the screen as a
+   * whole: the shell renders it as its bottom row, so it is on screen without
+   * scrolling for as long as the screen is, which is the pattern's whole point.
+   * A screen does not render this variant itself — it declares its marking
+   * with `useClassificationBanner` and the shell places it (see
+   * classificationBannerContext.ts). True renders it in the flow, for a marking
+   * that describes a *part* of the page — a search result set, a page-list
+   * widget — rather than the page itself.
    */
   inline?: boolean
   /**
@@ -32,23 +35,40 @@ export interface ClassificationBannerProps {
   scopeLabel: string
 }
 
-/** Height reserved so fixed-position banners never sit on top of page content. */
-export const CLASSIFICATION_BANNER_HEIGHT = 32
+/**
+ * The strip's minimum height. Its own, and nothing else's: the banner is a row
+ * of the shell's layout, so no other surface has to reserve space for it, and
+ * nothing outside this file should need the number.
+ */
+const CLASSIFICATION_BANNER_HEIGHT = 32
 
 /**
  * A protective marking (design.md §21), following the Intelligence Community
  * Design System's classification banner:
  * https://design.sis.gov.uk/components/utility/classification-banner/
  *
- * ICDS specifies a SINGLE banner fixed to the bottom of the viewport, which does
- * not scroll with the page, announced to screen readers as a landmark region
- * with a hidden label. That replaces this app's earlier top-and-bottom pair.
- * The pair existed for a real reason — someone printing or screenshotting a long
- * page has to meet the marking without knowing to scroll — so that reason is kept
- * rather than dropped: the print-only banner below renders the same label at the
- * top of the printed document, and the fixed banner falls back into the flow when
- * printing so it lands at the end. On screen you get ICDS's behaviour; on paper
- * you still get the marking top and bottom.
+ * ICDS specifies a SINGLE banner at the bottom of the viewport, which does not
+ * scroll with the page, announced to screen readers as a landmark region with
+ * a hidden label. That replaces this app's earlier top-and-bottom pair.
+ *
+ * ICDS gets "does not scroll" with `position: fixed`. This one gets it by being
+ * the last row of the shell's full-height column (AppShell.tsx), with the
+ * scrolling content region in the row above it. Same result on screen — full
+ * width, flush to the bottom, unmoved by scrolling — with one difference that
+ * is the reason for it: a fixed strip floats OVER the bottom of the content
+ * region, so every control that could end up there (the editor's sticky save
+ * bar, the rail's account block, a focused element scrolled into view) had to
+ * be lifted or padded clear of it by hand, and the one that was not — a task
+ * checkbox under a save bar that had been lifted for the banner — was a WCAG
+ * 2.5.8 failure. A layout row has nothing underneath it, so there is nothing
+ * to clear.
+ *
+ * The pair existed for a real reason — someone printing or screenshotting a
+ * long page has to meet the marking without knowing to scroll — so that reason
+ * is kept rather than dropped: the print-only banner below renders the same
+ * label at the top of the printed document, and this one is already in the
+ * flow so it lands at the end. On screen you get ICDS's behaviour; on paper you
+ * still get the marking top and bottom.
  *
  * Colour is an accent, never a signal (WCAG 1.4.1): the label is always written
  * out, and markingTone only makes a higher classification louder beside it. The
@@ -60,12 +80,12 @@ export function ClassificationBanner({ label, level, inline = false, scopeLabel 
   return (
     <>
       <Box
-        // A landmark only when fixed. ICDS announces the banner as a region, and
-        // that works because there is exactly one — two landmarks sharing a name
-        // is an axe `landmark-unique` failure, which is what an inline marking
-        // beside a fixed one would create.
+        // A landmark only for the screen's banner. ICDS announces the banner as
+        // a region, and that works because there is exactly one — two landmarks
+        // sharing a name is an axe `landmark-unique` failure, which is what an
+        // inline marking beside the screen's would create.
         {...(inline ? {} : { component: 'section' as const, 'aria-label': scopeLabel })}
-        data-classification-banner={inline ? 'inline' : 'fixed'}
+        data-classification-banner={inline ? 'inline' : 'foot'}
         sx={(theme) => {
           const tone = markingTone(level, theme.palette.mode === 'dark' ? 'dark' : 'light')
           return {
@@ -80,21 +100,14 @@ export function ClassificationBanner({ label, level, inline = false, scopeLabel 
             ...(inline
               ? {}
               : {
-                  position: 'fixed',
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  // Above the content, below MUI's modals so a dialog is never
-                  // obscured by it.
-                  zIndex: theme.zIndex.drawer + 1,
+                  // A row of the shell's column: never squeezed by the content
+                  // region above it, however tall that wants to be.
+                  flexShrink: 0,
                   minHeight: CLASSIFICATION_BANNER_HEIGHT,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                 }),
-            // Printing: let the fixed banner fall back into the flow so it ends
-            // up at the foot of the document instead of vanishing.
-            '@media print': { position: 'static' },
           }
         }}
       >
@@ -121,10 +134,10 @@ export function ClassificationBanner({ label, level, inline = false, scopeLabel 
         </Typography>
       </Box>
 
-      {/* Print only, and only for the fixed variant: the marking at the TOP of
+      {/* Print only, and only for the screen's banner: the marking at the TOP of
           the printed document, which the earlier top-and-bottom pair guaranteed
-          and a viewport-fixed banner cannot. aria-hidden because on screen it is
-          not rendered at all and the fixed banner above already announces it. */}
+          and a bottom-of-screen banner cannot. aria-hidden because on screen it
+          is not rendered at all and the banner above already announces it. */}
       {!inline && (
         <Box
           aria-hidden
@@ -135,6 +148,13 @@ export function ClassificationBanner({ label, level, inline = false, scopeLabel 
               display: 'none',
               '@media print': {
                 display: 'block',
+                // The shell renders this component as the last child of its
+                // flex column, so `order` is what moves this copy to the head
+                // of the printed page while the banner proper stays at its
+                // foot. Print-only and aria-hidden, so it is not the CSS
+                // reordering 2.4.3 warns about: nothing focusable, nothing
+                // read, and no screen rendering at all.
+                order: -1,
                 backgroundColor: tone.bg,
                 color: tone.fg,
                 textAlign: 'center',

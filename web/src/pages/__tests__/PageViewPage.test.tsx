@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
@@ -6,6 +6,7 @@ import { PageViewPage } from '../PageViewPage'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { FakePresenceTransport } from '../../realtime/FakePresenceTransport'
 import { PresenceRoomContext } from '../../presence/PresenceRoomContext'
+import { ClassificationBannerContext, type SetClassificationBanner } from '../../markings/classificationBannerContext'
 import type { PresenceViewer } from '../../realtime/types'
 import { expectNoAxeViolations } from '../../test/axe'
 
@@ -19,10 +20,15 @@ vi.mock('../../realtime/transports', () => ({
 }))
 
 let transport: FakePresenceTransport
+// What this screen tells the shell its page is classified as. The shell
+// renders the banner (app/__tests__/shellClassificationBanner.test.tsx); this
+// harness only records the declaration, which is this screen's whole part.
+let declaredMarking: Mock<SetClassificationBanner>
 
 beforeEach(() => {
   transport = new FakePresenceTransport()
   holder.transport = transport
+  declaredMarking = vi.fn<SetClassificationBanner>()
 })
 
 const basePage = {
@@ -136,9 +142,11 @@ function renderPage({
         {/* Stands in for the shell, which owns presence and receives the room
             this screen declares. */}
         <PresenceRoomContext value={presence}>
-          <Routes>
-            <Route path="/pages/:pageId" element={<PageViewPage />} />
-          </Routes>
+          <ClassificationBannerContext value={declaredMarking}>
+            <Routes>
+              <Route path="/pages/:pageId" element={<PageViewPage />} />
+            </Routes>
+          </ClassificationBannerContext>
         </PresenceRoomContext>
       </UrqlProvider>
     </MemoryRouter>,
@@ -334,7 +342,7 @@ describe('PageViewPage properties panel (design.md §20)', () => {
 })
 
 describe('PageViewPage protective marking (design.md §21)', () => {
-  it('shows the marking at the top AND the bottom, both the same string', async () => {
+  it('declares the page’s marking to the shell, whose bottom row is the banner', async () => {
     renderPage({
       pageOverrides: {
         marking: {
@@ -347,32 +355,20 @@ describe('PageViewPage protective marking (design.md §21)', () => {
       },
     })
     await screen.findByRole('heading', { name: 'Runbook' })
-    // ICDS: ONE banner, fixed to the bottom of the viewport, so the marking
-    // stays on screen while scrolling instead of bracketing the content. The
-    // reason the old top-and-bottom pair existed — someone printing a long page
-    // has to meet the marking without knowing where to scroll — is kept as a
-    // print-only copy at the head of the document.
-    const banners = document.querySelectorAll('[data-classification-banner]')
-    expect([...banners].map((b) => b.getAttribute('data-classification-banner'))).toEqual([
-      'fixed',
-      'print-head',
-    ])
-    for (const banner of banners) {
-      expect(banner.textContent).toContain('UK SECRET UK/US EYES ONLY')
-    }
+    // ICDS: ONE banner, at the bottom of the viewport, so the marking stays on
+    // screen while scrolling instead of bracketing the content. It is a row of
+    // the shell, so this screen renders nothing of it — it says what the
+    // marking is, and that it is THIS page's, which is the claim a screen
+    // reader is given to tell it from an answer's or a result set's.
+    expect(declaredMarking).toHaveBeenLastCalledWith({
+      label: 'UK SECRET UK/US EYES ONLY',
+      level: 'SECRET',
+      scopeLabel: 'Protective marking for this page',
+    })
+    expect(document.querySelector('[data-classification-banner]')).toBeNull()
   })
 
-  it('announces the fixed banner as a landmark naming what it marks', async () => {
-    // "This page" and "this answer" are different claims, and a reader who
-    // cannot see where the banner sits has nothing else to tell them apart.
-    renderPage()
-    await screen.findByRole('heading', { name: 'Runbook' })
-    expect(
-      screen.getByRole('region', { name: 'Protective marking for this page' }),
-    ).toBeInTheDocument()
-  })
-
-  it("renders the server's label rather than composing prefix + level + caveat", async () => {
+  it("declares the server's label rather than composing prefix + level + caveat", async () => {
     // A marking with no prefix reads as the bare level, with no leading space
     // and no "UK" invented for it (design.md §21.12).
     renderPage({
@@ -381,9 +377,15 @@ describe('PageViewPage protective marking (design.md §21)', () => {
       },
     })
     await screen.findByRole('heading', { name: 'Runbook' })
-    expect(document.querySelector('[data-classification-banner="fixed"]')?.textContent).toBe(
-      'Protective marking for this page: TOP SECRET',
-    )
+    expect(declaredMarking).toHaveBeenLastCalledWith(expect.objectContaining({ label: 'TOP SECRET', level: 'TOP_SECRET' }))
+  })
+
+  it('declares no marking for a withheld page — the protected screen carries it in the flow', async () => {
+    renderPage({ access: { page: null, denial } })
+    await screen.findByRole('heading', { level: 1, name: 'Protected page' })
+    // Every declaration so far — while loading and once denied — was "nothing".
+    expect(declaredMarking).toHaveBeenCalled()
+    expect(declaredMarking.mock.calls.every(([marking]) => marking === null)).toBe(true)
   })
 })
 

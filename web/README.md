@@ -83,7 +83,11 @@ deliberately not adopted and why. The **layout** is the shell: a navigation
 rail (`src/app/SideMenu.tsx`) with identity at the top and the signed-in user
 at the bottom, and a content region whose own header strip
 (`src/app/AppHeader.tsx`) carries the breadcrumb and the global actions. There
-is no top app bar, which is what the template does at desktop widths.
+is no top app bar, which is what the template does at desktop widths. Below
+both, when the screen shows marked content, the classification banner
+(`src/markings/ClassificationBanner.tsx`) is the frame's last row — a layout
+row rather than a fixed overlay, so the scroll region ends above it and nothing
+is ever underneath it.
 
 None of the template's dashboard content is here — no KPI cards, no charts,
 no sample grid — and none of its four `@mui/x-*` dependencies.

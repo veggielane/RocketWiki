@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigation } from 'react-router-dom'
 import { Box, LinearProgress, Stack, useMediaQuery, useTheme } from '@mui/material'
 import { visuallyHidden } from '@mui/utils'
-import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
+import { ClassificationBanner } from '../markings/ClassificationBanner'
+import { ClassificationBannerContext, type ClassificationBannerMarking } from '../markings/classificationBannerContext'
 import { useEmojiRegistryFeed } from '../emoji/useEmojiRegistry'
 import { AppHeader } from './AppHeader'
 import { SideMenu } from './SideMenu'
@@ -119,6 +120,17 @@ export function AppShell() {
   const setRoom = useCallback((next: string) => setRoomOverride(next), [])
   const presenceValue = useMemo(() => ({ viewers, setRoom }), [viewers, setRoom])
 
+  /**
+   * The protective marking of what is on screen, declared by the screen
+   * (classificationBannerContext.ts) and rendered here as the frame's bottom
+   * row. Nothing route-derived stands in for it: a screen that has declared
+   * nothing has no banner, which is the truth about it, where a guessed
+   * marking would be a wrong one. The screen's own effect clears it before the
+   * next screen paints, so there is no navigation bookkeeping here to match
+   * the presence room's.
+   */
+  const [marking, setMarking] = useState<ClassificationBannerMarking | null>(null)
+
   const toggleNav = () => {
     setNavOpen((open) => {
       const next = !open
@@ -128,7 +140,18 @@ export function AppShell() {
   }
 
   return (
-    <Box sx={{ display: 'flex', height: '100vh' }}>
+    // A column of two rows: the rail beside the content region, then the
+    // classification banner. The banner used to be position:fixed over the
+    // bottom of the viewport, which is what ICDS specifies and which meant
+    // every surface it floated over — this region's scroll padding, the
+    // Stack's bottom padding, the rail's account block, the editor's sticky
+    // save bar — had to reserve its strip by hand, and one that did so
+    // (the save bar) pushed a checkbox under itself. As a row, the scroll
+    // region ends where the banner begins and there is nothing under it to
+    // reserve for. It is still full width, still flush to the bottom, still
+    // on screen without scrolling; only what sits beneath it changed, to
+    // nothing.
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* Keyboard-only until focused — lets a keyboard/screen-reader user
           skip the rail and header's many tab stops on every single
           navigation, rather than tabbing through them each time. */}
@@ -149,89 +172,110 @@ export function AppShell() {
         Skip to main content
       </Box>
 
-      <SideMenu open={navOpen} temporary={isCompact} onClose={() => setNavOpen(false)} />
+      {/* The rail and the content region, sharing the height the banner
+          leaves. `minHeight: 0` because a flex item's minimum is otherwise its
+          content's height, and this row must be free to be shorter than the
+          content region's content — that is what makes the region scroll
+          rather than the row grow past the viewport. `position: relative`
+          because the rail's paper is positioned within this row (see
+          SideMenu.tsx) so that it, too, ends above the banner. */}
+      <Box sx={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
+        <SideMenu open={navOpen} temporary={isCompact} onClose={() => setNavOpen(false)} />
 
-      <Box
-        component="main"
-        id="main-content"
-        ref={mainRef}
-        tabIndex={-1}
-        sx={{
-          flexGrow: 1,
-          minWidth: 0,
-          overflow: 'auto',
-          bgcolor: 'background.default',
-          outline: 'none',
-          // A flex column, so the Stack below can be told to fill this region's
-          // height (see there). Nothing about scrolling changes: content taller
-          // than the region still overflows it and scrolls, exactly as a block
-          // would. The visually-hidden status box is absolutely positioned and
-          // the progress bar is sticky; neither cares what its parent's
-          // display is.
-          display: 'flex',
-          flexDirection: 'column',
-          // WCAG 2.4.11 (focus not obscured): the classification banner is
-          // position:fixed over the bottom of this scroll container, so when
-          // the browser scrolls a focused element into view it could land
-          // underneath it. The header strip scrolls with the content and needs
-          // no equivalent at the top, which the old fixed app bar did.
-          scrollPaddingBottom: `${CLASSIFICATION_BANNER_HEIGHT + 8}px`,
-        }}
-      >
-        {navigation.state !== 'idle' && (
-          <LinearProgress sx={{ position: 'sticky', top: 0, zIndex: 1 }} aria-label="Loading page" />
-        )}
-        {/* Focusing `<main>` moves the reading cursor but announces nothing on
-            its own. This is what says where you landed — the same
-            visually-hidden status region the ask page uses for its answers. */}
-        <Box role="status" aria-live="polite" sx={visuallyHidden}>
-          {title}
-        </Box>
-        <Stack
-          spacing={2}
+        <Box
+          component="main"
+          id="main-content"
+          ref={mainRef}
+          tabIndex={-1}
           sx={{
-            alignItems: 'center',
-            mx: { xs: 2, sm: 3 },
-            // Bottom padding reserves the fixed classification banner's strip so
-            // a page's last line is never hidden underneath it. Applied here
-            // rather than per-route because the banner is viewport-fixed: it
-            // overlaps whatever is scrolled to the bottom, marked page or not.
-            pb: `${CLASSIFICATION_BANNER_HEIGHT + 32}px`,
-            // Fills the content region top to bottom, and never shrinks below
-            // its content — so a screen that wants the height left under the
-            // header (the graph's canvas) can take it, while every other screen
-            // hugs the top exactly as it did when this was a block. The padding
-            // above is inside the filled height (border-box), which is what
-            // keeps the banner's strip reserved on a screen that fills it.
-            //
-            // Every step from the viewport to the outlet is a definite flex
-            // size (the shell is 100vh, `main` is stretched in it, this Stack
-            // and the outlet Box are flexed inside that), which is exactly the
-            // condition under which a screen's `minHeight: '100%'` resolves —
-            // `min-height: 100%` on the Stack alone would have left the
-            // outlet's height indefinite and that percentage meaningless.
-            // A screen that says `height: '100%'` would also start to resolve,
-            // so none does.
             flexGrow: 1,
-            flexShrink: 0,
+            minWidth: 0,
+            overflow: 'auto',
+            bgcolor: 'background.default',
+            outline: 'none',
+            // A flex column, so the Stack below can be told to fill this region's
+            // height (see there). Nothing about scrolling changes: content taller
+            // than the region still overflows it and scrolls, exactly as a block
+            // would. The visually-hidden status box is absolutely positioned and
+            // the progress bar is sticky; neither cares what its parent's
+            // display is.
+            display: 'flex',
+            flexDirection: 'column',
+            // WCAG 2.4.11 (focus not obscured) needs no scroll padding here:
+            // nothing is fixed over either end of this scroll container. The
+            // header strip scrolls with the content, and the classification
+            // banner is the row below this one rather than a strip floating
+            // over its bottom edge, so a focused element scrolled into view
+            // lands in the open.
           }}
         >
-          <Box sx={{ width: '100%', maxWidth: measureFor(pathname) }}>
-            <AppHeader navOpen={navOpen} onToggleNav={toggleNav} />
+          {navigation.state !== 'idle' && (
+            <LinearProgress sx={{ position: 'sticky', top: 0, zIndex: 1 }} aria-label="Loading page" />
+          )}
+          {/* Focusing `<main>` moves the reading cursor but announces nothing on
+              its own. This is what says where you landed — the same
+              visually-hidden status region the ask page uses for its answers. */}
+          <Box role="status" aria-live="polite" sx={visuallyHidden}>
+            {title}
           </Box>
-          {/* `flexGrow`, and still a block inside: a screen's root is laid out
-              as it always was, and the extra height is only there for one that
-              asks (`minHeight: '100%'`). Making this a flex column instead would
-              have re-laid-out every root and every fragment-rooted screen. */}
-          <Box sx={{ width: '100%', maxWidth: measureFor(pathname), flexGrow: 1 }}>
-            <PageTitleContext value={registerPageTitle}>
-              <PresenceRoomContext value={presenceValue}>
-                <Outlet />
-              </PresenceRoomContext>
-            </PageTitleContext>
-          </Box>
-        </Stack>
+          <Stack
+            spacing={2}
+            sx={{
+              alignItems: 'center',
+              mx: { xs: 2, sm: 3 },
+              // This used to be the banner's height plus 32px: a reservation so
+              // a page's last line was never hidden under the fixed strip, on
+              // every route because the strip overlapped whatever was scrolled
+              // to the bottom, marked page or not. The reservation is gone —
+              // the banner is a row of the shell now, so the scroll region ends
+              // above it and nothing can be hidden under it — and what remains
+              // is the 32px that was only ever breathing room, so a page's last
+              // line or button does not sit hard against the region's edge.
+              pb: 4,
+              // Fills the content region top to bottom, and never shrinks below
+              // its content — so a screen that wants the height left under the
+              // header (the graph's canvas) can take it, while every other screen
+              // hugs the top exactly as it did when this was a block. The padding
+              // above is inside the filled height (border-box), so a screen that
+              // fills it still keeps that breathing room.
+              //
+              // Every step from the viewport to the outlet is a definite flex
+              // size (the shell is 100vh, `main` is stretched in it, this Stack
+              // and the outlet Box are flexed inside that), which is exactly the
+              // condition under which a screen's `minHeight: '100%'` resolves —
+              // `min-height: 100%` on the Stack alone would have left the
+              // outlet's height indefinite and that percentage meaningless.
+              // A screen that says `height: '100%'` would also start to resolve,
+              // so none does.
+              flexGrow: 1,
+              flexShrink: 0,
+            }}
+          >
+            <Box sx={{ width: '100%', maxWidth: measureFor(pathname) }}>
+              <AppHeader navOpen={navOpen} onToggleNav={toggleNav} />
+            </Box>
+            {/* `flexGrow`, and still a block inside: a screen's root is laid out
+                as it always was, and the extra height is only there for one that
+                asks (`minHeight: '100%'`). Making this a flex column instead would
+                have re-laid-out every root and every fragment-rooted screen. */}
+            <Box sx={{ width: '100%', maxWidth: measureFor(pathname), flexGrow: 1 }}>
+              <PageTitleContext value={registerPageTitle}>
+                <PresenceRoomContext value={presenceValue}>
+                  <ClassificationBannerContext value={setMarking}>
+                    <Outlet />
+                  </ClassificationBannerContext>
+                </PresenceRoomContext>
+              </PageTitleContext>
+            </Box>
+          </Stack>
+        </Box>
       </Box>
+
+      {/* The frame's last row, present exactly when the screen has declared a
+          marking. Rendered directly in this column — not wrapped — because the
+          component's print-only head copy relies on being a flex item of it
+          (ClassificationBanner.tsx). */}
+      {marking && <ClassificationBanner label={marking.label} level={marking.level} scopeLabel={marking.scopeLabel} />}
     </Box>
   )
 }

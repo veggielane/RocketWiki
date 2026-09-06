@@ -41,7 +41,6 @@ import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { useUnsavedChangesGuard } from '../editor/useUnsavedChangesGuard'
-import { CLASSIFICATION_BANNER_HEIGHT } from '../markings/ClassificationBanner'
 import { describeSave, type SaveOutcome } from '../editor/describeSave'
 import { PageIconPicker } from './PageIconPicker'
 import { pageHref } from './pageSlug'
@@ -433,8 +432,12 @@ export function PageEditPage() {
         Sticky, not appended below the editor. The editor grows with the
         document, so on a long page Save sat below the entire text — the one
         control the screen exists for, reachable only by scrolling past
-        everything. `bottom` clears the fixed classification banner, which is
-        also viewport-fixed and would otherwise sit on top of it.
+        everything. Flush with the bottom of the scroll region: the
+        classification banner is a row of the shell below that region, not a
+        strip floating over it, so there is nothing here to lift clear of.
+        The 32px lift this used to carry for it was what pushed this bar over
+        the last line of a short document — a task checkbox, in the capture
+        the browser a11y tier judges — and failed WCAG 2.5.8.
       */}
       <Stack
         direction="row"
@@ -442,7 +445,7 @@ export function PageEditPage() {
         useFlexGap
         sx={{
           position: 'sticky',
-          bottom: `${CLASSIFICATION_BANNER_HEIGHT}px`,
+          bottom: 0,
           zIndex: 1,
           mt: 2,
           py: 1.5,

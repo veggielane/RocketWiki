@@ -66,7 +66,7 @@ import { AttachmentUploadButton } from '../attachments/AttachmentUploadButton'
 import { Comments } from '../comments/Comments'
 import { LabelEditor } from '../labels/LabelEditor'
 import { computeLabelOps } from '../labels/labelOps'
-import { ClassificationBanner } from '../markings/ClassificationBanner'
+import { useClassificationBanner } from '../markings/classificationBannerContext'
 import { useScrollToHash } from './useScrollToHash'
 import { PageIdContext } from './pageContext'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
@@ -159,6 +159,17 @@ export function PageViewPage({
   // A denial never reaches this: `access.page` is null then, so the tab keeps
   // the route's own name until the protected screen sets its own.
   useDocumentTitle(access?.page?.title)
+  // ICDS: one banner, at the bottom of the viewport, so the classification of
+  // what you are reading stays on screen while you scroll rather than only
+  // bracketing the content. The shell renders it as its bottom row; this
+  // screen only declares the marking, and declares nothing until the page has
+  // arrived — a withheld page shows its marking on the protected screen, in
+  // the flow, and no banner.
+  useClassificationBanner(
+    access?.page
+      ? { label: access.page.marking.label, level: access.page.marking.level, scopeLabel: 'Protective marking for this page' }
+      : null,
+  )
 
   const spaceId = access?.page?.spaceId
   const spaceKey = access?.page?.spaceKey
@@ -597,17 +608,6 @@ export function PageViewPage({
           }
         }}
       />
-
-      <Box sx={{ mt: 4 }}>
-        {/* ICDS: one banner, fixed to the bottom of the viewport, so the
-            classification of what you are reading stays on screen while you
-            scroll rather than only bracketing the content. */}
-        <ClassificationBanner
-          label={page.marking.label}
-          level={page.marking.level}
-          scopeLabel="Protective marking for this page"
-        />
-      </Box>
 
       <CreatePageDialog
         open={createOpen}
