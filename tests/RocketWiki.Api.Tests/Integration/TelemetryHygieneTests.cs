@@ -141,6 +141,13 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         };
         db.Pages.Add(page);
 
+        // The link index rows the product's write paths would have written for these two
+        // pages (seeded here because the pages are, rather than created through the
+        // mutation): the readable page's link to the protected one is a candidate edge
+        // the graph must drop, and the sweep below exercises that path.
+        db.PageLinks.AddRange(PageLink.FromContent(page.Id, page.CurrentContent));
+        db.PageLinks.AddRange(PageLink.FromContent(protectedPage.Id, protectedPage.CurrentContent));
+
         // design.md §21: a protective marking the caller *is* admitted to, so the caveat
         // gate genuinely evaluates a real country set on every resolution of this page
         // rather than short-circuiting on an empty caveat.
@@ -391,6 +398,37 @@ public sealed class TelemetryHygieneTests(RocketWikiApiFactory factory) : IClass
         Assert.Contains(fixture.PageId.ToString(), mcpBody, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(SentinelSelector, mcpBody, StringComparison.Ordinal);
         Assert.DoesNotContain(AccessDenialView.ProtectedTitle, mcpBody, StringComparison.Ordinal);
+
+        // 3i. The document graph, an OMITTING surface (§21.8): the readable page is a node
+        //     whose title and marking label (with the sentinel country) genuinely travel
+        //     in the body - that is the non-vacuity - while the protected page it links to
+        //     is neither a node nor an edge, and no span may carry any of it.
+        using var graph = await client.PostGraphQLAsync($$"""
+            query Graph { pageGraph(spaceKey: "{{fixture.SpaceKey}}") {
+              nodes { id title spaceKey slug marking { label } }
+              edges { sourcePageId targetPageId ordinal }
+            } }
+            """);
+        Assert.False(graph.RootElement.TryGetProperty("errors", out var graphErrors), $"pageGraph errored: {graphErrors}");
+        var graphBody = graph.RootElement.ToString();
+        Assert.Contains(SentinelTitle, graphBody, StringComparison.Ordinal);
+        Assert.Contains(SentinelNationality, graphBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(SentinelProtectedTitle, graphBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(SentinelSelector, graphBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(fixture.ProtectedPageId.ToString(), graphBody, StringComparison.OrdinalIgnoreCase);
+
+        // 3j. The per-page link fields on the readable page: the protected target is not
+        //     an outbound entry and not counted, and the same values flow through the
+        //     loader, the graph service and its permission batch.
+        using var pageLinks = await client.PostGraphQLAsync($$"""
+            query PageLinks { page(id: "{{fixture.PageId}}") {
+              outboundLinks { id title marking { label } } outboundLinkCount
+              inboundLinks { id title marking { label } } inboundLinkCount
+            } }
+            """);
+        var linksPage = pageLinks.RootElement.GetProperty("data").GetProperty("page");
+        Assert.Empty(linksPage.GetProperty("outboundLinks").EnumerateArray());
+        Assert.Equal(0, linksPage.GetProperty("outboundLinkCount").GetInt32());
 
         // 3h. A deliberately invalid document containing the search sentinel, so the
         //     GraphQL *error* path is exercised too - a validation error quotes the

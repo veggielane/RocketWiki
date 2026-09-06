@@ -1,3 +1,4 @@
+using GreenDonut;
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
 using RocketWiki.Api.Audit;
@@ -158,6 +159,102 @@ public sealed class PageFieldResolvers
         }
 
         return targets;
+    }
+
+    /// <summary>
+    /// The pages this page's current content links to, in first-occurrence order, as
+    /// graph nodes — only those the caller may view (design.md §6.7 / §21.8). Read from
+    /// the <c>PageLink</c> index through <see cref="IPageGraphService.GetPageLinksAsync"/>,
+    /// which is what makes the inbound twin below answerable at all; <c>linkTargets</c>
+    /// beside it keeps re-scanning the content because it discloses a placeholder per
+    /// denied target, and this field deliberately does not: it is the omitting view of
+    /// the same links, the one the graph draws.
+    ///
+    /// <para><b>Audit follows <c>linkTargets</c> and <c>revisions</c>, not a third
+    /// rule.</b> No per-neighbour row: a neighbour the caller cannot view is simply not in
+    /// the list, a pruned listing is not a refused request, and this Page already passed
+    /// canView and was audited where it was read. The subject page's own verdict is
+    /// re-decided by the service on the same gate, and a <c>Denied</c> there is race-only —
+    /// a rule change landed between the root read and this field — but is still recorded
+    /// (§7), exactly as <c>revisions</c> records its race-only denial, before collapsing to
+    /// the same empty list a missing or trashed page gets. All four link fields share one
+    /// loader entry (<see cref="PageLinkNeighboursByPageIdDataLoader"/>), and
+    /// <c>DbAuditSink</c> dedups the row.</para>
+    /// </summary>
+    public async Task<IReadOnlyList<PageGraphNode>> GetOutboundLinksAsync(
+        [Parent] Page page,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
+        PageLinkNeighboursByPageIdDataLoader linksLoader,
+        CancellationToken cancellationToken) =>
+        (await LoadPageLinksAsync(page, principalAccessor, auditSink, linksLoader, cancellationToken))?.Outbound ?? [];
+
+    /// <summary>
+    /// The pages whose current content links to this page, by title — only those the
+    /// caller may view, on exactly the terms <see cref="GetOutboundLinksAsync"/> states. A
+    /// backlink from a page the caller cannot read is not here and not counted: "one more
+    /// page links here" would be a census entry with the name left off (§21.8).
+    /// </summary>
+    public async Task<IReadOnlyList<PageGraphNode>> GetInboundLinksAsync(
+        [Parent] Page page,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
+        PageLinkNeighboursByPageIdDataLoader linksLoader,
+        CancellationToken cancellationToken) =>
+        (await LoadPageLinksAsync(page, principalAccessor, auditSink, linksLoader, cancellationToken))?.Inbound ?? [];
+
+    /// <summary>
+    /// <c>outboundLinks.Count</c>, literally: this resolver calls the list resolver and
+    /// measures what it returned. The Core contract says a count is the length of its list
+    /// and never one more; making the count a projection of the list makes that true by
+    /// construction rather than by agreement, so a stored number or a second query could
+    /// never disagree with the list beside it. One loader entry serves both.
+    /// </summary>
+    public async Task<int> GetOutboundLinkCountAsync(
+        [Parent] Page page,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
+        PageLinkNeighboursByPageIdDataLoader linksLoader,
+        CancellationToken cancellationToken) =>
+        (await GetOutboundLinksAsync(page, principalAccessor, auditSink, linksLoader, cancellationToken)).Count;
+
+    /// <summary><c>inboundLinks.Count</c>, on the same construction as
+    /// <see cref="GetOutboundLinkCountAsync"/>.</summary>
+    public async Task<int> GetInboundLinkCountAsync(
+        [Parent] Page page,
+        [Service] ICurrentPrincipalAccessor principalAccessor,
+        [Service] IAuditSink auditSink,
+        PageLinkNeighboursByPageIdDataLoader linksLoader,
+        CancellationToken cancellationToken) =>
+        (await GetInboundLinksAsync(page, principalAccessor, auditSink, linksLoader, cancellationToken)).Count;
+
+    /// <summary>
+    /// The one place the four link fields turn the service's result into neighbours:
+    /// anonymous and absent (NotFound, or a key the loader did not fill) are null without
+    /// a row; Denied is audited as a <c>page.view</c> refusal of this page and then null.
+    /// Internal and static so the race-only Denied branch — which no HTTP request can
+    /// reach on purpose — is still exercised by a test.
+    /// </summary>
+    internal static async Task<PageLinkNeighbours?> LoadPageLinksAsync(
+        Page page,
+        ICurrentPrincipalAccessor principalAccessor,
+        IAuditSink auditSink,
+        IDataLoader<Guid, ReadResult<PageLinkNeighbours>> linksLoader,
+        CancellationToken cancellationToken)
+    {
+        if (principalAccessor.Current is null)
+        {
+            return null;
+        }
+
+        var result = await linksLoader.LoadAsync(page.Id, cancellationToken);
+        if (result is ReadResult<PageLinkNeighbours>.Denied denied)
+        {
+            await ReadDenialAudit.RecordAsync(
+                auditSink, "page.view", AuditSubjectType.Page, page.Id, denied.Reason, cancellationToken);
+        }
+
+        return result?.ValueOrNull();
     }
 
     /// <summary>

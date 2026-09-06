@@ -68,6 +68,26 @@ public sealed class PageType : ObjectType<Page>
             .Type<NonNullType<ListType<NonNullType<ObjectType<PageLinkTarget>>>>>()
             .ResolveWith<PageFieldResolvers>(r => r.GetLinkTargetsAsync(default!, default!, default!, default!, default));
 
+        // design.md §6.7/§21.8: the OMITTING view of this page's links, both directions,
+        // as graph nodes — a neighbour the caller cannot view is absent, not a
+        // placeholder (that is linkTargets' job, outbound only). The two counts are
+        // projections of the two lists, never a query of their own: see the resolvers.
+        descriptor.Field("outboundLinks")
+            .Type<NonNullType<ListType<NonNullType<PageGraphNodeType>>>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetOutboundLinksAsync(default!, default!, default!, default!, default));
+
+        descriptor.Field("inboundLinks")
+            .Type<NonNullType<ListType<NonNullType<PageGraphNodeType>>>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetInboundLinksAsync(default!, default!, default!, default!, default));
+
+        descriptor.Field("outboundLinkCount")
+            .Type<NonNullType<IntType>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetOutboundLinkCountAsync(default!, default!, default!, default!, default));
+
+        descriptor.Field("inboundLinkCount")
+            .Type<NonNullType<IntType>>()
+            .ResolveWith<PageFieldResolvers>(r => r.GetInboundLinkCountAsync(default!, default!, default!, default!, default));
+
         descriptor.Field(p => p.Revisions)
             .Type<NonNullType<ListType<NonNullType<PageRevisionType>>>>()
             .ResolveWith<PageFieldResolvers>(r => r.GetRevisionsAsync(default!, default!, default!, default!, default));

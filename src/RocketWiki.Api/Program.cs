@@ -213,6 +213,10 @@ builder.Services.AddSingleton(sp =>
     new InstanceIdentity(sp.GetRequiredService<IOptions<InstanceOptions>>().Value.Id));
 static string InstanceId(IServiceProvider sp) => sp.GetRequiredService<InstanceIdentity>().LocalInstanceId;
 builder.Services.AddScoped<IPageReadService, PageReadService>();
+// The document graph (design.md §6.7/§21.8): an omitting read over the PageLink index,
+// gated by the same batched permission path as every other read. No InstanceId — like
+// IPageReadService, nothing here depends on replica status (§6.4).
+builder.Services.AddScoped<IPageGraphService, PageGraphService>();
 // Analytics reads through IPageReadService rather than the DbContext for its
 // visible-page set, so the §21 marking gate and §6.4 restrictions are the ones
 // already enforced everywhere else rather than a second copy in an aggregation.

@@ -702,14 +702,23 @@ for any page in it reached by id or slug.
 **Everything else still returns "absent", never "forbidden".** Search,
 Ask-the-wiki, RQL and the page-list widget, label listings, the home feeds,
 notifications, `Page.children`, comments, attachments, revisions, watch state,
-the SignalR joins, space listings, the permission inspector and **every MCP
-tool** omit a denied page entirely: no placeholder rows, no gaps in ordering
-that imply something was removed, no count that implies one. On those
-surfaces the reasoning is unchanged — a result list is a *compilation* of
-what matched, and a placeholder in it is a census of what the caller may not
-read, per query. Each omitting surface is pinned by test, plus a sweep that
-the placeholder vocabulary never reaches its response. The full table is in
-§21.8.
+the SignalR joins, space listings, the permission inspector, **the document
+graph** (`pageGraph(spaceKey)`, and `Page.inboundLinks` / `outboundLinks`
+with their counts) and **every MCP tool** omit a denied page entirely: no
+placeholder rows, no gaps in ordering that imply something was removed, no
+count that implies one. On those surfaces the reasoning is unchanged — a
+result list is a *compilation* of what matched, and a placeholder in it is a
+census of what the caller may not read, per query. The graph is the sharpest
+case: a whole-instance graph is a compilation of everything, so a page the
+caller cannot view is not a node, an edge exists only when the caller can
+view *both* of its endpoints (an edge with one hidden endpoint would be the
+census with the name left off), and a link count is the length of the
+filtered list beside it, never one more. `Page.linkTargets` and
+`Page.outboundLinks` read the same links and answer differently on purpose —
+the first discloses a placeholder per denied target to a reader inside the
+page, the second is the omitting view the graph draws. Each omitting surface
+is pinned by test, plus a sweep that the placeholder vocabulary never reaches
+its response. The full table is in §21.8.
 
 **Why the reversal, and why only there.** The earlier rule made a denied page
 indistinguishable from a nonexistent one on *every* read path, and it was
@@ -808,6 +817,23 @@ queries are audited too, still as `success`: `denied` stays reserved for ABAC
 refusals, and RQL never produces one (restricted pages are absent from the
 candidate set, never refused). `parseRql` is deliberately unaudited — a pure
 syntax service with no subject and no access decision (§22.7).
+
+`graph.view` (§6.7's document graph) — one row per `pageGraph` read, Details
+carrying the scope (`instance` or the space key asked for), the space's id
+as subject when the key names a live space, and the node and edge counts of
+the graph the caller received — bounded numbers, never a title or a marking.
+Always `success`, on the RQL reasoning: a compilation never produces an ABAC
+refusal, because a page the caller fails a gate for is absent from it rather
+than refused, and that includes a space-scoped read of a space the caller
+cannot enter (the same empty answer and the same `success` row that
+`labels(spaceKey)` and `search(spaceKey:)` already write; the tree's `denied`
+row for that case belongs to a directly requested subject, which a scope
+filter is not). It dedups on the scope, so two scopes in one document write
+two rows. The per-page `Page.inboundLinks` / `outboundLinks` fields and their
+counts write no row of their own — a listing continuation of the
+already-audited page read, as `linkTargets` is — except that the race-only
+re-decision of the subject page itself is recorded as a `page.view` denial
+when it fails, exactly as `revisions` records its own.
 
 `settings.avatar.set` / `settings.avatar.cleared` (§19) — the avatar
 mutations, via the domain-event pipeline in the same transaction as the
@@ -3590,6 +3616,7 @@ boundary is drawn once, here; the reasoning is §6.7's.
 | `Page.parentDenial` | **disclosed**, beside the unchanged null `parent` |
 | `page(id)` / `pageBySlug` | `null`, byte-identical to a page that does not exist — pinned, so the plain read stays leak-free |
 | search, Ask-the-wiki, RQL and page lists, label listings, home feeds, notifications, `Page.children`, comments, attachments, revisions, watch state, SignalR joins, space listings, the inspector, every MCP tool | **omitted**: no placeholder, no gap, no count — and a sweep pins that the placeholder vocabulary never appears in any of their responses |
+| the document graph — `pageGraph(spaceKey)`, `Page.inboundLinks` / `outboundLinks` and their counts | **omitted**: no node, no edge touching it (an edge exists only when the caller can view both endpoints), and no count that includes it — a count is the length of its filtered list by construction. A space the caller cannot enter, an archived space and a key naming nothing are the same empty graph, byte-identical. The read audits as `graph.view`, always `success` (§7); the per-page fields are a listing continuation of the already-audited page read, exactly as `linkTargets` is. Pinned by the same sweep |
 
 **A placeholder carries the marking and the reasons, and nothing that
 identifies the page.** Its title is a server constant; its marking is the
@@ -3679,7 +3706,9 @@ Enforcement is inherited, not reimplemented, everywhere `canView` is already
 computed through `PermissionContextLoader`: page reads, `parent`/`children`,
 revision history, search (keyword and vector — the post-filter is the same
 batch), Ask-the-wiki retrieval (a page the asker fails a marking gate for never enters
-the prompt, not merely the citation list), MCP tools, attachments, comments,
+the prompt, not merely the citation list), the document graph (every candidate
+page decided in one batch, and a node carries the marking that batch gated on,
+the tree's carry-the-value rule below), MCP tools, attachments, comments,
 labels, page properties, watch state, the notification read model, the co-editing
 hub's join check, and the §6.6 permission inspector (whose non-short-circuiting
 `Explain` is the gate's own walk with short-circuiting off, pinned by test to

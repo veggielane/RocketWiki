@@ -855,6 +855,8 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
     [InlineData("myRecentlyViewed")]
     [InlineData("notifications")]
     [InlineData("children")]
+    [InlineData("pageGraph")]
+    [InlineData("pageLinks")]
     [InlineData("askWiki")]
     [InlineData("mcp:search")]
     [InlineData("mcp:get_page")]
@@ -901,6 +903,21 @@ public sealed class AccessDisclosureTests(AskWikiApiFixture fixture) : IClassFix
             case "children":
                 body = await Gql(bob, $$"""query { page(id: "{{f.P0}}") { id children { id title } } }""");
                 Assert.Contains("\"children\":[]", body, StringComparison.Ordinal);
+                break;
+            case "pageGraph":
+                // The index holds P0 -> P1 and P0 -> P4; neither is an edge for Bob, and
+                // neither target is a node - the graph shows P0 and nothing that points
+                // at what he may not read.
+                body = await Gql(bob, $$"""query { pageGraph(spaceKey: "{{f.SpaceKey}}") { nodes { id title spaceKey slug marking { label } } edges { sourcePageId targetPageId ordinal } } }""");
+                Assert.Contains(JsonSerializer.Serialize(f.P0.ToString()), body, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("\"edges\":[]", body, StringComparison.Ordinal);
+                break;
+            case "pageLinks":
+                // Same links, per page: P0's outbound list is empty for Bob and its count
+                // is that list's length - not the three targets the content names.
+                body = await Gql(bob, $$"""query { page(id: "{{f.P0}}") { id outboundLinks { id title } outboundLinkCount inboundLinks { id title } inboundLinkCount } }""");
+                Assert.Contains("\"outboundLinks\":[]", body, StringComparison.Ordinal);
+                Assert.Contains("\"outboundLinkCount\":0", body, StringComparison.Ordinal);
                 break;
             case "askWiki":
                 fixture.ChatClient.Reset();

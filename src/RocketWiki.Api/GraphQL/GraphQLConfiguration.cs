@@ -41,6 +41,12 @@ public static class GraphQLConfiguration
             // which maps the visible nodes only.
             .AddType<PageTreeEntryType>()
             .AddType<PageTreeNodeType>()
-            .AddType<ProtectedTreeNodeType>();
+            .AddType<ProtectedTreeNodeType>()
+            // The document graph (design.md §6.7/§21.8): explicit types over Core's
+            // records, with no placeholder counterpart at all — an omitting surface has
+            // nothing to render for a page the caller cannot view (see PageGraphTypes).
+            .AddType<PageGraphType>()
+            .AddType<PageGraphNodeType>()
+            .AddType<PageGraphEdgeType>();
     }
 }
