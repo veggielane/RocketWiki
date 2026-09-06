@@ -1,0 +1,62 @@
+# The document graph (design.md §6.7 / §21.8): every page the caller can
+# view in scope, and every link between two such pages. An OMITTING surface,
+# by design and by test: a page the caller cannot view is not a node, an edge
+# exists only when they can view BOTH endpoints, and a count is the length of
+# the filtered list beside it. Nothing here needs filtering again in the SPA,
+# and nothing here may grow a "(protected)" placeholder — a whole-instance
+# graph is a compilation of everything, so a placeholder in it would be a
+# census of what the caller may not read.
+#
+# One node shape for both the graph and a page's own neighbour lists, so the
+# canvas, the table and the details screen cannot drift into three renderings
+# of the same page. `marking` is the value the server's gate decided on
+# (§21.9); the graph badges a node with the LEVEL only, as the tree does.
+fragment GraphNode on PageGraphNode {
+  id
+  title
+  spaceKey
+  slug
+  icon
+  marking {
+    ...PageMarking
+  }
+}
+
+# Null `spaceKey` is the whole instance — the product's default scope. A key
+# narrows it to that space's subgraph: edges whose source is in the space, to
+# targets the caller can view. A space the caller cannot enter, an archived
+# space and a key naming nothing are the same empty graph, byte-identical, so
+# the screen must not sharpen an empty answer into any one of them. Audited as
+# `graph.view` server-side (§7).
+query PageGraph($spaceKey: String) {
+  pageGraph(spaceKey: $spaceKey) {
+    nodes {
+      ...GraphNode
+    }
+    edges {
+      sourcePageId
+      targetPageId
+      ordinal
+    }
+  }
+}
+
+# One page's neighbours, for the details screen: the counts ARE the lengths of
+# the lists beside them (computed once, server-side), so a count can never
+# say "one more" than the list shows. Its own document rather than more fields
+# on PagePropertiesForPage for the same reason that one is separate from
+# PageById: the section loads, fails and re-reads on its own, and the
+# properties table does not wait on it.
+query PageLinksForPage($id: UUID!) {
+  page(id: $id) {
+    id
+    outboundLinkCount
+    inboundLinkCount
+    outboundLinks {
+      ...GraphNode
+    }
+    inboundLinks {
+      ...GraphNode
+    }
+  }
+}

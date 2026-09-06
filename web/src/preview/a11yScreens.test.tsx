@@ -44,6 +44,7 @@ import { TrashPage } from '../pages/TrashPage'
 import { AuditLogPage } from '../pages/AuditLogPage'
 import { SpaceListPage } from '../pages/SpaceListPage'
 import { AdminPage } from '../pages/AdminPage'
+import { GraphPage } from '../pages/GraphPage'
 import { RichTextEditor } from '../editor/RichTextEditor'
 import { MovePageDialog } from '../access/move/MovePageDialog'
 import { StaleRevisionDialog } from '../diff/StaleRevisionDialog'
@@ -123,6 +124,16 @@ vi.mock('../emoji/emojiBlobCache', () => ({
   getEmojiUrl: (name: string) => Promise.resolve(emojiFor(name)),
   peekEmojiUrl: (name: string) => emojiFor(name),
   resetEmojiBlobCache: () => {},
+}))
+
+// The graph canvas cannot mount in jsdom (no canvas, no layout), and it is
+// not what the a11y tiers judge anyway: axe has nothing to say about pixels
+// on a canvas. What they judge is everything AROUND it — the toolbar, the
+// legend, the focus chip, the description on the wrapper — so the renderer
+// is a stub and the chrome is real. The 3D renderer is lazy and never
+// reached from a capture, so it needs no stub.
+vi.mock('react-force-graph-2d', () => ({
+  default: () => <div data-testid="canvas-2d" />,
 }))
 
 const pageContent = [
@@ -315,6 +326,25 @@ const spaceTreeNodes = [
 /** One unchanged line and one that moves, so the history capture has both fills. */
 const HISTORY_BODY = (cause: string) => `Stage two ignition held at T-4 seconds.\n\n${cause}\n`
 
+const graphMarking = (level: string, levelName: string, label: string) => ({
+  level, levelName, eyesOnly: [] as string[], ukPrefix: true, selectors: [] as { category: string; value: string }[], label,
+})
+
+/** The staged document graph: the page-view page plus its neighbours, one per classification rung. */
+const graphNodes = [
+  { id: 'page-1', title: page.title, spaceKey: 'PROP', slug: page.slug, icon: 'ROCKET', marking: page.marking },
+  { id: 'page-3', title: 'Chill-in procedure v3', spaceKey: 'PROP', slug: 'chill-in-procedure-v3', icon: null, marking: graphMarking('OFFICIAL', 'OFFICIAL', 'UK OFFICIAL') },
+  { id: 'page-2', title: 'Telemetry review notes', spaceKey: 'PROP', slug: 'telemetry-review-notes', icon: 'CHART', marking: graphMarking('OFFICIAL_SENSITIVE', 'OFFICIAL-SENSITIVE', 'UK OFFICIAL-SENSITIVE') },
+  { id: 'page-0', title: 'Static fire campaign', spaceKey: 'PROP', slug: 'static-fire-campaign', icon: 'FLAG', marking: graphMarking('TOP_SECRET', 'TOP SECRET', 'UK TOP SECRET UK EYES ONLY') },
+  { id: 'page-5', title: 'Harness routing map', spaceKey: 'AV', slug: 'harness-routing-map', icon: 'MAP', marking: graphMarking('OFFICIAL', 'OFFICIAL', 'UK OFFICIAL') },
+]
+const graphEdges = [
+  { sourcePageId: 'page-1', targetPageId: 'page-3', ordinal: 0 },
+  { sourcePageId: 'page-1', targetPageId: 'page-2', ordinal: 1 },
+  { sourcePageId: 'page-0', targetPageId: 'page-1', ordinal: 0 },
+  { sourcePageId: 'page-2', targetPageId: 'page-3', ordinal: 0 },
+]
+
 function mockClient() {
   return createMockUrqlClient((name, op) => {
     if (name === 'PageById') return { page }
@@ -354,6 +384,22 @@ function mockClient() {
         ],
       }
     if (name === 'SpaceTreeForMove') return { pageTree: [] }
+    // The document graph (design.md §6.7 / §21.8): every page this caller
+    // can view, and the links between them — nothing withheld is here, by
+    // construction. All four levels among the nodes, so the legend beside
+    // the canvas puts every tone in front of the browser tier, and one node
+    // linked nowhere, so the table view shows its "None".
+    if (name === 'PageGraph') return { pageGraph: { nodes: graphNodes, edges: graphEdges } }
+    if (name === 'PageLinksForPage')
+      return {
+        page: {
+          id: page.id,
+          outboundLinkCount: 2,
+          inboundLinkCount: 1,
+          outboundLinks: [graphNodes[1], graphNodes[2]],
+          inboundLinks: [graphNodes[3]],
+        },
+      }
     if (name === 'SpaceLabelDetails') return { labelDetails: page.labelDetails }
     if (name === 'CustomEmojis')
       return { customEmojis: [{ name: 'rocket', etag: '"r1"' }, { name: 'banana', etag: '"b1"' }] }
@@ -756,6 +802,16 @@ const SCREENS: Screen[] = [
   // Carries the 'Planned' treatment for the not-built-yet sections, which is a
   // dashed border plus a chip — exactly the kind of thing worth painting.
   { name: 'admin', render: (mode) => shell(mode, '/admin', 'admin', <AdminPage />) },
+  // The document graph, focused on the staged page: the space filter, the
+  // view and dimension toggles, the focus chip, the legend of level badges
+  // (all four rungs, beside a canvas the tiers cannot see into) and the
+  // described wrapper around it.
+  { name: 'graph', render: (mode) => shell(mode, '/graph?focus=page-1', 'graph', <GraphPage />) },
+  // The same graph as its accessible equivalent: the filter field, the
+  // status line and a five-column table of links with the focused row
+  // marked — the surface a keyboard or screen-reader user actually gets,
+  // and the one where a level badge sits inside a selected table row.
+  { name: 'graph-table', render: (mode) => shell(mode, '/graph?view=table&focus=page-1', 'graph', <GraphPage />) },
   {
     name: 'notification-bell-open',
     render: (mode) => shell(mode, '/pages/page-1', 'pages/:pageId', <PageViewPage />),

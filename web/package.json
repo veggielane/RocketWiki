@@ -53,6 +53,8 @@
     "oidc-client-ts": "^3.5.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-force-graph-2d": "^1.29.1",
+    "react-force-graph-3d": "^1.29.1",
     "react-oidc-context": "^3.3.1",
     "react-router-dom": "^7.18.2",
     "urql": "^5.0.4",

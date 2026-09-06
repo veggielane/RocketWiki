@@ -244,6 +244,18 @@ export const routes: RouteObject[] = [
           return { Component: SearchPage }
         },
       },
+      // The document graph (design.md §6.7 / §21.8). Ungated: the read is an
+      // omitting surface that answers with exactly what this caller may see,
+      // and a caller who may see nothing gets an empty graph rather than a
+      // refusal. Its chunk carries the 2D renderer; the 3D one splits again
+      // behind a `lazy` inside the page (three.js, loaded only on demand).
+      {
+        path: 'graph',
+        lazy: async () => {
+          const { GraphPage } = await import('../pages/GraphPage')
+          return { Component: GraphPage }
+        },
+      },
       // Not router-gated: NOT_CONFIGURED is a payload fact learned by
       // asking (design.md §9.5 — no status query exists), so the page
       // itself renders the feature-absent state (askAvailability.ts) while

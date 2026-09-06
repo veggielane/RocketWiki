@@ -57,6 +57,7 @@ export const ADMIN_PAGES: Record<string, string> = {
 export const TOP_LEVEL_PAGES: Record<string, string> = {
   search: 'Search',
   ask: 'Ask the wiki',
+  graph: 'Graph',
   settings: 'Settings',
 }
 

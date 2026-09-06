@@ -29,6 +29,8 @@ import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive'
 import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined'
 import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined'
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined'
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined'
+import { graphPath } from '../graph/graphModel'
 import {
   usePageAccessByIdQuery,
   useCurrentUserQuery,
@@ -434,6 +436,20 @@ export function PageViewPage({
                     <HistoryOutlinedIcon fontSize="small" />
                   </ListItemIcon>
                   History
+                </MenuItem>
+                {/* This page, highlighted on the document graph. For every
+                    reader, like History: the graph is a read of pages they
+                    can already see, and the id in the URL makes the view
+                    linkable (design.md §6.7). */}
+                <MenuItem
+                  component={RouterLink}
+                  to={graphPath({ focus: page.id })}
+                  onClick={() => setActionsAnchor(null)}
+                >
+                  <ListItemIcon>
+                    <HubOutlinedIcon fontSize="small" />
+                  </ListItemIcon>
+                  View on graph
                 </MenuItem>
                 {/* Everything about the page that is not the page. Editors only,
                     matching the screen's own gate — offering a link that answers

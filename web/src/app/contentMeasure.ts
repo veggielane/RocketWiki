@@ -27,7 +27,9 @@ export const WIDE_MAX_WIDTH = 1400
  * space-scoped `/spaces/:spaceKey/-/analytics` got 960, so the same component
  * laid its charts out differently depending on which link you followed.
  */
-const WIDE_ROUTE_PATTERNS = ['/admin/audit', '/admin/analytics', '/admin/sync', '/spaces/:spaceKey/-/analytics']
+// `/graph` is wide for the same reason analytics is: a force-directed drawing
+// and a five-column table of links are things to scan across, not prose.
+const WIDE_ROUTE_PATTERNS = ['/admin/audit', '/admin/analytics', '/admin/sync', '/spaces/:spaceKey/-/analytics', '/graph']
 
 /**
  * How wide the content column is on the screen at `pathname`.

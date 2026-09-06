@@ -44,7 +44,22 @@ interface Options {
   isReplica?: boolean
   setError?: Record<string, unknown> | null
   removeError?: Record<string, unknown> | null
+  /** The page's neighbours in the document graph; `'none'` for a page linked nowhere, `'fail'` for a read that returns nothing. */
+  links?: 'linked' | 'none' | 'fail'
 }
+
+/** A node of the document graph, as the links section lists one (design.md §6.7). */
+const graphNode = (id: string, title: string, slug: string, spaceKey = 'ENG') => ({
+  id,
+  title,
+  slug,
+  spaceKey,
+  icon: null,
+  marking: baseMarking,
+})
+
+const outboundLinks = [graphNode('page-2', 'Chill-in procedure v3', 'chill-in-procedure-v3'), graphNode('page-3', 'Telemetry review notes', 'telemetry-review-notes')]
+const inboundLinks = [graphNode('page-0', 'Static fire campaign', 'static-fire-campaign', 'PROP')]
 
 function renderPage(options: Options = {}) {
   const {
@@ -57,11 +72,27 @@ function renderPage(options: Options = {}) {
     isReplica = false,
     setError = null,
     removeError = null,
+    links = 'linked',
   } = options
   const mock = createMockUrqlClient((name) => {
     if (name === 'PagePropertiesForPage') {
       if (pageMissing) return { page: null }
       return { page: { id: 'page-1', title: 'Runbook', spaceKey: 'ENG', spaceId: 'space-1', canEdit, canManageAccess, marking, properties } }
+    }
+    if (name === 'PageLinksForPage') {
+      if (links === 'fail') return undefined
+      const outbound = links === 'linked' ? outboundLinks : []
+      const inbound = links === 'linked' ? inboundLinks : []
+      // The counts ARE the lists' lengths, server-side by construction.
+      return {
+        page: {
+          id: 'page-1',
+          outboundLinkCount: outbound.length,
+          inboundLinkCount: inbound.length,
+          outboundLinks: outbound,
+          inboundLinks: inbound,
+        },
+      }
     }
     if (name === 'PagePropertyKeys') return { pagePropertyKeys: registry }
     // The move dialog's destination tree lives on this screen now.
@@ -370,6 +401,67 @@ describe('PageDetailsPage empty states', () => {
     // The screen renders read-only and the banner says WHY: "this is a replica"
     // and "you are not an editor" are different facts.
     expect(screen.queryByText(/managed by its editors/)).not.toBeInTheDocument()
+    expect(screen.getByRole('table', { name: 'Page properties' })).toBeInTheDocument()
+  })
+})
+
+describe('PageDetailsPage links (design.md §6.7 / §21.8)', () => {
+  it('counts the links each way and expands each count into the linked pages', async () => {
+    renderPage()
+    const outbound = await screen.findByRole('button', { name: 'Links to 2 pages' })
+    expect(screen.getByRole('button', { name: 'Linked from 1 page' })).toBeInTheDocument()
+    // Collapsed: the count is the whole story until it is opened.
+    expect(outbound).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('link', { name: /Chill-in procedure v3/ })).not.toBeInTheDocument()
+
+    fireEvent.click(outbound)
+    expect(outbound).toHaveAttribute('aria-expanded', 'true')
+    // Each linked page navigates, by its readable address.
+    expect(await screen.findByRole('link', { name: /Chill-in procedure v3/ })).toHaveAttribute(
+      'href',
+      '/spaces/ENG/chill-in-procedure-v3',
+    )
+    expect(screen.getByRole('link', { name: /Telemetry review notes/ })).toHaveAttribute(
+      'href',
+      '/spaces/ENG/telemetry-review-notes',
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Linked from 1 page' }))
+    expect(await screen.findByRole('link', { name: /Static fire campaign/ })).toHaveAttribute(
+      'href',
+      '/spaces/PROP/static-fire-campaign',
+    )
+  })
+
+  it('has no axe violations with a link list expanded', async () => {
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Links to 2 pages' }))
+    await screen.findByRole('link', { name: /Chill-in procedure v3/ })
+    await expectNoAxeViolations()
+  })
+
+  it('says plainly when the page is linked nowhere, instead of an expandable nothing', async () => {
+    renderPage({ links: 'none' })
+    expect(await screen.findByText('Links to 0 pages')).toBeInTheDocument()
+    expect(screen.getByText('This page links to no other page you can view.')).toBeInTheDocument()
+    expect(screen.getByText('Linked from 0 pages')).toBeInTheDocument()
+    expect(screen.getByText('No page you can view links here.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Links to/ })).not.toBeInTheDocument()
+  })
+
+  it('offers View on graph, focused on this page, to a reader who cannot edit', async () => {
+    // The graph is a read of pages the caller can already see, so the way to
+    // it is not an editor affordance; and the focus rides in the URL so the
+    // view is linkable.
+    renderPage({ canEdit: false })
+    expect(await screen.findByRole('link', { name: 'View on graph' })).toHaveAttribute('href', '/graph?focus=page-1')
+  })
+
+  it('reports a links read that returned nothing as a failure, never as "no links"', async () => {
+    renderPage({ links: 'fail' })
+    expect(await screen.findByText("Couldn't load this page's links.")).toBeInTheDocument()
+    expect(screen.queryByText(/Links to 0 pages/)).not.toBeInTheDocument()
+    // The rest of the screen is unaffected: the links read is its own query.
     expect(screen.getByRole('table', { name: 'Page properties' })).toBeInTheDocument()
   })
 })

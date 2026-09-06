@@ -21,6 +21,7 @@ import RocketLaunchIcon from '@mui/icons-material/RocketLaunch'
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined'
 import SpaceDashboardOutlinedIcon from '@mui/icons-material/SpaceDashboardOutlined'
 import HomeOutlinedIcon from '@mui/icons-material/HomeOutlined'
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined'
 import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from 'react-oidc-context'
 import { UserAvatar } from '../avatars/UserAvatar'
@@ -151,6 +152,15 @@ export function SideMenu({
               <SpaceDashboardOutlinedIcon />
             </ListItemIcon>
             <ListItemText primary="All spaces" />
+          </ListItemButton>
+          {/* The document graph, instance-wide by default (design.md §6.7).
+              Beside "All spaces" because it is the other whole-instance
+              view of the wiki's content. */}
+          <ListItemButton component={RouterLink} to="/graph" selected={location.pathname === '/graph'}>
+            <ListItemIcon>
+              <HubOutlinedIcon />
+            </ListItemIcon>
+            <ListItemText primary="Graph" />
           </ListItemButton>
         </List>
         {/* all → recent → current: every space, the few you keep coming

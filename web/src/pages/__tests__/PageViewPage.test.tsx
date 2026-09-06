@@ -314,6 +314,15 @@ describe('PageViewPage properties panel (design.md §20)', () => {
     )
   })
 
+  it('offers View on graph to every reader, with this page as the focus in the URL', async () => {
+    // The document graph is a read of pages the caller can already see
+    // (design.md §6.7), so the way to it is gated like History, not Details;
+    // the focus travels in the address so the view can be linked and refreshed.
+    renderPage({ pageOverrides: { canEdit: false } })
+    await openMoreActions()
+    expect(screen.getByRole('menuitem', { name: 'View on graph' })).toHaveAttribute('href', '/graph?focus=page-1')
+  })
+
   it('shows the panel only when there is something in it', async () => {
     // Previously an editor saw an empty panel carrying an "Add properties" link, so
     // every page wore a box whether or not it had any properties. The panel is now

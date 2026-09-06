@@ -187,6 +187,20 @@ export type LoadFailureReason =
    */
   | 'PAGE_ACCESS'
   /**
+   * The document graph (design.md §6.7 / §21.8). Transport only: an EMPTY
+   * graph is an answer — the same answer for a space the caller cannot
+   * enter, an archived one and a key naming nothing — so the screen's empty
+   * state stays blurry, and this sentence is reserved for a request that
+   * never came back.
+   */
+  | 'PAGE_GRAPH'
+  /**
+   * A page's own neighbour lists on the details screen: a listing
+   * continuation of a page read the caller has already passed, so it can
+   * name what failed without confirming anything new.
+   */
+  | 'PAGE_LINKS'
+  /**
    * The accumulated group vocabulary (design.md §6.6). Names the instance has
    * observed in tokens, never a membership list — so, like the other
    * registries, it has nothing to conceal and can say what failed.
@@ -236,6 +250,10 @@ export function describeLoadFailure(reason: LoadFailureReason): UnavailableCopy 
     }
   }
   switch (reason) {
+    case 'PAGE_GRAPH':
+      return { summary: "Couldn't load the document graph.", pointsToSettings: false }
+    case 'PAGE_LINKS':
+      return { summary: "Couldn't load this page's links.", pointsToSettings: false }
     case 'SPACE_LIST':
       return { summary: "Couldn't load the space list.", pointsToSettings: false }
     case 'SPACE':

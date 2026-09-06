@@ -56,7 +56,7 @@ data (same mock seams as the test suite) into one self-contained HTML file
 per screen **per theme** — dark-mode contrast is where audits usually
 bleed, so every screen exists as `--light` and `--dark`, with the
 `data-theme` attribute stamped exactly as `ColorModeProvider` stamps it in
-the live app. Captured screens (23 × 2 themes):
+the live app. Captured screens (26 × 2 themes):
 
 page view (with presence viewers), page edit (full editor + formatting
 toolbar), search, settings, ask (answered, citations + sources), admin
@@ -71,9 +71,13 @@ never be contrast-checked), a page-list widget — the only screen where
 MUI marking components render inside editor-content's plain-CSS surface, so
 the only place those two colour systems are checked against each other —
 plus page history, analytics, help, the admin index (its `Planned`
-treatment for unbuilt sections) and the **space list**, which is the first
+treatment for unbuilt sections), the **space list**, which is the first
 screen every user sees and the only one rendering the replica chip inside a
-card.
+card, and the **document graph** twice: the canvas view (the toolbar, the
+focus chip and a legend of every level badge around a canvas neither tier
+can see into — the renderer is stubbed, the chrome is real) and its
+**table view**, the keyboard and screen-reader equivalent, with the focused
+row marked by a labelled icon and `aria-current` rather than colour.
 
 `web/a11y/` (its own package, so Playwright and its browser downloads stay
 out of the SPA's dependency tree) loads each file in Chromium and runs axe

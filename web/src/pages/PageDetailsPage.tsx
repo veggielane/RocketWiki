@@ -52,6 +52,7 @@ import { readableTree } from './treeEntries'
 import { PageHeader } from '../app/PageHeader'
 import { useDocumentTitle } from '../app/documentTitle'
 import { PageMarkingSection } from '../markings/PageMarkingSection'
+import { PageLinksSection } from '../graph/PageLinksSection'
 import { hasPendingEdits, resolvePropertyEdit } from '../properties/propertyEdit'
 import { MAX_PROPERTY_VALUE_LENGTH } from '../properties/propertyLimits'
 
@@ -562,6 +563,23 @@ export function PageDetailsPage() {
         onReplicaRefusal={setReplicaOrigin}
         onChanged={() => refetch({ requestPolicy: 'network-only' })}
       />
+
+      {/* The page's place in the document graph (design.md §6.7 / §21.8):
+          what it links to and what links to it, counted over the pages this
+          caller can view. Metadata ABOUT the page, so it belongs here and not
+          on the page view; readable by anyone who can read the page, so it is
+          not gated. Its own query, so the properties table above neither waits
+          on it nor fails with it. */}
+      <Divider />
+      <Box>
+        <Typography variant="h6" component="h2">
+          Links
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          Which pages this one links to, and which link to it — counted over the pages you can view.
+        </Typography>
+      </Box>
+      <PageLinksSection pageId={page.id} />
 
       {/* Where the page sits, and who may read it — the two management actions
           that used to be buried in the page view's overflow menu. Separately
