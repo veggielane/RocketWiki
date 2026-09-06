@@ -107,6 +107,10 @@ export function ClassificationBanner({ label, level, inline = false, scopeLabel 
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
+                  // Printed, it is the foot of the document: kept whole, and
+                  // kept with the content's last lines rather than alone on
+                  // a fresh sheet where the engine can manage it.
+                  '@media print': { breakInside: 'avoid', breakBefore: 'avoid' },
                 }),
           }
         }}
@@ -155,6 +159,7 @@ export function ClassificationBanner({ label, level, inline = false, scopeLabel 
                 // reordering 2.4.3 warns about: nothing focusable, nothing
                 // read, and no screen rendering at all.
                 order: -1,
+                breakInside: 'avoid',
                 backgroundColor: tone.bg,
                 color: tone.fg,
                 textAlign: 'center',

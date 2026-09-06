@@ -151,7 +151,16 @@ export function AppShell() {
     // reserve for. It is still full width, still flush to the bottom, still
     // on screen without scrolling; only what sits beneath it changed, to
     // nothing.
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    //
+    // Printed, the column is as tall as its content rather than one screen:
+    // this and `main`'s overflow below are the two rules that make a long
+    // page print in full, measured in headless Chromium — without this one
+    // the content region stays one screen high, the foot banner prints on
+    // the first sheet in the middle of the document and no later sheet
+    // carries a marking. Still a flex column when printed, deliberately: the
+    // banner's print-only head copy is moved to the top with `order`, which
+    // only a flex parent honours (ClassificationBanner.tsx).
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', '@media print': { height: 'auto' } }}>
       {/* Keyboard-only until focused — lets a keyboard/screen-reader user
           skip the rail and header's many tab stops on every single
           navigation, rather than tabbing through them each time. */}
@@ -207,6 +216,13 @@ export function AppShell() {
             // banner is the row below this one rather than a strip floating
             // over its bottom edge, so a focused element scrolled into view
             // lands in the open.
+            //
+            // Printed, this region neither scrolls nor clips: with the column
+            // above at its natural height, everything here is in the flow and
+            // paginates (web/a11y/print.spec.ts asserts it). A scrolling
+            // region on paper is one screenful and then whatever the engine
+            // decides to do with the rest.
+            '@media print': { overflow: 'visible' },
           }}
         >
           {navigation.state !== 'idle' && (

@@ -5,6 +5,7 @@ import { buildCommentTree, type CommentNode, type FlatComment } from './buildCom
 import { UserLink } from '../users/UserLink'
 import { formatTimestamp } from '../format/dateTime'
 import { ConfirmDialog } from '../feedback/ConfirmDialog'
+import { PRINT_HIDDEN } from '../theme/print'
 
 export interface CommentsProps {
   pageId: string
@@ -102,7 +103,9 @@ export function Comments({ pageId, comments, canComment, currentUserId, canManag
       </Stack>
 
       {canComment && (
-        <Box>
+        // The composer is a control; the comments above it are content. Only
+        // the former stays off paper (theme/print.ts).
+        <Box sx={{ ...PRINT_HIDDEN }}>
           <RichTextEditor
             ref={newCommentRef}
             initialMarkdown=""
@@ -224,7 +227,7 @@ function CommentItem({
         )}
 
         {!node.isDeleted && (
-          <Stack direction="row" spacing={1}>
+          <Stack direction="row" spacing={1} sx={{ ...PRINT_HIDDEN }}>
             {canComment && (
               <Button size="small" onClick={() => onStartReply(node.id)}>
                 Reply
@@ -239,7 +242,7 @@ function CommentItem({
         )}
 
         {isReplying && (
-          <Box sx={{ mt: 1 }}>
+          <Box sx={{ mt: 1, ...PRINT_HIDDEN }}>
             <RichTextEditor
               ref={replyRef}
               initialMarkdown=""

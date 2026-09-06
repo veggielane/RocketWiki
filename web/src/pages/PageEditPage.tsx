@@ -45,6 +45,7 @@ import { describeSave, type SaveOutcome } from '../editor/describeSave'
 import { PageIconPicker } from './PageIconPicker'
 import { pageHref } from './pageSlug'
 import { PageIdContext } from './pageContext'
+import { PRINT_HIDDEN } from '../theme/print'
 
 /**
  * Page edit. Two of the brief's non-negotiables live here, both driven by
@@ -444,6 +445,8 @@ export function PageEditPage() {
         spacing={2}
         useFlexGap
         sx={{
+          // Save/Cancel do not print (theme/print.ts).
+          ...PRINT_HIDDEN,
           position: 'sticky',
           bottom: 0,
           zIndex: 1,

@@ -67,6 +67,7 @@ import { Comments } from '../comments/Comments'
 import { LabelEditor } from '../labels/LabelEditor'
 import { computeLabelOps } from '../labels/labelOps'
 import { useClassificationBanner } from '../markings/classificationBannerContext'
+import { PRINT_HIDDEN } from '../theme/print'
 import { useScrollToHash } from './useScrollToHash'
 import { PageIdContext } from './pageContext'
 import { PresenceAvatars } from '../presence/PresenceAvatars'
@@ -550,7 +551,7 @@ export function PageViewPage({
               ))}
               {/* design.md §6.4.2: attaching/detaching labels requires canEdit on this page. */}
               {page.canEdit && (
-                <Button size="small" startIcon={<LocalOfferOutlinedIcon />} onClick={() => setEditingLabels(true)}>
+                <Button size="small" startIcon={<LocalOfferOutlinedIcon />} onClick={() => setEditingLabels(true)} sx={PRINT_HIDDEN}>
                   {page.labels.length > 0 ? 'Edit labels' : 'Add labels'}
                 </Button>
               )}

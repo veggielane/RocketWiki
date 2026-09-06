@@ -3,6 +3,7 @@ import { Alert, Button } from '@mui/material'
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined'
 import { uploadAttachment, type UploadedAttachment } from './attachmentApi'
 import { describeAttachmentUnavailable } from '../feedback/unavailableCopy'
+import { PRINT_HIDDEN } from '../theme/print'
 
 export function AttachmentUploadButton({
   pageId,
@@ -33,7 +34,7 @@ export function AttachmentUploadButton({
 
   return (
     <>
-      <Button component="label" size="small" startIcon={<UploadFileOutlinedIcon />} disabled={uploading}>
+      <Button component="label" size="small" startIcon={<UploadFileOutlinedIcon />} disabled={uploading} sx={PRINT_HIDDEN}>
         {uploading ? 'Uploading…' : 'Upload attachment'}
         <input ref={inputRef} type="file" hidden onChange={(e) => void handleChange(e)} />
       </Button>

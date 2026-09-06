@@ -26,6 +26,7 @@ import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from 'react-oidc-context'
 import { UserAvatar } from '../avatars/UserAvatar'
 import { useCurrentUserQuery } from '../graphql/generated/graphql'
+import { PRINT_HIDDEN } from '../theme/print'
 import { SpaceTreeNav } from './SpaceTreeNav'
 import { RecentSpaces } from './RecentSpaces'
 import { clearRecentSpaces } from '../spaces/recentSpaces'
@@ -98,6 +99,9 @@ export function SideMenu({
         // width beside it.
         width: !temporary && open ? SIDE_MENU_WIDTH : 0,
         flexShrink: 0,
+        // Navigation does not print (theme/print.ts): on paper the rail is a
+        // column of links nobody can follow, beside every sheet.
+        ...PRINT_HIDDEN,
         '& .MuiDrawer-paper': {
           width: SIDE_MENU_WIDTH,
           boxSizing: 'border-box',

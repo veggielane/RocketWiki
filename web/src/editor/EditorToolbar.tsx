@@ -49,6 +49,7 @@ import { buildPageListFenceBody, type PageListSpec } from '../pagelist/fenceBody
 import { EmojiPickerButton } from './emoji/EmojiPickerButton'
 import { InsertLinkDialog, type LinkTarget } from './InsertLinkDialog'
 import { useRovingToolbar } from './useRovingToolbar'
+import { PRINT_HIDDEN } from '../theme/print'
 
 /**
  * A stateful mark button. A `ToggleButton` rather than an `IconButton` tinted
@@ -276,6 +277,8 @@ export function EditorToolbar({ editor }: { editor: Editor | null }) {
       ref={toolbarRef}
       onKeyDown={onKeyDown}
       sx={{
+        // Formatting controls do not print (theme/print.ts).
+        ...PRINT_HIDDEN,
         display: 'flex',
         flexWrap: 'wrap',
         alignItems: 'center',

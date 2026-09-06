@@ -87,7 +87,11 @@ is no top app bar, which is what the template does at desktop widths. Below
 both, when the screen shows marked content, the classification banner
 (`src/markings/ClassificationBanner.tsx`) is the frame's last row — a layout
 row rather than a fixed overlay, so the scroll region ends above it and nothing
-is ever underneath it.
+is ever underneath it. Printed, the frame gives up its fixed height and the
+content region its scrolling, so a page prints in full with the marking at the
+head and the foot of the printed document; the rail, the header's controls and
+every screen's action buttons stay off paper (`src/theme/print.ts` says what
+prints and what does not, and `a11y/print.spec.ts` measures it).
 
 None of the template's dashboard content is here — no KPI cards, no charts,
 no sample grid — and none of its four `@mui/x-*` dependencies.

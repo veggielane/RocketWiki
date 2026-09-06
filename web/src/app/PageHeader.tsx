@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link, Stack, Typography } from '@mui/material'
+import { PRINT_HIDDEN } from '../theme/print'
 import { Link as RouterLink } from 'react-router-dom'
 
 export interface PageHeaderProps {
@@ -76,7 +77,8 @@ export function PageHeader({ title, subject, description, titleAdornment, action
           direction="row"
           spacing={1}
           useFlexGap
-          sx={{ alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}
+          // Controls, not content: nothing here prints (theme/print.ts).
+          sx={{ alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', ...PRINT_HIDDEN }}
         >
           {actions}
         </Stack>

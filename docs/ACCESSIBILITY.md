@@ -100,6 +100,20 @@ blocks, dark table headers and a `#6b9bf7` link on white (~2.6:1). The fix is a
 keeps it honest. Running the dark captures under a dark OS would only re-test
 agreement, so `a11y.spec.ts` skips them there.
 
+**Printing is checked in the same browser run** (`web/a11y/print.spec.ts`,
+`chromium` project only — print rendering does not depend on the OS colour
+scheme). Under print-media emulation, over the page-view capture made about
+twenty sheets tall by cloning its rendered content: the content region is no
+longer a scroll container and clips nothing (`scrollHeight` ≤ `clientHeight`),
+a sentinel paragraph at the very end of the document sits inside the printed
+flow rather than beyond a one-screen clip, the print-only head copy of the
+protective marking is the first thing on the first sheet and the banner proper
+follows the last line, the rail, header controls and action buttons are hidden
+while the breadcrumb, title and content are not, none of that leaks into
+screen media, and a real PDF render produces more than a handful of sheets.
+What prints and what does not is decided per control in
+`web/src/theme/print.ts`.
+
 ### Running both layers locally
 
 ```bash

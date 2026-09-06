@@ -25,6 +25,7 @@ import { NotificationBell } from '../notifications/NotificationBell'
 import { useIsInstanceAdmin } from '../auth/useIsInstanceAdmin'
 import { useColorMode } from '../theme/colorModeContext'
 import { AppBreadcrumbs } from './AppBreadcrumbs'
+import { PRINT_HIDDEN } from '../theme/print'
 
 /**
  * The Dashboard template's header buttons are bordered, filled squares rather
@@ -107,6 +108,7 @@ export function AppHeader({ navOpen, onToggleNav }: AppHeaderProps) {
             aria-label={navOpen ? 'Collapse navigation' : 'Expand navigation'}
             aria-expanded={navOpen}
             onClick={onToggleNav}
+            sx={PRINT_HIDDEN}
           >
             <MenuIcon />
           </IconButton>
@@ -114,7 +116,10 @@ export function AppHeader({ navOpen, onToggleNav }: AppHeaderProps) {
         <AppBreadcrumbs />
       </Stack>
 
-      <Stack direction="row" sx={{ gap: 1, alignItems: 'center', flexShrink: 0 }}>
+      {/* Search, Ask, notifications, theme, help, admin: controls, so none of
+          it prints (theme/print.ts). The breadcrumb on the left does — it
+          says where the printed page lives. */}
+      <Stack direction="row" sx={{ gap: 1, alignItems: 'center', flexShrink: 0, ...PRINT_HIDDEN }}>
         {isCompact ? (
           <Tooltip title="Search">
             <IconButton component={RouterLink} to="/search" aria-label="Search the wiki">
