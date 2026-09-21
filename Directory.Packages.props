@@ -34,20 +34,20 @@
        inside this family is what produces the NU1605 downgrade errors that stopped
        RocketWiki.Storage.Tests building at 10.0.0. -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.12" />
   </ItemGroup>
 
   <!-- Security bumps over transitively-resolved versions. Both are direct references
@@ -63,7 +63,7 @@
     <!-- Microsoft.Data.SqlClient (via EFCore.SqlServer) pulls in a transitive
          System.Security.Cryptography.Xml 9.0.0, which NU1903 flags for several known
          high-severity advisories. Pinned to a patched version. -->
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.11" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.12" />
   </ItemGroup>
 
   <!-- Aspire. The AppHost's SDK version (Aspire.AppHost.Sdk in its Sdk attribute) is
@@ -74,8 +74,8 @@
     <PackageVersion Include="Aspire.Hosting.JavaScript" Version="13.5.3" />
     <PackageVersion Include="Aspire.Hosting.SqlServer" Version="13.5.3" />
     <PackageVersion Include="Aspire.Microsoft.EntityFrameworkCore.SqlServer" Version="13.5.3" />
-    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.9.0" />
-    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.10.0" />
     <!-- No official Aspire hosting integration exists for Keycloak; this is the
          leading community package (NikiforovAll). See AppHost.cs. -->
     <PackageVersion Include="Keycloak.AuthServices.Aspire.Hosting" Version="0.3.0" />
@@ -83,9 +83,9 @@
 
   <!-- GraphQL (design.md §8). -->
   <ItemGroup>
-    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.6.2" />
-    <PackageVersion Include="HotChocolate.AspNetCore.CommandLine" Version="16.6.2" />
-    <PackageVersion Include="HotChocolate.Diagnostics" Version="16.6.2" />
+    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.6.6" />
+    <PackageVersion Include="HotChocolate.AspNetCore.CommandLine" Version="16.6.6" />
+    <PackageVersion Include="HotChocolate.Diagnostics" Version="16.6.6" />
   </ItemGroup>
 
   <!-- OpenTelemetry (design.md §15). design.md §15's finding about
@@ -101,8 +101,8 @@
 
   <!-- AI: embeddings, "ask the wiki", and MCP (design.md §9, §8). -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.0" />
     <!-- The official MCP C# SDK's ASP.NET Core host; brings ModelContextProtocol +
          ModelContextProtocol.Core transitively. -->
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
@@ -121,7 +121,7 @@
 
   <!-- Storage and image processing (design.md §10, §19). -->
   <ItemGroup>
-    <PackageVersion Include="AWSSDK.S3" Version="4.0.102.4" />
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.103.3" />
     <!-- Referenced directly by RocketWiki.Storage's SqlServerFileStorage, but this
          version governs the whole solution: it is ahead of the 6.1.x floor
          Microsoft.EntityFrameworkCore.SqlServer asks for, so NuGet unification lifts
@@ -133,7 +133,7 @@
          column, and SqlServerFileStorage's streaming reads and chunked writes) and
          all 37 pass. If odd ADO.NET behaviour ever shows up, dropping back to 6.1.1
          is a one-line revert here. -->
-    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.2" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.0" />
     <!-- Pinned to the newest 3.x deliberately, NOT 4.x. Re-checked against 4.1.1 on
          2026-08-28 rather than taken on trust: the build fails outright with
          "No Six Labors license found. Set $(SixLaborsLicenseKey), set
@@ -151,15 +151,15 @@
        check the per-project test COUNTS are unchanged rather than just that the run
        is green — a runner that silently stops discovering a tier is still "green". -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
     <!-- MetricCollector<T> and FakeLogger, for asserting instruments actually emit. -->
-    <PackageVersion Include="Microsoft.Extensions.Diagnostics.Testing" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.Diagnostics.Testing" Version="10.10.0" />
     <!-- FakeTimeProvider, for the edit-session registry's deterministic sweep tests. -->
-    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.10.0" />
     <!-- design.md §14 tier 3: real SQL Server per run. -->
-    <PackageVersion Include="Testcontainers.MsSql" Version="4.14.0" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.15.0" />
   </ItemGroup>
 
 </Project>
