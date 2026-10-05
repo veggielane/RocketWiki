@@ -19,6 +19,8 @@
          is what design.md §15 itself uses. See AppHost.cs for the exact deviations
          from the design.md snippet (method names / API shape only, not intent). -->
     <PackageReference Include="Keycloak.AuthServices.Aspire.Hosting" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
   </ItemGroup>
