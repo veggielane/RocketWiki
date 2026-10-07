@@ -5,7 +5,8 @@ namespace RocketWiki.Api.Ai;
 /// <summary>
 /// The config-resolution rule both OpenAI-compatible endpoints follow (design.md
 /// §9.2/§9.5, §15 "config by reference"): the Aspire-injected connection string first,
-/// then the shared <c>Ai:</c> section per value — supplied here as an eagerly bound
+/// then the feature's own <c>Ai:Embeddings:*</c> / <c>Ai:Assistant:*</c> section, then
+/// the shared <c>Ai:</c> fallbacks — per value, all supplied here as an eagerly bound
 /// <see cref="AiOptions"/>, the one definition of that section's shape.
 ///
 /// One implementation, because the two callers had it line for line identical and the
@@ -37,10 +38,24 @@ internal static class AiConnectionStringParser
     /// <param name="fallback">The <c>Ai</c> section, bound eagerly (<see cref="AiOptions.BindEagerly"/>):
     /// <c>BaseUrl</c>/<c>ApiKey</c> are shared by both endpoints because one gateway
     /// commonly serves both models.</param>
-    /// <param name="model">The per-feature model fallback (<c>EmbeddingModel</c>,
-    /// <c>ChatModel</c>) — the one fallback that differs.</param>
+    /// <param name="feature">The feature's own section (<see cref="AiOptions.Embeddings"/>
+    /// or <see cref="AiOptions.Assistant"/>), consulted per value between the connection
+    /// string and the shared fallbacks.</param>
+    /// <param name="sharedModel">The older per-feature model key on the shared section
+    /// (<c>EmbeddingModel</c>, <c>ChatModel</c>), the last resort for the model name.</param>
+    /// <exception cref="InvalidOperationException">The connection string names an endpoint
+    /// that is not an absolute http(s) URL. Thrown here, at registration, because the
+    /// connection string is outside the validated options family: without this the first
+    /// embedding or question would die of a <c>UriFormatException</c> instead of the host
+    /// refusing to boot with the value named. Endpoints from the <c>Ai:*</c> keys are
+    /// checked by <see cref="AiConfiguration"/> instead, so every bad key is reported
+    /// together at startup rather than the first one aborting the rest.</exception>
     internal static AiEndpointSettings Resolve(
-        IConfiguration configuration, string connectionName, AiOptions fallback, Func<AiOptions, string?> model)
+        IConfiguration configuration,
+        string connectionName,
+        AiOptions fallback,
+        AiEndpointOptions feature,
+        Func<AiOptions, string?> sharedModel)
     {
         string? endpoint = null, key = null, modelName = null;
         int? dimensions = null;
@@ -60,11 +75,17 @@ internal static class AiConnectionStringParser
             {
                 endpoint = connectionString.Trim(); // bare URL
             }
+
+            if (!AiOptions.IsAbsoluteHttpUrlOrUnset(endpoint))
+            {
+                throw new InvalidOperationException(
+                    $"ConnectionStrings:{connectionName}: Endpoint must be an absolute http:// or https:// URL, got '{endpoint}'.");
+            }
         }
 
-        endpoint ??= NullIfEmpty(fallback.BaseUrl);
-        key ??= NullIfEmpty(fallback.ApiKey);
-        modelName ??= NullIfEmpty(model(fallback));
+        endpoint ??= NullIfEmpty(feature.Endpoint) ?? NullIfEmpty(fallback.BaseUrl);
+        key ??= NullIfEmpty(feature.ApiKey) ?? NullIfEmpty(fallback.ApiKey);
+        modelName ??= NullIfEmpty(feature.Model) ?? NullIfEmpty(sharedModel(fallback));
 
         return new AiEndpointSettings(endpoint, key, modelName, dimensions);
     }

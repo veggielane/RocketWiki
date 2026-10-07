@@ -163,6 +163,13 @@ var keycloak = builder.AddKeycloakContainer("keycloak")
 // The API is a container now, so a `localhost` in either value means the
 // container, not this machine: an endpoint served from this machine (Ollama, LM
 // Studio) must be addressed as host.docker.internal.
+//
+// The connection strings are the Aspire path. The same two endpoints can also be
+// configured per feature without one — `Ai__Embeddings__Endpoint` / `__Model` /
+// `__ApiKey` / `__Dimensions` and `Ai__Assistant__Endpoint` / `__Model` / `__ApiKey`,
+// settable on the api container with WithEnvironment — for the instance whose
+// embedding and chat models are not behind one gateway. A connection string
+// still wins per value where both are present (docs/CONFIGURATION.md "AI").
 var embeddings = builder.AddOptionalConnectionString("embeddings");
 var assistant = builder.AddOptionalConnectionString("assistant");
 

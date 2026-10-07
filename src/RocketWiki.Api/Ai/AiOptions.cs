@@ -25,25 +25,50 @@ namespace RocketWiki.Api.Ai;
 ///
 /// <para>No endpoint has a default (§9.4): questions and page content travel to these
 /// URLs, so an unresolved endpoint means "the feature is absent", never a guess.</para>
+///
+/// <para><b>Three layers, per value.</b> The Aspire connection string first; then the
+/// feature's own section (<see cref="Embeddings"/> = <c>Ai:Embeddings:*</c>,
+/// <see cref="Assistant"/> = <c>Ai:Assistant:*</c>); then the shared fallbacks beneath
+/// both (<see cref="BaseUrl"/>, <see cref="ApiKey"/>, and the older per-feature model
+/// spellings <see cref="EmbeddingModel"/> / <see cref="ChatModel"/>). The shared layer is
+/// the common deployment — one gateway serving both models — and the per-feature layer
+/// is for the instance whose embedding model and chat model live on different servers,
+/// or take different keys, and which has no Aspire to hand it connection strings.</para>
 /// </summary>
 public sealed class AiOptions
 {
     public const string SectionName = "Ai";
 
-    // --- Endpoint fallbacks (fail-closed; the connection string wins per value) ---
+    // --- Per-feature endpoint settings (win over the shared fallbacks below) ---
 
-    /// <summary>Fallback endpoint for both clients when the connection string carries none.</summary>
+    /// <summary>The embedding endpoint's own settings: <c>Ai:Embeddings:Endpoint</c>,
+    /// <c>Ai:Embeddings:ApiKey</c>, <c>Ai:Embeddings:Model</c>, <c>Ai:Embeddings:Dimensions</c>.
+    /// Each value beats the shared fallback beneath it and loses to the <c>embeddings</c>
+    /// connection string above it.</summary>
+    public AiEmbeddingsEndpointOptions Embeddings { get; set; } = new();
+
+    /// <summary>The chat endpoint's own settings: <c>Ai:Assistant:Endpoint</c>,
+    /// <c>Ai:Assistant:ApiKey</c>, <c>Ai:Assistant:Model</c>. Same precedence as
+    /// <see cref="Embeddings"/>, against the <c>assistant</c> connection string.</summary>
+    public AiEndpointOptions Assistant { get; set; } = new();
+
+    // --- Shared fallbacks (fail-closed; the layers above win per value) ---
+
+    /// <summary>Fallback endpoint for both clients when neither the connection string nor the
+    /// feature's own section carries one.</summary>
     public string? BaseUrl { get; set; }
 
     /// <summary>Fallback credential. Absent means a keyless gateway: a placeholder is sent.</summary>
     public string? ApiKey { get; set; }
 
-    /// <summary>Embedding model name; with no <c>Model=</c> in the connection string, its
+    /// <summary>Embedding model name — the older spelling of <c>Ai:Embeddings:Model</c>, kept
+    /// as its fallback. With neither, and no <c>Model=</c> in the connection string, the
     /// absence is what "embeddings not configured" means.</summary>
     public string? EmbeddingModel { get; set; }
 
-    /// <summary>Chat model name; with no <c>Model=</c> in the connection string, its
-    /// absence is what "assistant not configured" means.</summary>
+    /// <summary>Chat model name — the older spelling of <c>Ai:Assistant:Model</c>, kept as its
+    /// fallback. With neither, and no <c>Model=</c> in the connection string, the absence is
+    /// what "assistant not configured" means.</summary>
     public string? ChatModel { get; set; }
 
     // --- Embedding pipeline (design.md §9.2/§9.3) ---
@@ -113,5 +138,48 @@ public sealed class AiOptions
     public TimeSpan? EmbeddingTimeout => Seconds(EmbeddingTimeoutSeconds);
     public TimeSpan ChatTimeout => TimeSpan.FromSeconds(ChatTimeoutSeconds);
 
+    /// <summary>
+    /// What every AI endpoint value has to be: an absolute <c>http://</c> or
+    /// <c>https://</c> URL — the OpenAI-compatible API root, typically ending in
+    /// <c>/v1</c>. Null and empty pass (unset is a supported state); anything else, such
+    /// as the classic scheme-less <c>host:port</c> paste, fails the host at boot with the
+    /// key named (<see cref="AiConfiguration"/>) rather than as a <c>UriFormatException</c>
+    /// on the first embedding or question — the <c>FileStorage:S3:ServiceUrl</c> precedent.
+    /// </summary>
+    public static bool IsAbsoluteHttpUrlOrUnset(string? value) =>
+        string.IsNullOrEmpty(value)
+        || (Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps));
+
     private static TimeSpan? Seconds(int? value) => value is { } s ? TimeSpan.FromSeconds(s) : null;
+}
+
+/// <summary>
+/// One AI feature's own endpoint settings (<c>Ai:Assistant:*</c>, and the base of
+/// <c>Ai:Embeddings:*</c>). Every value is optional and fail-closed in the same way the
+/// shared keys are: an unset endpoint or model at every layer means the feature is
+/// absent, never guessed. See <see cref="AiOptions"/> for the precedence.
+/// </summary>
+public class AiEndpointOptions
+{
+    /// <summary>Absolute http(s) URL of the OpenAI-compatible API root, e.g.
+    /// <c>http://llm.internal:8000/v1</c>. Validated at startup.</summary>
+    public string? Endpoint { get; set; }
+
+    /// <summary>The credential for this endpoint. Absent means keyless: a placeholder is sent.</summary>
+    public string? ApiKey { get; set; }
+
+    /// <summary>The model name this endpoint is asked for.</summary>
+    public string? Model { get; set; }
+}
+
+/// <summary>The embedding endpoint's settings: an <see cref="AiEndpointOptions"/> plus the
+/// vector width, which is the one value that only an embedding endpoint declares.</summary>
+public sealed class AiEmbeddingsEndpointOptions : AiEndpointOptions
+{
+    /// <summary>Vector width requested of this endpoint. Beats <c>Ai:Dimensions</c>, loses
+    /// to the connection string's <c>Dimensions=</c>; must match the <c>vector(1536)</c>
+    /// column on SQL Server (EmbeddingDimensionsStartupCheck). Validated at startup —
+    /// explicitly, since DataAnnotations does not descend into a nested section.</summary>
+    public int? Dimensions { get; set; }
 }

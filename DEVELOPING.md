@@ -362,13 +362,16 @@ kind of waste. Action versions are kept current by `.github/dependabot.yml`
 - **Gravatar endpoint**: `Avatars:GravatarEndpointEnabled=true` exposes
   `GET /avatar/{hash}` (deliberately unauthenticated — that's the protocol;
   read design.md §19 before enabling anywhere shared).
-- **Semantic search**: configure the `embeddings` connection string or the
-  `Ai:` section (design.md §9.2); unconfigured means keyword-only,
-  structurally.
-- **Ask the wiki**: on top of the semantic-search config above, set
-  `Ai:ChatModel` (or the Aspire `assistant` connection string) to name the
-  chat model (design.md §9.5). Unconfigured means `askWiki` answers
-  `NOT_CONFIGURED`, structurally — no chat client is even registered.
+- **Semantic search**: configure the `embeddings` connection string, the
+  feature's own `Ai:Embeddings:Endpoint`/`Model` keys, or the shared `Ai:`
+  section (design.md §9.2); unconfigured means keyword-only, structurally.
+- **Ask the wiki**: on top of the semantic-search config above, name the chat
+  model — `Ai:Assistant:Model`, or the older `Ai:ChatModel`, or `Model=` in
+  the Aspire `assistant` connection string — and, when the chat server is not
+  the embedding server, its endpoint with `Ai:Assistant:Endpoint`
+  (design.md §9.5; docs/CONFIGURATION.md "AI" has the precedence).
+  Unconfigured means `askWiki` answers `NOT_CONFIGURED`, structurally — no
+  chat client is even registered.
 - **Browser telemetry**: `VITE_OTEL_EXPORTER_OTLP_ENDPOINT` (note the
   Aspire dashboard's OTLP/**HTTP** port is 18890; 18889 is gRPC).
 - **Selector categories** (design.md §21.15): a standalone API run configures

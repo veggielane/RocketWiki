@@ -73,6 +73,9 @@ api:
   #                                   keyword-only — structurally, by design.
   #   ConnectionStrings__assistant    the askWiki field (§9.5). Without it AND
   #   Ai__ChatModel                   Ai__ChatModel, askWiki answers NOT_CONFIGURED.
+  #   Ai__Embeddings__*               per-feature endpoint/key/model (and width) when
+  #   Ai__Assistant__*                the two models are not behind one gateway;
+  #                                   docs/CONFIGURATION.md "AI" has the precedence.
   #   GitLab__BaseUrl                 GitLab integration (§18). Absent = off.
   #
   # Optional, only with api.fileStorage.provider=SqlServer:

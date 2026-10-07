@@ -58,6 +58,15 @@ public sealed class EmbeddingPipelineWiringTests
         return provider.GetRequiredService<EmbeddingOptions>();
     }
 
+    /// <summary>The endpoint the registered generator will actually call — the one place
+    /// the resolved URL surfaces short of sending a request.</summary>
+    private static Uri? ResolvedEndpoint(WebApplicationBuilder builder)
+    {
+        using var provider = builder.Services.BuildServiceProvider();
+        return provider.GetRequiredService<IEmbeddingGenerator<string, Embedding<float>>>()
+            .GetService<EmbeddingGeneratorMetadata>()?.ProviderUri;
+    }
+
     [Fact]
     public void NotConfigured_RegistersNothing()
     {
@@ -109,6 +118,73 @@ public sealed class EmbeddingPipelineWiringTests
         var options = ResolvedOptions(builder);
         Assert.Equal("bge-m3", options.Model);
         Assert.Equal(1536, options.Dimensions); // §9.2's default, data-model.md's column size
+    }
+
+    /// <summary>
+    /// The feature's own section: an embedding server that is not the chat server, or
+    /// takes a different key or width, with no Aspire connection string to say so. Every
+    /// value — the dimensions included — beats the shared fallback beneath it.
+    /// </summary>
+    [Fact]
+    public void PerFeatureKeys_WinOverTheSharedFallbacks()
+    {
+        var builder = NewBuilder(new Dictionary<string, string?>
+        {
+            ["Ai:BaseUrl"] = "http://shared-gateway:8000/v1",
+            ["Ai:EmbeddingModel"] = "shared-model",
+            ["Ai:Dimensions"] = "512",
+            ["Ai:Embeddings:Endpoint"] = "http://embed.internal:9000/v1",
+            ["Ai:Embeddings:ApiKey"] = "embed-key",
+            ["Ai:Embeddings:Model"] = "bge-m3",
+            ["Ai:Embeddings:Dimensions"] = "1024",
+        });
+
+        builder.AddRocketWikiEmbeddings(FeatureFlagSnapshot.AllEnabled);
+
+        var options = ResolvedOptions(builder);
+        Assert.Equal("bge-m3", options.Model);
+        Assert.Equal(1024, options.Dimensions);
+        Assert.Equal(new Uri("http://embed.internal:9000/v1"), ResolvedEndpoint(builder));
+    }
+
+    /// <summary>§15 "config by reference": what Aspire injects outranks what was typed
+    /// into the section, value for value — the width included.</summary>
+    [Fact]
+    public void ConnectionString_WinsOverThePerFeatureKeys()
+    {
+        var builder = NewBuilder(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:embeddings"] = FullConnectionString,
+            ["Ai:Embeddings:Endpoint"] = "http://embed.internal:9000/v1",
+            ["Ai:Embeddings:Model"] = "bge-m3",
+            ["Ai:Embeddings:Dimensions"] = "1024",
+        });
+
+        builder.AddRocketWikiEmbeddings(FeatureFlagSnapshot.AllEnabled);
+
+        var options = ResolvedOptions(builder);
+        Assert.Equal("nomic-embed-text", options.Model);
+        Assert.Equal(768, options.Dimensions);
+        Assert.Equal(new Uri("http://llm-gateway:8000/v1"), ResolvedEndpoint(builder));
+    }
+
+    /// <summary>A bare value with no scheme used to register a generator that died of a
+    /// UriFormatException on the first page. The connection string is outside the
+    /// validated options family, so the parser refuses it at registration, naming the
+    /// source.</summary>
+    [Fact]
+    public void ConnectionString_WithASchemelessEndpoint_RefusesAtRegistration()
+    {
+        var builder = NewBuilder(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:embeddings"] = "llm-gateway:8000",
+            ["Ai:EmbeddingModel"] = "bge-m3",
+        });
+
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => builder.AddRocketWikiEmbeddings(FeatureFlagSnapshot.AllEnabled));
+        Assert.Contains("ConnectionStrings:embeddings", thrown.Message, StringComparison.Ordinal);
+        Assert.False(HasGenerator(builder.Services));
     }
 
     [Fact]

@@ -34,9 +34,12 @@ namespace RocketWiki.Api.Embeddings;
 ///    reference": the AppHost's <c>AddConnectionString("embeddings")</c>), in the usual
 ///    .NET AI connection-string shape <c>Endpoint=…;Key=…;Model=…;Dimensions=…</c>
 ///    (a bare URL is accepted as Endpoint-only).
-/// 2. The <c>Ai</c> section (<see cref="AiOptions"/>; §9.2's documented shape: BaseUrl /
-///    ApiKey / EmbeddingModel / Dimensions) for anything the connection string doesn't
-///    carry — and the whole story when running standalone outside Aspire.
+/// 2. This feature's own section, <c>Ai:Embeddings:Endpoint</c> / <c>ApiKey</c> /
+///    <c>Model</c> / <c>Dimensions</c> — for an embedding server that is not the chat
+///    server, or takes a different key.
+/// 3. The shared <c>Ai</c> fallbacks (<see cref="AiOptions"/>; §9.2's documented shape:
+///    BaseUrl / ApiKey / EmbeddingModel / Dimensions) for anything neither carries — and
+///    the whole story for the common one-gateway deployment outside Aspire.
 ///
 /// The endpoint keys are read eagerly (they decide whether anything registers, which
 /// happens before <c>Build()</c>); the job's tuning — dimensions fallback, poll interval,
@@ -57,12 +60,13 @@ public static class EmbeddingPipelineConfiguration
             return; // Flag off: keyword-only search, no job — the unconfigured shape. See class doc.
         }
 
-        // Connection string first, Ai section as per-value fallback — the shared rule
-        // (AiConnectionStringParser); the keys this feature reads are the class doc's
-        // list: Ai:BaseUrl / Ai:ApiKey / Ai:EmbeddingModel (eager) and Ai:Dimensions (lazy).
+        // Connection string, then Ai:Embeddings:*, then the shared Ai keys, per value —
+        // the shared rule (AiConnectionStringParser); the keys this feature reads are the
+        // class doc's list: the endpoint/key/model at each layer (eager) and the
+        // dimensions at each layer (lazy, below).
         var ai = AiOptions.BindEagerly(builder.Configuration);
         var (endpoint, key, model, connectionStringDimensions) = AiConnectionStringParser.Resolve(
-            builder.Configuration, connectionName: "embeddings", ai, o => o.EmbeddingModel);
+            builder.Configuration, connectionName: "embeddings", ai, ai.Embeddings, o => o.EmbeddingModel);
 
         if (endpoint is null || model is null)
         {
@@ -74,10 +78,13 @@ public static class EmbeddingPipelineConfiguration
             var tuning = sp.GetRequiredService<IOptions<AiOptions>>().Value;
             return new EmbeddingOptions(
                 Model: model,
-                // Connection string first, then Ai:Dimensions, then the column's fixed
-                // width (data-model.md) — the same value EmbeddingDimensionsStartupCheck
-                // compares against on SQL Server.
-                Dimensions: connectionStringDimensions ?? tuning.Dimensions ?? PageEmbeddingConfiguration.EmbeddingDimensions,
+                // Connection string first, then Ai:Embeddings:Dimensions, then
+                // Ai:Dimensions, then the column's fixed width (data-model.md) — the same
+                // value EmbeddingDimensionsStartupCheck compares against on SQL Server.
+                Dimensions: connectionStringDimensions
+                    ?? tuning.Embeddings.Dimensions
+                    ?? tuning.Dimensions
+                    ?? PageEmbeddingConfiguration.EmbeddingDimensions,
                 PollInterval: tuning.PollInterval,
                 BatchSize: tuning.BatchSize,
                 FailureBackoff: tuning.FailureBackoff,

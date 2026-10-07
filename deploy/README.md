@@ -245,6 +245,10 @@ one out gives you a silently feature-less install rather than an error:
   # of the separate key; either is fine, and the separate key is the clearer one.
   --from-literal=ConnectionStrings__assistant='Endpoint=http://llm-gateway:8000/v1;Key=CHANGE-ME'
   --from-literal=Ai__ChatModel='llama-3.3-70b-instruct'
+  # Two servers rather than one gateway? Each feature can carry its own endpoint,
+  # key and model instead: Ai__Embeddings__Endpoint / __ApiKey / __Model /
+  # __Dimensions and Ai__Assistant__Endpoint / __ApiKey / __Model. A connection
+  # string still wins per value where both are set (docs/CONFIGURATION.md "AI").
   # GitLab integration (§18). Absent = off.
   --from-literal=GitLab__BaseUrl='https://gitlab.internal'
 ```

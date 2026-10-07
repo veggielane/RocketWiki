@@ -46,6 +46,14 @@ public sealed class AssistantWiringTests
         return provider.GetRequiredService<AssistantOptions>();
     }
 
+    /// <summary>The endpoint the registered client will actually call — the one place the
+    /// resolved URL surfaces short of sending a request.</summary>
+    private static Uri? ResolvedEndpoint(WebApplicationBuilder builder)
+    {
+        using var provider = builder.Services.BuildServiceProvider();
+        return provider.GetRequiredService<IChatClient>().GetService<ChatClientMetadata>()?.ProviderUri;
+    }
+
     [Fact]
     public void NotConfigured_RegistersTheServiceButNoClientOrOptions()
     {
@@ -93,6 +101,82 @@ public sealed class AssistantWiringTests
 
         Assert.True(HasChatClient(builder.Services));
         Assert.Equal("mistral", ResolvedOptions(builder).ChatModel);
+    }
+
+    /// <summary>
+    /// The feature's own section: a chat server that is not the embedding server, or
+    /// takes a different key, with no Aspire connection string to say so. Every value
+    /// beats the shared fallback beneath it.
+    /// </summary>
+    [Fact]
+    public void PerFeatureKeys_WinOverTheSharedFallbacks()
+    {
+        var builder = NewBuilder(new Dictionary<string, string?>
+        {
+            ["Ai:BaseUrl"] = "http://shared-gateway:8000/v1",
+            ["Ai:ChatModel"] = "shared-model",
+            ["Ai:Assistant:Endpoint"] = "http://chat.internal:9000/v1",
+            ["Ai:Assistant:ApiKey"] = "chat-key",
+            ["Ai:Assistant:Model"] = "mistral",
+        });
+
+        builder.AddRocketWikiAssistant(FeatureFlagSnapshot.AllEnabled);
+
+        Assert.Equal("mistral", ResolvedOptions(builder).ChatModel);
+        Assert.Equal(new Uri("http://chat.internal:9000/v1"), ResolvedEndpoint(builder));
+    }
+
+    /// <summary>The common shape for the per-feature keys: one gateway, two models — the
+    /// model named per feature, the endpoint shared.</summary>
+    [Fact]
+    public void PerFeatureModel_RidesOnTheSharedEndpoint()
+    {
+        var builder = NewBuilder(new Dictionary<string, string?>
+        {
+            ["Ai:BaseUrl"] = "http://shared-gateway:8000/v1",
+            ["Ai:Assistant:Model"] = "mistral",
+        });
+
+        builder.AddRocketWikiAssistant(FeatureFlagSnapshot.AllEnabled);
+
+        Assert.True(HasChatClient(builder.Services));
+        Assert.Equal("mistral", ResolvedOptions(builder).ChatModel);
+        Assert.Equal(new Uri("http://shared-gateway:8000/v1"), ResolvedEndpoint(builder));
+    }
+
+    /// <summary>§15 "config by reference": what Aspire injects outranks what was typed
+    /// into the section, value for value.</summary>
+    [Fact]
+    public void ConnectionString_WinsOverThePerFeatureKeys()
+    {
+        var builder = NewBuilder(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:assistant"] = FullConnectionString,
+            ["Ai:Assistant:Endpoint"] = "http://chat.internal:9000/v1",
+            ["Ai:Assistant:Model"] = "mistral",
+        });
+
+        builder.AddRocketWikiAssistant(FeatureFlagSnapshot.AllEnabled);
+
+        Assert.Equal("llama-3.3-70b-instruct", ResolvedOptions(builder).ChatModel);
+        Assert.Equal(new Uri("http://llm-gateway:8000/v1"), ResolvedEndpoint(builder));
+    }
+
+    /// <summary>A scheme-less endpoint in the connection string used to register a client
+    /// that died of a UriFormatException on the first question. It is outside the validated
+    /// options family, so the parser refuses it at registration, naming the source.</summary>
+    [Fact]
+    public void ConnectionString_WithASchemelessEndpoint_RefusesAtRegistration()
+    {
+        var builder = NewBuilder(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:assistant"] = "Endpoint=llm-gateway:8000;Model=mistral",
+        });
+
+        var thrown = Assert.Throws<InvalidOperationException>(
+            () => builder.AddRocketWikiAssistant(FeatureFlagSnapshot.AllEnabled));
+        Assert.Contains("ConnectionStrings:assistant", thrown.Message, StringComparison.Ordinal);
+        Assert.False(HasChatClient(builder.Services));
     }
 
     [Fact]

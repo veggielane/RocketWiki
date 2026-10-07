@@ -211,25 +211,41 @@ deliberately not validated — a `TimeSpan` range attribute drags in
 Both endpoints are the same class of dependency: page content travels to
 them, so they must live inside the network boundary (design.md §9.4) — which
 is why both are ⛔ fail-closed with **no default endpoint**. Precedence is
-identical for both: the Aspire connection string first, then the `Ai:*` keys
-per value (`Ai/AiConnectionStringParser.cs`, called from
+identical for both, and it is three layers deep, resolved **per value**
+(`Ai/AiConnectionStringParser.cs`, called from
 `Embeddings/EmbeddingPipelineConfiguration.cs` and
-`Assistant/AssistantConfiguration.cs`).
+`Assistant/AssistantConfiguration.cs`):
+
+1. the Aspire connection string (`ConnectionStrings:embeddings` /
+   `ConnectionStrings:assistant`);
+2. the feature's own section — `Ai:Embeddings:Endpoint` / `ApiKey` / `Model` /
+   `Dimensions`, and `Ai:Assistant:Endpoint` / `ApiKey` / `Model` — for the
+   instance whose embedding model and chat model live on different servers, or
+   take different keys, and which has no Aspire to hand it connection strings;
+3. the shared fallbacks beneath both — `Ai:BaseUrl`, `Ai:ApiKey`, and the older
+   per-feature model spellings `Ai:EmbeddingModel` / `Ai:ChatModel` — the
+   common one-gateway-two-models deployment, where the endpoint is said once.
+
+A value set at a higher layer wins for that value only: `Ai:Assistant:Model`
+with a shared `Ai:BaseUrl` is a complete configuration, and a connection
+string carrying only `Endpoint=` still takes its model from the keys.
 
 The whole `Ai` section binds to one options class, `Ai/AiOptions.cs`
 (registered and **validated at startup** by `Ai/AiConfiguration.cs`, ahead of
 both features). Its keys fall into the two reading moments described at the
 top of this file:
 
-- **Eager** — the endpoint keys `Ai:BaseUrl`, `Ai:ApiKey`, `Ai:EmbeddingModel`,
-  `Ai:ChatModel`. They decide whether a client, an options object and (for
-  embeddings) a background job are *registered at all*, which has to happen
-  before the host is built; they are bound off the builder through
-  `AiOptions.BindEagerly`. In a `WebApplicationFactory` test host they are
-  therefore reached with `UseSetting` (which travels as a command-line
-  argument), never with `ConfigureAppConfiguration`.
-- **Lazy** — every tuning key below (`Dimensions`, `PollSeconds`,
-  `BatchSize`, `FailureBackoffSeconds`, `MaxAttempts`,
+- **Eager** — the endpoint keys at every layer: `Ai:Embeddings:Endpoint` /
+  `ApiKey` / `Model`, `Ai:Assistant:Endpoint` / `ApiKey` / `Model`, and the
+  shared `Ai:BaseUrl`, `Ai:ApiKey`, `Ai:EmbeddingModel`, `Ai:ChatModel`. They
+  decide whether a client, an options object and (for embeddings) a background
+  job are *registered at all*, which has to happen before the host is built;
+  they are bound off the builder through `AiOptions.BindEagerly`. In a
+  `WebApplicationFactory` test host they are therefore reached with
+  `UseSetting` (which travels as a command-line argument), never with
+  `ConfigureAppConfiguration`.
+- **Lazy** — every tuning key below (`Ai:Embeddings:Dimensions`, `Dimensions`,
+  `PollSeconds`, `BatchSize`, `FailureBackoffSeconds`, `MaxAttempts`,
   `EmbeddingTimeoutSeconds`, `ChatTimeoutSeconds`, `MaxContextChars`,
   `MaxRetrievedPages`, `MaxQuestionChars`, `MaxOutputTokens`). Resolved from
   `IOptions<AiOptions>` when `EmbeddingOptions` / `AssistantOptions` are first
@@ -243,12 +259,27 @@ the default — a zero poll interval or batch size is a configuration mistake,
 and it is now reported where an operator is looking. Every default satisfies
 its own annotation, so an instance with no `Ai` section at all still boots.
 
+Every endpoint key — `Ai:BaseUrl`, `Ai:Embeddings:Endpoint`,
+`Ai:Assistant:Endpoint` — **must be an absolute `http://` or `https://` URL**
+when set (the OpenAI-compatible API root, typically ending in `/v1`); a
+scheme-less `host:port` fails the host at boot naming the key, the same check
+`FileStorage:S3:ServiceUrl` gets, instead of surfacing as a `UriFormatException`
+on the first embedding or question. The nested per-feature sections are
+validated explicitly (`Ai/AiConfiguration.cs`), because DataAnnotations does not
+descend into them. A connection string whose `Endpoint=` is not an absolute
+http(s) URL is refused at registration with the connection name in the message
+— it is outside the options family, so it cannot be collected with the rest.
+
 | Key | Default | Unset means | design.md |
 |---|---|---|---|
 | ⛔ `ConnectionStrings:embeddings` | *(none)* | With no `Ai:BaseUrl`/`Ai:EmbeddingModel` fallback either: **keyword-only search, structurally** — no generator, no background job, nothing registers. Shape: `Endpoint=…;Key=…;Model=…;Dimensions=…` (a bare URL is Endpoint-only). Also nothing registers when the `FeatureManagement:SemanticSearch` flag is off, whatever this says (see "Feature flags") | §9.2 |
-| `Ai:BaseUrl` | *(none)* | Fallback endpoint for both AI clients when the connection string doesn't carry one (eager) | §9.2 |
+| `Ai:Embeddings:Endpoint` | *(none)* | Falls through to `Ai:BaseUrl`. The embedding endpoint on its own, for an instance whose embedding and chat models live on different servers; loses only to the connection string's `Endpoint=`. Must be an absolute http(s) URL — **validated at startup** (eager) | §9.2 |
+| `Ai:Embeddings:ApiKey` | *(none)* | Falls through to `Ai:ApiKey`, then keyless (eager) | §9.2 |
+| `Ai:Embeddings:Model` | *(none)* | Falls through to `Ai:EmbeddingModel`, the older spelling of the same thing (eager) | §9.2 |
+| `Ai:Embeddings:Dimensions` | *(none)* | Falls through to `Ai:Dimensions`, then the column's 1536. Loses to the connection string's `Dimensions=`. **Validated at startup**: must be positive (lazy) | §9.3 |
+| `Ai:BaseUrl` | *(none)* | Fallback endpoint for both AI clients when neither the connection string nor the feature's own section carries one. Must be an absolute http(s) URL — **validated at startup** (eager) | §9.2 |
 | `Ai:ApiKey` | *(none)* | Keyless gateway — a placeholder credential is sent, which in-boundary gateways ignore (eager) | §9.2 |
-| `Ai:EmbeddingModel` | *(none)* | With no `Model=` in the connection string: embeddings not configured (see above) (eager) | §9.2 |
+| `Ai:EmbeddingModel` | *(none)* | With no `Model=` in the connection string and no `Ai:Embeddings:Model`: embeddings not configured (see above) (eager) | §9.2 |
 | `Ai:Dimensions` | `1536` (the `vector(1536)` column's width, applied when neither the connection string's `Dimensions=` nor this key is set) | n/a (has a default). Must match the `vector(1536)` column — a contradicting value **fails startup** (`EmbeddingDimensionsStartupCheck`) before a single doomed write. **Validated at startup**: must be positive | §9.3 |
 | `Ai:PollSeconds` | `30` s (via `EmbeddingOptions.PollIntervalOrDefault`) | n/a. Background job's scan interval. **Validated at startup**: must be positive (a `0` used to fall back to the default silently; it now fails the host) | §9.2 |
 | `Ai:BatchSize` | `16` | n/a. Max pages (re-)embedded per job run. **Validated at startup**: must be positive | §9.2 |
@@ -256,7 +287,10 @@ its own annotation, so an instance with no `Ai` section at all still boots.
 | `Ai:MaxAttempts` | `5` | n/a. Consecutive failures on one revision before it is quarantined and the scan moves on (editing the page re-arms it). **Validated at startup**: must be positive | §9.2 |
 | `Ai:EmbeddingTimeoutSeconds` | `30` s (via `RequestTimeoutOrDefault`) | n/a. Per-call network timeout on the embedding endpoint; no SDK retries. **Validated at startup**: must be positive | §9.2 |
 | ⛔ `ConnectionStrings:assistant` | *(none)* | With no `Ai:ChatModel` fallback either: `askWiki` answers `NOT_CONFIGURED`, structurally — no chat client registers, retrieval is never touched. Shape: `Endpoint=…;Key=…;Model=…`. Also nothing registers when the `FeatureManagement:AskWiki` flag is off, whatever this says | §9.5 |
-| ⛔ `Ai:ChatModel` | *(none)* | Its absence is what "assistant not configured" *means* (eager) | §9.5 |
+| `Ai:Assistant:Endpoint` | *(none)* | Falls through to `Ai:BaseUrl`. The chat endpoint on its own, for an instance whose chat model is not behind the embedding gateway; loses only to the connection string's `Endpoint=`. Must be an absolute http(s) URL — **validated at startup** (eager) | §9.5 |
+| `Ai:Assistant:ApiKey` | *(none)* | Falls through to `Ai:ApiKey`, then keyless (eager) | §9.5 |
+| `Ai:Assistant:Model` | *(none)* | Falls through to `Ai:ChatModel`, the older spelling of the same thing (eager) | §9.5 |
+| ⛔ `Ai:ChatModel` | *(none)* | With no `Model=` in the connection string and no `Ai:Assistant:Model`: its absence is what "assistant not configured" *means* (eager) | §9.5 |
 | `Ai:ChatTimeoutSeconds` | `30` | n/a. One attempt, no retries; an ask degrades to `UNREACHABLE`, never hangs. **Validated at startup**: must be positive | §9.5 |
 | `Ai:MaxContextChars` | `24000` | n/a. Cap on context text sent to the model per ask. **Validated at startup**: must be positive | §9.5 |
 | `Ai:MaxRetrievedPages` | `8` | n/a. Permission-filtered hits retrieval asks `ISearchService` for. **Validated at startup**: must be positive | §9.5 |

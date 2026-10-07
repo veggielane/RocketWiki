@@ -1537,8 +1537,9 @@ text, nothing to mark.
 The chat endpoint is configured like the embedding endpoint and carries the
 same honesty: **the user's question and the retrieved (viewable) page
 content travel to it** — that is the feature — so it is inside the security
-boundary (§9.4), reached via the Aspire `assistant` connection string or
-`Ai:ChatModel` against the shared `Ai:BaseUrl`, and fail-closed (§15): no
+boundary (§9.4), reached via the Aspire `assistant` connection string, its
+own `Ai:Assistant:Endpoint`/`ApiKey`/`Model` keys, or `Ai:ChatModel` against
+the shared `Ai:BaseUrl` — per value, in that order — and fail-closed (§15): no
 default exists, unset means the feature is absent and `askWiki` answers a
 typed `NOT_CONFIGURED` payload fact (never a GraphQL error — the §18
 degradation pattern, including `UNREACHABLE` on endpoint failure: one

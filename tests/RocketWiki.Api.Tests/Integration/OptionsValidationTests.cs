@@ -60,6 +60,13 @@ public sealed class OptionsValidationTests(RocketWikiApiFactory factory) : IClas
                     ["Ai:BatchSize"] = "0",
                     ["Ai:ChatTimeoutSeconds"] = "-5",
                     ["Ai:PollSeconds"] = "0",
+                    // The per-feature endpoint sections are nested, which DataAnnotations
+                    // never descends into: both rows below fail only because
+                    // AiConfiguration validates them by hand. A scheme-less endpoint is the
+                    // same paste error as the S3 row, and used to surface the same way —
+                    // as an opaque UriFormatException on first use.
+                    ["Ai:Embeddings:Dimensions"] = "0",
+                    ["Ai:Assistant:Endpoint"] = "chat.internal:9000",
                     // A blank id would compare every space's origin against nothing — the
                     // silent fail-open the Helm values schema also refuses (design.md §12).
                     ["Instance:Id"] = "",
@@ -90,6 +97,8 @@ public sealed class OptionsValidationTests(RocketWikiApiFactory factory) : IClas
         Assert.Contains("Ai:BatchSize", reported, StringComparison.Ordinal);
         Assert.Contains("Ai:ChatTimeoutSeconds", reported, StringComparison.Ordinal);
         Assert.Contains("Ai:PollSeconds", reported, StringComparison.Ordinal);
+        Assert.Contains("Ai:Embeddings:Dimensions", reported, StringComparison.Ordinal);
+        Assert.Contains("Ai:Assistant:Endpoint", reported, StringComparison.Ordinal);
         Assert.Contains("Instance:Id", reported, StringComparison.Ordinal);
         Assert.Contains("Keycloak:Realm", reported, StringComparison.Ordinal);
         Assert.Contains("Keycloak:Authority", reported, StringComparison.Ordinal);

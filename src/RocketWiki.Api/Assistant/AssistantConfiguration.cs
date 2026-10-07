@@ -18,11 +18,14 @@ namespace RocketWiki.Api.Assistant;
 /// 1. The Aspire-injected <c>assistant</c> connection string
 ///    (<c>Endpoint=…;Key=…;Model=…</c>, bare URL accepted as Endpoint-only) — the
 ///    AppHost's <c>AddConnectionString("assistant")</c>, §15 "config by reference".
-/// 2. The <c>Ai</c> section (<see cref="AiOptions"/>) for anything the connection string
-///    doesn't carry: <c>Ai:ChatModel</c> names the model, and the endpoint/key fall back
-///    to §9.2's shared <c>Ai:BaseUrl</c>/<c>Ai:ApiKey</c> — one gateway serving both the
-///    embedding and chat models is the expected deployment, so the second model
-///    should be one config key, not a duplicated section.
+/// 2. This feature's own section, <c>Ai:Assistant:Endpoint</c> / <c>ApiKey</c> /
+///    <c>Model</c> — for a chat server that is not the embedding server, or takes a
+///    different key.
+/// 3. The shared <c>Ai</c> fallbacks (<see cref="AiOptions"/>) for anything neither
+///    carries: <c>Ai:ChatModel</c> names the model, and the endpoint/key fall back to
+///    §9.2's shared <c>Ai:BaseUrl</c>/<c>Ai:ApiKey</c> — one gateway serving both the
+///    embedding and chat models is the expected deployment, so for it the second model
+///    is one config key, not a duplicated section.
 ///
 /// <b>Configured is opt-in; absent is a supported state (§15 fail-closed).</b> When
 /// no endpoint/model resolves, no client and no options register: AskWikiService
@@ -72,10 +75,10 @@ public static class AssistantConfiguration
             return; // Flag off: the unconfigured shape, whatever is configured. See class doc.
         }
 
-        // Connection string first, Ai section as per-value fallback — the shared rule
-        // (AiConnectionStringParser); the keys this feature reads are the class doc's
-        // list: Ai:BaseUrl / Ai:ApiKey (shared with the embedding endpoint, since one
-        // gateway serving both models is the expected deployment) and Ai:ChatModel.
+        // Connection string, then Ai:Assistant:*, then the shared Ai keys, per value —
+        // the shared rule (AiConnectionStringParser); the keys this feature reads are the
+        // class doc's list: the endpoint/key/model at each layer, with Ai:BaseUrl /
+        // Ai:ApiKey shared with the embedding endpoint beneath them.
         //
         // The ENDPOINT keys are read EAGERLY off the builder, unlike GitLabConfiguration
         // which deliberately resolves its options from the container instead. The
@@ -95,7 +98,7 @@ public static class AssistantConfiguration
         // registration AiConfiguration binds and validates — not captured here.
         var ai = AiOptions.BindEagerly(builder.Configuration);
         var (endpoint, key, model, _) = AiConnectionStringParser.Resolve(
-            builder.Configuration, connectionName: "assistant", ai, o => o.ChatModel);
+            builder.Configuration, connectionName: "assistant", ai, ai.Assistant, o => o.ChatModel);
         if (endpoint is null || model is null)
         {
             return; // Not configured: feature absent, fail closed. See class doc.
