@@ -12,7 +12,6 @@
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" />
     <PackageReference Include="Aspire.Hosting.SqlServer" />
-    <PackageReference Include="Aspire.Hosting.JavaScript" />
     <!-- No official Microsoft Aspire hosting integration exists for Keycloak or MinIO.
          Keycloak.AuthServices.Aspire.Hosting (NikiforovAll) is the leading community
          package for Keycloak; MinIO is wired via the generic AddContainer API, which
@@ -23,8 +22,9 @@
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\RocketWiki.Api\RocketWiki.Api.csproj" />
-  </ItemGroup>
+  <!-- No ProjectReference to RocketWiki.Api on purpose: the API runs as the image
+       Dockerfile.api builds (AddDockerfile in AppHost.cs), so the AppHost neither
+       builds nor references the project. The same goes for the SPA, which is why
+       Aspire.Hosting.JavaScript (AddViteApp) is not referenced either. -->
 
 </Project>

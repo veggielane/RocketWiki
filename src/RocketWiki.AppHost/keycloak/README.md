@@ -13,9 +13,11 @@ data volume is reset); it is not how a real deployment gets its realm.
 - Realm `rocketwiki`.
 - Two clients:
   - `rocketwiki-web` — the SPA. Public client, Authorization Code + PKCE
-    (`pkce.code.challenge.method: S256`), no client secret. Redirect URI and
-    web origin point at the Vite dev server (`http://localhost:5173`) — update
-    these if the frontend's dev port ever changes.
+    (`pkce.code.challenge.method: S256`), no client secret. Redirect URIs and
+    web origins name the two origins the SPA runs on under the AppHost:
+    `http://localhost:5173` (the web container, pinned in `AppHost.cs`) and
+    `http://localhost:5174` (where `npm run dev` lands while the container
+    owns 5173) — update these if either port ever changes.
   - `rocketwiki-api` — `bearerOnly`. Never used to run a flow; it exists only
     as an audience target (see below) and as the client MCP's OAuth 2.1 flow
     will eventually authenticate against (design.md §8).

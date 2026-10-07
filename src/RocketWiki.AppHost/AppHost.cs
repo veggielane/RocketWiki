@@ -15,6 +15,18 @@ using Microsoft.Extensions.Configuration;
 //     wired by hand: explicit S3 (9000) and console (9001) endpoints, dev-only root
 //     credentials, and the `server /data --console-address :9001` command (wrapped
 //     in a shell so the bucket directory exists first — see below).
+//   - The API and the SPA are CONTAINERS built from the repo-root Dockerfiles
+//     (`AddDockerfile`), not `AddProject` / `AddViteApp`. §15 says the AppHost
+//     "serves both local development and the deployment artifacts", and the
+//     images ARE the deployment artifacts: running them here means every start
+//     exercises Dockerfile.api, Dockerfile.web and the nginx template the k3s
+//     chart ships, rather than a Kestrel process and a Vite dev server that only
+//     resemble them. The price is the inner loop — a code change is an image
+//     rebuild (layer-cached: a source-only change re-runs publish / `vite build`
+//     and nothing before it) and there is no debugger to attach. The fast paths
+//     are unchanged and still point at this stack: `npm run dev` proxies to the
+//     API's pinned host port, and `dotnet run --project src/RocketWiki.Api` is the
+//     container-free backend loop (DEVELOPING.md).
 var builder = DistributedApplication.CreateBuilder(args);
 
 // Dev-only MinIO credentials and bucket name. Declared once because three places
@@ -23,6 +35,33 @@ var builder = DistributedApplication.CreateBuilder(args);
 const string MinioRootUser = "minioadmin";
 const string MinioRootPassword = "minioadmin";
 const string MinioBucket = "rocketwiki";
+
+// The browser-facing addresses, pinned. Everything the BROWSER talks to needs a
+// stable host port, because something that cannot be told the port at run time
+// has already been told it: the realm's redirect URIs and web origins
+// (keycloak/rocketwiki-realm.json) name the SPA's origin, and the SPA's Keycloak
+// authority and draw.io URL are Vite build-time constants baked into the web
+// image's bundle (the build args below; Dockerfile.web's header explains why
+// there is no run-time alternative). Keycloak's own 8080 is pinned by
+// AddKeycloakContainer. Each of these is a fact some other file already states,
+// so it is declared exactly once here and referenced everywhere else.
+const int WebPort = 5173;              // the port the realm was written for (it was the Vite dev server's)
+const string KeycloakFrontendUrl = "http://localhost:8080";
+const string KeycloakRealm = "rocketwiki";
+const int DrawioPort = 8090;           // not 8080: that is Keycloak's
+// Plain strings, assembled once. WithEnvironment has an overload that takes an
+// interpolated string as a ReferenceExpression (for endpoint holes), so a
+// `$"..."` with an int in it does not compile at the call site; these are also
+// each used twice (build arg and CSP), which is the point.
+var keycloakAuthority = $"{KeycloakFrontendUrl}/realms/{KeycloakRealm}";
+var drawioUrl = $"http://localhost:{DrawioPort}";
+var cspConnectSrc = $"'self' {KeycloakFrontendUrl}";
+var cspFrameSrc = $"{KeycloakFrontendUrl} {drawioUrl}";
+// The API's host port is pinned for a different reason. No browser uses it (the
+// web container's nginx proxies /graphql, /hubs and the binary routes), but
+// `npm run dev` does: web/vite.config.ts's proxy target defaults to this port,
+// so the Vite inner loop works against this stack with nothing set.
+const int ApiPort = 5079;
 
 // The SA password is pinned rather than generated, for the same reason MinIO's
 // credentials above are: it is dev-only, and something outside this file has to
@@ -68,19 +107,12 @@ var minio = builder.AddContainer("minio", "minio/minio")
 
 // Dev-only convenience: a self-hosted draw.io (diagrams.net) instance for the
 // SPA's embedded diagram editor. Hand-wired like MinIO above (no Aspire hosting
-// package). Nothing references it yet — the Vite app isn't wired into the
-// AppHost (see the TODO below), so set VITE_DRAWIO_URL to this container's
-// endpoint by hand (web/.env.example). Production points at its own in-network
+// package). The web image bakes VITE_DRAWIO_URL (drawioUrl above) at build
+// time, which is why the host port is pinned here rather than left to Aspire. Production points at its own in-network
 // instance instead (design.md §15: the editor URL must never leave the
-// boundary). Tag pinned deliberately; the standing caveat (§16) applies — no
-// container runtime has ever run this, so it is config-reviewed, not verified.
-// NOTE: nothing consumes this endpoint automatically. The SPA reads
-// VITE_DRAWIO_URL, which is not wired from here, and Aspire assigns this container a
-// DYNAMIC host port — so the fixed localhost:8080 suggested in web/.env.example is
-// wrong for any given run. Read the assigned port off the Aspire dashboard and set
-// VITE_DRAWIO_URL to it, or the diagram editor silently fails to load.
+// boundary). Tag pinned deliberately.
 builder.AddContainer("drawio", "jgraph/drawio", "31.3.2")
-    .WithHttpEndpoint(targetPort: 8080, name: "http");
+    .WithHttpEndpoint(port: DrawioPort, targetPort: 8080, name: "http");
 
 // Dev-only Keycloak instance. Production points RocketWiki.Api at an existing
 // realm via configuration instead (design.md §15 "Production"). The `rocketwiki`
@@ -94,7 +126,25 @@ builder.AddContainer("drawio", "jgraph/drawio", "31.3.2")
 // the folder is empty and a real import once it isn't.
 var keycloak = builder.AddKeycloakContainer("keycloak")
     .WithDataVolume()
-    .WithImport(Path.Combine(builder.AppHostDirectory, "keycloak"), isReadOnly: true);
+    .WithImport(Path.Combine(builder.AppHostDirectory, "keycloak"), isReadOnly: true)
+    // Two callers, two addresses, one issuer. The browser reaches Keycloak at
+    // KeycloakFrontendUrl (Aspire's proxy on the host); the API container reaches
+    // it at http://keycloak.dev.internal:8080 on the container network (Aspire
+    // names containers `<resource>.dev.internal` there). Left to itself, Keycloak
+    // derives the token issuer from whichever Host header a request arrived
+    // with, so the tokens the SPA obtains say
+    // `iss: http://localhost:8080/realms/...` while the discovery document the API
+    // fetches says `issuer: http://keycloak.dev.internal:8080/...` — and the bearer
+    // handler validates the one against the other, so every token is refused
+    // (IDX10205) for a perfectly good login. Invisible while the API was a host
+    // process using the same localhost address the browser does. KC_HOSTNAME
+    // fixes the issuer (and every browser-facing URL) to the frontend address;
+    // KC_HOSTNAME_BACKCHANNEL_DYNAMIC keeps the server-to-server URLs in that same
+    // document (jwks_uri, token endpoint) following the request, so the API is
+    // still pointed at an address it can reach. Keycloak only allows the second
+    // when the first is a full URL, which it is.
+    .WithEnvironment("KC_HOSTNAME", KeycloakFrontendUrl)
+    .WithEnvironment("KC_HOSTNAME_BACKCHANNEL_DYNAMIC", "true");
 
 // External OpenAI-compatible embeddings endpoint (design.md §9.4) and chat endpoint
 // for "ask the wiki" (design.md §9) — always connection strings, never containers
@@ -109,10 +159,31 @@ var keycloak = builder.AddKeycloakContainer("keycloak")
 // NOT_CONFIGURED and registers no chat client at all), so "unconfigured" is a
 // supported state that must not be able to stop the stack booting. Set them with
 // `dotnet user-secrets set ConnectionStrings:embeddings "..."` in this project.
+//
+// The API is a container now, so a `localhost` in either value means the
+// container, not this machine: an endpoint served from this machine (Ollama, LM
+// Studio) must be addressed as host.docker.internal.
 var embeddings = builder.AddOptionalConnectionString("embeddings");
 var assistant = builder.AddOptionalConnectionString("assistant");
 
-var api = builder.AddProject<Projects.RocketWiki_Api>("api")
+// The API, as the image Dockerfile.api produces — the same artifact the k3s chart
+// deploys (deploy/README.md). Context is the repo root because the Dockerfile's
+// COPY paths are written against it; Aspire rebuilds on every start and the
+// daemon's layer cache decides how much of that is work.
+var api = builder.AddDockerfile("api", "../..", "Dockerfile.api")
+    .WithHttpEndpoint(port: ApiPort, targetPort: 8080, name: "http")
+    // The image bakes the orchestrated defaults (Dockerfile.api): Production, and
+    // Database__MigrateOnStartup=false, because two replicas racing MigrateAsync()
+    // is design.md §15's corruption risk. This stack is one replica on one
+    // developer's machine, so both go back to what `dotnet run` had: Development
+    // for Nitro, introspection, /health and plain-HTTP Keycloak metadata
+    // (RequireHttpsMetadata is !IsDevelopment), and migrate-on-startup because the
+    // alternative — a one-shot container running the bundled /app/efbundle before
+    // the API starts — is the chart's Job, and this file is not the chart.
+    .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
+    .WithEnvironment("Database__MigrateOnStartup", "true")
+    // Container to container, so Aspire resolves the server as `sql,1433` on the
+    // container network rather than the host-side proxy port.
     .WithReference(sql)
     // Injects service-discovery variables (services__minio__http__0). Nothing
     // resolves a services__* name today — the API reads its S3 endpoint from
@@ -128,6 +199,8 @@ var api = builder.AddProject<Projects.RocketWiki_Api>("api")
     // leaving `me` reporting isAuthenticated:false for a perfectly good login. Passing
     // the endpoint as the connection string keeps design.md §15's "config by
     // reference" intent and leaves the realm composition in the API where it belongs.
+    // From this container that endpoint is http://keycloak.dev.internal:8080 — see
+    // KC_HOSTNAME above for why that address and the browser's can share an issuer.
     .WithEnvironment("ConnectionStrings__keycloak", keycloak.GetEndpoint("http"))
     // Dev-only MinIO credentials, matching the container above. Without these the
     // API falls back to the FileSystem provider and the MinIO container is dead
@@ -160,6 +233,15 @@ var api = builder.AddProject<Projects.RocketWiki_Api>("api")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__1__Description", "Regional releasability")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__1__Values__0", "NORTH")
     .WithEnvironment("ProtectiveMarking__SelectorCategories__1__Values__1", "SOUTH")
+    // AddProject wires the dashboard's OTLP endpoint into a project implicitly; a
+    // Dockerfile resource gets nothing unless asked. ServiceDefaults switches the
+    // exporter on only when OTEL_EXPORTER_OTLP_ENDPOINT is set, so without this
+    // line the API's traces, metrics and logs never leave the container and the
+    // dashboard's telemetry pages stay empty with no error anywhere.
+    .WithOtlpExporter()
+    // Readiness, so the web container's WaitFor(api) below means "answering", not
+    // "process started". /health is mapped in Development (ServiceDefaults).
+    .WithHttpHealthCheck("/health")
     // WithReference wires configuration; it does NOT imply waiting. Without these the
     // API starts the moment its own dependencies are *described*, races SQL Server's
     // boot, and dies — observed, not theorised: the first run that got this far
@@ -185,14 +267,37 @@ if (assistant is not null)
     api.WithReference(assistant);
 }
 
-// TODO(milestone 0): the Vite app is not wired into the AppHost yet — it runs
-// standalone via `npm run dev` (see DEVELOPING.md). Uncomment once confirmed
-// working under the AppHost:
-//
-//   builder.AddViteApp("web", "../../web").WithReference(api);
-//
-// Requires the Aspire.Hosting.JavaScript package (referenced in
-// RocketWiki.AppHost.csproj).
+// The SPA, as the image Dockerfile.web produces: the Vite build served by nginx,
+// which proxies /graphql, /hubs and the binary routes to the API so the bundle's
+// same-origin defaults hold (deploy/docker/nginx/default.conf.template). This is
+// the one resource a browser is pointed at.
+var apiHttp = api.GetEndpoint("http");
+builder.AddDockerfile("web", "../..", "Dockerfile.web")
+    // Vite inlines VITE_* at build time (Dockerfile.web's header): these three are
+    // permanent properties of the image, which is why each is a pinned host-side
+    // address from the constants above rather than an endpoint reference. A
+    // reference would resolve to the container-network name (`keycloak:8080`),
+    // which is right for the API and meaningless to a browser.
+    .WithBuildArg("VITE_OIDC_AUTHORITY", keycloakAuthority)
+    .WithBuildArg("VITE_OIDC_CLIENT_ID", "rocketwiki-web")
+    .WithBuildArg("VITE_DRAWIO_URL", drawioUrl)
+    .WithHttpEndpoint(port: WebPort, targetPort: 8080, name: "http")
+    .WithExternalHttpEndpoints()
+    // host:port on the container network, no scheme — the template supplies
+    // `http://`. Derived from the api resource rather than left to the image's
+    // `api:8080` default, which is NOT the name Aspire gives the container
+    // (`api.dev.internal`): with the default, nginx would 502 every API call.
+    .WithEnvironment("API_UPSTREAM", ReferenceExpression.Create($"{apiHttp.Property(EndpointProperty.HostAndPort)}"))
+    // The Content-Security-Policy's two deployment-supplied directives (the nginx
+    // template's header): connect-src must name the Keycloak origin, because
+    // oidc-client-ts fetches discovery, token and userinfo over XHR; frame-src must
+    // name it too (silent renew is an iframe) and the draw.io origin (the diagram
+    // editor is an iframe). The same addresses as the build args — the same facts,
+    // which is the point of stating each once above.
+    .WithEnvironment("CSP_CONNECT_SRC", cspConnectSrc)
+    .WithEnvironment("CSP_FRAME_SRC", cspFrameSrc)
+    .WithHttpHealthCheck("/")
+    .WaitFor(api);
 
 builder.Build().Run();
 

@@ -14,7 +14,7 @@ in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 |---|---|---|
 | .NET SDK | 10.0.x | everything backend |
 | Node.js | 24.x | the SPA (`web/`) |
-| Docker | any recent | the full Aspire stack **and** the SQL Server test tier — both optional; everything else works without it |
+| Docker | any recent; **VM memory ≥ 8 GB** | the full Aspire stack (which builds the API and web images inside the VM, next to a running SQL Server) **and** the SQL Server test tier — both optional; everything else works without it. Docker Desktop's Hyper-V default is 2 GB, and the web image's `npm ci` on top of the running stack drove that VM into a thrash the engine never came back from (README, "When it doesn't come up") |
 | Helm | 4.x | only if you touch `deploy/helm` (`helm lint --strict`) |
 
 The first two are pinned in-repo rather than left to convention: `global.json`
@@ -53,9 +53,38 @@ dotnet run --project src/RocketWiki.AppHost
 This starts SQL Server (with a data volume), Keycloak (dev realm
 auto-imported: seven users covering the rule engine's edge cases, all password
 `RocketWiki!Dev1` — see `src/RocketWiki.AppHost/keycloak/README.md`), MinIO,
-and a draw.io container for the diagram editor, then the API with connection
-strings injected. The Aspire dashboard URL is printed at startup; it also
-receives all OpenTelemetry (traces/metrics/logs) automatically.
+and a draw.io container for the diagram editor, then **the API and the SPA as
+containers built from `Dockerfile.api` and `Dockerfile.web`** — the deployment
+images, not `dotnet run` and a Vite dev server — with connection strings
+injected. The Aspire dashboard URL is printed at startup; it also receives all
+OpenTelemetry (traces/metrics/logs) automatically. The app is at
+<http://localhost:5173> once `web` shows healthy.
+
+**Host ports are pinned.** The SPA's Keycloak authority and draw.io URL are
+Vite build-time constants baked into the web image, and the realm's redirect
+URIs name the SPA's origin, so none of them can follow a port Aspire picks at
+run time: `5173` web, `8080` Keycloak, `8090` draw.io, and `5079` for the API —
+the last pinned so `vite.config.ts`'s default proxy target works unchanged.
+The constants at the top of `AppHost.cs` are the one place these live.
+
+**Rebuilds happen on every start.** Both images go through `docker build`
+each time the AppHost starts; the daemon's layer cache makes an unchanged tree
+a cache walk (the whole stack answered 48 s after launch when measured) and a
+source change a `dotnet publish` (plus the EF migrations-bundle step) or an
+`npm ci` + `vite build` inside the container, a couple of minutes. There is no
+hot reload and no debugger attach on either — for that inner loop use the
+standalone paths below, both of which still point at this stack. The API
+container runs as `Development` with `Database__MigrateOnStartup=true`,
+overriding the orchestrated defaults the image bakes (`Dockerfile.api`'s
+header says which).
+
+**Two addresses for Keycloak, one issuer.** The browser reaches it at
+`http://localhost:8080`; the API container reaches it at `http://keycloak.dev.internal:8080`.
+Keycloak would otherwise mint tokens with the first as `iss` and hand the API a
+discovery document naming the second, and the bearer handler refuses every
+token (IDX10205). `AppHost.cs` sets `KC_HOSTNAME` to the browser address and
+`KC_HOSTNAME_BACKCHANNEL_DYNAMIC=true`, so the issuer is fixed while the
+server-to-server URLs follow whichever address asked.
 
 The AppHost also injects the **dev selector catalog**
 (`ProtectiveMarking:SelectorCategories`, design.md §21.15) into the API: two
@@ -70,8 +99,11 @@ than `appsettings.Development.json` so the `WebApplicationFactory` test tier
 never picks it up by accident.
 
 **The GraphQL IDE.** Nitro (Hot Chocolate's built-in IDE) is served at the API's
-`/graphql` in Development — open that URL in a browser and you get a schema
-browser and a query console. It is switched off in every other environment,
+`/graphql` in Development — open <http://localhost:5079/graphql> in a browser
+and you get a schema browser and a query console. It is served from the copy
+embedded in the `ChilliCream.Nitro.App` package (`ServeMode.Embedded`), not
+redirected to ChilliCream's CDN as the package default does, so it loads with no
+route to the internet. It is switched off in every other environment,
 explicitly rather than by relying on the package default, because this
 application holds classified content and an IDE is a schema browser plus a query
 console handed to whoever can reach the endpoint (`Program.cs`, `ModifyServerOptions`).
@@ -81,20 +113,23 @@ unauthenticated session sees exactly what an unauthenticated SPA would: the
 absent-shaped empty answers. To run anything as a real user you need a token —
 see the PKCE note in the Keycloak section of this file.
 
-The Vite app is **not** in the AppHost yet (a commented TODO in
-`AppHost.cs`). Run it separately:
+**Frontend inner loop against this stack.** The web container owns `5173`, so
+the Vite dev server lands on the next port:
 
 ```bash
-cd web && npm run dev        # http://localhost:5173
+cd web && npm run dev        # http://localhost:5174
 ```
 
-The Vite dev server proxies `/graphql`, `/hubs` (WebSocket), `/attachments`,
-`/avatars`, `/avatar`, `/emojis`, and `/users` to the API — the API
-deliberately has no CORS policy, so always go through the proxy. Under
-Aspire the API's port is assigned dynamically: read it off the dashboard and
-set `VITE_API_TARGET=http://localhost:<port>` before `npm run dev`. Point
-`VITE_OIDC_AUTHORITY` at the Keycloak the dashboard shows (realm
-`rocketwiki`). All frontend env vars are documented in `web/.env.example`.
+It proxies `/graphql`, `/hubs` (WebSocket), `/attachments`, `/avatars`,
+`/avatar`, `/emojis`, and `/users` to the API — the API deliberately has no
+CORS policy, so always go through the proxy — and its default target is the
+API container's pinned `http://localhost:5079`, so `VITE_API_TARGET` needs no
+setting. The realm allows the `5174` origin as well as `5173`; that entry is
+part of the realm import, so an older Keycloak volume needs the `docker volume
+rm` below before sign-in from the dev server works. `VITE_OIDC_AUTHORITY` is
+`http://localhost:8080/realms/rocketwiki` (`web/.env.example`), and leave
+`VITE_OIDC_REDIRECT_URI` unset so it follows the dev server's own origin. All
+frontend env vars are documented in `web/.env.example`.
 
 Two things to know before the first run on a new machine:
 
@@ -142,7 +177,9 @@ docker run --rm --user root \
 ```bash
 # launchSettings.json is gitignored, so a fresh clone has no launch profile and
 # Kestrel binds its own default port. Ask for 5079 explicitly — that is the port
-# the SPA dev proxy (VITE_API_TARGET) is configured against.
+# the SPA dev proxy (VITE_API_TARGET) is configured against. It is also the
+# port the AppHost pins its API container to, so stop that container in the
+# dashboard first if the stack is running.
 ASPNETCORE_URLS=http://localhost:5079 dotnet run --project src/RocketWiki.Api
 ```
 

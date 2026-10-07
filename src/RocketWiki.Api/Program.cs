@@ -1,3 +1,4 @@
+using ChilliCream.Nitro.App;
 using HotChocolate.Diagnostics;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.SignalR;
@@ -409,6 +410,14 @@ builder.Services
     {
         o.Tool.Enable = builder.Environment.IsDevelopment();
         o.Tool.Title = "RocketWiki API";
+        // Serve the IDE's own files from the copy embedded in the ChilliCream.Nitro.App
+        // package this build already carries. The package default (ServeMode.Latest)
+        // is a redirect to ChilliCream's CDN: opening /graphql in a browser would
+        // fetch the IDE from the public internet on every load - a dependency
+        // design.md §15 does not permit even in Development, and the one that makes
+        // the IDE a blank page on a network with no route out. Embedded means the
+        // bytes shipped with the package, and nothing else.
+        o.Tool.ServeMode = ServeMode.Embedded;
     })
     // Introspection: on in Development, OFF everywhere else. This was the open decision
     // the Nitro comment above deferred; it is made here, in the same shape and for the

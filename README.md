@@ -56,10 +56,16 @@ default, what *unset* means, and which keys fail closed — is catalogued in
 - **.NET 10 SDK** (developed against 10.0.400).
 - **Node.js 24** and npm, for the `web/` frontend (developed against Node
   24.14.1 / npm 11.12.1).
-- **Docker** — for the full stack (SQL Server, Keycloak, MinIO, draw.io) and
-  for the SQL Server test tier. Both are optional: everything else builds,
-  tests and runs without it. Developed against Docker Desktop 4.87.0 (engine
-  29.7.2, Linux containers).
+- **Docker** — for the full stack (SQL Server, Keycloak, MinIO, draw.io, and
+  the API and web images) and for the SQL Server test tier. Both are
+  optional: everything else builds, tests and runs without it. Developed
+  against Docker Desktop 4.87.0 (engine 29.7.2, Linux containers). **Give
+  Docker Desktop's VM at least 8 GB of memory** (Settings → Resources, or
+  `MemoryMiB` in `%APPDATA%\Docker\settings-store.json`): the AppHost builds
+  the API and web images inside that VM while SQL Server, Keycloak, MinIO and
+  draw.io are already running in it, and on the 2 GB Hyper-V default the
+  `npm ci` stage drove the VM into thrashing until the engine stopped
+  answering at all — see "When it doesn't come up".
 - The Aspire CLI and project templates
   (`dotnet tool install -g Aspire.Cli`, `dotnet new install
   Aspire.ProjectTemplates`) only if you want the `aspire` command itself —
@@ -90,40 +96,52 @@ dotnet run --project src/RocketWiki.AppHost
 ```
 
 That brings up SQL Server (with a data volume), Keycloak with the `rocketwiki`
-dev realm auto-imported, MinIO, a draw.io container for the diagram editor, and
-the API — with connection strings injected and startup ordering handled. The
-Aspire dashboard URL is printed at startup, and receives all traces, metrics
-and logs (design.md §15).
+dev realm auto-imported, MinIO, a draw.io container for the diagram editor,
+and then the API and the SPA — **as the images `Dockerfile.api` and
+`Dockerfile.web` build**, the same artifacts the k3s chart deploys, with
+connection strings injected and startup ordering handled. The AppHost rebuilds
+both images on every start, layer-cached: with nothing changed the whole stack
+is answering again well under a minute after launch (48 s measured), and a
+source change costs a `dotnet publish` or `npm ci` + `vite build` inside Docker
+(a couple of minutes). The Aspire dashboard URL is printed at startup, and
+receives all traces, metrics and logs (design.md §15).
 
-**The first run builds the SQL Server image** from `docker/mssql-fts` (a few
-minutes; cached afterwards). This is not optional and not a preference: Aspire's
-default `AddSqlServer` image has neither Full-Text Search nor the `vector` type,
-so the application cannot run on it at all.
+**The first run builds three images**: SQL Server from `docker/mssql-fts` (a few
+minutes; cached afterwards), then the API and the SPA. The SQL Server one is not
+optional and not a preference: Aspire's default `AddSqlServer` image has
+neither Full-Text Search nor the `vector` type, so the application cannot run
+on it at all.
 
-**3. Generate the GraphQL client and start the SPA.** The Vite app is not in the
-AppHost yet, so it runs separately:
+**3. Open the app** at <http://localhost:5173> once the dashboard shows `web`
+healthy. That is the nginx in the web image serving the built SPA and proxying
+`/graphql`, `/hubs` (WebSocket), `/attachments`, `/avatars`, `/avatar`,
+`/emojis` and `/users` to the API container, which is why the API carries no
+CORS policy. The host ports are pinned, not assigned: `5173` for the SPA
+(the realm's redirect URIs name it), `8080` for Keycloak, `5079` for the API
+and `8090` for draw.io — the SPA's Keycloak authority and draw.io URL are
+baked into the image at build time, so they cannot be told a port at run time
+(see the constants at the top of `AppHost.cs`).
+
+For frontend work, the Vite dev server is still the fast path, and it points at
+this stack with nothing to configure:
 
 ```
 cd web
 npm ci
 npm run codegen   # REQUIRED — the typed client is generated from
                   # ../schema.graphql and deliberately not committed
-npm run dev       # http://localhost:5173
+npm run dev       # lands on http://localhost:5174 (5173 is the web container)
 ```
 
-The dev server proxies `/graphql`, `/hubs` (WebSocket), `/attachments`,
-`/avatars`, `/avatar`, `/emojis` and `/users` to the API, which is why the API
-carries no CORS policy — always go through the proxy. The API's port is
-assigned dynamically under Aspire: read it off the dashboard and set
-`VITE_API_TARGET=http://localhost:<port>` before `npm run dev`. Copy
-`web/.env.example` to `web/.env.local` for the rest; every `VITE_*` key is
-documented there and in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
-
-Take `VITE_OIDC_AUTHORITY` from `.env.example` as-is
-(`http://localhost:8080/realms/rocketwiki`) rather than reading a port off
-`docker ps`. Keycloak's *published* container port is randomised per run; 8080
-is Aspire's stable proxy in front of it. Using the container's own port looks
-right, and breaks sign-in only after the redirect back from Keycloak.
+Its proxy targets the API's pinned port by default, and the realm allows the
+`5174` origin — into a *fresh* Keycloak volume; see "When it doesn't come up".
+Copy `web/.env.example` to `web/.env.local` for anything beyond the defaults;
+every `VITE_*` key is documented there and in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md). Take `VITE_OIDC_AUTHORITY`
+from `.env.example` as-is (`http://localhost:8080/realms/rocketwiki`) rather
+than reading a port off `docker ps`: Keycloak's *published* container port is
+randomised per run; 8080 is Aspire's stable proxy in front of it, and the
+issuer in every token is pinned to it (`KC_HOSTNAME` in `AppHost.cs`).
 
 **4. Sign in.** The realm seeds seven users, all with password
 `RocketWiki!Dev1`, chosen to cover the rule engine's edge cases rather than to
@@ -133,16 +151,28 @@ attribute claims at all (§6.3's fail-closed case). The full table, and what
 each proves, is in
 [`src/RocketWiki.AppHost/keycloak/README.md`](src/RocketWiki.AppHost/keycloak/README.md).
 
-**5. Optional: the GraphQL IDE.** Nitro is served at the API's `/graphql` in
-Development — a schema browser and query console. It is switched off in every
-other environment explicitly, rather than by relying on the package default,
-because this application holds classified content. Queries there travel the
-same authenticated path the SPA's do, so an unauthenticated session sees
-exactly what an unauthenticated SPA would: absent-shaped empty answers.
+**5. Optional: the GraphQL IDE.** Nitro is served at the API's `/graphql`
+(<http://localhost:5079/graphql> in a browser) in Development — a schema
+browser and query console, served from the copy embedded in the Hot Chocolate
+package rather than fetched from ChilliCream's CDN, so it works with no route to
+the internet. It is switched off in every other environment explicitly, rather
+than by relying on the package default, because this application holds
+classified content. Queries there travel the same authenticated path the SPA's
+do, so an unauthenticated session sees exactly what an unauthenticated SPA
+would: absent-shaped empty answers.
 
 ### When it doesn't come up
 
-Both of these are "only on a fresh volume" rules, and both look like something
+- **`web` sits in `Building` for ten minutes, then `FailedToStart` with
+  `Container startup failed: context deadline exceeded` — and meanwhile
+  `docker ps` hangs and the API stops answering.** The Docker VM has run out of
+  memory: the image build (npm's install and the Vite build are the heavy
+  stages) is competing with the running SQL Server, Keycloak, MinIO and
+  draw.io for a VM that, on Docker Desktop's Hyper-V default, has 2 GB. Raise
+  it to 8 GB (Prerequisites above) and restart Docker Desktop; the ten minutes
+  is DCP's build deadline, not the build's real cost.
+
+The next two are "only on a fresh volume" rules, and both look like something
 else:
 
 - **`docker volume rm` the Keycloak volume after editing
@@ -246,7 +276,8 @@ RocketWiki/
 ├── RocketWiki.sln
 ├── src/
 │   ├── RocketWiki.AppHost/        Aspire topology (SQL Server, MinIO, Keycloak,
-│   │                              embeddings connection string, the API)
+│   │                              draw.io, the API and web images, the AI
+│   │                              connection strings)
 │   ├── RocketWiki.ServiceDefaults/ health checks, OpenTelemetry, resilience
 │   ├── RocketWiki.Api/            ASP.NET Core + Hot Chocolate GraphQL, JWT
 │   │                              bearer auth, audit-declaration attributes,
@@ -590,20 +621,21 @@ not. The last tree carrying it is tagged `full-feature`.)
   run — discovery shape and token-validation wiring are tested, a live
   client obtaining a Keycloak token is not; and RFC 8707 resource-audience
   alignment is an open realm-config question.
-- **The k3s deployment package (milestone 9) is authored but entirely
-  unexercised.** `Dockerfile.api`, `Dockerfile.web`, and the Helm chart in
-  `deploy/helm/rocketwiki/` exist, `helm lint` passes and `helm template`
-  renders valid YAML (including the guard rails: api.replicaCount is
-  hard-locked to 1, telemetry export fails closed, secrets are referenced
-  never templated) — and that is the *whole* claim. No image has ever been
-  built, no manifest applied, and the EF migrations bundle the migration Job
-  depends on has never been generated or run; like everything else behind
-  the container-runtime gap, assume it doesn't work until it's been watched
-  working. Known src-side follow-up it surfaced: ServiceDefaults maps
-  `/health`/`/alive` only in Development, so the chart probes TCP until
-  those endpoints get a config gate for production. `deploy/README.md` has
-  the build/offline-install/restore-drill procedures and its own, longer
-  "what has never been verified" list.
+- **The k3s deployment package (milestone 9): the images run daily, the
+  chart does not.** `Dockerfile.api` and `Dockerfile.web` are what the Aspire
+  AppHost builds and runs on every start (since 2026-10-07 — see "Verified on
+  real containers" below), so the publish, the EF migrations-bundle step, the
+  Vite build, nginx's envsubst config and its proxying are exercised
+  continuously. What that does *not* cover: the Helm chart in
+  `deploy/helm/rocketwiki/` (`helm lint` passes and `helm template` renders
+  valid YAML including the guard rails — api.replicaCount hard-locked to 1,
+  telemetry export fails closed, secrets referenced never templated — and
+  that is the whole claim; nothing has been applied to a cluster), the
+  migrations bundle's *execution* (the AppHost overrides the image back to
+  migrate-on-startup; the bundle is built every time and has never been run),
+  and the images' Production-mode defaults as such (the AppHost runs them as
+  Development). `deploy/README.md` has the build/offline-install/restore-drill
+  procedures and its own, longer "what has never been verified" list.
 - `RocketWiki.Core.Tests` and `RocketWiki.Data.Tests` have passed as part of
   a solution-wide run in the past — not
   independently reverified by this file's author this round (see the
@@ -926,10 +958,22 @@ bullet keeps its own sharper caveat where one exists):
   janitor that finds unreferenced objects requires an interface change
   across all three providers first (filesystem, S3, SQL Server).
 
-**Verified on real containers (2026-08-28).** The standing "nothing has ever
-run against real infrastructure" caveat is now retired. `aspire run` was
-executed on Docker Desktop 4.87.0 (engine 29.7.2, Linux containers) from
-*empty volumes*, and the following were observed rather than reasoned about:
+**Verified on real containers (2026-08-28, extended 2026-10-07).** The
+standing "nothing has ever run against real infrastructure" caveat is now
+retired. `aspire run` was executed on Docker Desktop 4.87.0 (engine 29.7.2,
+Linux containers) from *empty volumes*, and the following were observed rather
+than reasoned about:
+
+- **The API and the SPA run as their deployment images** (2026-10-07). The
+  AppHost builds `Dockerfile.api` and `Dockerfile.web` and runs the results
+  in place of the project and the Vite dev server: migrations applied from the
+  API container against the SQL Server container; a PKCE sign-in by a dev user
+  through the web image's nginx proxy, with the token minted by Keycloak under
+  the browser's address and validated by an API that reaches Keycloak under the
+  container network's (`KC_HOSTNAME` + backchannel-dynamic, `AppHost.cs`);
+  the security headers on the served SPA; and Nitro served from the embedded
+  copy with no CDN request. The Vite build inside Docker — the one stage of
+  `Dockerfile.web` that had never run — now runs on every start.
 
 - **The whole Aspire topology boots** — SQL Server, Keycloak, MinIO and
   draw.io containers plus the API project, with `WithReference`, service
@@ -1007,15 +1051,24 @@ test client with no claims header really is anonymous — but no test had ever
 aimed one at an audited list.
 
 **Still explicitly unverified:**
+- **That the API *container's* telemetry reaches the dashboard.** The project
+  resource's did (above); the container gets the same exporter configuration
+  from `WithOtlpExporter()`, the dashboard's OTLP endpoint answers from inside
+  the container network, and the exporter logs no errors — but receipt was not
+  observed on the dashboard itself during the 2026-10-07 run, which was
+  scripted and never opened it. Open the Traces page after a sign-in and look
+  for `api`; if it is empty, the TLS trust of the dashboard's dev certificate
+  inside the container is the first suspect.
 - **That any browser span has ever been exported to a real OTLP endpoint.**
   The exporter's transport is mocked in the web tests; the only evidence the
   export leg does anything at all is an early draft that let it run for real
   and produced `ECONNREFUSED` against a dashboard that wasn't running. The
-  Aspire AppHost still doesn't run the Vite dev server (a commented-out TODO
-  in `AppHost.cs`), so nothing injects the endpoint automatically yet —
-  `web/.env.example` documents the variables for standalone `vite dev`,
-  including the easily-missed detail that the dashboard's OTLP/HTTP port is
-  18890, not the gRPC 18889.
+  AppHost now runs the SPA as the web image, but `VITE_OTEL_*` are build-time
+  values it does not bake (the dashboard's OTLP endpoint and its CORS allow-list
+  would both have to be known at image build), so nothing injects the endpoint
+  automatically yet — `web/.env.example` documents the variables for standalone
+  `vite dev`, including the easily-missed detail that the dashboard's OTLP/HTTP
+  port is 18890, not the gRPC 18889.
 - **Token renewal in the browser.** `npm run dev` has now been pointed at the
   live stack, and a real browser has completed the login redirect, loaded and
   created pages, and held an open SignalR hub connection — the three defects

@@ -8,19 +8,15 @@
 #       --build-arg VITE_OIDC_CLIENT_ID=rocketwiki-web \
 #       -t rocketwiki/web:<tag> .
 #
-# VERIFICATION STATUS, precisely (README.md "Current status" retired the blanket
-# "nothing has ever run" caveat on 2026-08-28; this file is partly covered by it):
-#
-#   Exercised on a real container runtime:
-#     - the oidc-authority-check stage below, in all five cases (missing,
-#       scheme-less, wrong scheme, valid, explicit opt-out) — and a full build of
-#       this file with no authority, which fails at that stage as intended;
-#     - the nginx stage's config: envsubst substitution, `nginx -t`, and live
-#       responses carrying every security header on every location, including a
-#       502 from the API proxy (see deploy/docker/nginx/default.conf.template).
-#
-#   NOT exercised here: the npm ci + `npm run build` stage, and therefore the
-#     assembled image as a whole. Correct by inspection only.
+# VERIFICATION STATUS. This file is built, and the image run, by the Aspire
+# AppHost on every start (src/RocketWiki.AppHost/AppHost.cs, `AddDockerfile`):
+# the dev stack's SPA IS this image, with the build args and runtime env the
+# AppHost sets, so every stage below is exercised continuously - first proven
+# end to end on 2026-10-07 (a real browser-style PKCE sign-in through this
+# nginx against the containerised API). Before that, the oidc-authority-check
+# stage (all five cases) and the nginx stage's config had been exercised on a
+# container runtime and the npm/vite stage had not (README.md "Current status",
+# 2026-08-28).
 
 # ---------------------------------------------------------------------------
 # Stage 0: the OIDC authority must be stated, and must be a URL.
@@ -115,21 +111,28 @@ COPY web/ ./
 #     baking them is only needed if an environment must override that.
 #   - VITE_GRAPHQL_URL: defaults to same-origin /graphql, which the nginx
 #     proxy below exists to satisfy. Leave unset.
-#   - VITE_SIGNALR_NOTIFICATIONS_URL: documented in web/.env.example; no code
-#     reads it yet (the SignalR transports are wired elsewhere) — accepted
-#     here anyway so the build interface doesn't churn when it lands.
+#   - VITE_SIGNALR_NOTIFICATIONS_URL: defaults to same-origin /hubs/notifications
+#     (src/realtime/transports.ts), served by the /hubs proxy below. Leave unset.
+#   - VITE_DRAWIO_URL: OPTIONAL and fail-closed (src/editor/drawio/drawioConfig.ts):
+#     unset means no diagram editor loads, and viewing diagrams never needs it.
+#     The origin given here must ALSO be named in CSP_FRAME_SRC at run time (the
+#     nginx stage below) or the editor iframe is blocked. The AppHost passes its
+#     own drawio container's pinned host port; production passes its in-network
+#     instance, never the public service (design.md §15).
 ARG VITE_OIDC_AUTHORITY
 ARG VITE_OIDC_CLIENT_ID
 ARG VITE_OIDC_REDIRECT_URI
 ARG VITE_OIDC_POST_LOGOUT_REDIRECT_URI
 ARG VITE_GRAPHQL_URL
 ARG VITE_SIGNALR_NOTIFICATIONS_URL
+ARG VITE_DRAWIO_URL
 ENV VITE_OIDC_AUTHORITY=$VITE_OIDC_AUTHORITY \
     VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID \
     VITE_OIDC_REDIRECT_URI=$VITE_OIDC_REDIRECT_URI \
     VITE_OIDC_POST_LOGOUT_REDIRECT_URI=$VITE_OIDC_POST_LOGOUT_REDIRECT_URI \
     VITE_GRAPHQL_URL=$VITE_GRAPHQL_URL \
-    VITE_SIGNALR_NOTIFICATIONS_URL=$VITE_SIGNALR_NOTIFICATIONS_URL
+    VITE_SIGNALR_NOTIFICATIONS_URL=$VITE_SIGNALR_NOTIFICATIONS_URL \
+    VITE_DRAWIO_URL=$VITE_DRAWIO_URL
 
 # tsc -b && vite build (web/package.json). The type-check is kept on purpose:
 # an image build should fail the same way CI does, not ship what tsc rejects.

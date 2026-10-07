@@ -2213,18 +2213,37 @@ var minio = builder.AddContainer("minio", "minio/minio")  // S3-compatible (§10
 var kc    = builder.AddKeycloak("keycloak").WithDataVolume();   // dev only
 var ai    = builder.AddConnectionString("embeddings");          // external endpoint (§9)
 
-var api = builder.AddProject<Projects.RocketWiki_Api>("api")
+// The API and the SPA run as the images the deployment ships — the same
+// Dockerfiles, built by the AppHost on every start — not as a project and a
+// Vite dev server. The AppHost "serves both local development and the
+// deployment artifacts" by running the artifacts.
+var api = builder.AddDockerfile("api", "../..", "Dockerfile.api")
+                 .WithHttpEndpoint(port: 5079, targetPort: 8080)
+                 .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Development")
                  .WithReference(sql).WithReference(minio)
                  .WithReference(kc).WithReference(ai);
 
-builder.AddViteApp("web", "../../web").WithReference(api);
+builder.AddDockerfile("web", "../..", "Dockerfile.web")
+       .WithBuildArg("VITE_OIDC_AUTHORITY", "http://localhost:8080/realms/rocketwiki")
+       .WithHttpEndpoint(port: 5173, targetPort: 8080)
+       .WithEnvironment("API_UPSTREAM", api.GetEndpoint("http").Property(EndpointProperty.HostAndPort))
+       .WaitFor(api);
 ```
 
 - **Dev:** `aspire run` starts everything — SQL Server, MinIO, a Keycloak
-  seeded with a dev realm, the API, and the Vite dev server — with the
-  Aspire dashboard for logs, traces, and health. New contributors get a
-  working stack from a clone plus one command, which matters when the
-  system has this many moving parts.
+  seeded with a dev realm, then the API image and the web image (nginx serving
+  the Vite build, proxying to the API) — with the Aspire dashboard for logs,
+  traces, and health. New contributors get a working stack from a clone plus
+  one command, which matters when the system has this many moving parts; and
+  what they run is what ships, so the Dockerfiles and the nginx config are
+  exercised on every start instead of only at deployment. The browser-facing
+  host ports are pinned (the SPA's Keycloak and draw.io addresses are Vite
+  build-time constants, and the realm's redirect URIs name the SPA's origin),
+  and Keycloak's issuer is fixed to the browser's address (`KC_HOSTNAME`) while
+  its backchannel URLs follow the container network, so one token validates
+  for an API that reaches Keycloak by a different name than the browser does.
+  The fast inner loops — `dotnet run` on the API, `npm run dev` on the SPA —
+  remain, and point at this stack.
 - **Config by reference, not by hand.** Connection strings and endpoints are
   injected via service discovery, so `FileStorage:S3:ServiceUrl` (§10) and
   `Ai:BaseUrl` (§9) stop being copy-pasted per environment.
@@ -2509,7 +2528,7 @@ caveat below the table.
 
 | # | Milestone | Status | Contents |
 |---|---|---|---|
-| 0 | Walking skeleton | **done** | Aspire AppHost + ServiceDefaults, Vite app scaffolded, Keycloak dev realm with the §11 protocol mappers, schema-drift + audit-coverage guards. `aspire run` verified end to end on 2026-08-28 (see the caveat section below); the Vite app is still not in the AppHost |
+| 0 | Walking skeleton | **done** | Aspire AppHost + ServiceDefaults, Vite app scaffolded, Keycloak dev realm with the §11 protocol mappers, schema-drift + audit-coverage guards. `aspire run` verified end to end on 2026-08-28 (see the caveat section below); since 2026-10-07 the AppHost runs the API and the SPA as the images `Dockerfile.api`/`Dockerfile.web` build, so the Vite app is in the AppHost as the web image rather than as a dev server |
 | 1 | Editor spike ⚠️ | **done** | TipTap + Markdown round-trip for the full v1 feature set, proven against a real editor instance. Was the highest-risk item; it held. |
 | 2 | Core wiki | **done** | Rule engine, EF model proven on SQLite, domain-event pipeline (audit in the same transaction), page CRUD + subtree delete, permission-filtered reads (incl. §6.7's not-found-vs-denied result with denied-read auditing), GraphQL resolvers + object-level authorization (adversarially tested), access-rule management with replay-provable history, space CRUD |
 | 3 | Content features | **done** | Attachments (S3 + filesystem providers; S3 now verified against live MinIO — upload, download and object placement), comments, labels — all wired end to end and audited |

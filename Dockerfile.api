@@ -6,11 +6,14 @@
 #
 #     docker build -f Dockerfile.api -t rocketwiki/api:<tag> .
 #
-# STANDING CAVEAT (README.md "Current status"): no container runtime has ever
-# been available in the environment this was written in. This Dockerfile has
-# never been built, the image has never run, and the EF bundle step below has
-# never executed. Treat every line as "correct by inspection" until the
-# container-runtime task resumes.
+# This file is built, and the image run, by the Aspire AppHost on every start
+# (src/RocketWiki.AppHost/AppHost.cs, `AddDockerfile`): the dev stack's API IS
+# this image, with ASPNETCORE_ENVIRONMENT=Development and
+# Database__MigrateOnStartup=true overriding the orchestrated defaults baked
+# below. So the publish and the migrations-bundle step run on every rebuild and
+# the image serves real traffic daily; what the AppHost does NOT exercise is
+# the bundle's execution (that is the chart's Job, or a Compose entrypoint
+# override) and the Production-mode defaults as such.
 
 # ---------------------------------------------------------------------------
 # Stage 1: build + publish.

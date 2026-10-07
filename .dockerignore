@@ -7,10 +7,16 @@
 .claude
 **/bin
 **/obj
-web/node_modules
+**/node_modules
 web/dist
 web/coverage
 tests
+# Separate npm projects neither image reads: the Astro docs site and the
+# Playwright a11y package (its screenshots alone are tens of MB). The AppHost
+# builds both images on every start, and the context is sent to the daemon
+# each time, so what is excluded here is paid for on every `aspire run`.
+docs-site
+web/a11y
 # Local secrets / env files must never enter a build context, even ignored
 # ones — web/.env.example is the documented exception (it holds no values).
 **/.env
