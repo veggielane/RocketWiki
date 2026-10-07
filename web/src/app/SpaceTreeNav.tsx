@@ -8,6 +8,7 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  ListSubheader,
   Link,
   MenuItem,
   Select,
@@ -241,14 +242,37 @@ function PageTree({
   // sub-tree inside its parent's <li> is what makes the hierarchy real to a
   // screen reader rather than a flat run of links with decorative indentation.
   return (
-    <List dense disablePadding>
+    <List
+      dense
+      disablePadding
+      sx={
+        // A guide rule down the left of every nested list, the way a docs
+        // site draws a submenu: it hangs under the parent's chevron, and it
+        // is what lets the eye tell a child from the next sibling once the
+        // rows wrap. Depth 0 has no parent to hang from.
+        depth > 0
+          ? {
+              position: 'relative',
+              '&::before': {
+                content: '""',
+                position: 'absolute',
+                top: 2,
+                bottom: 2,
+                left: 12 + (depth - 1) * 12 + 11,
+                width: '1px',
+                bgcolor: 'divider',
+              },
+            }
+          : undefined
+      }
+    >
       {nodes.map((node, index) => {
         // A withheld page is a leaf at its sibling position: not a link, no
         // chevron, one disclosure for its reasons. Keyed by position because
         // it carries no id — by design, so nothing about it can be keyed on.
         if (isProtectedEntry(node)) {
           return (
-            <ProtectedTreeLeaf key={`protected-${index}`} denial={node.denial} indent={2 + depth * 1.5} leadingSpacer />
+            <ProtectedTreeLeaf key={`protected-${index}`} denial={node.denial} indent={1.5 + depth * 1.5} leadingSpacer />
           )
         }
         // The page's own icon when it has one, the generic page glyph when it
@@ -266,7 +290,7 @@ function PageTree({
             {/* The disclosure sits beside the link, never inside it: a button
                 nested in an anchor is an axe "nested-interactive" violation,
                 and clicking to unfold a branch must not also navigate. */}
-            <Box sx={{ display: 'flex', alignItems: 'center', pl: 2 + depth * 1.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', pl: 1.5 + depth * 1.5 }}>
               {hasChildren ? (
                 <IconButton
                   size="small"
@@ -305,7 +329,7 @@ function PageTree({
                 // Case-insensitive: the server resolves /spaces/ENG/My-Page,
                 // so an `===` here would load the page and fail to highlight it.
                 selected={node.id === activePageId || sameSlug(node.slug, activeSlug)}
-                sx={{ flex: 1, minWidth: 0, py: 0.25 }}
+                sx={{ flex: 1, minWidth: 0, py: 0.25, pl: 1 }}
               >
                 <ListItemIcon sx={{ minWidth: 28 }}>
                   <Icon sx={{ fontSize: 16 }} />
@@ -501,7 +525,7 @@ export function SpaceTreeNav() {
 
   return (
     <>
-      <Box sx={{ px: 2, py: 1.5 }}>
+      <Box sx={{ px: 1.5, pt: 2.5, pb: 1.5 }}>
         {/* FormControl + Select rather than the `TextField select` used
             elsewhere: this one needs `displayEmpty` and a `renderValue`, and
             only the un-sugared form types the value as the space key it is. */}
@@ -561,7 +585,7 @@ export function SpaceTreeNav() {
           is about the same thing the tree is, and outside the <nav> landmark for
           the same reason the picker is: that landmark is the hierarchy itself. */}
       {activeSpace && (
-        <Box sx={{ px: 2, pb: 1 }}>
+        <Box sx={{ px: 1.5, pb: 0.5 }}>
           <Link
             component={RouterLink}
             to={`/spaces/${activeSpace.key}/-/browse`}
@@ -580,6 +604,12 @@ export function SpaceTreeNav() {
           first pass at this component shipped. */}
       {activeSpace && (
         <nav aria-label={`Pages in ${activeSpace.name}`}>
+          {/* The group's title, like the sidebar's other groups. A div, not
+              the component's default <li>: an <li> straight inside <nav> is
+              an axe "listitem" violation. */}
+          <ListSubheader component="div" disableSticky>
+            Pages
+          </ListSubheader>
           {tree.length > 0 ? (
             <PageTree
               nodes={tree}

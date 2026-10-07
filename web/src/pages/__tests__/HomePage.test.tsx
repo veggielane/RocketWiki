@@ -76,7 +76,7 @@ function feeds({ activity, stale, viewed }: FeedData = {}) {
         myRecentlyViewed: {
           pageInfo: { hasNextPage: viewed.hasNextPage ?? false },
           nodes: Array.from({ length: Math.min(first, viewed.count) }, (_, i) => ({
-            lastViewedAtUtc: '2026-08-31T11:00:00Z',
+            lastViewedAtUtc: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
             page: page(200 + i),
           })),
         },
@@ -209,7 +209,7 @@ describe('one feed failing does not take the page with it', () => {
     const mock = createMockUrqlClient((name) => {
       if (name === 'ActivityFeed') return undefined // no data, no error → treated as empty
       if (name === 'MyStaleContent') return { myStaleContent: { totalCount: 1, pageInfo: { hasNextPage: false }, nodes: [{ page: page(1, { updatedAtUtc: '2025-01-01T00:00:00Z' }) }] } }
-      if (name === 'MyRecentlyViewed') return { myRecentlyViewed: { pageInfo: { hasNextPage: false }, nodes: [{ lastViewedAtUtc: '2026-08-31T11:00:00Z', page: page(2) }] } }
+      if (name === 'MyRecentlyViewed') return { myRecentlyViewed: { pageInfo: { hasNextPage: false }, nodes: [{ lastViewedAtUtc: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), page: page(2) }] } }
       return undefined
     })
     render(

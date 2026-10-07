@@ -5,6 +5,7 @@ import { visuallyHidden } from '@mui/utils'
 import { ClassificationBanner } from '../markings/ClassificationBanner'
 import { ClassificationBannerContext, type ClassificationBannerMarking } from '../markings/classificationBannerContext'
 import { useEmojiRegistryFeed } from '../emoji/useEmojiRegistry'
+import { AppBreadcrumbs } from './AppBreadcrumbs'
 import { AppHeader } from './AppHeader'
 import { SideMenu } from './SideMenu'
 import { PageTitleContext, composeDocumentTitle } from './documentTitle'
@@ -18,11 +19,13 @@ import { measureFor } from './contentMeasure'
 
 
 /**
- * The app's frame, following the MUI Dashboard template's layout: a navigation
- * rail down the left, and a content region whose own header strip carries the
- * breadcrumb and the global actions. There is no top app bar — the template has
- * none at desktop widths, and the things one would hold (identity, account,
- * search, notifications) are in the rail and the header strip instead.
+ * The app's frame, laid out the way a documentation site is: a navbar across
+ * the top carrying the brand, the search box and the global actions
+ * (AppHeader.tsx); a sidebar down the left carrying all of the navigation as a
+ * grouped menu (SideMenu.tsx); and the content column beside it, whose first
+ * row is the breadcrumb. The navbar and the sidebar are rows and columns of the
+ * frame rather than bars fixed over the content, so the content region scrolls
+ * on its own with nothing floating over either end of it.
  */
 export function AppShell() {
   const theme = useTheme()
@@ -140,8 +143,8 @@ export function AppShell() {
   }
 
   return (
-    // A column of two rows: the rail beside the content region, then the
-    // classification banner. The banner used to be position:fixed over the
+    // A column of three rows: the navbar, the sidebar beside the content
+    // region, then the classification banner. The banner used to be position:fixed over the
     // bottom of the viewport, which is what ICDS specifies and which meant
     // every surface it floated over — this region's scroll padding, the
     // Stack's bottom padding, the rail's account block, the editor's sticky
@@ -181,13 +184,19 @@ export function AppShell() {
         Skip to main content
       </Box>
 
-      {/* The rail and the content region, sharing the height the banner
-          leaves. `minHeight: 0` because a flex item's minimum is otherwise its
-          content's height, and this row must be free to be shorter than the
-          content region's content — that is what makes the region scroll
-          rather than the row grow past the viewport. `position: relative`
-          because the rail's paper is positioned within this row (see
-          SideMenu.tsx) so that it, too, ends above the banner. */}
+      {/* The navbar: a row of the frame, above the scroll region rather than
+          fixed over it, so a focused element scrolled into view below can
+          never land under it (WCAG 2.4.11). */}
+      <AppHeader navOpen={navOpen} onToggleNav={toggleNav} />
+
+      {/* The sidebar and the content region, sharing the height the navbar
+          and the banner leave. `minHeight: 0` because a flex item's minimum
+          is otherwise its content's height, and this row must be free to be
+          shorter than the content region's content — that is what makes the
+          region scroll rather than the row grow past the viewport.
+          `position: relative` because the sidebar's paper is positioned
+          within this row (see SideMenu.tsx) so that it starts under the
+          navbar and ends above the banner. */}
       <Box sx={{ display: 'flex', flexGrow: 1, minHeight: 0, position: 'relative' }}>
         <SideMenu open={navOpen} temporary={isCompact} onClose={() => setNavOpen(false)} />
 
@@ -212,10 +221,9 @@ export function AppShell() {
             flexDirection: 'column',
             // WCAG 2.4.11 (focus not obscured) needs no scroll padding here:
             // nothing is fixed over either end of this scroll container. The
-            // header strip scrolls with the content, and the classification
-            // banner is the row below this one rather than a strip floating
-            // over its bottom edge, so a focused element scrolled into view
-            // lands in the open.
+            // navbar is the row above it and the classification banner the
+            // row below, neither a strip floating over an edge, so a focused
+            // element scrolled into view lands in the open.
             //
             // Printed, this region neither scrolls nor clips: with the column
             // above at its natural height, everything here is in the flow and
@@ -267,8 +275,11 @@ export function AppShell() {
               flexShrink: 0,
             }}
           >
-            <Box sx={{ width: '100%', maxWidth: measureFor(pathname) }}>
-              <AppHeader navOpen={navOpen} onToggleNav={toggleNav} />
+            {/* Where you are. The one piece of the old header strip that
+                stays in the content column: it is about the content, it
+                scrolls with it, and it prints with it (the navbar does not). */}
+            <Box sx={{ width: '100%', maxWidth: measureFor(pathname), pt: 2 }}>
+              <AppBreadcrumbs />
             </Box>
             {/* `flexGrow`, and still a block inside: a screen's root is laid out
                 as it always was, and the extra height is only there for one that

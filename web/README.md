@@ -74,27 +74,45 @@ heading also names the browser tab, via `app/documentTitle.ts`.
 
 ## Look and feel
 
-The design is MUI's Dashboard template (v9.4.0, the version this repo runs) —
-its layout and its elements, written in this repo's own structure rather than
-vendored from it. The **elements** are the theme: colour ramps in
-`src/theme/palette.ts`, component overrides in
+The **elements** are MUI's Dashboard template (v9.4.0, the version this repo
+runs), written in this repo's own structure rather than vendored from it:
+colour ramps in `src/theme/palette.ts`, component overrides in
 `src/theme/componentCustomizations.ts`, both of which list what was
-deliberately not adopted and why. The **layout** is the shell: a navigation
-rail (`src/app/SideMenu.tsx`) with identity at the top and the signed-in user
-at the bottom, and a content region whose own header strip
-(`src/app/AppHeader.tsx`) carries the breadcrumb and the global actions. There
-is no top app bar, which is what the template does at desktop widths. Below
-both, when the screen shows marked content, the classification banner
-(`src/markings/ClassificationBanner.tsx`) is the frame's last row — a layout
-row rather than a fixed overlay, so the scroll region ends above it and nothing
-is ever underneath it. Printed, the frame gives up its fixed height and the
-content region its scrolling, so a page prints in full with the marking at the
-head and the foot of the printed document; the rail, the header's controls and
-every screen's action buttons stay off paper (`src/theme/print.ts` says what
-prints and what does not, and `a11y/print.spec.ts` measures it). Tables,
-images and diagrams wider than the sheet shrink to fit on paper rather than
-lose their right-hand side — cramped and complete, a trade recorded where the
-rule lives at the end of `src/editor/editor-content.css`.
+deliberately not adopted and why.
+
+The **layout** is the shape a documentation site has — daisyUI's docs are the
+reference — built from those elements. A navbar across the top
+(`src/app/AppHeader.tsx`): the sidebar toggle, the brand, a search box with
+its keyboard shortcut on show (Ctrl/⌘+K lands in it from anywhere), and the
+global actions ending in the signed-in user's avatar, behind which the account
+menu lives. A sidebar down the left (`src/app/SideMenu.tsx`) that is
+navigation and nothing else: groups under small bold titles — the wiki's
+whole-instance views, recent spaces, then the current space's picker and page
+tree — with compact rounded rows and the current one drawn as a solid pill in
+the text colour, so the one row that matters cannot be missed; nested pages
+hang off a guide rule under their parent's chevron
+(`src/app/SpaceTreeNav.tsx`). The pill treatment is scoped to the sidebar
+through the drawer's `sx` rather than the theme, because `ListItemButton` is
+also search hits and page lists elsewhere. The content column beside them
+opens with the breadcrumb, the one piece of the old header strip that is
+about the content rather than the frame. At phone widths the sidebar becomes
+an overlay behind the toggle, carrying the brand itself, and the search box
+folds to an icon.
+
+Both the navbar and the sidebar are rows and columns of the frame, not bars
+fixed over the content, so the content region scrolls on its own with nothing
+floating over either end of it. Below it, when the screen shows marked
+content, the classification banner (`src/markings/ClassificationBanner.tsx`)
+is the frame's last row — a layout row rather than a fixed overlay, so the
+scroll region ends above it and nothing is ever underneath it. Printed, the
+frame gives up its fixed height and the content region its scrolling, so a
+page prints in full with the marking at the head and the foot of the printed
+document; the sidebar, the navbar and every screen's action buttons stay off
+paper (`src/theme/print.ts` says what prints and what does not, and
+`a11y/print.spec.ts` measures it). Tables, images and diagrams wider than the
+sheet shrink to fit on paper rather than lose their right-hand side — cramped
+and complete, a trade recorded where the rule lives at the end of
+`src/editor/editor-content.css`.
 
 None of the template's dashboard content is here — no KPI cards, no charts,
 no sample grid — and none of its four `@mui/x-*` dependencies.

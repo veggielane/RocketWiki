@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Provider as UrqlProvider } from 'urql'
 import { SideMenu } from '../SideMenu'
 import { createMockUrqlClient } from '../../test/mockUrqlClient'
 import { expectNoAxeViolations } from '../../test/axe'
 
-// The rail reads the signed-in user for its account block; nothing here needs
-// a real OIDC client.
+// The tree's empty-state copy asks whether the viewer is an instance admin;
+// nothing here needs a real OIDC client.
 vi.mock('react-oidc-context', () => ({
   useAuth: () => ({
     user: { profile: { name: 'Viewer', email: 'viewer@example.test' } },
@@ -16,7 +16,7 @@ vi.mock('react-oidc-context', () => ({
   }),
 }))
 
-function renderRail(localUserId: string | null) {
+function renderSidebar(path = '/') {
   const mock = createMockUrqlClient((name) => {
     if (name === 'SpaceList') return { spaces: [] }
     if (name === 'CurrentUser')
@@ -28,14 +28,14 @@ function renderRail(localUserId: string | null) {
           groups: [],
           isAuthenticated: true,
           isInstanceAdmin: false,
-          localUserId,
+          localUserId: 'user-1',
           hasAvatar: false,
         },
       }
     return undefined
   })
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <UrqlProvider value={mock.client}>
         <SideMenu open />
       </UrqlProvider>
@@ -44,35 +44,37 @@ function renderRail(localUserId: string | null) {
 }
 
 /**
- * The account menu at the bottom of the rail is where a person's own things
- * live — Settings, Sign out — so it is where their own profile is offered.
- * The profile route takes the LOCAL user id, which arrives with `me`; until
- * it has, there is no address to link to, and the item is absent rather than
- * pointing somewhere that would 404.
+ * The sidebar is navigation and nothing else now: the brand and the signed-in
+ * user moved to the navbar (AppHeader.tsx), and what is left is the grouped
+ * menu — the whole-instance views first, under one landmark, with the current
+ * destination marked.
  */
-describe('SideMenu account menu', () => {
-  it("offers My profile, pointing at the signed-in user's own profile", async () => {
-    renderRail('user-1')
-    fireEvent.click(await screen.findByRole('button', { name: 'Account menu' }))
-    expect(await screen.findByRole('menuitem', { name: 'My profile' })).toHaveAttribute('href', '/people/user-1')
-    // Beside the account's other affordances, not instead of them.
-    expect(screen.getByRole('menuitem', { name: 'Settings' })).toBeInTheDocument()
-    expect(screen.getByRole('menuitem', { name: 'Sign out' })).toBeInTheDocument()
+describe('SideMenu navigation', () => {
+  it('groups the whole-instance views under the Main landmark', async () => {
+    renderSidebar('/')
+    const main = await screen.findByRole('navigation', { name: 'Main' })
+    expect(within(main).getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/')
+    expect(within(main).getByRole('link', { name: 'All spaces' })).toHaveAttribute('href', '/spaces')
+    expect(within(main).getByRole('link', { name: 'Graph' })).toHaveAttribute('href', '/graph')
   })
 
-  it('offers no My profile item until the local id is known', async () => {
-    renderRail(null)
-    fireEvent.click(await screen.findByRole('button', { name: 'Account menu' }))
-    // Settings is unconditional, so waiting on it proves the menu rendered
-    // before asserting the profile item's absence.
-    await screen.findByRole('menuitem', { name: 'Settings' })
-    expect(screen.queryByRole('menuitem', { name: 'My profile' })).not.toBeInTheDocument()
+  it('marks the current destination and no other', async () => {
+    renderSidebar('/graph')
+    const main = await screen.findByRole('navigation', { name: 'Main' })
+    expect(within(main).getByRole('link', { name: 'Graph' })).toHaveClass('Mui-selected')
+    expect(within(main).getByRole('link', { name: 'Home' })).not.toHaveClass('Mui-selected')
+    expect(within(main).getByRole('link', { name: 'All spaces' })).not.toHaveClass('Mui-selected')
   })
 
-  it('has no axe violations with the account menu open', async () => {
-    renderRail('user-1')
-    fireEvent.click(await screen.findByRole('button', { name: 'Account menu' }))
-    await screen.findByRole('menuitem', { name: 'My profile' })
+  it('carries no account controls — those are the navbar\'s', async () => {
+    renderSidebar('/')
+    await screen.findByRole('navigation', { name: 'Main' })
+    expect(screen.queryByRole('button', { name: 'Account menu' })).not.toBeInTheDocument()
+  })
+
+  it('has no axe violations', async () => {
+    renderSidebar('/spaces')
+    await screen.findByRole('navigation', { name: 'Main' })
     await expectNoAxeViolations()
   })
 })
