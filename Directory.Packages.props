@@ -101,7 +101,7 @@
   <!-- AI: embeddings, "ask the wiki", and MCP (design.md §9, §8). -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="11.0.0" />
     <!-- The official MCP C# SDK's ASP.NET Core host; brings ModelContextProtocol +
          ModelContextProtocol.Core transitively. -->
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
